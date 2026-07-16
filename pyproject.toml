@@ -1,0 +1,12 @@
+[project]
+name = "shantytown"
+version = "0.0.1"
+description = "A small harness for running a crew of coding agents."
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+shanty = "shantytown.cli:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
