@@ -55,27 +55,42 @@ def test_live_when_events_are_flowing():
     assert "27 events delivered" in lv.render()
 
 
-def test_stalled_is_not_live_even_with_a_big_counter():
-    """THE CORRECTION THAT COST THIS MODULE A REWRITE — and I caught it live.
+def test_idle_is_not_live_and_is_not_dead_either():
+    """TWO WRONG ANSWERS, BOTH MINE, TWENTY MINUTES APART (aegis-k6hv).
 
-    v1 was `live if delivered > 0`, straight from integrations.md's "the health
-    answer is a count". Driven against the REAL reactor while firing a REAL bead
-    comment, it reported "live - 27 events delivered" for six minutes while
-    reactor processed NOTHING and my event went unhandled (measured: counter
-    frozen at 27, last_event_age climbing 310->400s, health {"status":"ok"}).
-
-    A CUMULATIVE COUNTER NEVER GOES DOWN. delivered>0 proves it worked ONCE and
-    will keep saying "live" a week after it dies — up==1 with a bigger number,
-    which is the exact failure this module exists to detect.
+    v1: `live if delivered > 0`. A cumulative counter never goes down, so it says
+        "live" a week after death — up==1 with a bigger number. NEVER FIRES.
+    v2: `idle > 300s -> STALLED`. I reported reactor STALLED to its owner. It was
+        not. It was IDLE: 2 writes to beads_aegis in 15 min because the crew had
+        gone to bed. The counter moved 27 -> 46 the moment work arrived. CRIES
+        WOLF EVERY NIGHT — and a detector that cries wolf gets silenced, and then
+        misses the real death anyway.
+    v3 (this): an aging last_event means "nothing happened" OR "I stopped
+        looking" — THE SAME READING FOR OPPOSITE STATES. reactor exposes no
+        last-poll timestamp, so it is not knowable from here. Say so.
     """
     lv = _Fake(REAL).liveness(now=1784180913.885 + 600)   # 10 min of silence
     assert lv.reachable is True
-    assert lv.delivered == 27, "the counter is healthy-looking — that is the trap"
-    assert lv.verdict == "STALLED", (
-        "27 events and total silence reported as live — the adapter is reading "
-        "a history and calling it a pulse"
+    assert lv.delivered == 27, "the counter looks healthy — that is v1's trap"
+    assert lv.verdict == "cannot tell", (
+        "reported a verdict the metrics cannot support: idle and dead are the "
+        "same reading here"
     )
-    assert "it is not working" in lv.render()
+    out = lv.render()
+    assert "Idle or dead" in out
+    assert "live" not in out.replace("delivered", "")
+
+
+def test_quiet_fleet_does_not_read_as_broken():
+    """THE FALSE ALARM I ACTUALLY SENT. Regression test for it.
+
+    A real, healthy reactor on a sleeping fleet must NOT be reported broken.
+    This is the v2 bug: I watched an 8-minute window at 2am and called it a
+    stall. Nothing was wrong.
+    """
+    lv = _Fake(REAL).liveness(now=1784180913.885 + 3600)   # an hour of quiet
+    assert lv.verdict != "GREEN AND DEAD", "a sleeping fleet reported as dead"
+    assert lv.verdict == "cannot tell"
 
 
 def test_a_total_without_a_timestamp_is_cannot_tell():

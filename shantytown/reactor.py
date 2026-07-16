@@ -42,11 +42,19 @@ import urllib.request
 from dataclasses import dataclass
 
 
-# How long without a new event before "live" is a lie. reactor is poll-mode
-# (reactor_mode 0) and was observed processing a burst within seconds, so minutes
-# of silence is not a slow tick — it is a stop. Tunable, because the honest
-# answer to "how stale is too stale" is owned by whoever runs reactor, not by me.
-STALE_AFTER_S = 300.0
+# How long without a new event before we stop calling it "live". NOT "before it
+# is dead" — see the verdict table. This is the boundary of what we know, not a
+# diagnosis.
+#
+# THE MISTAKE THAT PUT THIS COMMENT HERE (aegis-k6hv): v2 of this module treated
+# idle > 300s as STALLED and I reported reactor stalled to its owner. It was not.
+# It was IDLE — 2 writes to beads_aegis in 15 minutes, because the crew had gone
+# to bed. The counter moved 27 -> 46 the moment work arrived. On a fleet that
+# legitimately goes quiet overnight, "no event in 5 minutes = broken" PAGES EVERY
+# NIGHT, gets silenced, and then misses the real death anyway. That is the exact
+# mirror of v1 (live if delivered>0, which never fires): one detector that cannot
+# fire, one that cannot stop. I built both in twenty minutes.
+QUIET_AFTER_S = 300.0
 
 
 @dataclass(frozen=True)
@@ -64,30 +72,46 @@ class Liveness:
 
     @property
     def verdict(self) -> str:
+        """Three answers. There is no "STALLED", and that absence is the finding.
+
+        REACTOR'S METRICS CANNOT DISTINGUISH IDLE FROM DEAD. An aging
+        reactor_last_event_timestamp means EITHER "nothing happened" OR "I
+        stopped looking" — the same reading for opposite states. There is no
+        reactor_last_poll_timestamp: nothing that says "I LOOKED and there was
+        nothing there". So a frozen counter on a quiet fleet is healthy, a frozen
+        counter on a busy fleet is dead, and the metrics do not say which fleet
+        you have.
+        Answering that question needs a second source (was there work to do?),
+        which this adapter deliberately does not reach for — an adapter that
+        secretly queries the tracker to grade the event source has made
+        shantytown depend on reactor, which is the one thing integrations.md
+        forbids. So we report the boundary honestly instead of guessing past it.
+        """
         if not self.reachable or self.delivered is None:
             return "cannot tell"
         if self.delivered == 0:
-            return "GREEN AND DEAD"          # never did anything
-        if self.idle_s is None:
-            # It has a total but won't say when. A total is a HISTORY, not a
-            # pulse — refuse to upgrade that to "live".
+            # Unambiguous, and it is the state reactor was ACTUALLY in for
+            # months: answering, monitored, green, and it has never once done
+            # the thing. No amount of quiet explains a lifetime total of zero.
+            return "GREEN AND DEAD"
+        if self.idle_s is None or self.idle_s > QUIET_AFTER_S:
+            # It worked at some point and is not working right now. Whether that
+            # is a sleeping fleet or a dead process is NOT KNOWABLE FROM HERE.
             return "cannot tell"
-        if self.idle_s > STALE_AFTER_S:
-            return "STALLED"                 # did something once; not now
         return "live"
 
     def render(self) -> str:
-        if self.verdict == "cannot tell":
-            return f"  reactor: CANNOT TELL — {self.detail}"
         if self.verdict == "GREEN AND DEAD":
             return ("  reactor: *** GREEN AND DEAD — answering, 0 events "
-                    "delivered. It is not doing the thing. ***")
-        if self.verdict == "STALLED":
-            return (f"  reactor: *** STALLED — {self.delivered} events total but "
-                    f"NOTHING for {self.idle_s:.0f}s. It answers; it is not "
-                    f"working. ***")
-        return (f"  reactor: live — {self.delivered} events delivered, "
-                f"last {self.idle_s:.0f}s ago")
+                    "delivered, ever. It is not doing the thing. ***")
+        if self.verdict == "live":
+            return (f"  reactor: live — {self.delivered} events delivered, "
+                    f"last {self.idle_s:.0f}s ago")
+        if self.detail:
+            return f"  reactor: CANNOT TELL — {self.detail}"
+        return (f"  reactor: CANNOT TELL — {self.delivered} delivered, but "
+                f"nothing for {self.idle_s:.0f}s. Idle or dead: reactor exposes "
+                f"no last-poll, so this reading is the same for both.")
 
 
 class Reactor:
