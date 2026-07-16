@@ -81,6 +81,14 @@ def main(argv: list[str] | None = None) -> int:
     tk.add_argument("-a", "--assignee")
     tk.add_argument("-n", "--dry-run", action="store_true")
 
+    cx = sub.add_parser("context", help="what code should I be looking at?")
+    cx.add_argument("query", nargs="+")
+    cx.add_argument("-b", "--budget", type=int, default=5)
+    cx.add_argument("--repo", help="restrict to one indexed repo")
+    cx.add_argument("--mode", default="hybrid", choices=["hybrid", "semantic", "keyword"])
+    cx.add_argument("--none", action="store_true",
+                    help="use the none-adapter (the leak test: harness works without bobbin)")
+
     a = ap.parse_args(argv)
 
     if a.cmd == "prime":
@@ -95,7 +103,64 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_mail(a)
     if a.cmd == "task":
         return _cmd_task(a)
+    if a.cmd == "context":
+        return _cmd_context(a)
     return _not_yet(a.cmd)
+
+
+def _cmd_context(a) -> int:
+    """what code should I be looking at?  (docs/adapters.md:89)
+
+    THE EXIT CODES ARE THE FEATURE. Read-only, so there is nothing to --dry-run:
+    the reason dispatch needs one is that it writes; this cannot.
+
+        0  did it       — bobbin answered. The list may be EMPTY, and empty is
+                          an answer: I asked, nothing matched.
+        1  refused      — a precondition failed (no query). We did not ask.
+        2  could not tell — bobbin was unreachable / unparseable / absent.
+
+    2 and 0-with-nothing print differently and exit differently ON PURPOSE. They
+    are the same bytes and opposite facts: "there is nothing there" vs "I could
+    not look". Collapsing them is the defect this command exists to not have —
+    a cheerful empty result from a service that is DOWN is how a 429 became 32
+    fake findings.
+    """
+    # Imported here, not at module top: cli is not core, but keeping first-class
+    # backends out of the import path until they are actually asked for is the
+    # habit the leak test enforces one layer down.
+    from .bobbin import BobbinContext, NoContext
+    from .protocols import ContextUnavailable
+
+    query = " ".join(a.query)
+    ctx = NoContext() if a.none else BobbinContext(repo=a.repo, mode=a.mode)
+
+    try:
+        hits = ctx.relevant(query, a.budget)
+    except ValueError as e:
+        print(f"refused: {e}", file=sys.stderr)
+        return 1
+    except ContextUnavailable as e:
+        # Say WHICH failure, in bobbin's own words. "unavailable" alone is a shrug.
+        print(f"could not tell: {e}", file=sys.stderr)
+        return 2
+
+    if not hits:
+        # THREE kinds of "nothing", and they must not wear the same sentence.
+        # I wrote "asked, nothing matched" for both of these first and it was a
+        # lie for the none-adapter, which never asked — the exact conflation this
+        # command exists to prevent, in the command that prevents it. Exit code
+        # alone is not enough: an operator reading stdout must be able to tell.
+        if a.none:
+            print(f"no context adapter configured (none) — did not look for {query!r}")
+        else:
+            print(f"no context found for {query!r} (bobbin answered; nothing matched)")
+        return 0
+
+    for h in hits:
+        loc = f"{h.path}:{h.lines}" if h.lines else h.path
+        tag = f" [{h.repo}]" if h.repo else ""
+        print(f"{loc}{tag}  {h.name}".rstrip())
+    return 0
 
 
 def _cmd_mail(a) -> int:

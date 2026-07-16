@@ -95,11 +95,36 @@ things and conflating them is how a harness grows a town:
 ```python
 class Context(Protocol):        # bobbin
     def relevant(self, query: str, budget: int) -> list[Snippet]: ...
+    # raises ContextUnavailable when it could not look. See below — this is
+    # not decoration, the signature is unsound without it.
 
 class Knowledge(Protocol):      # quipu
     def search(self, query: str) -> list[Fact]: ...
     def record(self, episode: Episode) -> TxId: ...
 ```
+
+**`-> list[Snippet]` cannot say "I could not look", and it must.** Built 2026-07-16
+(aegis-rhhw); the hole was in this signature, not in the implementation. An empty
+list has to carry two opposite facts:
+
+| | means | exit |
+|---|---|---|
+| `[]` from the **none-adapter** | nothing is configured; we never asked | `0` |
+| `[]` from **bobbin, answering** | we asked; nothing matched | `0` |
+| `[]` from **bobbin, DOWN** | we could not ask — **not a finding** | `2` |
+
+The first two are answers. The third is a failure wearing their clothes: *the
+none-adapter and a downed bobbin return the same bytes and mean opposite things.*
+So implementations **raise `ContextUnavailable`** rather than return `[]` when the
+backend is unreachable, unparseable, or absent — the exception is the only thing
+in the type that can hold that distinction.
+
+This is not hypothetical: a sweep here read a rate-limited **429 as "metric
+absent"** and manufactured 32 fake findings. "I could not look" scored as "there
+is nothing there". Measured, bobbin itself is honest about this and we just have
+to not throw it away — `exit 0` + `{"count":0}` when it answers with nothing,
+`exit 1` + *"Failed to connect"* when it cannot. The adapter's job is to carry
+that out to the caller.
 
 **bobbin is optional. quipu's *knowledge* job is optional. quipu's *registry* job is not** — see
 [`agent-card.md`](agent-card.md): quipu holds identity (who exists, who reports to whom, what role),

@@ -75,3 +75,54 @@ class Tracker(Protocol):
 class Panes(Protocol):
     def send(self, pane: str, text: str) -> None: ...
     def exists(self, pane: str) -> bool: ...
+
+
+@dataclass(frozen=True)
+class Snippet:
+    """A place to look. Not the code — the pointer to it.
+
+    The agent reads the file itself, the same way it reads a work item. If this
+    ever carries the source text, context has become a cache and the harness has
+    grown a job it does not want.
+    """
+    path: str
+    lines: str = ""
+    score: float = 0.0
+    repo: str = ""
+    name: str = ""
+
+
+class ContextUnavailable(Exception):
+    """I could not look. NOT "there is nothing there".
+
+    This exception exists because the designed signature cannot express the
+    difference. `relevant() -> list[Snippet]` has exactly one way to say "no
+    results", and TWO facts need saying:
+
+        the none-adapter, and a bobbin that is DOWN, return the same bytes
+        and mean opposite things.                                — ellie, aegis-rhhw
+
+    An empty list is a FINDING: I asked, and the answer was nothing. This is a
+    FAILURE: I never got an answer. Callers map them to different exit codes (0
+    vs 2), and they must never collapse. ellie's sweep read a rate-limited 429
+    as "metric absent" and manufactured 32 fake findings — "I could not look"
+    scored as "there is nothing there". That is this exception's whole job.
+    """
+
+
+@runtime_checkable
+class Context(Protocol):
+    """Given what an agent is doing, what code should it be looking at?
+
+    Read-only, synchronous, best-effort (docs/adapters.md:89 — Stiwi's ask at :84).
+
+    ONE method. It cannot grow a query API the way a tracker can, and that is
+    deliberate: an integration that exists because it is in a table is how you
+    get to 110 commands. If you need a second method, THAT IS THE FINDING — put
+    it on the bead, not in this file. (aegis-rhhw; the same rule that caught a
+    third Tracker method inside a day.)
+
+    Implementations MUST raise ContextUnavailable rather than return [] when
+    they could not reach their backend. Returning [] there is the defect.
+    """
+    def relevant(self, query: str, budget: int) -> list[Snippet]: ...
