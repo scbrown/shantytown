@@ -58,8 +58,20 @@ def test_dispatch_calls_only_protocol_methods():
                 )
 
 
-def test_tracker_interface_is_two_functions():
-    """Anything more and the tracker is driving the harness."""
+def test_tracker_interface_is_three_functions():
+    """Anything more and the tracker is driving the harness.
+
+    Was two. Widened to three on 2026-07-16 by Stiwi's direction: `st task`
+    creates work, and creation cannot go through get/update — update() needs an
+    id that does not exist yet.
+
+    This guard is NOT relaxed, it is re-pinned. It caught a real defect once
+    (a third method, mine(), added unilaterally to make one command work) and it
+    would catch a fourth today. The difference is who asked: a shared contract
+    widened by its owner is a decision; widened at 2am to unblock yourself it is
+    a bug. The number is not the point — the point is that the number can only
+    move on purpose.
+    """
     for impl in (FilesTracker, BeadsTracker):
         public = {m for m in dir(impl) if not m.startswith("_")}
-        assert public == {"get", "update"}, f"{impl.__name__} exposes {public}"
+        assert public == {"get", "update", "create"}, f"{impl.__name__} exposes {public}"

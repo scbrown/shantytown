@@ -1,14 +1,18 @@
 <div align="center">
 
 ```
-    ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-   █                          █
-   █   ▟▙    ▟▙    ▟▙    ▟▙   █        s h a n t y t o w n
-   █  ▐██▌  ▐██▌  ▐██▌  ▐██▌  █
-   █   ██    ██    ██    ██   █        ┌───┐   ┌───┐   ┌───┐
-   █  ─────────────────────   █        │ ▸ │──▶│ ▸ │──▶│ ▸ │
-   ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀        └───┘   └───┘   └───┘
-                                       create   send    fetch
+                          .-.                    .--.
+             .--.        /   \      .-.          |[]|    .-.
+            /::::\   .--|:::::|--. /   \    .--. |  |   /   \
+      .-.   |::[]:|  |==|:::::|==| |:::|   /::::\|[]|  |:::::|   .--.
+     /   \  |::::||  |  |[]:[]|  | |:::|   |::::||  |  |:::::|  /    \
+    |:::::| |[]::||  |  |:::::|  | |:[]|   |[]::||::|  |:[]:[|  |::[]|
+    |:[]:[| |::::||__|__|:::::|__|_|:::|___|::::||::|__|:::::|__|::::|
+   _|_____|_|____||__|__|_____|__|_|___|___|____||__|__|_____|__|____|_
+  ///////////////////////////////////////////////////////////////////////
+
+                          s h a n t y t o w n
+                a crew of agents. no town hall required.
 ```
 
 # shantytown
@@ -17,133 +21,110 @@
 
 *Create a work item. Tell an agent to go get it. That's the whole idea.*
 
-[![dispatch 3.4s](https://img.shields.io/badge/dispatch-3.4s-brightgreen)](#-the-numbers)
+[![dispatch 3.4s](https://img.shields.io/badge/dispatch-3.4s-brightgreen)](#-speed)
 [![35x faster](https://img.shields.io/badge/vs%20gt%20sling-35%C3%97%20faster-brightgreen)](#-versus-gas-town)
-[![3 connections](https://img.shields.io/badge/dolt%20conns-3%20(was%2063)-brightgreen)](#-the-numbers)
-[![8 commands](https://img.shields.io/badge/commands-8-blue)](#-the-whole-surface)
-[![tests](https://img.shields.io/badge/tests-45%20passing-blue)](#-testing-philosophy)
+[![10 commands](https://img.shields.io/badge/commands-10-blue)](#-the-whole-surface)
+[![tests](https://img.shields.io/badge/tests-57%20passing-blue)](#-a-check-that-cannot-fail-is-not-a-check)
 [![python](https://img.shields.io/badge/python-3.11%2B-blue)](#-install)
 
 </div>
 
----
-
-shantytown is what's left of a 14-agent homelab harness **after you remove everything nobody used.**
-
-It is deliberately **smaller than the thing it replaces**. That's the only honest reason to build one.
-
-## 🔎 Why
-
-We run 14 coding agents on [Gas Town](https://github.com/scbrown/gastown). It works, and it earned its
-complexity honestly — it was built for a world with polecats, a mayor, and an orchestration tier.
-
-We don't live in that world any more, and the numbers say so:
-
-| | |
-|---|---|
-| Commands Gas Town ships | **~110** |
-| Commands we measurably use | **9** |
-| Utilisation | **8%** |
-
-Everything else — `daemon`, `mayor`, `deacon`, `witness`, `refinery`, `polecat`, `dog`, `convoy`,
-`mq`, `scheduler`, `warrant`, `seance`, `reaper` — **we do not run.** Not "rarely": the daemon is
-masked on our host by deliberate, permanent directive, and the fleet has been fine for months.
-
-> We were carrying a town to use a mailbox and a message.
-
-## 💡 The idea
-
-Three steps. No daemon, no mayor, no convoy, no formula.
-
-```
-1. CREATE   the work item          → returns an id
-2. SEND     "go read <id>"         → tmux send-keys
-3. FETCH    the agent reads it itself
+```bash
+st task "fix the login timeout"      # → st-1
+st mail ian "go read st-1"           # → straight into ian's pane
+st crew                              # → who's up, who's on what
 ```
 
-Step 1 is pluggable. Step 2 is a pane. Step 3 is the agent doing what agents already do.
+Three steps: **create → send → fetch.** No daemon. No mayor. No broker. No queue.
 
-The tell: `gt nudge --mode immediate` says, in its own help text, *"Send directly via `tmux
-send-keys`."* **Dispatch already was `tmux send-keys`.** Gas Town is a wrapper around it — which is
-why the replacement is smaller.
+## 📮 Routing: there is nothing in the middle
 
-## ⚡ The numbers
+**`st mail` *is* `tmux send-keys`.** That's not an implementation detail — it's the product.
 
-Measured on the same host, same store, same day. Not estimated.
+```
+st mail ian "go read st-1"
+   │
+   ├─ registry.get("ian")        → identity: role, reports_to, pane
+   ├─ pane = "aegis-crew-ian"    → the address IS the pane
+   ├─ panes.exists(pane)?        → NO  → exit 2 "could not tell". nothing sent.
+   └─ tmux send-keys -t <pane>   → the message. that's the delivery.
+```
 
-| | `gt sling` | `shanty go` | |
+**No message bus. No queue. No delivery guarantee — because there's nothing to guarantee.** The pane is either there or it isn't, and you're told which.
+
+That matters more than it sounds. **A queue will happily accept a message for a reader that never comes.** We measured ours: **47 nudges sat queued for a recipient that does not exist — oldest 25 days, across five different spellings of the name.** Every send reported success. `send-keys` structurally cannot do that: no pane, no send, exit 2.
+
+| routing outcome | exit | what it means |
+|---|---|---|
+| delivered | **0** | the keys went into a live pane |
+| no such agent / no pane | **1** | refused. nothing sent. |
+| pane named but gone | **2** | *could not tell* — never a cheerful success |
+
+**Identity resolves through the registry, not through a config file you hand-edit.** The graph is the truth; the agent card is a projection of it. Writes go to the graph, reads may come from the card, never the reverse — so an agent's address can't quietly drift from reality.
+
+## ✨ Features
+
+- 📮 **`st mail`** — a message into a pane. One send-keys. Nothing between you and the agent.
+- 📋 **`st task`** — create work, get an id back. The id is the product; it's what step 2 says.
+- 🚀 **`st go`** — dispatch: bind an item to an agent and tell them. **35× faster than `gt sling`.**
+- 🧭 **`st prime`** — who am I, what's on my plate. A **read**; it never writes.
+- 🚦 **`st triage`** — refuse / nudge / clear, judged from what the runtime actually prints on screen.
+- 👥 **`st crew`** — who exists, who's up, what role. Reports **down** only when it's really down.
+- 🔌 **Pluggable trackers** — beads today, files tomorrow, yours next. *Same dispatch code.* Proven by a swap test, not by an interface.
+- 🖥️ **tmux-native** — bring your own panes. Named sockets supported, so it works from cron and systemd too.
+- 🧪 **`--dry-run` on every writing command**, from commit one.
+- 🔢 **Exit codes scripts can read** — `0` did it · `1` refused · `2` couldn't tell.
+
+## ⚡ Speed
+
+Measured on one host, one store, one day. Not estimated.
+
+| | `gt sling` | `st go` | |
 |---|---:|---:|---|
 | dispatch (dry-run) | 51.54 s | **0.15 s** | **344× faster** |
 | dispatch (real) | > 120 s ⏱️ | **3.40 s** | **35× faster** |
 | Dolt connections | 63 | **3** | **21× fewer** |
-| CPU while running | 4% | — | *it was waiting, not working* |
+| CPU while running | 4% | — | *waiting, not working* |
 
-`gt sling --dry-run` **writes nothing** and still took 51 s: it spawns 20 `bd` subprocesses per
-dispatch, 13 of them the *same* dependency query — an N+1 over **processes**, which is why connection
-reuse is impossible rather than merely absent.
-
-**And the honest part.** Of `shanty go`'s 3.40 s, **~3.2 s is the tracker write** — `bd update` costs
-3.93 s while `bd show` costs 0.18 s. **shantytown's own overhead is ~0.20 s.** We wrote a criterion of
-*"dispatch under a second"*, missed it, and **kept the miss on the record** rather than moving the
-goalposts quietly: the floor is bd's, not ours. A target set against an unmeasured floor can only ever
-return FAIL, and looks rigorous doing it. With the files tracker, dispatch is **0.04 s**.
-
-## ✨ Features
-
-- 🎯 **8 commands.** The entire surface. If it grows a `convoy`, a `rig`, or a `formula`, we've
-  rebuilt the thing we left.
-- 🔌 **Pluggable trackers.** Beads today, files tomorrow, yours next — *same dispatch code*. Proven by
-  a swap test, not by an interface.
-- 🖥️ **tmux-native.** Dispatch is `send-keys` into a pane. No broker, no queue, no daemon.
-- 🧭 **`shanty prime`** — who am I, what's on my plate. It is a **read**, and must never write.
-- 🚦 **`shanty triage`** — refuse / nudge / clear, decided from what the runtime actually prints.
-- 🌐 **Identity is the graph.** The agent card is a **projection**, never the truth. Writes go to the
-  graph; reads may come from the card; never the reverse.
-- 🧪 **`--dry-run` on every writing command**, from commit one.
-- 🔢 **Exit codes scripts can read.** `0` did it · `1` refused · `2` couldn't tell.
+**And the honest part.** Of that 3.40 s, **~3.2 s is the tracker write** — `bd update` costs 3.93 s where `bd show` costs 0.18 s. **shantytown's own overhead is ~0.20 s.** We set a target of "dispatch under a second", missed it, and kept the miss on the record: the floor is bd's, not ours. With the files tracker, dispatch is **0.04 s**.
 
 ## 🧱 The whole surface
 
 ```
-shanty prime                      who am I, what's on my plate      ← the primer
-shanty go <item> [agent]          dispatch. this is the one that matters.
-shanty crew                       who exists, what state, what role
-shanty roles [--check]            the hierarchy, and whether it's real
-shanty role set <agent> <role>    generative: rewrites cards, emits hooks
-shanty new <agent>                create an agent from a card
-shanty stop <agent>               stop it
-shanty log [agent]                what happened
+st task <title>                   create work, get an id back
+st mail <agent> <message>         a message into a pane. send-keys, nothing more.
+st go <item> [agent]              dispatch. the one that matters.
+st prime                          who am I, what's on my plate      ← the primer
+st crew                           who exists, what state, what role
+st roles [--check]                the hierarchy, and whether it's real
+st role set <agent> <role>        generative: rewrites cards, emits hooks
+st new <agent>                    create an agent from a card
+st stop <agent>                   stop it
+st log [agent]                    what happened
 ```
+
+Ten. **Adding an eleventh means deleting one.** If it grows an `st convoy`, an `st rig`, or an `st formula`, we've rebuilt what we left.
+
+> The binary is **`st`**, not `shanty` — `shanty` is the operator's own tmux command, and ours would shadow it on `PATH`. A harness that steals your command name has already made itself the centre of the world.
 
 ## 🆚 Versus Gas Town
 
-Not a competitor. Gas Town is the parent — shantytown is what the parent looks like with the unused
-92% removed.
+Gas Town is the parent, and it earned its complexity honestly — it was built for a world with an orchestration tier. We don't live there any more. It ships **~110 commands; we measurably used nine.**
 
 | | Gas Town | shantytown |
 |---|---|---|
-| Commands | ~110 | **8** |
+| Commands | ~110 | **10** |
 | Dispatch | `gt sling` → convoy + formula + hook | **`tmux send-keys`** |
 | Dispatch cost | >120 s, 63 Dolt conns | **3.4 s, 3 conns** |
+| Messaging | `gt mail` → bus + queue + router | **`st mail` → send-keys** |
+| Undeliverable message | queued forever, reports ✓ | **exit 2, nothing sent** |
 | Orchestration tier | mayor · deacon · witness · refinery · polecat | **none** |
-| Message bus | `gt mail` — our most-used command | **none**, deliberately |
-| Convoys | auto-created per dispatch, on the hot path | **none** — `shanty log` reads the tracker |
+| Convoys | auto-created per dispatch, on the hot path | **none** |
 | Tracker | Beads, welded in | **pluggable protocol** |
 | Identity | 4 files | **the graph** (card is a projection) |
-| Handoff | drops `--settings`, silently hookless | **none** — `stop` + `new`; the card carries identity |
+| Dashboard | two servers, both down | **none** — a dashboard reads the tracker |
 
-### What we kept
-Beads (as **a** tracker, not **the** tracker), tmux panes, and the agent card. That's it.
-
-### What's deliberately absent
-- **No `shanty mail`.** Our heaviest-used Gas Town command (70 invocations), and still no. *A harness
-  that grows a message bus is on its way to being a town.*
-- **No orchestration tier.** It is switched off on our host by directive and nothing broke — the
-  strongest evidence we have that it isn't needed.
-- **No convoys.** A write on the hot path, for dashboard visibility.
-- **No dashboard.** A dashboard reads the tracker, not the harness. Gas Town ships two dashboard
-  servers; both are down; the dashboard everyone actually uses bypasses both and works.
-- **No handoff.** Gas Town's drops the settings flag and silently produces a hookless session.
+**What we kept:** beads (as *a* tracker, not *the* tracker), tmux panes, the agent card. That's it.
 
 ## 🧪 Testing philosophy
 
@@ -169,7 +150,7 @@ None of these were caught by the green suite. Every one was caught by *driving t
 |---|---|
 | [`docs/vision.md`](docs/vision.md) | what this replaces, and how we'll know it failed |
 | [`docs/design.md`](docs/design.md) | the shape: dispatch, triage, trackers, panes |
-| [`docs/cli.md`](docs/cli.md) | the eight commands, and `shanty prime` |
+| [`docs/cli.md`](docs/cli.md) | the eight commands, and `st prime` |
 | [`docs/agent-card.md`](docs/agent-card.md) | identity — the graph is the truth, the card is a projection |
 | [`docs/roles.md`](docs/roles.md) | worker / lead / administrator, and why a lead absorbs |
 | [`docs/adapters.md`](docs/adapters.md) | first-class defaults, pluggable everything |

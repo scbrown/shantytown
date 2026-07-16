@@ -13,6 +13,7 @@ it — count the connections, don't hold a stopwatch.
 """
 from __future__ import annotations
 import json
+import re
 import subprocess
 
 from .protocols import WorkItem
@@ -44,6 +45,36 @@ class BeadsTracker:
             status=d.get("status", "open"),
             assignee=d.get("assignee"),
         )
+
+    def create(self, title: str, **fields) -> WorkItem:
+        """`bd create`. Returns the item, because the caller needs the new id.
+
+        bd prints the id on stdout; we parse it rather than re-query, so create
+        costs one bd invocation and not two. bd update is ~3.9s against bd show's
+        0.18s (aegis-s9m7) — every avoided round trip is real money here.
+        """
+        args = ["create", title, "--json"]
+        for k, v in fields.items():
+            if v is None:
+                continue
+            args.append(f"--{k.replace('_', '-')}={v}")
+        r = self._bd(*args)
+        if r.returncode != 0:
+            raise RuntimeError(f"bd create failed: {r.stderr.strip()[:120]}")
+        try:
+            d = json.loads(r.stdout)
+            if isinstance(d, list):
+                d = d[0]
+            item_id = d.get("id", "")
+        except json.JSONDecodeError:
+            # bd's human output: "✓ Created issue: aegis-x1y2 — title"
+            m = re.search(r"\b([a-z][a-z0-9_]*-[a-z0-9]+)\b", r.stdout)
+            item_id = m.group(1) if m else ""
+        if not item_id:
+            # Never invent an id. A create that cannot name what it made did not
+            # create anything the caller can use.
+            raise RuntimeError(f"bd create gave no id: {r.stdout.strip()[:120]}")
+        return WorkItem(id=item_id, title=title, status="open", assignee=fields.get("assignee"))
 
     def update(self, item_id: str, **fields) -> None:
         args = ["update", item_id]

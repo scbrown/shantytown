@@ -58,9 +58,17 @@ class Tracker(Protocol):
     — Optional, not a list, so a primer structurally CANNOT print a backlog
     ("a primer that prints a backlog is a dashboard"). A function that cannot
     return two things cannot grow a dashboard.
+
+    THREE functions as of 2026-07-16, by Stiwi's direction: `st task` creates
+    work, and creation cannot be expressed through get/update — update() needs an
+    id that does not exist yet. This is an OWNER-DIRECTED widening, which is a
+    different act from the one test_swap caught: that was a shared contract
+    widened unilaterally at 2am to make one command work. The guard still pins the
+    surface; it now pins it at three, and a fourth method still fails the test.
     """
     def get(self, item_id: str) -> WorkItem: ...
     def update(self, item_id: str, **fields) -> None: ...
+    def create(self, title: str, **fields) -> WorkItem: ...
 
 
 @runtime_checkable

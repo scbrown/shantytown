@@ -84,6 +84,23 @@ class FilesTracker:
         p.write_text(json.dumps(d, indent=2, sort_keys=True))
 
 
+    def create(self, title: str, **fields) -> WorkItem:
+        """New item. Returns it, because the caller needs the id it did not have.
+
+        The id is content-free and monotonic: creation must not need a server.
+        """
+        self.root.mkdir(parents=True, exist_ok=True)
+        n = 1 + max(
+            (int(f.stem[3:]) for f in self.root.glob("st-*.json") if f.stem[3:].isdigit()),
+            default=0,
+        )
+        item_id = f"st-{n}"
+        d = {"title": title, "status": "open"}
+        d.update({k: v for k, v in fields.items() if v is not None})
+        self._path(item_id).write_text(json.dumps(d, indent=2, sort_keys=True))
+        return WorkItem(id=item_id, title=title, status="open", assignee=d.get("assignee"))
+
+
 def plate(tracker: FilesTracker, agent: str) -> WorkItem | None:
     """The ONE thing on an agent's plate, or None. A module function, not a method.
 
