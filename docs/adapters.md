@@ -93,10 +93,21 @@ class Knowledge(Protocol):      # quipu
     def record(self, episode: Episode) -> TxId: ...
 ```
 
-**Both must be optional at the interface and excellent by default.** The `none` adapter is the test:
-an agent with no bobbin and no quipu still starts, still works, still stops. If it can't, we didn't
-build a harness with knowledge — we built a knowledge system with a harness attached, and that's the
-thing this repo exists to not be.
+**bobbin is optional. quipu's *knowledge* job is optional. quipu's *registry* job is not** — see
+[`agent-card.md`](agent-card.md): quipu holds identity (who exists, who reports to whom, what role),
+and you cannot start an agent whose identity you can't read. Those are two jobs and they must not
+share a switch:
+
+| quipu's job | holds | optional? |
+|---|---|---|
+| **registry** | identity, hierarchy, role | **no — required** |
+| **knowledge** | episodes, facts | **yes — `none` adapter valid** |
+
+The `none` **knowledge** adapter is still the test: an agent with no bobbin and no episode-store
+starts, works, and stops. If it can't, we didn't build a harness with knowledge — we built a knowledge
+system with a harness attached, and that's the thing this repo exists to not be. There is no `none`
+registry, and that is a real cost to "smaller than what it replaces" — argued honestly in
+`agent-card.md`.
 
 ### The quipu integration has a known trap, and it's ours
 
