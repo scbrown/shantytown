@@ -31,11 +31,14 @@ shantytown keeps the nine, drops the rest, and stops pretending dispatch is hard
 | [`docs/agent-card.md`](docs/agent-card.md) | the agent card: identity, hierarchy, generative roles |
 | [`docs/roles.md`](docs/roles.md) | worker / lead / administrator, and why a lead absorbs |
 | [`docs/adapters.md`](docs/adapters.md) | first-class defaults (Claude Code, beads, bobbin, quipu), pluggable everything |
+| [`docs/integrations.md`](docs/integrations.md) | the rest of the toolbox — tapestry, reactor, dp, skein — and why we ship **no dashboard** |
 
 ## Principles
 
 - **Smaller than what it replaces.** If it grows an orchestration tier, we got it wrong.
 - **Bring your own tracker.** Beads, GitHub issues, or a directory of markdown files. Two functions.
+- **Ship no dashboard.** A dashboard reads the tracker, not the harness. Gas Town ships two dashboard
+  servers; both are down; the dashboard everyone uses bypasses both and works.
 - **Bring your own panes.** [shanty](https://git.lan/stiwi/shanty), [herdr](https://github.com/ogulcancelik/herdr), or bare tmux.
 - **Python.** New code is Python; it has the test tooling bash doesn't.
 - **A check must be able to fail.** Anything that reports health must be shown returning red.
