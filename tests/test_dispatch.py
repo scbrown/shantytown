@@ -123,3 +123,44 @@ def test_refuses_unknown_agent(world):
     with pytest.raises(LookupError, match="no such agent"):
         d.go("item-1", "ghost")
     assert tracker.updates == 0
+
+
+# --- socket: bare tmux cannot see a named server, and says "down" instead of erroring ---
+
+def test_tmux_socket_is_threaded_into_every_command():
+    """Standing shantytown up on its own host printed `down` for all 8 crew while
+    every one was live on socket gt-ae5f35. Bare tmux does not error on a socket
+    it cannot see — it returns an empty list, exit 0. A false negative about
+    liveness is the worst answer this adapter can give."""
+    from shantytown.tmux import Tmux
+    t = Tmux(socket="gt-ae5f35")
+    assert t._cmd("list-panes") == ["tmux", "-L", "gt-ae5f35", "list-panes"]
+    # -L must precede the subcommand or tmux rejects it
+    assert t._cmd("send-keys", "-t", "p")[:4] == ["tmux", "-L", "gt-ae5f35", "send-keys"]
+
+
+def test_tmux_socket_defaults_to_bare_tmux():
+    from shantytown.tmux import Tmux
+    assert Tmux(socket=None)._cmd("list-panes") == ["tmux", "list-panes"]
+
+
+def test_tmux_socket_reads_env(monkeypatch):
+    from shantytown.tmux import Tmux
+    monkeypatch.setenv("SHANTY_TMUX_SOCKET", "sock1")
+    assert Tmux()._cmd("ls") == ["tmux", "-L", "sock1", "ls"]
+
+
+def test_exists_matches_session_names_not_only_pane_ids():
+    """Our panes are addressed by session name (aegis-crew-ian); #{pane_id} only
+    ever yields %N, so a pane_id-only check reports down for every agent."""
+    from shantytown.tmux import Tmux
+    import subprocess
+    t = Tmux()
+    out = subprocess.CompletedProcess([], 0, stdout="%1 aegis-crew-ian\n%2 other\n", stderr="")
+    orig = subprocess.run
+    try:
+        subprocess.run = lambda *a, **k: out
+        assert t.exists("aegis-crew-ian") is True
+        assert t.exists("aegis-crew-nobody") is False
+    finally:
+        subprocess.run = orig
