@@ -30,6 +30,20 @@ class FilesRegistry:
         )
 
     def all(self) -> list[Agent]:
+        """Every agent. RAISES if there is no registry to read.
+
+        This distinction is load-bearing and it was a real bug: glob() on a
+        MISSING directory returns [] — no error — so `roles --check` against a
+        nonexistent registry reported "0 agents, every one reports somewhere"
+        and EXITED 0. That is exactly the defect cli.md says exit code 2 exists
+        for: "a check that couldn't reach its target reported CLEAR."
+
+        An empty registry (dir present, no cards) and an absent registry (no dir)
+        are DIFFERENT ANSWERS. The first is "nobody exists". The second is "I
+        could not look". Only the second is exit 2, and glob() collapses them.
+        """
+        if not self.root.is_dir():
+            raise OSError(f"no registry to read: {self.root} does not exist")
         return [self.get(p.stem) for p in sorted(self.root.glob("*.json"))]
 
 
@@ -37,8 +51,12 @@ class FilesTracker:
     """A work item is a json file. That's the whole tracker."""
 
     def __init__(self, root: Path):
+        # NO mkdir here. Constructing a tracker must not touch the disk.
+        # `shanty prime` wires one, and cli.md is explicit: "prime is a read. It
+        # must never write." A mkdir in __init__ meant merely ASKING who you are
+        # created a directory — a write nobody requested and nobody could see.
+        # The mkdir belongs in update(), the only method that writes.
         self.root = Path(root)
-        self.root.mkdir(parents=True, exist_ok=True)
 
     def _path(self, item_id: str) -> Path:
         return self.root / f"{item_id}.json"
@@ -47,6 +65,9 @@ class FilesTracker:
         p = self._path(item_id)
         if not p.is_file():
             raise LookupError(f"no such item: {item_id}")
+        return self._read(p, item_id)
+
+    def _read(self, p: Path, item_id: str) -> WorkItem:
         d = json.loads(p.read_text())
         return WorkItem(
             id=item_id,
@@ -55,7 +76,27 @@ class FilesTracker:
             assignee=d.get("assignee"),
         )
 
+    def mine(self, agent: str) -> WorkItem | None:
+        """The one thing on an agent's plate, or None.
+
+        Returns AT MOST ONE item, by construction. cli.md: "One item, or none. A
+        primer that prints a backlog is a dashboard." That is enforced in the
+        RETURN TYPE rather than in prime's formatting — a signature that cannot
+        express a backlog cannot be talked into printing one later.
+
+        Ties broken by id so two runs agree; a primer that reorders itself is a
+        primer nobody trusts.
+        """
+        if not self.root.is_dir():
+            return None
+        for p in sorted(self.root.glob("*.json")):
+            item = self._read(p, p.stem)
+            if item.assignee == agent and item.status != "closed":
+                return item
+        return None
+
     def update(self, item_id: str, **fields) -> None:
+        self.root.mkdir(parents=True, exist_ok=True)
         p = self._path(item_id)
         d = json.loads(p.read_text()) if p.is_file() else {}
         d.update({k: v for k, v in fields.items() if v is not None})
