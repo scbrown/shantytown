@@ -69,7 +69,7 @@ def test_idle_is_not_live_and_is_not_dead_either():
         looking" — THE SAME READING FOR OPPOSITE STATES. reactor exposes no
         last-poll timestamp, so it is not knowable from here. Say so.
     """
-    lv = _Fake(REAL).liveness(now=1784180913.885 + 600)   # 10 min of silence
+    lv = _Fake(REAL).liveness(now=1784180913.885 + 1200)   # 20 min — above the measured 788s max
     assert lv.reachable is True
     assert lv.delivered == 27, "the counter looks healthy — that is v1's trap"
     assert lv.verdict == "cannot tell", (
@@ -90,7 +90,7 @@ def test_backlogged_is_dead_not_idle():
     """
     body = REAL.replace("reactor_catchup_commits_remaining 0",
                         "reactor_catchup_commits_remaining 9")
-    lv = _Fake(body).liveness(now=1784180913.885 + 600)
+    lv = _Fake(body).liveness(now=1784180913.885 + 1200)
     assert lv.pending == 9
     assert lv.verdict == "BACKLOGGED"
     assert "Quiet does not explain a backlog" in lv.render()
@@ -107,11 +107,28 @@ def test_pending_zero_does_NOT_prove_healthy():
     build a third detector that cannot fire — v1's failure mode again, from a
     metric whose own documentation says it will not help.
     """
-    lv = _Fake(REAL).liveness(now=1784180913.885 + 600)   # pending==0, 10min idle
+    lv = _Fake(REAL).liveness(now=1784180913.885 + 1200)   # pending==0, 10min idle
     assert lv.pending == 0
     assert lv.verdict == "cannot tell", (
         "pending==0 was treated as proof of health — but the metric only counts "
         "INITIAL catchup, so 0 is what a dead steady-state reactor also reports"
+    )
+
+
+def test_600s_of_silence_is_INSIDE_the_measured_distribution():
+    """THE THRESHOLD WAS BELOW NORMAL AND THE MEASUREMENT PROVED IT (aegis-8qk1).
+
+    Measured end-to-end latency on beads_aegis: n=66, min=0s, avg=45s, MAX=788s.
+    The old QUIET_AFTER_S was 300 — **3 of 66 healthy events exceeded it**. All
+    three of tonight's reported "stalls" sat inside this distribution.
+
+    So 600s of silence, which I personally reported as a stall, must read as
+    live: it is well inside normal. This is the regression test for the false
+    alarm I sent to reactor's owner.
+    """
+    lv = _Fake(REAL).liveness(now=1784180913.885 + 600)
+    assert lv.verdict == "live", (
+        "600s read as trouble — but the measured max is 788s, so this is normal"
     )
 
 

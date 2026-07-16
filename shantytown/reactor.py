@@ -55,14 +55,28 @@ from dataclasses import dataclass
 # mirror of v1 (live if delivered>0, which never fires): one detector that cannot
 # fire, one that cannot stop. I built both in twenty minutes.
 #
-# AND THE NUMBER ITSELF IS A GUESS — dearing measured reactor's processing
-# latency at 5s on one probe and 69s on another. THE SAME REACTOR, THE SAME DAY,
-# AN ORDER OF MAGNITUDE APART, and nobody has characterised the distribution. So
-# 300 is not "5x the worst case"; it is 4x the largest sample anyone happens to
-# have taken. Any threshold here is unfounded until someone characterises the
-# latency, which is why this constant only ever downgrades "live" to "cannot
-# tell" — never to "dead". A guessed threshold may not accuse.
-QUIET_AFTER_S = 300.0
+# THE NUMBER IS NOW MEASURED, AND THE GUESS WAS WRONG (aegis-8qk1, dearing).
+# reactor.reactor_events carries payload.created_at (the bd write) alongside its
+# own timestamp (when reactor handled it), so the end-to-end latency is an exact
+# subtraction — no join, no log, no SSH:
+#
+#   SELECT TIMESTAMPDIFF(SECOND, JSON_UNQUOTE(JSON_EXTRACT(payload,'$.created_at')),
+#                        timestamp)
+#     FROM reactor.reactor_events WHERE source_db='beads_aegis';
+#
+#   n=66   min=0s   avg=45s   MAX=788s
+#
+# The old value was 300. **3 of 66 HEALTHY events exceeded it** — 788s of normal
+# latency is 2.6x my "conservative" threshold. Every one of tonight's three
+# reported "stalls" (two dearing's, one mine) sat INSIDE this distribution. The
+# guess was not merely unfounded; it was below the observed maximum, and it only
+# failed safely because this constant may never accuse — it downgrades live ->
+# cannot tell, never -> dead. That property is the sole reason a wrong number did
+# not become a fourth false alarm.
+#
+# 900 sits above the observed max with headroom. It is STILL A SAMPLE (n=66, one
+# night, one fleet): treat it as the best available number, not the true ceiling.
+QUIET_AFTER_S = 900.0
 
 
 @dataclass(frozen=True)
