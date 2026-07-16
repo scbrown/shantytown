@@ -21,6 +21,17 @@ under one. Underneath, it's `tmux send-keys`.
 
 shantytown keeps the nine, drops the rest, and stops pretending dispatch is hard.
 
+## The docs
+
+| doc | what it answers |
+|---|---|
+| [`docs/vision.md`](docs/vision.md) | what this replaces, and how we'll know it failed |
+| [`docs/design.md`](docs/design.md) | the shape: dispatch, triage, trackers, panes |
+| [`docs/cli.md`](docs/cli.md) | the eight commands, and `shanty prime` — the primer |
+| [`docs/agent-card.md`](docs/agent-card.md) | the agent card: identity, hierarchy, generative roles |
+| [`docs/roles.md`](docs/roles.md) | worker / lead / administrator, and why a lead absorbs |
+| [`docs/adapters.md`](docs/adapters.md) | first-class defaults (Claude Code, beads, bobbin, quipu), pluggable everything |
+
 ## Principles
 
 - **Smaller than what it replaces.** If it grows an orchestration tier, we got it wrong.

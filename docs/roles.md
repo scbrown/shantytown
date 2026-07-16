@@ -3,6 +3,10 @@
 > Reports' stop hooks terminate at their **lead**. What the lead doesn't absorb rises to the
 > **administrator**. That's the whole hierarchy.
 
+**Roles live in the agent card, and declaring one is generative** — it rewrites the card and emits
+that role's stop hooks in the same write. See [`agent-card.md`](agent-card.md) for the card, the
+`role set` contract, and what happens to a lead's reports when it's demoted or goes down.
+
 ## Three roles
 
 | role | takes work? | delegates? | receives stop hooks from |
