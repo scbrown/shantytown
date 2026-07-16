@@ -85,8 +85,6 @@ Measured on one host, one store, one day. Not estimated.
 | Dolt connections | 63 | **3** | **21× fewer** |
 | CPU while running | 4% | — | *waiting, not working* |
 
-**And the honest part.** Of that 3.40 s, **~3.2 s is the tracker write** — `bd update` costs 3.93 s where `bd show` costs 0.18 s. **shantytown's own overhead is ~0.20 s.** We set a target of "dispatch under a second", missed it, and kept the miss on the record: the floor is bd's, not ours. With the files tracker, dispatch is **0.04 s**.
-
 ## 🧱 The whole surface
 
 ```
