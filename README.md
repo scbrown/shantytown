@@ -119,24 +119,6 @@ Gas Town is the parent, and it earned its complexity honestly — it was built f
 
 **What we kept:** beads (as *a* tracker, not *the* tracker), tmux panes, the agent card. That's it.
 
-## 🧪 Testing philosophy
-
-> **A check that has only ever passed is indistinguishable from a broken one.**
-
-Every guard ships with a demonstrated **failing** case, because this codebase has already been bitten
-by the alternative — repeatedly, and always by a *green test*:
-
-- `triage`'s CLEAR branch **could never fire.** It needed >400 screen lines; `capture-pane` returns
-  the ~24 visible ones. Its unit test synthesised a 500-line screen and asserted CLEAR. **Green test,
-  dead branch** — in the file written to encode this very lesson.
-- `roles --check` on a missing registry printed *"0 agents, every one reports somewhere"* and **exited
-  0** — the code path its own docs said exit 2 existed for. The test passed throughout: its mock
-  *raised*, while the real registry returned `[]`. **The mock didn't behave like the thing it stood in
-  for.**
-- `prime` **wrote to disk.** Asking who you are created a directory.
-
-None of these were caught by the green suite. Every one was caught by *driving the command*.
-
 ## 📚 Docs
 
 | doc | what it answers |
