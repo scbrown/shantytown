@@ -22,11 +22,19 @@ first didn't leak.
 
 | layer | first-class (default) | the second implementation, which is the *proof* |
 |---|---|---|
+| **registry** *(identity)* | **quipu** | `files` — a flat registry. **Required layer; still needs two impls.** |
 | **runtime** | **Claude Code** | one other (`opencode` / `codex`) |
 | **tracker** | **beads** | `files` — a directory of markdown. Zero dependencies. |
 | **panes** | bare `tmux` | `shanty` / `herdr` adapters, later |
 | **context** | **bobbin** | none-adapter (returns nothing, harness still works) |
 | **knowledge** | **quipu** | none-adapter |
+
+The **registry** row is the one that breaks the pattern and it's worth staring at: it is the only
+layer with **no `none` option** — you cannot start an agent whose identity you can't read. It still
+gets a second implementation, because the two-implementations rule isn't about optionality, it's about
+**leak detection**: if a flat-file registry is hard to write, quipu has leaked into the core. That
+second impl is also the honest answer to "does shantytown now require a graph database?" — no, it
+requires a *registry*, and quipu is the good one.
 
 The `files` tracker and the `none` adapters aren't charity. They are the **negative control**: if the
 harness can't run with a markdown directory and no bobbin, the interface is a lie and beads/bobbin
@@ -144,5 +152,11 @@ triage calls quipu directly, the adapter is decorative and the second implementa
 we're maintaining for the README.
 
 **The check is mechanical, not cultural:** the test suite runs the whole harness on
-`files` + `none` + `none` + bare tmux. If that goes red, we leaked. That test is the interface —
-everything above is commentary.
+**`files` registry + `files` tracker + `none` context + `none` knowledge + bare tmux**. No quipu, no
+beads, no bobbin, no multiplexer. If that goes red, we leaked. That test is the interface — everything
+above is commentary.
+
+Note what that run proves and what it doesn't: it proves *the core doesn't import quipu*. It does not
+license shipping the flat registry — quipu is the default because identity wants provenance, history,
+and one place to ask. The flat registry exists to keep the boundary honest, the same way the `files`
+tracker does.
