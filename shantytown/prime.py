@@ -19,8 +19,9 @@ the thing we keep finding untrue.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Callable
 
-from .protocols import Agent, Panes, Registry, Tracker, WorkItem
+from .protocols import Agent, Panes, Registry, WorkItem
 
 
 class Unreachable(Exception):
@@ -86,19 +87,26 @@ class Priming:
 def prime(
     me: str,
     registry: Registry,
-    tracker: Tracker,
     panes: Panes,
+    plate: Callable[[str], WorkItem | None] | None = None,
     context: list[str] | None = None,
     knowledge: list[str] | None = None,
 ) -> Priming:
     """Resolve the four things. Reads only.
+
+    `plate` is INJECTED rather than taken off the Tracker protocol, because
+    Tracker is two functions and prime is not allowed to widen it alone
+    (aegis-gqr8 — see the note in protocols.Tracker). Pass files.plate bound to
+    a tracker; pass None and prime honestly reports an empty plate rather than
+    guessing. Note the tracker is not a parameter at all now: prime never writes,
+    and the only thing it wanted from a tracker was this one read.
 
     Raises LookupError  -> exit 1 (refused: you are not in the registry)
     Raises Unreachable  -> exit 2 (could not tell: a backend was unreachable)
     """
     agent = registry.get(me)                       # 1. identity, one source
 
-    item = tracker.mine(me)                        # 2. one item, or none
+    item = plate(me) if plate else None            # 2. one item, or none
 
     lead: Agent | None = None
     lead_up: bool | None = None

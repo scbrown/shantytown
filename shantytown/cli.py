@@ -12,7 +12,7 @@ from pathlib import Path
 
 from . import roles as roles_mod
 from .dispatch import Dispatcher
-from .files import FilesRegistry, FilesTracker
+from .files import FilesRegistry, FilesTracker, plate as files_plate
 from .prime import Unreachable, prime as do_prime
 from .tmux import Tmux
 
@@ -90,7 +90,9 @@ def _cmd_prime(a) -> int:
               file=sys.stderr)
         return REFUSED
     try:
-        p = do_prime(me, _registry(a.root), _tracker(a.root), Tmux())
+        trk = _tracker(a.root)
+        p = do_prime(me, _registry(a.root), Tmux(),
+                     plate=lambda who: files_plate(trk, who))
     except LookupError as e:
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED

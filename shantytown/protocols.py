@@ -39,22 +39,27 @@ class Registry(Protocol):
 
 @runtime_checkable
 class Tracker(Protocol):
-    """Three functions, and the third one is load-bearing on purpose.
+    """Two functions. Anything more and the tracker is driving the harness.
 
-    It was two. `shanty prime` has to answer "what's on my plate" and could not:
-    get() needs an id you do not have yet. The options were a query API (which is
-    how a tracker starts driving the harness), or prime reaching past the
-    protocol into the files layout (which is how the second impl stops being a
-    leak detector). Neither.
+    UNRESOLVED, and deliberately not resolved here (aegis-gqr8): `shanty prime`
+    must answer "what's on my plate", and it CANNOT through this protocol —
+    get() needs an id you do not have yet. I briefly added a third method,
+    mine(), and it broke test_swap's two-function assertion, which exists to
+    enforce exactly this line. The test was right to stop me: a shared contract
+    is not mine to widen at 2am.
 
-    So: mine() returns AT MOST ONE item — Optional, not a list. cli.md says "One
-    item, or none. A primer that prints a backlog is a dashboard", and this
-    signature makes that structurally true instead of a rule someone has to
-    remember. A function that cannot return two things cannot grow a dashboard.
-    That is the whole justification for the third method; a fourth needs its own.
+    For now prime reads the plate through a per-adapter helper (files.plate),
+    so this protocol is unchanged and the beads swap keeps working. That is a
+    holding position, not an answer — it means every new tracker owes a plate
+    reader that the protocol does not describe.
+
+    The real question for arnold: does prime's need justify a third method? If
+    yes, the shape that preserves the design is `mine(agent) -> WorkItem | None`
+    — Optional, not a list, so a primer structurally CANNOT print a backlog
+    ("a primer that prints a backlog is a dashboard"). A function that cannot
+    return two things cannot grow a dashboard.
     """
     def get(self, item_id: str) -> WorkItem: ...
-    def mine(self, agent: str) -> WorkItem | None: ...
     def update(self, item_id: str, **fields) -> None: ...
 
 

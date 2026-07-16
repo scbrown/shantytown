@@ -76,28 +76,39 @@ class FilesTracker:
             assignee=d.get("assignee"),
         )
 
-    def mine(self, agent: str) -> WorkItem | None:
-        """The one thing on an agent's plate, or None.
-
-        Returns AT MOST ONE item, by construction. cli.md: "One item, or none. A
-        primer that prints a backlog is a dashboard." That is enforced in the
-        RETURN TYPE rather than in prime's formatting — a signature that cannot
-        express a backlog cannot be talked into printing one later.
-
-        Ties broken by id so two runs agree; a primer that reorders itself is a
-        primer nobody trusts.
-        """
-        if not self.root.is_dir():
-            return None
-        for p in sorted(self.root.glob("*.json")):
-            item = self._read(p, p.stem)
-            if item.assignee == agent and item.status != "closed":
-                return item
-        return None
-
     def update(self, item_id: str, **fields) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
         p = self._path(item_id)
         d = json.loads(p.read_text()) if p.is_file() else {}
         d.update({k: v for k, v in fields.items() if v is not None})
         p.write_text(json.dumps(d, indent=2, sort_keys=True))
+
+
+def plate(tracker: FilesTracker, agent: str) -> WorkItem | None:
+    """The ONE thing on an agent's plate, or None. A module function, not a method.
+
+    WHY IT LIVES HERE AND NOT ON THE PROTOCOL (aegis-gqr8): `shanty prime` must
+    answer "what's on my plate" and Tracker cannot — get() needs an id you do not
+    have yet. I first solved that by adding a third method, mine(), to Tracker.
+    That broke test_swap's two-function assertion AND the BeadsTracker isinstance
+    check — ellie's test caught a shared-contract change I had no business making
+    alone. It was right; this is the holding position until arnold rules.
+
+    Reading `tracker.root` here is not a leak: this module OWNS the files layout.
+    It is the files adapter answering a question about its own storage. It IS a
+    debt — every new tracker now owes a plate reader the protocol does not
+    describe, and beads.py has none, so prime against beads shows an empty plate
+    rather than a wrong one.
+
+    Returns AT MOST ONE item, by construction. cli.md: "One item, or none. A
+    primer that prints a backlog is a dashboard." Ties broken by id so two runs
+    agree — a primer that reorders itself is a primer nobody trusts.
+    """
+    root = Path(tracker.root)
+    if not root.is_dir():
+        return None
+    for p in sorted(root.glob("*.json")):
+        item = tracker._read(p, p.stem)
+        if item.assignee == agent and item.status != "closed":
+            return item
+    return None

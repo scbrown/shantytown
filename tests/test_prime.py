@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from shantytown.files import FilesRegistry, FilesTracker
+from shantytown.files import FilesRegistry, FilesTracker, plate
 from shantytown.prime import prime
 from shantytown.tmux import NullPanes
 
@@ -54,10 +54,13 @@ def test_prime_writes_nothing(tmp_path: Path):
         return {str(p) for p in tmp_path.rglob("*")}
 
     before = snap()
-    # Note: the items/ dir deliberately does NOT exist. If prime creates it,
-    # this fails — which is the whole point.
-    p = prime("solo", FilesRegistry(crew), FilesTracker(tmp_path / "items"),
-              NullPanes())
+    # Note: the items/ dir deliberately does NOT exist. If prime (or the plate
+    # reader, or merely CONSTRUCTING the tracker) creates it, this fails — which
+    # is the whole point. The tracker is built here, inside the snapshot window,
+    # precisely so the mkdir-in-__init__ bug would be caught.
+    trk = FilesTracker(tmp_path / "items")
+    p = prime("solo", FilesRegistry(crew), NullPanes(),
+              plate=lambda who: plate(trk, who))
     after = snap()
 
     assert before == after, f"prime WROTE: {after - before}"
@@ -68,8 +71,8 @@ def test_prime_writes_nothing(tmp_path: Path):
 def test_prime_is_idempotent(world):
     """Safe to run twice. It is the most-run command in the harness."""
     _, reg, trk = world
-    a = prime("ellie", reg, trk, NullPanes()).render()
-    b = prime("ellie", reg, trk, NullPanes()).render()
+    a = prime("ellie", reg, NullPanes(), plate=lambda w, _t=trk: plate(_t, w)).render()
+    b = prime("ellie", reg, NullPanes(), plate=lambda w, _t=trk: plate(_t, w)).render()
     assert a == b
 
 
@@ -77,7 +80,7 @@ def test_one_item_never_a_backlog(world):
     """cli.md: "One item, or none. A primer that prints a backlog is a dashboard."""
     _, reg, trk = world
     trk.update("aegis-2nd", title="Second thing", status="open", assignee="ellie")
-    p = prime("ellie", reg, trk, NullPanes())
+    p = prime("ellie", reg, NullPanes(), plate=lambda w, _t=trk: plate(_t, w))
     # The type says so, but assert the behaviour: one, not two.
     assert p.item is not None
     assert p.render().count("▶") == 1
@@ -86,21 +89,21 @@ def test_one_item_never_a_backlog(world):
 def test_closed_items_are_not_on_your_plate(world):
     _, reg, trk = world
     trk.update("aegis-9h2", status="closed")
-    p = prime("ellie", reg, trk, NullPanes())
+    p = prime("ellie", reg, NullPanes(), plate=lambda w, _t=trk: plate(_t, w))
     assert p.item is None
     assert "nothing." in p.render()
 
 
 def test_empty_plate_says_so(world):
     _, reg, trk = world
-    p = prime("arnold", reg, trk, NullPanes())
+    p = prime("arnold", reg, NullPanes(), plate=lambda w, _t=trk: plate(_t, w))
     assert p.item is None
     assert "nothing." in p.render()
 
 
 def test_lead_up(world):
     _, reg, trk = world
-    p = prime("ellie", reg, trk, NullPanes())
+    p = prime("ellie", reg, NullPanes(), plate=lambda w, _t=trk: plate(_t, w))
     assert p.lead.name == "malcolm"
     assert p.lead_up is True
     assert "up. Your stop events go to them." in p.render()
@@ -110,7 +113,7 @@ def test_lead_down_is_said_here_not_later(world):
     """cli.md item 3: if your lead is down, prime says so HERE."""
     _, reg, trk = world
     panes = NullPanes(); panes._exists = False
-    p = prime("ellie", reg, trk, panes)
+    p = prime("ellie", reg, panes, plate=lambda w, _t=trk: plate(_t, w))
     assert p.lead_up is False
     assert "DOWN" in p.render()
 
@@ -125,7 +128,7 @@ def test_lead_state_unknown_is_not_up(world):
     crew = tmp / "crew"
     _card(crew, "leadnopane", role="lead", reports_to="arnold")
     _card(crew, "kid", role="worker", reports_to="leadnopane", pane="%9")
-    p = prime("kid", FilesRegistry(crew), trk, NullPanes())
+    p = prime("kid", FilesRegistry(crew), NullPanes(), plate=lambda w, _t=trk: plate(_t, w))
     assert p.lead_up is None
     out = p.render()
     assert "UNKNOWN" in out
@@ -135,7 +138,7 @@ def test_lead_state_unknown_is_not_up(world):
 def test_orphan_is_loud(world):
     """An orphan's stop events go nowhere. That is the finding, not a footnote."""
     _, reg, trk = world
-    p = prime("arya", reg, trk, NullPanes())
+    p = prime("arya", reg, NullPanes(), plate=lambda w, _t=trk: plate(_t, w))
     assert p.lead is None
     assert "ORPHAN" in p.render()
 
@@ -148,13 +151,13 @@ def test_card_naming_a_missing_lead_refuses(world):
     """
     _, reg, trk = world
     with pytest.raises(LookupError, match="no such agent is in the registry"):
-        prime("ghostlead", reg, trk, NullPanes())
+        prime("ghostlead", reg, NullPanes(), plate=lambda w, _t=trk: plate(_t, w))
 
 
 def test_unknown_agent_refuses(world):
     _, reg, trk = world
     with pytest.raises(LookupError, match="no such agent"):
-        prime("nobody-here", reg, trk, NullPanes())
+        prime("nobody-here", reg, NullPanes(), plate=lambda w, _t=trk: plate(_t, w))
 
 
 def test_optional_sections_vanish(world):
@@ -163,11 +166,11 @@ def test_optional_sections_vanish(world):
     Absent, not empty. An empty heading claims we looked and found nothing.
     """
     _, reg, trk = world
-    bare = prime("ellie", reg, trk, NullPanes()).render()
+    bare = prime("ellie", reg, NullPanes(), plate=lambda w, _t=trk: plate(_t, w)).render()
     assert "CONTEXT" not in bare
     assert "KNOWN" not in bare
 
-    rich = prime("ellie", reg, trk, NullPanes(),
+    rich = prime("ellie", reg, NullPanes(), plate=lambda w, _t=trk: plate(_t, w),
                  context=["scripts/e2e/den.sh"],
                  knowledge=['"den.svc was cowboy-deployed" — 2026-06-30']).render()
     assert "CONTEXT (bobbin)" in rich
