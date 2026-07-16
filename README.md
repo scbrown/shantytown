@@ -100,10 +100,6 @@ st stop <agent>                   stop it
 st log [agent]                    what happened
 ```
 
-Ten. **Adding an eleventh means deleting one.** If it grows an `st convoy`, an `st rig`, or an `st formula`, we've rebuilt what we left.
-
-> The binary is **`st`**, not `shanty` — `shanty` is the operator's own tmux command, and ours would shadow it on `PATH`. A harness that steals your command name has already made itself the centre of the world.
-
 ## 🆚 Versus Gas Town
 
 Gas Town is the parent, and it earned its complexity honestly — it was built for a world with an orchestration tier. We don't live there any more. It ships **~110 commands; we measurably used nine.**
