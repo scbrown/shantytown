@@ -54,6 +54,14 @@ from dataclasses import dataclass
 # NIGHT, gets silenced, and then misses the real death anyway. That is the exact
 # mirror of v1 (live if delivered>0, which never fires): one detector that cannot
 # fire, one that cannot stop. I built both in twenty minutes.
+#
+# AND THE NUMBER ITSELF IS A GUESS — dearing measured reactor's processing
+# latency at 5s on one probe and 69s on another. THE SAME REACTOR, THE SAME DAY,
+# AN ORDER OF MAGNITUDE APART, and nobody has characterised the distribution. So
+# 300 is not "5x the worst case"; it is 4x the largest sample anyone happens to
+# have taken. Any threshold here is unfounded until someone characterises the
+# latency, which is why this constant only ever downgrades "live" to "cannot
+# tell" — never to "dead". A guessed threshold may not accuse.
 QUIET_AFTER_S = 300.0
 
 
