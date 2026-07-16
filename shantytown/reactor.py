@@ -68,6 +68,7 @@ class Liveness:
     reachable: bool
     delivered: int | None          # None = could not tell
     idle_s: float | None = None    # seconds since the last event; None = unknown
+    pending: int | None = None     # commits reactor knows it has NOT processed
     detail: str = ""
 
     @property
@@ -94,9 +95,17 @@ class Liveness:
             # months: answering, monitored, green, and it has never once done
             # the thing. No amount of quiet explains a lifetime total of zero.
             return "GREEN AND DEAD"
+        if self.pending and self.pending > 0 and (
+                self.idle_s is None or self.idle_s > QUIET_AFTER_S):
+            # dearing's discriminator (aegis-4s5d): work is PENDING and nothing
+            # has been processed. Quiet cannot explain a backlog. This is the
+            # one reading that separates "idle" from "dead" — when it fires.
+            return "BACKLOGGED"
         if self.idle_s is None or self.idle_s > QUIET_AFTER_S:
             # It worked at some point and is not working right now. Whether that
             # is a sleeping fleet or a dead process is NOT KNOWABLE FROM HERE.
+            # NOTE pending==0 does NOT rescue us: see Reactor.liveness on why
+            # this metric cannot prove the negative.
             return "cannot tell"
         return "live"
 
@@ -104,6 +113,10 @@ class Liveness:
         if self.verdict == "GREEN AND DEAD":
             return ("  reactor: *** GREEN AND DEAD — answering, 0 events "
                     "delivered, ever. It is not doing the thing. ***")
+        if self.verdict == "BACKLOGGED":
+            return (f"  reactor: *** BACKLOGGED — {self.pending} commits pending "
+                    f"and NOTHING processed for {self.idle_s:.0f}s. Quiet does "
+                    f"not explain a backlog. It is not working. ***")
         if self.verdict == "live":
             return (f"  reactor: live — {self.delivered} events delivered, "
                     f"last {self.idle_s:.0f}s ago")
@@ -153,7 +166,7 @@ class Reactor:
             body = self._metrics()
         except (urllib.error.URLError, OSError, TimeoutError) as e:
             # NOT "broken", NOT "fine". We could not look.
-            return Liveness(False, None, None, f"unreachable at {self.base}: {e}")
+            return Liveness(False, None, detail=f"unreachable at {self.base}: {e}")
 
         n = _counter(body, "reactor_events_dispatched_total")
         if n is None:
@@ -162,16 +175,33 @@ class Reactor:
             # It answered, but not with the thing that means anything. Refusing
             # to guess is the point: a /metrics page without the counter tells
             # you the port is open, which is exactly what up==1 already told you.
-            return Liveness(True, None, None,
-                            "answered, but exposes no event counter — "
-                            "presence without liveness")
+            return Liveness(True, None,
+                            detail="answered, but exposes no event counter — "
+                                   "presence without liveness")
 
         ts = _counter(body, "reactor_last_event_timestamp")
         idle = None if ts is None else max(0.0, now - float(ts))
+
+        # dearing's discriminator (aegis-4s5d), used ONE-WAY ONLY.
+        #
+        # pending > 0 + nothing processed  ->  DEAD. Quiet cannot explain a
+        # backlog, so this is a true positive whenever it fires.
+        #
+        # pending == 0  ->  PROVES NOTHING, and this is the trap. The metric's
+        # own HELP says "Commits remaining in INITIAL CATCHUP" — it tracks the
+        # startup backlog, not steady-state pending work. A reactor that dies
+        # AFTER catchup reads 0, identically to a healthy idle one. Nobody has
+        # ever observed it above 0 (dearing checked; so did I, repeatedly).
+        # So treating pending==0 as "therefore idle, therefore healthy" would
+        # build a THIRD detector that cannot fire — v1's exact failure mode,
+        # from a metric whose documentation already says it will not help.
+        # We upgrade cannot-tell -> BACKLOGGED; we never downgrade to live.
+        pending = _counter(body, "reactor_catchup_commits_remaining")
+
         detail = ("" if ts is not None else
                   f"{n} events total, but no reactor_last_event_timestamp — "
                   "a total is a history, not a pulse")
-        return Liveness(True, n, idle, detail)
+        return Liveness(True, n, idle, pending, detail)
 
 
 class NoReactor:
@@ -185,7 +215,7 @@ class NoReactor:
     """
 
     def liveness(self) -> Liveness:
-        return Liveness(False, None, "no reactor configured (none adapter)")
+        return Liveness(False, None, detail="no reactor configured (none adapter)")
 
 
 def _counter(body: str, name: str) -> int | None:

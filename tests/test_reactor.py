@@ -81,6 +81,40 @@ def test_idle_is_not_live_and_is_not_dead_either():
     assert "live" not in out.replace("delivered", "")
 
 
+def test_backlogged_is_dead_not_idle():
+    """dearing's discriminator (aegis-4s5d): quiet cannot explain a BACKLOG.
+
+    pending > 0 AND nothing processed = work is waiting and reactor is not doing
+    it. That is the one reading which separates idle from dead, and it is a true
+    positive whenever it fires.
+    """
+    body = REAL.replace("reactor_catchup_commits_remaining 0",
+                        "reactor_catchup_commits_remaining 9")
+    lv = _Fake(body).liveness(now=1784180913.885 + 600)
+    assert lv.pending == 9
+    assert lv.verdict == "BACKLOGGED"
+    assert "Quiet does not explain a backlog" in lv.render()
+
+
+def test_pending_zero_does_NOT_prove_healthy():
+    """THE TRAP IN THE DISCRIMINATOR, and it is in the metric's own HELP text.
+
+    "Commits remaining in INITIAL CATCHUP" — it tracks the STARTUP backlog, not
+    steady-state pending work. A reactor that dies after catchup reads 0,
+    identically to a healthy idle one. Nobody has ever seen it above 0.
+
+    So pending==0 + stale must stay CANNOT TELL. Downgrading it to "live" would
+    build a third detector that cannot fire — v1's failure mode again, from a
+    metric whose own documentation says it will not help.
+    """
+    lv = _Fake(REAL).liveness(now=1784180913.885 + 600)   # pending==0, 10min idle
+    assert lv.pending == 0
+    assert lv.verdict == "cannot tell", (
+        "pending==0 was treated as proof of health — but the metric only counts "
+        "INITIAL catchup, so 0 is what a dead steady-state reactor also reports"
+    )
+
+
 def test_quiet_fleet_does_not_read_as_broken():
     """THE FALSE ALARM I ACTUALLY SENT. Regression test for it.
 
