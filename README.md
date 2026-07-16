@@ -53,8 +53,6 @@ st mail ian "go read st-1"
 
 **No message bus. No queue. No delivery guarantee — because there's nothing to guarantee.** The pane is either there or it isn't, and you're told which.
 
-That matters more than it sounds. **A queue will happily accept a message for a reader that never comes.** We measured ours: **47 nudges sat queued for a recipient that does not exist — oldest 25 days, across five different spellings of the name.** Every send reported success. `send-keys` structurally cannot do that: no pane, no send, exit 2.
-
 | routing outcome | exit | what it means |
 |---|---|---|
 | delivered | **0** | the keys went into a live pane |
