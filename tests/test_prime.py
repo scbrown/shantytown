@@ -68,6 +68,30 @@ def test_prime_writes_nothing(tmp_path: Path):
     assert p.me.name == "solo"
 
 
+def test_constructing_a_tracker_creates_nothing(tmp_path: Path):
+    """CONSTRUCTION IS SIDE-EFFECT-FREE. update() is the only writer.
+
+    ellie's catch, and she is right that it needs its own test: FilesTracker
+    .__init__ used to mkdir(parents=True), so merely BUILDING a tracker wrote to
+    disk — while cli.md says prime must never write. The mkdir now lives in
+    update().
+
+    Why this test and not just test_prime_writes_nothing: the two-function
+    interface test CANNOT catch a regression here, because the interface does not
+    change — only the behaviour does. Without this, the next person restores the
+    mkdir for a perfectly good-looking reason ("the tracker should own its dir")
+    and prime silently writes again, and every test still passes.
+    """
+    root = tmp_path / "items"
+    t = FilesTracker(root)
+    assert not root.exists(), "constructing a FilesTracker touched the disk"
+
+    # ...and the write still works when a write is actually asked for.
+    t.update("x-1", title="real", status="open")
+    assert root.is_dir(), "update() failed to create its own directory"
+    assert t.get("x-1").title == "real"
+
+
 def test_prime_is_idempotent(world):
     """Safe to run twice. It is the most-run command in the harness."""
     _, reg, trk = world
