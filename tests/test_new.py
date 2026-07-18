@@ -1,0 +1,127 @@
+"""st new — bring up a HOOKED agent session. shantytown #5 (aegis-qdal.qdal.1).
+
+The command chains the two seams: new_session (empty pane) -> Runtime.start
+(compose w/ --settings, send) -> verify PROCESS live -> 0/1/2. Every exit code
+has a both-outcomes test; the negative control that matters is arnold's: a launch
+that never comes up MUST be 2, not 0.
+"""
+from __future__ import annotations
+import json
+from pathlib import Path
+
+import pytest
+
+from shantytown import cli
+from shantytown.tmux import NullPanes
+
+
+READY = "… Welcome to Claude Code …\n? for shortcuts"
+
+
+def _world(tmp_path: Path, *, role="worker", pane="aegis-crew-ellie", settings=True):
+    """A crew card, and (optionally) the role's settings file — the thing #6
+    emits. Present = compose can materialize; absent = compose refuses."""
+    crew = tmp_path / "crew"; crew.mkdir()
+    card = {"role": role}
+    if pane is not None:
+        card["pane"] = pane
+    (crew / "ellie.json").write_text(json.dumps(card))
+    if settings:
+        sdir = tmp_path / "settings"; sdir.mkdir()
+        (sdir / f"{role}.settings.json").write_text("{}")
+    return tmp_path
+
+
+class _Args:
+    def __init__(self, **kw):
+        self.root = kw.pop("root")
+        self.agent = kw.pop("agent", "ellie")
+        self.dry_run = kw.pop("dry_run", False)
+        self.backend = "files"; self.repo = None
+        for k, v in kw.items():
+            setattr(self, k, v)
+
+
+@pytest.fixture(autouse=True)
+def _fast_poll(monkeypatch):
+    # a real launch takes seconds; a test must not wait.
+    monkeypatch.setattr(cli, "_LIVE_ATTEMPTS", 1)
+    monkeypatch.setattr(cli, "_LIVE_DELAY", 0)
+
+
+# --- exit 0: session created, --settings composed, runtime observed live ----
+
+def test_new_starts_and_verifies_live(tmp_path, monkeypatch, capsys):
+    root = _world(tmp_path)
+    panes = NullPanes(screen=READY, live=set())   # banner already up -> live
+    monkeypatch.setattr(cli, "Tmux", lambda: panes)
+    rc = cli._cmd_new(_Args(root=root))
+    assert rc == cli.OK
+    out = capsys.readouterr().out
+    assert "started ellie" in out
+    # the seam actually delivered a launch carrying --settings + identity
+    assert panes.sent, "st new claimed started but sent nothing"
+    _, text = panes.sent[-1]
+    assert "SHANTY_AGENT=ellie" in text and "--settings" in text
+    assert panes.exists("aegis-crew-ellie")
+
+
+# --- exit 2: launched but never observed live (THE negative control) --------
+
+def test_new_returns_2_when_runtime_never_comes_up(tmp_path, monkeypatch, capsys):
+    """A launch that never comes up MUST be could-not-tell, never a cheerful 0.
+    NullPanes with no banner: send lands, but the ready marker never appears."""
+    root = _world(tmp_path)
+    panes = NullPanes(screen="braino@vati:~$", live=set())   # bare shell, no banner
+    monkeypatch.setattr(cli, "Tmux", lambda: panes)
+    rc = cli._cmd_new(_Args(root=root))
+    assert rc == cli.CANNOT_TELL
+    assert "could not tell" in capsys.readouterr().err
+    # it DID try to launch (this is could-not-confirm, not refuse)
+    assert panes.sent
+
+
+# --- exit 1: refusals, each creating NOTHING --------------------------------
+
+def test_new_refuses_unknown_agent(tmp_path, monkeypatch, capsys):
+    root = _world(tmp_path)
+    monkeypatch.setattr(cli, "Tmux", lambda: NullPanes(live=set()))
+    rc = cli._cmd_new(_Args(root=root, agent="nobody"))
+    assert rc == cli.REFUSED
+    assert "refused" in capsys.readouterr().err
+
+
+def test_new_refuses_when_settings_cannot_be_materialized(tmp_path, monkeypatch, capsys):
+    """No settings file (not yet emitted) -> compose refuses -> NOTHING created.
+    The invariant: no --settings, no launch."""
+    root = _world(tmp_path, settings=False)
+    panes = NullPanes(live=set())
+    monkeypatch.setattr(cli, "Tmux", lambda: panes)
+    rc = cli._cmd_new(_Args(root=root))
+    assert rc == cli.REFUSED
+    assert "refused" in capsys.readouterr().err
+    assert not panes.exists("aegis-crew-ellie"), "refuse must create no session"
+    assert panes.sent == [], "refuse must launch nothing"
+
+
+def test_new_refuses_to_clobber_a_live_session(tmp_path, monkeypatch, capsys):
+    """The clobber guard — never replace a running agent."""
+    root = _world(tmp_path)
+    panes = NullPanes(screen=READY, live={"aegis-crew-ellie"})   # already live
+    monkeypatch.setattr(cli, "Tmux", lambda: panes)
+    rc = cli._cmd_new(_Args(root=root))
+    assert rc == cli.REFUSED
+    assert "already exists" in capsys.readouterr().err
+    assert panes.sent == [], "clobber-refuse must launch nothing"
+
+
+def test_new_dry_run_prints_and_creates_nothing(tmp_path, monkeypatch, capsys):
+    root = _world(tmp_path)
+    panes = NullPanes(live=set())
+    monkeypatch.setattr(cli, "Tmux", lambda: panes)
+    rc = cli._cmd_new(_Args(root=root, dry_run=True))
+    assert rc == cli.OK
+    out = capsys.readouterr().out
+    assert "would launch" in out and "--settings" in out
+    assert not panes.exists("aegis-crew-ellie"), "dry-run must create no session"
+    assert panes.sent == [], "dry-run must launch nothing"

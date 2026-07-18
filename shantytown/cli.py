@@ -20,6 +20,7 @@ comment, and in a repo whose whole thesis is the exact count, that is the bug.
 from __future__ import annotations
 import argparse
 import sys
+import time
 from pathlib import Path
 
 from . import beads as beads_mod
@@ -27,7 +28,14 @@ from . import roles as roles_mod
 from .dispatch import Dispatcher, TriageRefused
 from .files import FilesRegistry, FilesTracker, plate as files_plate
 from .prime import Unreachable, prime as do_prime
+from .runtime import ClaudeRuntime, CapabilityError, SettingsError
 from .tmux import Tmux
+
+# `st new` liveness poll: how long to wait for the runtime to appear in the pane
+# before returning could-not-tell (2). Module constants so tests can shrink them
+# to (1, 0) — a real launch takes a few seconds, a test must not.
+_LIVE_ATTEMPTS = 20
+_LIVE_DELAY = 0.25
 
 # 0 did it | 1 refused (precondition) | 2 could not tell (backend unreachable)
 OK, REFUSED, CANNOT_TELL = 0, 1, 2
@@ -161,7 +169,87 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_stop(a)
     if a.cmd == "log":
         return _cmd_log(a)
+    if a.cmd == "new":
+        return _cmd_new(a)
     return _not_yet(a.cmd)
+
+
+def _default_settings(root: Path):
+    """Resolve a card -> the settings file that wires its ROLE's hooks.
+
+    The file is EMITTED by `role set` / #6 (aegis-ct5q); #5 owns the launch seam,
+    not the hook-file content. So this resolver READS: it returns the path if the
+    role's settings file exists, else None -> compose refuses. That refusal IS the
+    invariant working — no settings, no launch, never a settings-less fallback.
+    """
+    def resolve(card):
+        p = Path(root) / "settings" / f"{card.role}.settings.json"
+        return str(p) if p.is_file() else None
+    return resolve
+
+
+def _runtime(a, panes):
+    """The runtime for this invocation. Claude Code is first-class; a second
+    runtime (codex/opencode) would be selected here and its capability gate
+    (runtime.require_capability) would refuse a lead it cannot host."""
+    return ClaudeRuntime(panes, _default_settings(a.root))
+
+
+def _observe_live(runtime, panes, session) -> bool:
+    """Poll capture() until the runtime is OBSERVED live, or give up (-> 2).
+
+    This proves the PROCESS came up — NOT that hooks fired. The hooks guarantee is
+    enforced at COMPOSITION (the string provably carried --settings), not by pane
+    inspection (arnold: that is GT's unanswerable 'did I get primed?'). A green
+    verify here must never be read as 'hooks registered'."""
+    for _ in range(_LIVE_ATTEMPTS):
+        if runtime.is_live(panes.capture(session)):
+            return True
+        if _LIVE_DELAY:
+            time.sleep(_LIVE_DELAY)
+    return False
+
+
+def _cmd_new(a) -> int:
+    """new <agent> — bring up a HOOKED agent session (aegis-qdal #5).
+
+    new_session (empty pane) -> Runtime.start (compose w/ --settings, send) ->
+    verify PROCESS live -> 0/1/2. The order is deliberate: everything that can
+    REFUSE (unknown agent, capability, settings) runs BEFORE any tmux mutation, so
+    a refusal creates nothing (arnold: 'write nothing, launch nothing').
+    """
+    panes = Tmux()
+    try:
+        card = _registry(a.root).get(a.agent)
+    except LookupError as e:
+        print(f"  refused: {e}", file=sys.stderr)
+        return REFUSED
+    runtime = _runtime(a, panes)
+    session = card.pane or f"aegis-crew-{card.name}"
+    # PRE-FLIGHT: compose refuses capability/settings BEFORE we touch tmux.
+    try:
+        launch = runtime.compose(card)
+    except (CapabilityError, SettingsError) as e:
+        print(f"  refused: {e}", file=sys.stderr)
+        return REFUSED
+    if a.dry_run:
+        print(f"  would launch in {session}: {launch}")
+        return OK
+    # Clobber guard: never replace a live agent (RAISES if the session exists).
+    try:
+        panes.new_session(session)
+    except RuntimeError as e:
+        print(f"  refused: {e}", file=sys.stderr)
+        return REFUSED
+    # Deliver through the seam. Panes stays runtime-blind — sees a finished string.
+    runtime.start(card, session)
+    if _observe_live(runtime, panes, session):
+        print(f"  started {a.agent} ({session}) — --settings composed, runtime live.")
+        return OK
+    print(f"  could not tell: launched {a.agent} but the runtime was not observed "
+          f"live in {session} within the timeout. It may still be coming up; "
+          f"check `st log {a.agent}`.", file=sys.stderr)
+    return CANNOT_TELL
 
 
 def _cmd_stop(a) -> int:
@@ -495,19 +583,14 @@ def _cmd_roles(a) -> int:
 
 
 def _not_yet(cmd: str) -> int:
-    """Only `new` still lands here. role set (rpo1), stop and log (qdal.1) are
-    built; new is held on ONE gate: the launch-command composition — how to spawn
-    the agent-with-hooks (runtime-specific, must carry --settings so hooks load).
-    Panes.new_session makes the empty pane; composing and send()ing the launch
-    string is the piece arnold is ruling separately (folded into #5). Until that
-    contract lands, `new` refuses rather than spawn a hookless zombie.
-
-    Refusing is the honest answer. The alternative — a stub that prints something
-    plausible and exits 0 — is the exact defect this repo was built in reaction
-    to: a command that reports success for work it did not do (exit 1).
+    """A guard, not a stub. As of qdal.1 EVERY command in the surface is wired
+    (new/stop/log were the last three). Nothing routes here anymore; it exists so
+    that a subcommand ADDED to the parser without a handler refuses loudly instead
+    of silently doing nothing — the honest failure, not a plausible exit 0. If you
+    see this, you added a parser entry and forgot to wire it in main().
     """
-    print(f"  refused: `shanty {cmd}` is specified in docs/cli.md but not built "
-          f"yet. It is not a stub and will not pretend to work.", file=sys.stderr)
+    print(f"  refused: `st {cmd}` is in the parser but has no handler wired in "
+          f"main(). It is not a stub and will not pretend to work.", file=sys.stderr)
     return REFUSED
 
 
