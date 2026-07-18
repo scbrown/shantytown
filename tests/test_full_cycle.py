@@ -1,0 +1,128 @@
+"""THE DONE GATE — a full crew cycle on shantytown, ZERO gt (aegis-qdal / zx7l).
+
+dearing's gate for the epic: "one crew member runs a FULL cycle on st with ZERO
+gt — that's 'done'." Built SHIM-ONLY per her directive — every pane is a NullPanes,
+so the loop NEVER launches a real agent (an earlier live-fire probe proved a real
+`claude` can survive teardown; the loop must never spawn one). The cycle:
+
+    role set (emit hooks) -> prime -> task -> prime(plate) -> new -> go(dispatch)
+    -> log -> mail -d(durable, survives) -> stop -> stop-event routes + drains
+
+Each step asserts its MEASURED outcome (exit code + the state it changed), and the
+final check asserts NO real claude process was spawned anywhere in the cycle — the
+safety guardrail as an executable assertion, not a hope.
+"""
+from __future__ import annotations
+import json
+import subprocess
+from pathlib import Path
+
+import pytest
+
+from shantytown import cli, stop_event
+from shantytown.cli import main, OK, CANNOT_TELL
+from shantytown.events import FilesEvents
+from shantytown.tmux import NullPanes
+
+
+READY = " ▐▛███▜▌   Claude Code v2.1.214\n  ⏸ manual mode on · ? for shortcuts"
+
+
+class _CrewPanes(NullPanes):
+    """One shared shim for the whole cycle: session-mode (new/stop manage the live
+    set) with the real ready banner as its screen (so new's verify sees 'live' and
+    go's verify sees the echoed dispatch). Purely in-memory — no tmux, no claude."""
+    def __init__(self, live):
+        super().__init__(screen=READY, live=live)
+
+
+@pytest.fixture
+def workspace(tmp_path):
+    root = tmp_path / ".shanty"
+    (root / "crew").mkdir(parents=True)
+    # a worker (ellie) reporting to a lead (maldoon) under an admin (goldblum)
+    (root / "crew" / "ellie.json").write_text(json.dumps(
+        {"role": "worker", "reports_to": "maldoon", "pane": "aegis-crew-ellie"}))
+    (root / "crew" / "maldoon.json").write_text(json.dumps(
+        {"role": "lead", "reports_to": "goldblum", "pane": "aegis-crew-maldoon"}))
+    (root / "crew" / "goldblum.json").write_text(json.dumps(
+        {"role": "administrator", "pane": "aegis-crew-goldblum"}))
+    return root
+
+
+def test_full_crew_cycle_on_st_zero_gt(workspace, monkeypatch, capsys):
+    root = workspace
+    live: set[str] = set()                     # nobody up yet
+    panes = _CrewPanes(live)
+    monkeypatch.setattr(cli, "Tmux", lambda *a, **k: panes)
+    monkeypatch.setattr(stop_event, "Tmux", lambda: panes)
+    monkeypatch.setattr(cli, "_LIVE_ATTEMPTS", 1)
+    monkeypatch.setattr(cli, "_LIVE_DELAY", 0)
+
+    def run(*argv):
+        rc = main(["--root", str(root), *argv])
+        return rc
+
+    # 1. role set — emits the per-role settings.json (the hooks st new reads)
+    assert run("role", "set", "ellie", "worker") == OK
+    assert (root / "settings" / "worker.settings.json").is_file()
+
+    # 2. prime — identity + EMPTY plate
+    assert run("prime", "ellie") == OK
+    assert "nothing" in capsys.readouterr().out.lower()
+
+    # 3. task — create work assigned to ellie
+    assert run("task", "fix", "the", "widget", "-a", "ellie") == OK
+
+    # 4. prime — the item now APPEARS on the plate (measured transition)
+    assert run("prime", "ellie") == OK
+    assert "fix the widget" in capsys.readouterr().out
+
+    # 5. new — bring ellie up: session created, --settings composed, verify live
+    assert run("new", "ellie") == OK
+    assert panes.exists("aegis-crew-ellie"), "new did not create the session"
+    _, launch = panes.sent[-1]
+    assert "SHANTY_AGENT=ellie" in launch and "--settings" in launch
+
+    # 6. go — dispatch the item to the live pane; verify it landed -> in_progress
+    #    (find the created item id from the tracker)
+    item_id = next(p.stem for p in (root / "items").glob("*.json"))
+    assert run("go", item_id, "ellie") == OK
+    assert json.loads((root / "items" / f"{item_id}.json").read_text())["status"] == "in_progress"
+
+    # 7. log — capture the pane (reads the ready UI back)
+    assert run("log", "ellie") == OK
+    assert "Claude Code" in capsys.readouterr().out
+
+    # 8. mail -d — durable message to a DOWN agent (maldoon not live): survives
+    assert run("mail", "-d", "maldoon", "HANDOFF", "the", "epic") == OK
+    mail_items = [json.loads(p.read_text()) for p in (root / "items").glob("*.json")]
+    assert any(m.get("assignee") == "maldoon" and m["title"].startswith("mail:")
+               for m in mail_items), "durable mail did not persist"
+
+    # 9. stop — kill ellie's session, VERIFIED gone
+    assert run("stop", "ellie") == OK
+    assert not panes.exists("aegis-crew-ellie"), "stop left the session alive"
+
+    # 10. stop-event routing: ellie stops. maldoon (lead) is DOWN (not in live) ->
+    #     the event RISES to the admin, durably, then the admin DRAINS it once.
+    monkeypatch.setenv("SHANTY_AGENT", "ellie")
+    assert stop_event.main(["send", "--root", str(root)]) == 0
+    # the event ROSE to the admin (lead down) and survived on the store
+    assert [e.rose for e in FilesEvents(root / "events").drain("goldblum")] == [True]
+    # re-persist a fresh one so the admin's drain path has something to deliver
+    monkeypatch.setenv("SHANTY_AGENT", "ellie")
+    assert stop_event.main(["send", "--root", str(root)]) == 0
+    capsys.readouterr()                        # clear accumulated stdout first
+    monkeypatch.setenv("SHANTY_AGENT", "goldblum")
+    assert stop_event.main(["drain", "--root", str(root)]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["decision"] == "block" and "ellie stopped" in payload["reason"]
+    assert "lead-unreachable" in payload["reason"], "a rise must carry its reason"
+
+    # SAFETY GUARDRAIL (dearing): the entire cycle spawned NO real claude. Assert
+    # it — the loop is shim-only by construction, and this proves it.
+    probe = subprocess.run(["pgrep", "-af", "claude --settings"],
+                           capture_output=True, text=True)
+    assert str(root) not in probe.stdout, \
+        f"a real claude was spawned in the cycle: {probe.stdout!r}"
