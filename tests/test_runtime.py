@@ -50,6 +50,15 @@ def test_compose_sets_SHANTY_AGENT_for_identity():
     assert "SHANTY_AGENT=malcolm" in launch
 
 
+def test_compose_carries_no_chrome():
+    """--no-chrome is the prod 0-path fix (aegis-84z1): without it a first-run
+    claude stops at a Chrome-consent prompt that blocks the ready UI, so st new's
+    verify never sees live. Live-fire confirmed it goes straight to ready."""
+    rt = ClaudeRuntime(NullPanes(), _ok_settings)
+    launch = rt.compose(Agent(name="ellie", role="worker"))
+    assert "--no-chrome" in launch
+
+
 # --- the capability gate, BOTH outcomes (the positive control matters) ------
 
 def test_lead_on_claude_PASSES():

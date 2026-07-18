@@ -194,7 +194,13 @@ class ClaudeRuntime:
                 f"could not materialize settings for {card.name} "
                 f"(role {card.role!r}); refusing to launch a settings-less agent."
             )
-        launch = f"SHANTY_AGENT={card.name} claude --settings {settings_path}"
+        # --no-chrome: crew agents do not use the Chrome integration, and WITHOUT
+        # this a first-run claude stops at a "Claude in Chrome extension detected"
+        # consent prompt that BLOCKS the ready UI — so st new's verify never sees
+        # live and returns could-not-tell (2) for an agent that would be fine.
+        # Live-fire confirmed (aegis-84z1): `claude --no-chrome` goes straight to
+        # the ready UI, is_live True. This is the prod 0-path fix.
+        launch = f"SHANTY_AGENT={card.name} claude --no-chrome --settings {settings_path}"
         # The invariant, asserted where it is made. If this ever fails, the bug is
         # here, not downstream — a settings-less string must be UNREACHABLE.
         assert "--settings" in launch, "compose produced a settings-less launch"

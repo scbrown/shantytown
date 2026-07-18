@@ -74,11 +74,51 @@ class Tmux:
         return name
 
     def kill_session(self, name: str) -> None:
-        """Destroy the session. IDEMPOTENT: killing an absent session is success
-        ("gone" is the desired end state either way). kill-session errors on an
-        absent target, so guard with exists()."""
-        if self.exists(name):
-            subprocess.run(self._cmd("kill-session", "-t", name), check=True)
+        """Destroy the session AND the process tree in its pane. IDEMPOTENT.
+
+        kill-session alone is NOT enough for a real agent: killing the session
+        SIGHUPs the pane's shell, but a child that ignores SIGHUP (measured: a
+        real claude survived a session kill during aegis-84z1 validation and had
+        to be SIGKILLed by hand) can ORPHAN and keep running — burning tokens,
+        invisible to `exists()`. So: capture the pane's process group BEFORE the
+        kill, kill the session, then TERM the group and escalate to KILL. Best-
+        effort on the tree (no such pid == already gone == success); the caller
+        (`st stop`) still VERIFIES via exists()."""
+        if not self.exists(name):
+            return
+        pane_pid = self._pane_pid(name)
+        subprocess.run(self._cmd("kill-session", "-t", name), check=True)
+        if pane_pid:
+            self._kill_tree(pane_pid)
+
+    def _pane_pid(self, name: str) -> int | None:
+        """The pid of the pane's shell — the head of the process tree we must
+        ensure dies. The real agent is its child."""
+        r = subprocess.run(
+            self._cmd("display-message", "-t", name, "-p", "#{pane_pid}"),
+            capture_output=True, text=True,
+        )
+        s = r.stdout.strip()
+        return int(s) if r.returncode == 0 and s.isdigit() else None
+
+    def _kill_tree(self, pane_pid: int) -> None:
+        """TERM then (if needed) KILL the pane's process group, so a SIGHUP-
+        ignoring child cannot outlive the session. Signals the GROUP (negative
+        pid) because the agent is a child of the pane shell; ESRCH (already gone)
+        is the success case, swallowed."""
+        import os
+        import signal
+        import time
+        for sig in (signal.SIGTERM, signal.SIGKILL):
+            try:
+                os.killpg(pane_pid, sig)      # pane shell leads its own group
+            except (ProcessLookupError, PermissionError):
+                return                        # gone (or not ours) — done
+            time.sleep(0.2)
+            try:
+                os.killpg(pane_pid, 0)        # still alive? probe with signal 0
+            except ProcessLookupError:
+                return                        # confirmed dead after this signal
 
 
 class NullPanes:
