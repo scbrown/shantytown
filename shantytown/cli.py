@@ -114,9 +114,13 @@ def build_parser() -> argparse.ArgumentParser:
     lg = sub.add_parser("log", help="what happened")
     lg.add_argument("agent", nargs="?")
 
-    ml = sub.add_parser("mail", help="send a message to an agent (tmux send-keys)")
+    ml = sub.add_parser("mail", help="send a message to an agent (tmux send-keys; -d persists)")
     ml.add_argument("agent")
     ml.add_argument("message", nargs="+")
+    ml.add_argument("-d", "--durable", action="store_true",
+                    help="must-survive: persist to the tracker (beads-parity on "
+                         "the aegis store with --backend beads), then best-effort "
+                         "live send. Default is ephemeral send-keys.")
     ml.add_argument("-n", "--dry-run", action="store_true")
 
     tk = sub.add_parser("task", help="create a work item")
@@ -425,22 +429,36 @@ def _cmd_context(a) -> int:
 
 
 def _cmd_mail(a) -> int:
-    """mail IS send-keys. That is the whole implementation, and it is the point.
+    """mail is send-keys by default; -d/--durable persists first (aegis-qdal #7).
 
-    Stiwi, 2026-07-16: "st mail should just be tmux send keys."
-
-    There is no bus, no queue, no store, no delivery guarantee — because there is
-    nothing between the sender and the pane. `gt nudge --mode immediate` says the
-    same thing in its own help ("Send directly via tmux send-keys"); Gas Town just
-    wrapped it in a mail command, a queue, and a router first. We measured what
-    that wrapping costs: 47 nudges sat queued for a mayor that does not exist,
-    oldest 25 days, across FIVE spellings of the recipient — because a queue
+    ROUTINE (default) — Stiwi, 2026-07-16: "st mail should just be tmux send keys."
+    There is no bus, no queue, no store — nothing between the sender and the pane.
+    We measured what wrapping it costs: 47 nudges sat queued for a mayor that does
+    not exist, oldest 25 days, across FIVE spellings of the recipient — a queue
     accepts a message for a reader that will never come. send-keys cannot: the
-    pane is either there or it is not, and you are told which.
+    pane is there or it is not, and you are told which. Failure modes stay the two
+    honest ones — REFUSED (no agent / no pane), CANNOT_TELL (pane named but gone).
 
-    So the only failure modes are the two honest ones:
-      REFUSED (1)      no such agent, or the agent has no pane
-      CANNOT_TELL (2)  the pane is named but the multiplexer says it is gone
+    DURABLE (-d) — the gap #7 closes. Routine send-keys VANISHES if the recipient
+    is down, which is wrong for a must-survive message (a handoff, a protocol
+    step). gt mail's durability is a bead+Dolt commit; parity here is: PERSIST to
+    the tracker FIRST (the survival guarantee), THEN best-effort live send for
+    immediacy. Persist-first is deliberate — the store is the source of truth, the
+    live send is a bonus; if we persisted but the pane is gone, the message still
+    survives and the recipient picks it up on their next `st prime`.
+
+    dearing's ruling (qdal.2): beads-parity on the AEGIS store, NOT a dedicated
+    store. So durable reuses the SELECTED tracker — run `--backend beads --repo
+    <aegis>` for the aegis bead (survives cross-session, cross-host); the portable
+    files backend gives a lesser-but-real local durability. We PRINT where it
+    landed so the durability is never ambiguous.
+
+    Durable exit codes:
+      REFUSED (1)      no such agent
+      CANNOT_TELL (2)  could NOT persist (tracker unreachable) — the survival
+                       guarantee failed, so we do NOT downgrade to a silent
+                       routine send and report success
+      OK (0)           persisted (+ delivered live if the pane was there)
     """
     msg = " ".join(a.message)
     try:
@@ -448,10 +466,15 @@ def _cmd_mail(a) -> int:
     except LookupError as e:
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED
+    panes = Tmux()
+
+    if getattr(a, "durable", False):
+        return _mail_durable(a, agent, msg, panes)
+
+    # ROUTINE — unchanged. send-keys only, ephemeral.
     if agent.pane is None:
         print(f"  refused: {agent.name} has no pane in the registry", file=sys.stderr)
         return REFUSED
-    panes = Tmux()
     if a.dry_run:
         print(f"  would: send-keys -> pane {agent.pane}")
         print(f"  would: {msg}")
@@ -465,6 +488,35 @@ def _cmd_mail(a) -> int:
         return CANNOT_TELL
     panes.send(agent.pane, msg)
     print(f"  -> {agent.name}    sent to pane {agent.pane}")
+    return OK
+
+
+def _mail_durable(a, agent, msg: str, panes) -> int:
+    """Persist-then-deliver. The tracker write is the guarantee; the send is speed."""
+    backend = getattr(a, "backend", "files")
+    live = agent.pane is not None and panes.exists(agent.pane)
+    if a.dry_run:
+        print(f"  would: persist a durable message for {agent.name} via {backend}")
+        print(f"  would: {'+ live send-keys -> ' + agent.pane if live else 'no live send (recipient down); survives for prime'}")
+        print("\n  1 durable write." + (" 1 send-keys." if live else " 0 send-keys."))
+        return OK
+    # PERSIST FIRST — the survival guarantee. If this cannot be done, the durable
+    # promise cannot be kept; say so (2) rather than silently downgrade to routine.
+    tracker = _tracker(a)
+    try:
+        item = tracker.create(f"mail: {msg}", assignee=a.agent)
+    except Exception as e:                       # bd/store unreachable, etc.
+        print(f"  could not tell: durable persist FAILED for {agent.name} "
+              f"({type(e).__name__}: {str(e)[:100]}). Nothing guaranteed to "
+              f"survive; not downgrading to an ephemeral send.", file=sys.stderr)
+        return CANNOT_TELL
+    # Persisted. Now best-effort immediacy — never fatal to the durable result.
+    if live:
+        panes.send(agent.pane, msg)
+        print(f"  -> {agent.name}    persisted as {item.id} ({backend}) + delivered live to {agent.pane}")
+    else:
+        print(f"  -> {agent.name}    persisted as {item.id} ({backend}); "
+              f"recipient not live — will pick it up on `st prime`.")
     return OK
 
 
