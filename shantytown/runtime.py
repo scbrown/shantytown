@@ -108,6 +108,40 @@ def require_capability(rt: Runtime, card: Agent) -> None:
 SettingsResolver = Callable[[Agent], "str | None"]
 
 
+# The internal entry the emitted Stop hooks call (arnold's #6 ruling). NOT an st
+# subcommand — plumbing, so the command-count test never sees it.
+_STOP_SEND = {"type": "command", "command": "python -m shantytown.stop_event send"}
+_STOP_DRAIN = {"type": "command", "command": "python -m shantytown.stop_event drain"}
+
+
+def settings_for_role(role: str) -> dict:
+    """The Claude Code settings.json a role needs — the CONTENT `role set` emits
+    and `st new`'s launch reads via --settings (#6, arnold gt-wisp-w4j2af).
+
+    This is Claude-Code-SPECIFIC (its hooks schema), so it lives with the runtime,
+    not in the runtime-agnostic tier — a second runtime emits its own format.
+
+    Every non-root role SENDs its own stop up (route_stop -> persist). Every
+    DESTINATION (lead, admin) also DRAINs received events into its model. A Stop
+    hook does not carry a 'blocking' flag — the DRAIN command BLOCKS by printing
+    decision:block, which is exactly why a destination needs a runtime whose stop
+    hook can reach the model (the capability gate refuses a lead on one that
+    can't). So:
+        worker        -> [send]          (send-only; never receives)
+        lead          -> [send, drain]   (sends its own stop up; drains reports')
+        administrator -> [drain]         (root: receives only; its stop terminates)
+    """
+    if role == "worker":
+        stop = [_STOP_SEND]
+    elif role == "lead":
+        stop = [_STOP_SEND, _STOP_DRAIN]
+    elif role == "administrator":
+        stop = [_STOP_DRAIN]
+    else:
+        raise ValueError(f"unknown role {role!r}; expected worker/lead/administrator")
+    return {"hooks": {"Stop": [{"hooks": stop}]}}
+
+
 class ClaudeRuntime:
     """Claude Code, first-class. Composes `SHANTY_AGENT=<name> claude --settings
     <path>` and delivers it through the injected Panes.

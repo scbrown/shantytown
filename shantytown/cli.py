@@ -19,6 +19,7 @@ comment, and in a repo whose whole thesis is the exact count, that is the bug.
 """
 from __future__ import annotations
 import argparse
+import json
 import sys
 import time
 from pathlib import Path
@@ -28,7 +29,7 @@ from . import roles as roles_mod
 from .dispatch import Dispatcher, TriageRefused, SendUnverified
 from .files import FilesRegistry, FilesTracker, plate as files_plate
 from .prime import Unreachable, prime as do_prime
-from .runtime import ClaudeRuntime, CapabilityError, SettingsError
+from .runtime import ClaudeRuntime, CapabilityError, SettingsError, settings_for_role
 from .tmux import Tmux
 
 # `st new` liveness poll: how long to wait for the runtime to appear in the pane
@@ -370,7 +371,28 @@ def _cmd_role(a) -> int:
     print(plan.render())
     if a.dry_run:
         print("\n  --dry-run: nothing written.")
+        return OK
+    # GENERATIVE (#6): emit each written role's settings.json in the SAME operation
+    # as the card, so "declaring a role emits its stop hooks" is literal — the card
+    # and its hooks cannot drift. This is the CONTENT st new's --settings reads.
+    emitted = _emit_role_settings(a.root, {ag.role for ag in plan.writes})
+    for path in emitted:
+        print(f"  hooks   {path}")
     return OK
+
+
+def _emit_role_settings(root: Path, roles: set[str]) -> list[Path]:
+    """Write <root>/settings/<role>.settings.json for each role. Idempotent —
+    settings are per-role (all workers share one), so re-emitting is a no-op
+    rewrite. Returns the paths written."""
+    sdir = Path(root) / "settings"
+    sdir.mkdir(parents=True, exist_ok=True)
+    written = []
+    for role in sorted(roles):
+        p = sdir / f"{role}.settings.json"
+        p.write_text(json.dumps(settings_for_role(role), indent=2, sort_keys=True))
+        written.append(p)
+    return written
 
 
 def _cmd_context(a) -> int:
