@@ -54,10 +54,11 @@ def main(argv: list[str] | None = None) -> int:
     rl = sub.add_parser("roles", help="the hierarchy, and whether it's real")
     rl.add_argument("--check", action="store_true")
 
-    rs = sub.add_parser("role", help="role set <agent> <role>")
+    rs = sub.add_parser("role", help="role set <agent> <role> [--reports a,b]")
     rs.add_argument("set_", metavar="set", choices=["set"])
     rs.add_argument("agent")
-    rs.add_argument("role")
+    rs.add_argument("role", choices=["worker", "lead", "administrator"])
+    rs.add_argument("--reports", default="", help="comma-separated reports for a lead/administrator")
     rs.add_argument("-n", "--dry-run", action="store_true")
 
     nw = sub.add_parser("new", help="create an agent from a card")
@@ -105,7 +106,32 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_task(a)
     if a.cmd == "context":
         return _cmd_context(a)
+    if a.cmd == "role":
+        return _cmd_role(a)
     return _not_yet(a.cmd)
+
+
+def _cmd_role(a) -> int:
+    """role set <agent> <role> [--reports a,b] — GENERATIVE (aegis-rpo1).
+
+    Writes the card AND emits the stop-hook routing in one operation, so a lead
+    card and its routing cannot disagree. Refuses (exit 1) on any rule violation
+    — orphaned reports, a lead under a lead (depth 2), an unknown agent — BEFORE
+    writing anything, so a bad hierarchy never half-lands.
+    """
+    from . import tier
+    reports = [r.strip() for r in a.reports.split(",") if r.strip()]
+    try:
+        plan = tier.role_set(_registry(a.root), a.agent, a.role,
+                             reports=reports, dry_run=a.dry_run)
+    except (LookupError, ValueError) as e:
+        print(f"  refused: {e}", file=sys.stderr)
+        return REFUSED
+    print(("  would write:" if a.dry_run else "  wrote:"))
+    print(plan.render())
+    if a.dry_run:
+        print("\n  --dry-run: nothing written.")
+    return OK
 
 
 def _cmd_context(a) -> int:

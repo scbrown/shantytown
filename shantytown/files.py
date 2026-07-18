@@ -29,6 +29,23 @@ class FilesRegistry:
             pane=d.get("pane"),
         )
 
+    def set(self, agent: Agent) -> None:
+        """Write an agent card. The write half of the registry.
+
+        role set (the generative op in tier.py) is the only thing that should
+        call this — it writes the card and emits the routing in one operation so
+        the card and the hooks cannot disagree. Preserves fields the tier does
+        not own (pane).
+        """
+        self.root.mkdir(parents=True, exist_ok=True)
+        p = self.root / f"{agent.name}.json"
+        existing = json.loads(p.read_text()) if p.is_file() else {}
+        existing["role"] = agent.role
+        existing["reports_to"] = agent.reports_to
+        if agent.pane is not None:
+            existing["pane"] = agent.pane
+        p.write_text(json.dumps(existing, indent=2, sort_keys=True))
+
     def all(self) -> list[Agent]:
         """Every agent. RAISES if there is no registry to read.
 
