@@ -48,7 +48,7 @@ def test_dispatch_calls_only_protocol_methods():
     from pathlib import Path
 
     tree = ast.parse(Path(dispatch.__file__).read_text())
-    allowed = {"get", "update", "send", "exists", "render", "join", "items", "split"}
+    allowed = {"get", "update", "send", "exists", "capture", "render", "join", "items", "split"}
     for node in ast.walk(tree):
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
             v = node.func.value

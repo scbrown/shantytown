@@ -81,6 +81,12 @@ class Tracker(Protocol):
 class Panes(Protocol):
     def send(self, pane: str, text: str) -> None: ...
     def exists(self, pane: str) -> bool: ...
+    def capture(self, pane: str) -> str: ...   # read the pane back — triage reads
+                                               # it to decide, #2 verify reads it
+                                               # to confirm a send landed. Both
+                                               # Tmux and NullPanes implement it;
+                                               # it was a de-facto protocol method
+                                               # that was never declared.
 
 
 @dataclass(frozen=True)

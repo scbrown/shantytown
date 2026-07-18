@@ -63,9 +63,14 @@ class NullPanes:
 
     _exists = True
 
-    def __init__(self, screen: str = "") -> None:
+    def __init__(self, screen: str = "", drops: bool = False) -> None:
         self.sent = []
         self.screen = screen
+        # drops=True models a send that does NOT land — send-keys "succeeds" but
+        # the pane never shows the text. This is what #2's verify must catch, and
+        # it is the ONLY way to prove verify can fail (a verifier never seen
+        # failing is not evidence).
+        self._drops = drops
 
     def exists(self, pane: str) -> bool:
         return self._exists
@@ -75,3 +80,8 @@ class NullPanes:
 
     def send(self, pane: str, text: str) -> None:
         self.sent.append((pane, text))
+        # A real pane shows what was just typed into it, so capture() must
+        # reflect the send — otherwise this double models a pane that silently
+        # eats every message, which is not a pane. Unless drops=True.
+        if not self._drops:
+            self.screen += ("\n" if self.screen else "") + text

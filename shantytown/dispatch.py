@@ -27,6 +27,23 @@ class TriageRefused(Exception):
         super().__init__(decision.why)
 
 
+class SendUnverified(Exception):
+    """We sent, but reading the pane back did NOT show the work (#2).
+
+    Maps to exit 2 (could-not-confirm), NOT exit 0. The critical consequence is
+    in go(): because verify runs BEFORE the tracker write, an unverified send
+    leaves the item UNTOUCHED — never marked in_progress for a send that may not
+    have landed. "Send-and-assume is how you believe work was assigned when it
+    wasn't" (design.md). The honest failure is "I could not confirm delivery, so
+    I recorded nothing" — a human re-dispatches, rather than a tracker full of
+    items nobody was told about.
+    """
+
+    def __init__(self, item_id: str, pane: str):
+        self.item_id, self.pane = item_id, pane
+        super().__init__(f"sent {item_id} to {pane} but could not confirm it landed")
+
+
 @dataclass
 class Plan:
     """What a dispatch WOULD do. --dry-run returns this and stops."""
@@ -94,6 +111,25 @@ class Dispatcher:
         decision = triage(self.panes, p.pane, p.text)
         if decision.action is not Action.NUDGE:
             raise TriageRefused(decision)
-        self.tracker.update(item_id, **p.updates)      # 1 tracker write
+        # #2: SEND -> VERIFY -> UPDATE, in that order, on purpose. The tracker
+        # write moved AFTER a confirmed send so a dropped send never marks work
+        # in_progress. verify reads the pane back for the item id — the thing we
+        # just sent must now be visible on the pane. If it is not, we sent into
+        # the void: raise SendUnverified (exit 2) and write NOTHING.
         self.panes.send(p.pane, p.text)                # 1 send
+        if not self.verify(p.pane, item_id):
+            raise SendUnverified(item_id, p.pane)
+        self.tracker.update(item_id, **p.updates)      # 1 tracker write (last)
         return p
+
+    def verify(self, pane: str, item_id: str) -> bool:
+        """Did the send land? Read the pane back and look for the item id.
+
+        design.md: "verify reads the pane back. Send-and-assume is how you
+        believe work was assigned when it wasn't." The item id is in the text we
+        sent, so after a real send-keys it is on the pane's input line. A false
+        negative (the agent cleared it before we looked) is SAFE by construction:
+        it maps to exit 2 and leaves the tracker untouched, so a human
+        re-dispatches rather than the tracker lying — never the other direction.
+        """
+        return item_id in self.panes.capture(pane)
