@@ -64,9 +64,9 @@ specific and *load-bearing* stop-hook contract we've measured the hard way:
 - so "notify the agent at stop" is **blocking or nothing**, not blocking-vs-gentle
 
 We lost a day to that in Gas Town. **A runtime that cannot deliver a message to its agent at stop
-cannot host a `lead`** — the whole role is "receive your reports' stop events". So `hooks()` is not
-metadata; it's a **capability declaration**, and the harness must refuse a card whose role needs a
-capability its runtime doesn't have:
+cannot host any role that RECEIVES stop events** — the whole job of such a role is "receive stop
+events from below". So `hooks()` is not metadata; it's a **capability declaration**, and the harness
+must refuse a card whose role needs a capability its runtime doesn't have:
 
 ```
 $ shanty role set malcolm lead
@@ -75,8 +75,19 @@ $ shanty role set malcolm lead
          malcolm stays worker. Nothing written.
 ```
 
-Refusing loudly is the point. A lead on a runtime that can't deliver stop events is a tier that
-exists on paper and absorbs nothing — and that failure is *silent*, which is the one kind we've
+**Which roles need it is not a fixed list — it is exactly the set of `route_stop` DESTINATIONS**
+(aegis-qdal, ruled against the tier in tier.py). A **worker** is only ever a stop *source*, so it
+needs nothing. A **lead** receives its reports' stops. An **administrator** receives *risen* stops —
+Q3 (a report's stop rises to the admin when its lead is down, LOUDLY, carrying `LEAD_UNREACHABLE`),
+Q4 (a lead-less worker routes straight to the admin), and lead escalations. So **both lead AND
+administrator require `blocking_stop`**, and the admin is the *more* critical case, not the marginal
+one: it is the last backstop, with nobody above it to catch what it drops, so a non-blocking
+administrator turns Q3's LOUD rise into a *silent* one — regressing the exact invariant that ruling
+exists to hold. The gate is keyed on the `blocking_stop` capability, never a runtime name, so a third
+capable runtime passes without editing it.
+
+Refusing loudly is the point. A stop-receiver on a runtime that can't deliver stop events is a tier
+that exists on paper and absorbs nothing — and that failure is *silent*, which is the one kind we've
 agreed not to ship.
 
 ## Context and knowledge — bobbin and quipu, first-class
