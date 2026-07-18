@@ -87,6 +87,12 @@ class BeadsTracker:
             raise RuntimeError(f"bd update {item_id} failed: {r.stderr.strip()[:120]}")
 
 
+# Plate precedence, shared verbatim with files.plate so the two backends order a
+# plate identically (the two-implementation equivalence, aegis-260i). "In-hand"
+# work outranks "not-started"; anything not listed (open, etc.) sorts last, then id.
+_PLATE_RANK = {"hooked": 0, "in_progress": 1}
+
+
 def plate(tracker: "BeadsTracker", agent: str) -> "WorkItem | None":
     """The ONE thing on an agent's plate, or None. A module function, not a method.
 
@@ -115,12 +121,18 @@ def plate(tracker: "BeadsTracker", agent: str) -> "WorkItem | None":
     mine = [
         x for x in rows
         if x.get("assignee") in (agent, agent.split("/")[-1])
-        and x.get("status") in ("hooked", "in_progress")
+        and x.get("status") != "closed"
     ]
     if not mine:
         return None
-    # deterministic: hooked outranks in_progress, then lowest id
-    mine.sort(key=lambda x: (x.get("status") != "hooked", x.get("id", "")))
+    # OPEN-ASSIGNED belongs on the plate (aegis-260i, malcolm): returning None
+    # while 3 beads are assigned to you reports "nothing" when it means "nothing
+    # STARTED" — the same silent-degradation class this reader is built to refuse.
+    # This used to filter to hooked/in_progress and DIVERGED from files.plate's
+    # "not closed"; the two-implementation rule exists to catch exactly that. Now
+    # both include not-closed, with one shared precedence: in-hand outranks
+    # not-started, then lowest id (deterministic across runs and across backends).
+    mine.sort(key=lambda x: (_PLATE_RANK.get(x.get("status"), 2), x.get("id", "")))
     top = mine[0]
     return WorkItem(
         id=top.get("id", ""),

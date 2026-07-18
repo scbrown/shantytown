@@ -118,6 +118,11 @@ class FilesTracker:
         return WorkItem(id=item_id, title=title, status="open", assignee=d.get("assignee"))
 
 
+# Plate precedence, identical to beads._PLATE_RANK so both backends order a plate
+# the same way (two-implementation equivalence, aegis-260i).
+_PLATE_RANK = {"hooked": 0, "in_progress": 1}
+
+
 def plate(tracker: FilesTracker, agent: str) -> WorkItem | None:
     """The ONE thing on an agent's plate, or None. A module function, not a method.
 
@@ -141,8 +146,16 @@ def plate(tracker: FilesTracker, agent: str) -> WorkItem | None:
     root = Path(tracker.root)
     if not root.is_dir():
         return None
-    for p in sorted(root.glob("*.json")):
-        item = tracker._read(p, p.stem)
-        if item.assignee == agent and item.status != "closed":
-            return item
-    return None
+    mine = [
+        item
+        for p in sorted(root.glob("*.json"))
+        if (item := tracker._read(p, p.stem)).assignee == agent
+        and item.status != "closed"
+    ]
+    if not mine:
+        return None
+    # Shared precedence with beads.plate (aegis-260i): in-hand outranks
+    # not-started, then id. Was pure filename order, which would surface an
+    # unstarted open item over one you're mid-flight on — the wrong plate.
+    mine.sort(key=lambda it: (_PLATE_RANK.get(it.status, 2), it.id))
+    return mine[0]
