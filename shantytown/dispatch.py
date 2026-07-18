@@ -12,6 +12,19 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from .protocols import Panes, Registry, Tracker
+from .triage import Action, Decision, triage
+
+
+class TriageRefused(Exception):
+    """`st go` declined to send because the target pane is not ready to receive.
+
+    Carries the whole Decision so the caller can print WHY and on what inputs —
+    a refusal you cannot inspect is indistinguishable from a bug. Maps to exit 1.
+    """
+
+    def __init__(self, decision: Decision):
+        self.decision = decision
+        super().__init__(decision.why)
 
 
 @dataclass
@@ -59,10 +72,28 @@ class Dispatcher:
             text=f"Work is on your hook: {item_id} — {item.title}",
         )
 
+    def triage(self, item_id: str, agent_name: str) -> Decision:
+        """What st go WOULD do to that pane, without touching it. Read-only.
+
+        Closes shantytown #1: st go sent into mid-flight panes. It went straight
+        to send-keys, so dispatching to an agent that was mid-response
+        interrupted its work. Now go() consults sentinel's triage first and only
+        NUDGE proceeds. This method exposes that judgement for --dry-run and for
+        `st go` to print before it refuses.
+        """
+        p = self.plan(item_id, agent_name)       # resolve + precondition-check
+        return triage(self.panes, p.pane, p.text)
+
     def go(self, item_id: str, agent_name: str, dry_run: bool = False) -> Plan:
         p = self.plan(item_id, agent_name)
         if dry_run:
             return p
+        # #1: consult triage BEFORE any write. A REFUSE/CLEAR/RESTART here means
+        # we never mark the item in_progress and never send — no half-dispatch,
+        # no interrupted agent. Only a healthy pane (NUDGE) proceeds.
+        decision = triage(self.panes, p.pane, p.text)
+        if decision.action is not Action.NUDGE:
+            raise TriageRefused(decision)
         self.tracker.update(item_id, **p.updates)      # 1 tracker write
         self.panes.send(p.pane, p.text)                # 1 send
         return p

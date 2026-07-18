@@ -14,8 +14,9 @@ import argparse
 import sys
 from pathlib import Path
 
+from . import beads as beads_mod
 from . import roles as roles_mod
-from .dispatch import Dispatcher
+from .dispatch import Dispatcher, TriageRefused
 from .files import FilesRegistry, FilesTracker, plate as files_plate
 from .prime import Unreachable, prime as do_prime
 from .tmux import Tmux
@@ -28,17 +29,40 @@ def _registry(root: Path) -> FilesRegistry:
     return FilesRegistry(root / "crew")
 
 
-def _tracker(root: Path) -> FilesTracker:
-    return FilesTracker(root / "items")
+def _tracker(a):
+    """The tracker for this invocation, selected by --backend (aegis-kbuz #3).
+
+    arnold added beads.plate() (the reader) but the CLI still wired FilesTracker
+    unconditionally, so `st --backend beads` did not exist and his plate was
+    unreachable. This wires it: --backend beads reaches BeadsTracker; --repo is
+    bd's -C. Identity (registry) stays files — work lives in beads, identity does
+    not.
+    """
+    if getattr(a, "backend", "files") == "beads":
+        return beads_mod.BeadsTracker(repo=getattr(a, "repo", None))
+    return FilesTracker(a.root / "items")
 
 
-def _wire(root: Path) -> Dispatcher:
-    return Dispatcher(_registry(root), _tracker(root), Tmux())
+def _plate(a):
+    """The plate reader matching the selected tracker — uses arnold's beads.plate
+    for the beads backend (his is canonical; my duplicate was dropped)."""
+    trk = _tracker(a)
+    if getattr(a, "backend", "files") == "beads":
+        return lambda who: beads_mod.plate(trk, who)
+    return lambda who: files_plate(trk, who)
+
+
+def _wire(a) -> Dispatcher:
+    return Dispatcher(_registry(a.root), _tracker(a), Tmux())
 
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="st")
     ap.add_argument("--root", type=Path, default=Path.cwd() / ".shanty")
+    ap.add_argument("--backend", choices=["files", "beads"], default="files",
+                    help="tracker backend (identity is always files). #3")
+    ap.add_argument("--repo", default=None,
+                    help="bd -C <dir> when --backend beads")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     pr = sub.add_parser("prime", help="who am I, what's on my plate")
@@ -245,7 +269,7 @@ def _cmd_task(a) -> int:
         print("\n  0 writes.")
         return OK
     try:
-        item = _tracker(a.root).create(title, assignee=a.assignee)
+        item = _tracker(a).create(title, assignee=a.assignee)
     except Exception as e:
         print(f"  could not tell: tracker create failed: {e}", file=sys.stderr)
         return CANNOT_TELL
@@ -263,9 +287,7 @@ def _cmd_prime(a) -> int:
               file=sys.stderr)
         return REFUSED
     try:
-        trk = _tracker(a.root)
-        p = do_prime(me, _registry(a.root), Tmux(),
-                     plate=lambda who: files_plate(trk, who))
+        p = do_prime(me, _registry(a.root), Tmux(), plate=_plate(a))
     except LookupError as e:
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED
@@ -280,17 +302,28 @@ def _cmd_prime(a) -> int:
 
 
 def _cmd_go(a) -> int:
-    d = _wire(a.root)
+    d = _wire(a)
+    if a.dry_run:
+        try:
+            decision = d.triage(a.item, a.agent)
+            p = d.go(a.item, a.agent, dry_run=True)
+        except LookupError as e:
+            print(f"  refused: {e}", file=sys.stderr)
+            return REFUSED
+        print(p.render()); print("\n  triage: " + decision.render())
+        print("  0 writes. 1 tracker call, 1 send-keys.")
+        return OK
     try:
-        p = d.go(a.item, a.agent, dry_run=a.dry_run)
+        p = d.go(a.item, a.agent)
+    except TriageRefused as e:
+        # #1: pane not ready (in-flight/wedged/high-context). No write, no send.
+        print(f"  refused: pane not ready — {e.decision.render()}", file=sys.stderr)
+        return REFUSED
     except LookupError as e:
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED
-    if a.dry_run:
-        print(p.render()); print("\n  0 writes. 1 tracker call, 1 send-keys.")
-    else:
-        print(f"  {p.item_id} -> {p.agent}          in progress")
-        print(f"  sent to pane {p.pane}")
+    print(f"  {p.item_id} -> {p.agent}          in progress")
+    print(f"  sent to pane {p.pane}")
     return OK
 
 
