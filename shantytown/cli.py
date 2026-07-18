@@ -25,7 +25,7 @@ from pathlib import Path
 
 from . import beads as beads_mod
 from . import roles as roles_mod
-from .dispatch import Dispatcher, TriageRefused
+from .dispatch import Dispatcher, TriageRefused, SendUnverified
 from .files import FilesRegistry, FilesTracker, plate as files_plate
 from .prime import Unreachable, prime as do_prime
 from .runtime import ClaudeRuntime, CapabilityError, SettingsError
@@ -582,6 +582,16 @@ def _cmd_go(a) -> int:
         # #1: pane not ready (in-flight/wedged/high-context). No write, no send.
         print(f"  refused: pane not ready — {e.decision.render()}", file=sys.stderr)
         return REFUSED
+    except SendUnverified as e:
+        # #2: we sent, but reading the pane back did NOT confirm it landed. Its
+        # docstring pins this to exit 2, and go() ran verify BEFORE the tracker
+        # write, so NOTHING was recorded — a human re-dispatches rather than the
+        # tracker claiming an assignment that may never have arrived. This must be
+        # a clean could-not-tell, NOT an uncaught traceback (found by the zx7l
+        # full-cycle validation against a real pane).
+        print(f"  could not tell: {e} — recorded nothing; re-dispatch.",
+              file=sys.stderr)
+        return CANNOT_TELL
     except LookupError as e:
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED
