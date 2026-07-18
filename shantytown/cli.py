@@ -1,13 +1,21 @@
-"""st — the CLI. Ten commands. Adding an eleventh requires deleting one.
+"""st — the CLI. Twelve commands, and the count is load-bearing: each earns its slot.
 
     prime · go · mail · task · crew · roles [--check] · role set · new · stop · log
+    · context · doctor [--install]
 
 The binary is `st`, not `shanty`: `shanty` is Stiwi's tmux command and ours would
 shadow it on PATH. A harness that steals the operator's own command name has
 already made itself the centre of the world.
 
-Gas Town ships ~110 and we measurably use nine. This is not a smaller version of
-that list; it is the nine, and the discipline is the point (docs/cli.md).
+Gas Town ships ~110. This is not a smaller version of that list; it is the short
+set we measurably use, and the discipline is the point (docs/cli.md). The surface
+grew past the original ten by two, each on a specific ask — not drift:
+  · context — the bobbin Context protocol (aegis-rhhw)
+  · doctor  — out-of-box tool detect/install, Stiwi's direct ask (aegis-q9eh)
+The count is PINNED by a test (tests/test_command_count.py): the next command
+either updates this number or fails CI. This docstring used to say "ten" while the
+code had eleven (context landed unannounced) — a count nobody enforces is a
+comment, and in a repo whose whole thesis is the exact count, that is the bug.
 """
 from __future__ import annotations
 import argparse
@@ -56,7 +64,9 @@ def _wire(a) -> Dispatcher:
     return Dispatcher(_registry(a.root), _tracker(a), Tmux())
 
 
-def main(argv: list[str] | None = None) -> int:
+def build_parser() -> argparse.ArgumentParser:
+    """The full `st` parser. Exposed so tests/test_command_count.py can introspect
+    the command surface and pin it to the docstring — the count is the thesis."""
     ap = argparse.ArgumentParser(prog="st")
     ap.add_argument("--root", type=Path, default=Path.cwd() / ".shanty")
     ap.add_argument("--backend", choices=["files", "beads"], default="files",
@@ -114,7 +124,20 @@ def main(argv: list[str] | None = None) -> int:
     cx.add_argument("--none", action="store_true",
                     help="use the none-adapter (the leak test: harness works without bobbin)")
 
-    a = ap.parse_args(argv)
+    dr = sub.add_parser("doctor", help="what tools are installed, what's stale, what's missing")
+    dr.add_argument("tool", nargs="?", help="check one tool; all if omitted")
+    dr.add_argument("--install", action="store_true",
+                    help="install/upgrade the missing or stale tools (refuses if a toolchain is absent)")
+    dr.add_argument("-n", "--dry-run", action="store_true",
+                    help="with --install: show the plan, run nothing")
+    dr.add_argument("--no-latest", action="store_true",
+                    help="skip the release check (offline/fast) — detect local state only")
+
+    return ap
+
+
+def main(argv: list[str] | None = None) -> int:
+    a = build_parser().parse_args(argv)
 
     if a.cmd == "prime":
         return _cmd_prime(a)
@@ -132,7 +155,52 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_context(a)
     if a.cmd == "role":
         return _cmd_role(a)
+    if a.cmd == "doctor":
+        return _cmd_doctor(a)
     return _not_yet(a.cmd)
+
+
+def _cmd_doctor(a) -> int:
+    """st doctor [tool] [--install] [--dry-run] [--no-latest].
+
+    Detect is the default and touches nothing. --install mutates; --dry-run makes
+    even --install touch nothing (it prints the plan). Exit: 0 all present &
+    current, 1 something absent/stale, 2 something could-not-tell (quipu's broken
+    --version, or an unreachable release source)."""
+    from . import doctor as doc
+
+    specs = doc.SPECS
+    if getattr(a, "tool", None):
+        specs = tuple(s for s in doc.SPECS if s.name == a.tool)
+        if not specs:
+            known = ", ".join(s.name for s in doc.SPECS)
+            print(f"unknown tool {a.tool!r}. known: {known}", file=sys.stderr)
+            return REFUSED
+
+    healths = doc.detect_all(specs, check_latest=not a.no_latest)
+
+    if not a.install:
+        print(doc.report(healths))
+        return doc.exit_code(healths)
+
+    plans = [doc.plan_install(h) for h in healths]
+    print(doc.report(healths, plans=plans))
+    if a.dry_run:
+        return doc.exit_code(healths)  # planned only — nothing ran
+
+    failures = []
+    for p in plans:
+        try:
+            doc.run_install(p)
+        except RuntimeError as e:
+            failures.append(str(e))
+    if failures:
+        for f in failures:
+            print(f, file=sys.stderr)
+        return CANNOT_TELL
+    # re-detect so the post-install report is the observed state, not the intent
+    print(doc.report(doc.detect_all(specs, check_latest=not a.no_latest)))
+    return doc.exit_code(doc.detect_all(specs, check_latest=not a.no_latest))
 
 
 def _cmd_role(a) -> int:

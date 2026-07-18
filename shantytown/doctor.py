@@ -1,0 +1,312 @@
+"""st doctor — what tools are here, what version, what's missing, what's stale.
+
+The out-of-box feature (aegis-q9eh, Stiwi's ask: "I want `st` to facilitate
+installing these other tools"). DETECT is the product; install is a flag. Detect
+is where the value measured out — "most users need to know the state far more
+often than they need a fresh install" — so this module earns its slot on the
+detect half, and the three lies a naive doctor tells are the whole reason it
+exists:
+
+  ABSENT vs UNKNOWN.  quipu-server --version ERRORS — it opens a store to answer
+    (`error opening store .bobbin/quipu/quipu.db`), an upstream bug. A binary that
+    is present but won't say its version is UNKNOWN ("I could not tell"), NOT
+    missing. Collapsing them is the same class as a 429 read as "metric absent" —
+    it makes a naive installer conclude quipu is broken/absent when it is neither.
+
+  INSTALLED vs CURRENT.  bobbin 0.3.1 sits on the box while 0.6.0 is released. The
+    out-of-box problem is not "not installed", it is "installed and nobody knows
+    what's there". So STALE is a first-class state, and "could not check the latest
+    release" is UNKNOWN, never silently CURRENT.
+
+  DETECT touches nothing.  asking a binary who it is must not mkdir (prime's old
+    bug) or write. Only --install mutates, and --dry-run shows the plan without
+    running a step.
+"""
+from __future__ import annotations
+
+import json
+import re
+import shutil
+import subprocess
+import urllib.request
+from dataclasses import dataclass
+
+# The single word for a tool's row. Each exists to stop one specific lie (above).
+ABSENT = "absent"       # binary not on PATH
+UNKNOWN = "unknown"     # present, but version or latest could not be determined — exit 2
+STALE = "stale"         # present, version known, older than the latest release
+CURRENT = "current"     # present, version known, == latest
+PRESENT = "present"     # present, version known, latest not checked/unknown
+
+
+@dataclass(frozen=True)
+class ToolSpec:
+    name: str
+    binary: str
+    version_argv: tuple[str, ...]
+    version_re: str
+    toolchain: str          # the toolchain needed to install ("unknown" if we don't know how)
+    installs_via: str       # human description of the mechanism
+    leverage: str           # the st feature this tool lights up
+    release: str | None = None      # "github:owner/repo" | "forgejo:owner/repo" | None (no releases)
+    version_broken: bool = False     # KNOWN upstream: --version fails; do NOT read that as absent
+
+
+# Surveyed, not assumed (aegis-q9eh). beads has NO releases → source build; quipu's
+# --version is known-broken; reactor has no install mechanism yet (blocked, k6hv).
+SPECS: tuple[ToolSpec, ...] = (
+    ToolSpec(
+        "beads", "bd", ("bd", "version"), r"(\d+\.\d+\.\d+)",
+        toolchain="go",
+        installs_via="go build from source (no release binary is published)",
+        leverage="the beads tracker backend — st --backend beads",
+        release=None,
+    ),
+    ToolSpec(
+        "bobbin", "bobbin", ("bobbin", "--version"), r"(\d+\.\d+\.\d+)",
+        toolchain="cargo",
+        installs_via="release binary if published, else cargo build",
+        leverage="st context — semantic code search over your repos",
+        release="github:scbrown/bobbin",
+    ),
+    ToolSpec(
+        "quipu", "quipu-server", ("quipu-server", "--version"), r"(\d+\.\d+\.\d+)",
+        toolchain="cargo",
+        installs_via="release binary if published, else cargo build",
+        leverage="the registry (identity, required) + knowledge (episodes)",
+        release="github:scbrown/quipu",
+        version_broken=True,
+    ),
+    ToolSpec(
+        "reactor", "reactor", ("reactor", "--version"), r"(\d+\.\d+\.\d+)",
+        toolchain="unknown",
+        installs_via="no install mechanism yet — upstream has no release (aegis-k6hv)",
+        leverage="bead-lifecycle events feeding the harness",
+        release=None,
+    ),
+)
+
+
+@dataclass(frozen=True)
+class Health:
+    spec: ToolSpec
+    present: bool
+    version: str | None
+    version_error: str | None    # set iff present but version could not be read
+    latest: str | None
+    latest_error: str | None     # set iff we tried to check latest and could not
+    toolchain_ok: bool
+
+    @property
+    def state(self) -> str:
+        if not self.present:
+            return ABSENT
+        if self.version_error is not None:
+            return UNKNOWN
+        if self.latest and self.version and _older(self.version, self.latest):
+            return STALE
+        if self.latest and self.version:
+            return CURRENT
+        return PRESENT
+
+    @property
+    def uncertain(self) -> bool:
+        """True when doctor could not fully determine this tool's state — the
+        'I could not tell' that must not be laundered into a clean bill."""
+        return self.present and (self.version_error is not None or self.latest_error is not None)
+
+
+# --- injectable probes: real by default, faked in tests ----------------------
+
+def _which(name: str) -> str | None:
+    return shutil.which(name)
+
+
+def _run(argv: tuple[str, ...]) -> tuple[int, str]:
+    try:
+        r = subprocess.run(list(argv), capture_output=True, text=True, timeout=10)
+        return r.returncode, (r.stdout or "") + (r.stderr or "")
+    except (OSError, subprocess.SubprocessError) as e:
+        return 127, str(e)
+
+
+def _fetch_latest(release: str | None, *, opener=urllib.request.urlopen) -> tuple[str | None, str | None]:
+    """(version, error). Best-effort. 'could not check' is a real answer that maps
+    to UNKNOWN — never to CURRENT. No release channel (source-build tools) is not
+    an error: it returns (None, None)."""
+    if not release:
+        return None, None
+    try:
+        kind, slug = release.split(":", 1)
+    except ValueError:
+        return None, f"bad release spec {release!r}"
+    url = {
+        "github": f"https://api.github.com/repos/{slug}/releases/latest",
+        "forgejo": f"http://git.svc/api/v1/repos/{slug}/releases/latest",
+    }.get(kind)
+    if not url:
+        return None, f"unknown release source {kind!r}"
+    try:
+        with opener(url, timeout=8) as resp:
+            data = json.load(resp)
+    except Exception as e:  # noqa: BLE001 — any failure here is "could not look", named
+        return None, f"could not reach release source: {e}"
+    tag = (data.get("tag_name") or data.get("name") or "") if isinstance(data, dict) else ""
+    m = re.search(r"(\d+\.\d+\.\d+)", tag)
+    return (m.group(1), None) if m else (None, f"no version found in latest tag {tag!r}")
+
+
+def _older(a: str, b: str) -> bool:
+    def parts(v: str) -> tuple[int, ...]:
+        return tuple(int(x) for x in v.split("."))
+    try:
+        return parts(a) < parts(b)
+    except ValueError:
+        return False
+
+
+def detect(spec: ToolSpec, *, which=_which, run=_run, fetch=_fetch_latest,
+           check_latest: bool = True) -> Health:
+    """Detect one tool. Reads PATH, runs --version, optionally checks the latest
+    release. Mutates NOTHING."""
+    present = which(spec.binary) is not None
+    version = version_error = None
+    if present:
+        rc, out = run(spec.version_argv)
+        m = re.search(spec.version_re, out or "")
+        if rc == 0 and m:
+            version = m.group(1)
+        else:
+            # Present, but could not read a version. NAME it — do not fall through
+            # to "absent". For quipu this is the known upstream --version bug.
+            first = (out or "").strip().splitlines()[0] if (out or "").strip() else "(no output)"
+            version_error = first[:160]
+
+    latest = latest_error = None
+    if present and check_latest:
+        latest, latest_error = fetch(spec.release)
+
+    if spec.toolchain == "unknown":
+        toolchain_ok = False
+    else:
+        toolchain_ok = which(spec.toolchain) is not None
+
+    return Health(spec, present, version, version_error, latest, latest_error, toolchain_ok)
+
+
+def detect_all(specs: tuple[ToolSpec, ...] = SPECS, **kw) -> list[Health]:
+    return [detect(s, **kw) for s in specs]
+
+
+def exit_code(healths: list[Health]) -> int:
+    """0 = all present & accounted-for; 1 = something absent/stale (actionable);
+    2 = something could not be determined ('I could not tell'). Uncertainty
+    dominates: a report you cannot trust is worse than one that says 'fix this'."""
+    if any(h.uncertain for h in healths):
+        return 2
+    if any(h.state in (ABSENT, STALE) for h in healths):
+        return 1
+    return 0
+
+
+# --- install planning: detect-before-install, refuse-loudly ------------------
+
+@dataclass(frozen=True)
+class InstallPlan:
+    tool: str
+    action: str          # "install" | "upgrade" | "skip" | "refuse"
+    reason: str
+    steps: tuple[str, ...]
+
+
+def plan_install(health: Health) -> InstallPlan:
+    s = health.spec
+    # Only ABSENT and STALE are actionable. Do not churn a working install:
+    if health.state == CURRENT:
+        return InstallPlan(s.name, "skip", "already current", ())
+    if health.state == PRESENT:
+        return InstallPlan(s.name, "skip",
+                           f"installed ({health.version}); latest not confirmed, leaving as-is", ())
+    if health.state == UNKNOWN:
+        # present but version unreadable — reinstalling blindly could clobber a
+        # working binary over an upstream --version bug. Leave it, say why.
+        return InstallPlan(s.name, "skip",
+                           "present but version unknown — not reinstalling over a working binary", ())
+    # ABSENT or STALE from here.
+    if s.release is None and s.toolchain == "unknown":
+        return InstallPlan(s.name, "refuse", f"no known install mechanism — {s.installs_via}", ())
+    if not health.toolchain_ok:
+        # Refuse LOUDLY rather than half-install. A missing toolchain that fails
+        # halfway is worse than a clean "install <toolchain> first".
+        return InstallPlan(
+            s.name, "refuse",
+            f"toolchain '{s.toolchain}' is not on PATH — install it first, refusing to half-install",
+            (),
+        )
+    steps = _install_steps(s, health)
+    action = "upgrade" if health.state == STALE else "install"
+    return InstallPlan(s.name, action, s.installs_via, steps)
+
+
+def _install_steps(spec: ToolSpec, health: Health) -> tuple[str, ...]:
+    """Best-known install commands. NEVER pip --break-system-packages (this host is
+    PEP-668; st itself ships via pipx). Prefer a release binary; fall back to a
+    source build only when there is no release."""
+    if spec.name == "beads":
+        return ("go install github.com/steveyegge/beads/cmd/bd@latest",)
+    if spec.toolchain == "cargo":
+        # Prefer a published release binary; cargo is the fallback when none.
+        return (f"cargo install --git https://github.com/{spec.release.split(':',1)[1]}",)
+    return ()
+
+
+def run_install(plan: InstallPlan, *, run=_run, dry_run: bool = False) -> None:
+    """Execute a plan. skip/refuse run nothing. --dry-run runs nothing (the steps
+    were already shown by the report). Only this function ever mutates the box."""
+    if plan.action in ("skip", "refuse") or dry_run:
+        return
+    for step in plan.steps:
+        rc, out = run(tuple(step.split()))
+        if rc != 0:
+            raise RuntimeError(f"{plan.tool}: install step failed: {step}\n{out[:200]}")
+
+
+# --- rendering ---------------------------------------------------------------
+
+_GLYPH = {ABSENT: "✗", UNKNOWN: "?", STALE: "△", CURRENT: "✓", PRESENT: "•"}
+
+
+def report(healths: list[Health], *, plans: list[InstallPlan] | None = None) -> str:
+    lines = ["st doctor — tool inventory", ""]
+    for h in healths:
+        g = _GLYPH.get(h.state, "?")
+        if h.state == ABSENT:
+            detail = "not installed"
+        elif h.state == UNKNOWN:
+            reason = h.version_error or h.latest_error or "could not determine state"
+            if h.spec.version_broken and h.version_error:
+                reason = f"cannot report version (known upstream bug: --version opens a store) [{reason}]"
+            detail = f"present, but {reason}"
+        elif h.state == STALE:
+            detail = f"{h.version} installed — {h.latest} available (STALE)"
+        elif h.state == CURRENT:
+            detail = f"{h.version} installed (current)"
+        else:  # PRESENT
+            detail = f"{h.version} installed"
+            if h.latest_error:
+                detail += f"; latest unknown ({h.latest_error})"
+        lines.append(f"  {g} {h.spec.name:8} {detail}")
+        lines.append(f"      leverage: {h.spec.leverage}")
+    lines.append("")
+    if plans:
+        lines.append("install plan:")
+        for p in plans:
+            lines.append(f"  {p.tool:8} {p.action.upper()} — {p.reason}")
+            for step in p.steps:
+                lines.append(f"      $ {step}")
+    else:
+        actionable = [h for h in healths if h.state in (ABSENT, STALE)]
+        if actionable:
+            lines.append("run `st doctor --install` to install/upgrade: "
+                         + ", ".join(h.spec.name for h in actionable))
+    return "\n".join(lines)

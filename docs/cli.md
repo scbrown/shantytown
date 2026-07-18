@@ -2,27 +2,37 @@
 
 > Stiwi, 2026-07-16: *"there needs to be a cli and a primer"*.
 >
-> Gas Town ships ~110 commands and we measurably use nine. This is not a smaller version of that list.
-> It is **the nine**, and the discipline is that adding a tenth requires deleting one or showing the
-> use.
+> Gas Town ships ~110 commands and we measurably use a dozen. This is not a smaller version of that
+> list. It is **the short set**, and the discipline is that each command earns its slot — the count is
+> now pinned by a test (`tests/test_command_count.py`), so a new command either updates the docstring
+> and this doc, or fails CI.
 
 ## The whole surface
 
 ```
 shanty prime                      who am I, what's on my plate         <- the primer
 shanty go <item> [agent]          dispatch. this is the one that matters.
+shanty mail <agent> <message>     send a message to an agent (tmux send-keys)
+shanty task <title>               create a work item
 shanty crew                       who exists, what state, what role
 shanty roles [--check]            the hierarchy, and whether it's real
 shanty role set <agent> <role>    generative: rewrites cards, emits hooks
 shanty new <agent>                create an agent from a card
 shanty stop <agent>               stop it
 shanty log [agent]                what happened
+shanty context <query>            what code should I be looking at? (bobbin)
+shanty doctor [--install]         what's installed, stale, missing (out-of-box)
 ```
 
-Eight. `--dry-run` is on every command that writes, from commit one.
+Twelve. `--dry-run` is on every command that writes, from commit one. The surface grew past the
+original eight by four, each on a specific ask — not drift: **mail**/**task** (the dispatch/tracker
+pair, owner-directed), **context** (the bobbin Context protocol, aegis-rhhw), and **doctor**
+(out-of-box detect/install, Stiwi's direct ask, aegis-q9eh). Each is named on purpose: this doc once
+said "eight" while the code had twelve, and a count nobody enforces is a comment — in the one repo
+whose whole pitch is the exact count, that was the bug.
 
-That's the entire CLI. If it grows a `shanty convoy`, a `shanty rig`, or a `shanty formula`, we've
-rebuilt the thing we left.
+If it grows a `shanty convoy`, a `shanty rig`, or a `shanty formula`, we've rebuilt the thing we left —
+but the guard against that is now the test, not this sentence.
 
 ## `shanty prime` — the primer
 
@@ -123,10 +133,30 @@ $ shanty roles --check
 Three outcomes: **ok**, **broken**, **cannot tell**. If it can't read a card it says so and exits
 non-zero. A checker that can only report health is not a checker.
 
+## `shanty doctor` — the out-of-box feature
+
+```
+$ shanty doctor
+  • beads    1.0.5 installed
+  • bobbin   0.3.1 installed — 0.6.0 available (STALE)
+  ? quipu    present, but cannot report version (known upstream bug: --version opens a store)
+  ✗ reactor  not installed
+```
+
+Detect is the product; `--install` is a flag. Three states exist to stop three lies: **absent** vs
+**unknown** (quipu is present but its `--version` errors by opening a store — "I could not tell" is not
+"not installed"), **installed** vs **stale** (bobbin 0.3.1 while 0.6.0 is out — the out-of-box problem
+is not "missing", it's "installed and nobody knows what's there"), and detect **touches nothing**.
+`--install` prefers a release binary, falls back to a source build only where there's no release
+(beads), and **refuses loudly when the toolchain is missing** rather than half-installing. Never
+`--break-system-packages` — this host is PEP-668, which is why `st` itself ships via pipx.
+
 ## What's deliberately absent
 
-- **No `shanty mail`.** Our heaviest-used Gas Town command (70), and still no. A harness that grows a
-  message bus is on its way to being a town. Agents that need to talk have `go` and a tracker.
+- **`shanty mail` is thin, not a bus.** It exists (owner-directed), but it is one line — a tmux
+  send-keys to an agent's pane, not a message store. The discipline held: a harness that grows a
+  message *bus* is on its way to being a town, so mail carries no queue, no threads, no persistence.
+  Agents that need durable work have a tracker (`task`/`go`).
 - **No orchestration tier.** No mayor, deacon, witness, refinery, polecat. That tier is switched off
   on our host by directive and nothing broke — the strongest evidence we have that it isn't needed.
 - **No convoys.** `gt sling` auto-creates one per dispatch. It's a write on the hot path for
