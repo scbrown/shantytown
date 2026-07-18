@@ -53,11 +53,17 @@ class Tracker(Protocol):
     holding position, not an answer — it means every new tracker owes a plate
     reader that the protocol does not describe.
 
-    The real question for arnold: does prime's need justify a third method? If
-    yes, the shape that preserves the design is `mine(agent) -> WorkItem | None`
-    — Optional, not a list, so a primer structurally CANNOT print a backlog
-    ("a primer that prints a backlog is a dashboard"). A function that cannot
-    return two things cannot grow a dashboard.
+    RULED (arnold, aegis-gqr8): NO. "What's on my plate" is NOT a Tracker method.
+    It stays a per-backend PLATE READER (files.plate, beads.plate) injected into
+    prime. Reasons: (1) the two-function contract is load-bearing — ellie's test
+    and the BeadsTracker swap both depend on it, and mine() broke both; (2) a
+    plate reader is a QUERY, and queries are exactly what this protocol excludes
+    to keep the tracker from driving the harness; (3) malcolm's single-item
+    instinct was right but the placement was wrong — Optional-not-a-list belongs
+    on the reader, not smuggled into the shared surface. The holding position IS
+    the answer. The debt it named (every backend owes a plate reader) is paid:
+    beads.plate now exists alongside files.plate, both returning at most one item,
+    both raising rather than reporting an empty plate when they could not look.
 
     THREE functions as of 2026-07-16, by Stiwi's direction: `st task` creates
     work, and creation cannot be expressed through get/update — update() needs an

@@ -85,3 +85,46 @@ class BeadsTracker:
         r = self._bd(*args)
         if r.returncode != 0:
             raise RuntimeError(f"bd update {item_id} failed: {r.stderr.strip()[:120]}")
+
+
+def plate(tracker: "BeadsTracker", agent: str) -> "WorkItem | None":
+    """The ONE thing on an agent's plate, or None. A module function, not a method.
+
+    Pays the debt files.plate() names: prime against the beads tracker used to
+    show an empty plate because only the files backend had a reader. Now both do.
+
+    THE RULING (aegis-gqr8, arnold): "what's on my plate" is NOT a third Tracker
+    method — the two-function Tracker (get/update) is load-bearing; ellie's test
+    and the BeadsTracker swap both depend on it, and malcolm's mine() broke both.
+    It is a per-backend PLATE READER, injected into prime. malcolm's files
+    implementation was the right pattern; this is its beads sibling.
+
+    Returns AT MOST ONE item, by construction — cli.md: "one item, or none; a
+    primer that prints a backlog is a dashboard." A function that cannot return
+    two things cannot grow into a query API, which is what keeps the tracker from
+    driving the harness. Ties broken deterministically (hooked before in_progress,
+    then by id) so two runs agree.
+    """
+    import json
+    r = tracker._bd("list", "--json")
+    if r.returncode != 0:
+        # could-not-look, not empty-plate. Raise so prime surfaces exit 2 rather
+        # than reporting "nothing on your plate" when it simply could not ask.
+        raise RuntimeError(f"bd list failed: {r.stderr.strip()[:120]}")
+    rows = json.loads(r.stdout) if r.stdout.strip() else []
+    mine = [
+        x for x in rows
+        if x.get("assignee") in (agent, agent.split("/")[-1])
+        and x.get("status") in ("hooked", "in_progress")
+    ]
+    if not mine:
+        return None
+    # deterministic: hooked outranks in_progress, then lowest id
+    mine.sort(key=lambda x: (x.get("status") != "hooked", x.get("id", "")))
+    top = mine[0]
+    return WorkItem(
+        id=top.get("id", ""),
+        title=top.get("title", ""),
+        status=top.get("status", "open"),
+        assignee=top.get("assignee"),
+    )
