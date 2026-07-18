@@ -115,9 +115,11 @@ def test_start_REFUSES_before_sending_when_settings_missing():
 
 # --- is_live: the process-verify predicate, both outcomes -------------------
 
-def test_is_live_true_on_the_ready_banner():
+def test_is_live_true_on_the_real_ready_ui():
+    """The markers are the ONES OBSERVED against real claude v2.1.214 (zx7l
+    live-fire): the version banner and the '? for shortcuts' status line."""
     rt = ClaudeRuntime(NullPanes(), _ok_settings)
-    assert rt.is_live("… Welcome to Claude Code …\n? for shortcuts")
+    assert rt.is_live(" ▐▛███▜▌   Claude Code v2.1.214\n  ⏸ manual mode on · ? for shortcuts")
 
 
 def test_is_live_false_on_a_bare_shell():
@@ -129,3 +131,19 @@ def test_is_live_false_on_a_failed_launch():
     """The negative control that matters: a launch that errored is NOT live."""
     rt = ClaudeRuntime(NullPanes(), _ok_settings)
     assert not rt.is_live("claude: command not found")
+
+
+def test_is_live_false_on_the_old_hallucinated_marker():
+    """'Welcome to Claude Code' was a GUESS that never appears — it must NOT be
+    treated as live (a marker never observed passing is not a marker)."""
+    rt = ClaudeRuntime(NullPanes(), _ok_settings)
+    assert not rt.is_live("Welcome to Claude Code")
+
+
+def test_consent_prompt_is_waiting_not_live():
+    """A first-run consent screen is a THIRD state: not live, not failed. zx7l
+    live-fire found this is exactly why the original st new returned 2."""
+    rt = ClaudeRuntime(NullPanes(), _ok_settings)
+    screen = "  Claude in Chrome extension detected\n  ❯ 1. Yes  2. No, keep browser tools off"
+    assert rt.waiting_for_human(screen)
+    assert not rt.is_live(screen), "a consent prompt must not read as live"

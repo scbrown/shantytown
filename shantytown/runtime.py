@@ -157,10 +157,21 @@ class ClaudeRuntime:
 
     # Positive signal that Claude Code has taken over the pane. A capture that
     # contains none of these is NOT live (still a shell, an error, or nothing).
-    # See is_live()'s note: this list owes a live-fire confirmation.
-    READY_MARKERS = ("Welcome to Claude Code", "? for shortcuts")
+    # CONFIRMED by live-fire against real claude v2.1.214 (aegis-zx7l probe,
+    # 2026-07-18): the ready UI carries the version banner "Claude Code v" AND the
+    # persistent status line "? for shortcuts". The earlier "Welcome to Claude
+    # Code" was a GUESS and never appears — a marker never observed passing is not
+    # a marker (my validate-the-instrument rule); it is now replaced with two that
+    # were watched to match a real ready pane.
+    READY_MARKERS = ("? for shortcuts", "Claude Code v")
     # Definitely-not-live signals — a failed launch, seen as loudly as possible.
     DEAD_MARKERS = ("command not found", "no such file", "not found", "Traceback")
+    # A first-run consent screen (e.g. "Claude in Chrome extension detected") is a
+    # THIRD state: not live, not failed — WAITING FOR A HUMAN. It blocks the ready
+    # UI, so is_live correctly returns False and st new reports could-not-tell (2).
+    # The real fix is to launch past it (a settings/config that pre-answers), which
+    # is entangled with what role-set emits — tracked on zx7l, not guessed here.
+    CONSENT_MARKERS = ("Claude in Chrome extension detected", "keep browser tools off")
 
     def __init__(self, panes, resolve_settings: SettingsResolver) -> None:
         self._panes = panes
@@ -196,20 +207,27 @@ class ClaudeRuntime:
 
     def is_live(self, screen: str) -> bool:
         """Is the runtime OBSERVED live in this captured pane? Runtime-specific:
-        each runtime knows its own ready signal. Claude Code's UI shows its input
-        box once it is up; a pane still at a bare shell prompt, showing an error,
-        or 'command not found' is NOT live.
+        each runtime knows its own ready signal. Claude Code's ready UI shows its
+        version banner and a persistent "? for shortcuts" status line; a pane at a
+        bare shell prompt, an error, or a first-run consent screen is NOT live.
 
-        NOTE (validate-the-instrument, my standing rule): the marker below is the
-        one piece of #5 that owes a LIVE-FIRE confirmation against a real claude
-        session before `st new`'s 0-path is trusted in production — a verify never
-        observed returning 0 for a real launch is not yet tested. The MECHANISM
-        (poll capture, live->0 / not-live->2) is proven both ways in tests; the
-        specific marker string is flagged for the qdal validation cycle (zx7l).
+        LIVE-FIRE CONFIRMED (aegis-zx7l, real claude v2.1.214): the READY_MARKERS
+        were watched matching a real ready pane, and "Welcome to Claude Code" (the
+        old guess) was watched NEVER appearing and removed. A consent screen is
+        deliberately NOT live here — see waiting_for_human().
         """
         if any(bad in screen for bad in self.DEAD_MARKERS):
             return False                       # a failed launch is never live
+        if self.waiting_for_human(screen):
+            return False                       # blocked on consent — not up yet
         return any(mark in screen for mark in self.READY_MARKERS)
+
+    def waiting_for_human(self, screen: str) -> bool:
+        """A THIRD state between live and failed: a first-run prompt (e.g. the
+        Chrome-extension consent) is up and blocking the ready UI. Neither "live"
+        nor "crashed" — it needs a person. st new surfaces this specifically so a
+        could-not-tell (2) reads as 'go answer the prompt', not 'it died'."""
+        return any(c in screen for c in self.CONSENT_MARKERS)
 
 
 class CodexRuntime:

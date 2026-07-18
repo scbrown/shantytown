@@ -251,6 +251,15 @@ def _cmd_new(a) -> int:
     if _observe_live(runtime, panes, session):
         print(f"  started {a.agent} ({session}) — --settings composed, runtime live.")
         return OK
+    # Not observed live. Distinguish "waiting for a human" (a first-run consent
+    # prompt) from "unknown" — both are could-not-tell (2), but they need
+    # different human actions (aegis-zx7l live-fire found the consent case).
+    final = panes.capture(session)
+    if getattr(runtime, "waiting_for_human", None) and runtime.waiting_for_human(final):
+        print(f"  could not tell: {a.agent} ({session}) is WAITING ON A PROMPT "
+              f"(first-run consent), not up yet. Answer it: `st log {a.agent}` to "
+              f"see it, then attach to the pane.", file=sys.stderr)
+        return CANNOT_TELL
     print(f"  could not tell: launched {a.agent} but the runtime was not observed "
           f"live in {session} within the timeout. It may still be coming up; "
           f"check `st log {a.agent}`.", file=sys.stderr)
