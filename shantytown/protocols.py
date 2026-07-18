@@ -15,6 +15,10 @@ class Agent:
     role: str = "worker"          # worker | lead | administrator
     reports_to: str | None = None
     pane: str | None = None
+    model: str | None = None      # the model this agent runs. Persisted on the
+                                  # card so a restart honors it instead of
+                                  # silently reverting to the default (#9). None
+                                  # = use the launcher default.
 
 
 @dataclass(frozen=True)

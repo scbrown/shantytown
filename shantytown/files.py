@@ -27,6 +27,7 @@ class FilesRegistry:
             role=d.get("role", "worker"),
             reports_to=d.get("reports_to"),
             pane=d.get("pane"),
+            model=d.get("model"),
         )
 
     def set(self, agent: Agent) -> None:
@@ -44,6 +45,11 @@ class FilesRegistry:
         existing["reports_to"] = agent.reports_to
         if agent.pane is not None:
             existing["pane"] = agent.pane
+        # model, like pane, is a field the tier (role set) does not own — write
+        # it only when carried, so a role change preserves the persisted model
+        # instead of wiping it (#9).
+        if agent.model is not None:
+            existing["model"] = agent.model
         p.write_text(json.dumps(existing, indent=2, sort_keys=True))
 
     def all(self) -> list[Agent]:
