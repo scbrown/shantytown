@@ -57,13 +57,46 @@ class Tmux:
         subprocess.run(self._cmd("send-keys", "-t", pane, "-l", text), check=True)
         subprocess.run(self._cmd("send-keys", "-t", pane, "Enter"), check=True)
 
+    def new_session(self, name: str) -> str:
+        """Create a DETACHED, EMPTY session; return its address (the name).
+
+        RAISES if a session by that name already exists — never silently replace
+        a live agent (arnold's #5 ruling: the clobber hazard, same family as
+        RESTART-never-handoff). The caller checks exists() and decides.
+
+        It makes an EMPTY shell only. It does NOT launch an agent — that is a
+        runtime send(), outside this adapter, so a handoff (which drops
+        --settings) cannot leak in through the pane layer.
+        """
+        if self.exists(name):
+            raise RuntimeError(f"session {name!r} already exists — stop it first")
+        subprocess.run(self._cmd("new-session", "-d", "-s", name), check=True)
+        return name
+
+    def kill_session(self, name: str) -> None:
+        """Destroy the session. IDEMPOTENT: killing an absent session is success
+        ("gone" is the desired end state either way). kill-session errors on an
+        absent target, so guard with exists()."""
+        if self.exists(name):
+            subprocess.run(self._cmd("kill-session", "-t", name), check=True)
+
 
 class NullPanes:
-    """Second implementation. Proves dispatch doesn't import tmux."""
+    """Second implementation. Proves dispatch doesn't import tmux.
+
+    Two modes for exists(), because two callers want opposite defaults:
+      - dispatch/triage: `NullPanes()` — every pane exists (ambient _exists=True),
+        so go()/triage() have a pane to work with without seeding one.
+      - session lifecycle (#5): `NullPanes(live=set())` — nothing exists until
+        new_session() creates it. This is arnold's "in-memory session set". A set
+        (even empty) switches exists() to membership; None keeps the ambient
+        default. Same object, so the swap leak-detector still sees one Panes.
+    """
 
     _exists = True
 
-    def __init__(self, screen: str = "", drops: bool = False) -> None:
+    def __init__(self, screen: str = "", drops: bool = False,
+                 live: set | None = None) -> None:
         self.sent = []
         self.screen = screen
         # drops=True models a send that does NOT land — send-keys "succeeds" but
@@ -71,8 +104,13 @@ class NullPanes:
         # it is the ONLY way to prove verify can fail (a verifier never seen
         # failing is not evidence).
         self._drops = drops
+        # None -> ambient mode (everything exists); a set -> session-lifecycle
+        # mode (only named sessions exist). new/kill_session require a set.
+        self._live = live
 
     def exists(self, pane: str) -> bool:
+        if self._live is not None:
+            return pane in self._live
         return self._exists
 
     def capture(self, pane: str) -> str:
@@ -85,3 +123,20 @@ class NullPanes:
         # eats every message, which is not a pane. Unless drops=True.
         if not self._drops:
             self.screen += ("\n" if self.screen else "") + text
+
+    def new_session(self, name: str) -> str:
+        """RAISES if the name is live; else creates an empty session. Requires
+        session-lifecycle mode (live set) — new_session on the ambient default
+        would always raise, since everything ambiently exists."""
+        if self._live is None:
+            self._live = set()      # first session call opts into lifecycle mode
+        if name in self._live:
+            raise RuntimeError(f"session {name!r} already exists — stop it first")
+        self._live.add(name)
+        return name
+
+    def kill_session(self, name: str) -> None:
+        """Idempotent: discard removes if present, no-op if absent."""
+        if self._live is None:
+            self._live = set()
+        self._live.discard(name)

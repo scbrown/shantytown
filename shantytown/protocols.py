@@ -91,6 +91,12 @@ class Panes(Protocol):
                                                # Tmux and NullPanes implement it;
                                                # it was a de-facto protocol method
                                                # that was never declared.
+    # #5 session lifecycle (aegis-qdal, arnold's ruling). new_session makes an
+    # EMPTY pane and RAISES if the name exists (never clobber a live agent);
+    # kill_session is idempotent. Launching the agent-with-hooks is a runtime
+    # send(), NOT a Panes verb — that boundary keeps handoff from leaking in.
+    def new_session(self, name: str) -> str: ...
+    def kill_session(self, name: str) -> None: ...
 
 
 @dataclass(frozen=True)

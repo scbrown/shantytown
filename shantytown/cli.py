@@ -157,7 +157,62 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_role(a)
     if a.cmd == "doctor":
         return _cmd_doctor(a)
+    if a.cmd == "stop":
+        return _cmd_stop(a)
+    if a.cmd == "log":
+        return _cmd_log(a)
     return _not_yet(a.cmd)
+
+
+def _cmd_stop(a) -> int:
+    """stop <agent> — kill the agent's session (aegis-qdal #5).
+
+    kill_session is idempotent, so this is honest about the two states: an agent
+    that is not running is ALREADY the desired end state (exit 0, "was not
+    running"); a running one is killed and VERIFIED gone (exit 0, "stopped") or,
+    if it is somehow still there after the kill, exit 2 — never a cheerful "done"
+    over a session that is still alive.
+    """
+    panes = Tmux()
+    try:
+        agent = _registry(a.root).get(a.agent)
+    except LookupError as e:
+        print(f"  refused: {e}", file=sys.stderr)
+        return REFUSED
+    session = agent.pane      # the address; None/absent = not running
+    if not session or not panes.exists(session):
+        print(f"  {a.agent} was not running.")
+        return OK
+    if a.dry_run:
+        print(f"  would: kill-session {session}")
+        return OK
+    panes.kill_session(session)
+    if panes.exists(session):
+        print(f"  could not tell: killed {session} but it is still there",
+              file=sys.stderr)
+        return CANNOT_TELL
+    print(f"  stopped {a.agent} ({session}).")
+    return OK
+
+
+def _cmd_log(a) -> int:
+    """log [agent] — what happened, = capture() on the session pane (arnold's #5
+    ruling: log needs NOTHING new, it rides capture). Read-only."""
+    panes = Tmux()
+    if not a.agent:
+        print("  refused: log <agent> — whose log?", file=sys.stderr)
+        return REFUSED
+    try:
+        agent = _registry(a.root).get(a.agent)
+    except LookupError as e:
+        print(f"  refused: {e}", file=sys.stderr)
+        return REFUSED
+    session = agent.pane
+    if not session or not panes.exists(session):
+        print(f"  {a.agent} is not running — no session to read.")
+        return OK
+    print(panes.capture(session))
+    return OK
 
 
 def _cmd_doctor(a) -> int:
@@ -440,17 +495,16 @@ def _cmd_roles(a) -> int:
 
 
 def _not_yet(cmd: str) -> int:
-    """role set / new / stop / log are specified but not built.
+    """Only `new` still lands here. role set (rpo1), stop and log (qdal.1) are
+    built; new is held on ONE gate: the launch-command composition — how to spawn
+    the agent-with-hooks (runtime-specific, must carry --settings so hooks load).
+    Panes.new_session makes the empty pane; composing and send()ing the launch
+    string is the piece arnold is ruling separately (folded into #5). Until that
+    contract lands, `new` refuses rather than spawn a hookless zombie.
 
-    Refusing is the honest answer. The alternative — a stub that prints
-    something plausible and exits 0 — is the exact defect this repo was built in
-    reaction to: a command that reports success for work it did not do. It
-    exits 1 (refused: a precondition failed — the command does not exist yet).
-
-    role set / new / stop additionally need protocol surface that does not exist:
-    Registry has no write, and Panes has no session lifecycle (only send/exists).
-    Adding either is a design decision, not an implementation detail. See the
-    note on aegis-gqr8.
+    Refusing is the honest answer. The alternative — a stub that prints something
+    plausible and exits 0 — is the exact defect this repo was built in reaction
+    to: a command that reports success for work it did not do (exit 1).
     """
     print(f"  refused: `shanty {cmd}` is specified in docs/cli.md but not built "
           f"yet. It is not a stub and will not pretend to work.", file=sys.stderr)
