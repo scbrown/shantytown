@@ -1,7 +1,7 @@
-"""st — the CLI. Twelve commands, and the count is load-bearing: each earns its slot.
+"""st — the CLI. Thirteen commands, and the count is load-bearing: each earns its slot.
 
     prime · go · mail · task · crew · roles [--check] · role set · new · stop · log
-    · context · doctor [--install]
+    · context · doctor [--install] · project
 
 The binary is `st`, not `shanty`: `shanty` is Stiwi's tmux command and ours would
 shadow it on PATH. A harness that steals the operator's own command name has
@@ -12,6 +12,7 @@ set we measurably use, and the discipline is the point (docs/cli.md). The surfac
 grew past the original ten by two, each on a specific ask — not drift:
   · context — the bobbin Context protocol (aegis-rhhw)
   · doctor  — out-of-box tool detect/install, Stiwi's direct ask (aegis-q9eh)
+  · project — materialize the crew cards from the graph (aegis-gz57)
 The count is PINNED by a test (tests/test_command_count.py): the next command
 either updates this number or fails CI. This docstring used to say "ten" while the
 code had eleven (context landed unannounced) — a count nobody enforces is a
@@ -28,6 +29,7 @@ from . import beads as beads_mod
 from . import roles as roles_mod
 from .dispatch import Dispatcher, TriageRefused, SendUnverified
 from .files import FilesRegistry, FilesTracker, plate as files_plate
+from .quipu import QuipuRegistry
 from .prime import Unreachable, prime as do_prime
 from .runtime import ClaudeRuntime, CapabilityError, SettingsError, settings_for_role
 from .tmux import Tmux
@@ -42,8 +44,17 @@ _LIVE_DELAY = 0.25
 OK, REFUSED, CANNOT_TELL = 0, 1, 2
 
 
-def _registry(root: Path) -> FilesRegistry:
-    return FilesRegistry(root / "crew")
+def _registry(a):
+    """Identity backend for this invocation, selected by --registry (aegis-gz57).
+
+    quipu is the SOURCE OF TRUTH (Stiwi: "quipu should be the source of truth");
+    files is the projection/cache and the leak detector. Default stays files so
+    an offline invocation still resolves identity locally; --registry quipu reads
+    it straight from the graph. Either way the SAME roles.check runs over it.
+    """
+    if getattr(a, "registry", "files") == "quipu":
+        return QuipuRegistry()
+    return FilesRegistry(a.root / "crew")
 
 
 def _tracker(a):
@@ -70,7 +81,7 @@ def _plate(a):
 
 
 def _wire(a) -> Dispatcher:
-    return Dispatcher(_registry(a.root), _tracker(a), Tmux())
+    return Dispatcher(_registry(a), _tracker(a), Tmux())
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -82,6 +93,9 @@ def build_parser() -> argparse.ArgumentParser:
                     help="tracker backend (identity is always files). #3")
     ap.add_argument("--repo", default=None,
                     help="bd -C <dir> when --backend beads")
+    ap.add_argument("--registry", choices=["files", "quipu"], default="files",
+                    help="identity backend: files (projection/default) or quipu "
+                         "(the graph, the source of truth). gz57")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     pr = sub.add_parser("prime", help="who am I, what's on my plate")
@@ -146,6 +160,8 @@ def build_parser() -> argparse.ArgumentParser:
     dr.add_argument("--no-latest", action="store_true",
                     help="skip the release check (offline/fast) — detect local state only")
 
+    sub.add_parser("project", help="materialize the crew cards FROM the graph (gz57)")
+
     return ap
 
 
@@ -176,6 +192,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_log(a)
     if a.cmd == "new":
         return _cmd_new(a)
+    if a.cmd == "project":
+        return _cmd_project(a)
     return _not_yet(a.cmd)
 
 
@@ -225,7 +243,7 @@ def _cmd_new(a) -> int:
     """
     panes = Tmux()
     try:
-        card = _registry(a.root).get(a.agent)
+        card = _registry(a).get(a.agent)
     except LookupError as e:
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED
@@ -277,7 +295,7 @@ def _cmd_stop(a) -> int:
     """
     panes = Tmux()
     try:
-        agent = _registry(a.root).get(a.agent)
+        agent = _registry(a).get(a.agent)
     except LookupError as e:
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED
@@ -316,7 +334,7 @@ def _cmd_log(a) -> int:
         print("  refused: log <agent> — whose log?", file=sys.stderr)
         return REFUSED
     try:
-        agent = _registry(a.root).get(a.agent)
+        agent = _registry(a).get(a.agent)
     except LookupError as e:
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED
@@ -382,7 +400,7 @@ def _cmd_role(a) -> int:
     from . import tier
     reports = [r.strip() for r in a.reports.split(",") if r.strip()]
     try:
-        plan = tier.role_set(_registry(a.root), a.agent, a.role,
+        plan = tier.role_set(_registry(a), a.agent, a.role,
                              reports=reports, dry_run=a.dry_run)
     except (LookupError, ValueError) as e:
         print(f"  refused: {e}", file=sys.stderr)
@@ -504,7 +522,7 @@ def _cmd_mail(a) -> int:
     """
     msg = " ".join(a.message)
     try:
-        agent = _registry(a.root).get(a.agent)
+        agent = _registry(a).get(a.agent)
     except LookupError as e:
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED
@@ -592,7 +610,7 @@ def _cmd_prime(a) -> int:
               file=sys.stderr)
         return REFUSED
     try:
-        p = do_prime(me, _registry(a.root), Tmux(), plate=_plate(a))
+        p = do_prime(me, _registry(a), Tmux(), plate=_plate(a))
     except LookupError as e:
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED
@@ -645,7 +663,7 @@ def _cmd_go(a) -> int:
 def _cmd_crew(a) -> int:
     panes = Tmux()
     try:
-        agents = _registry(a.root).all()
+        agents = _registry(a).all()
     except Exception as e:
         print(f"  could not tell: {e}", file=sys.stderr)
         return CANNOT_TELL
@@ -666,7 +684,7 @@ def _cmd_crew(a) -> int:
 def _cmd_roles(a) -> int:
     if not a.check:
         try:
-            agents = _registry(a.root).all()
+            agents = _registry(a).all()
         except Exception as e:
             print(f"  could not tell: {e}", file=sys.stderr)
             return CANNOT_TELL
@@ -677,13 +695,35 @@ def _cmd_roles(a) -> int:
         print()
         return OK
 
-    rep = roles_mod.check(_registry(a.root))
+    rep = roles_mod.check(_registry(a))
     print()
     print(rep.render())
     print()
     return {roles_mod.OK: OK,
             roles_mod.BROKEN: REFUSED,
             roles_mod.CANNOT_TELL: CANNOT_TELL}[rep.verdict]
+
+
+def _cmd_project(a) -> int:
+    """Materialize the crew cards FROM the graph (gz57). quipu is the authority;
+    the cards are a generated projection — writes go to the graph, reads may come
+    from the card, NEVER the reverse. Regenerating is idempotent; hand-edits are
+    overwritten on the next project, which is the point.
+
+    Refuses (2) if the graph is unreachable — a projection you could not source
+    is not an empty projection. It projects the graph AS-IS, orphans included, so
+    `roles --check` still surfaces them rather than project hiding a bad graph.
+    """
+    try:
+        agents = QuipuRegistry().all()
+    except Exception as e:
+        print(f"  could not project: quipu unreachable: {e}", file=sys.stderr)
+        return CANNOT_TELL
+    files = FilesRegistry(a.root / "crew")
+    for ag in sorted(agents, key=lambda x: x.name):
+        files.set(ag)
+    print(f"\n  projected {len(agents)} cards from the graph -> {a.root / 'crew'}\n")
+    return OK
 
 
 def _not_yet(cmd: str) -> int:
