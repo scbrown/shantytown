@@ -156,3 +156,29 @@ def test_consent_prompt_is_waiting_not_live():
     screen = "  Claude in Chrome extension detected\n  ❯ 1. Yes  2. No, keep browser tools off"
     assert rt.waiting_for_human(screen)
     assert not rt.is_live(screen), "a consent prompt must not read as live"
+
+
+# --- prod launch config: workspace cwd + per-agent bypass-permissions (pilot) ---
+
+def test_compose_launches_in_the_agent_workspace():
+    """cd to the workspace so Claude Code auto-loads the agent's .mcp.json +
+    CLAUDE.md — the launcher never reads their secret contents."""
+    rt = ClaudeRuntime(NullPanes(), _ok_settings)
+    launch = rt.compose(Agent(name="ellie", role="worker",
+                              workspace="/home/braino/gt/beads_aegis/crew/ellie"))
+    assert launch.startswith("cd /home/braino/gt/beads_aegis/crew/ellie && ")
+    assert "SHANTY_AGENT=ellie" in launch and "--settings" in launch
+
+
+def test_compose_adds_skip_permissions_only_when_dangerous():
+    rt = ClaudeRuntime(NullPanes(), _ok_settings)
+    safe = rt.compose(Agent(name="ellie", role="worker"))
+    assert "--dangerously-skip-permissions" not in safe          # default: off
+    danger = rt.compose(Agent(name="ellie", role="worker", dangerous=True))
+    assert "--dangerously-skip-permissions" in danger            # opt-in only
+
+
+def test_dangerous_is_per_agent_not_global():
+    """One agent's dangerous flag must not leak to another."""
+    rt = ClaudeRuntime(NullPanes(), _ok_settings)
+    assert "--dangerously-skip-permissions" not in rt.compose(Agent(name="grant", role="worker"))

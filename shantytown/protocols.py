@@ -19,6 +19,17 @@ class Agent:
                                   # card so a restart honors it instead of
                                   # silently reverting to the default (#9). None
                                   # = use the launcher default.
+    workspace: str | None = None  # the cwd to launch the agent in. Claude Code
+                                  # auto-loads .mcp.json and CLAUDE.md from here,
+                                  # so pointing at the agent's existing dir wires
+                                  # its servers + charter WITHOUT the launcher ever
+                                  # reading their contents (the pilot, aegis-qdal.5:
+                                  # secrets stay in the agent's own files). None =
+                                  # launch in the default cwd.
+    dangerous: bool = False       # opt-in --dangerously-skip-permissions for THIS
+                                  # agent. Per-agent, never global — a crew worker
+                                  # that must act without permission prompts sets
+                                  # it on its card; nobody else is affected.
 
 
 @dataclass(frozen=True)

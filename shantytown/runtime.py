@@ -200,7 +200,19 @@ class ClaudeRuntime:
         # live and returns could-not-tell (2) for an agent that would be fine.
         # Live-fire confirmed (aegis-84z1): `claude --no-chrome` goes straight to
         # the ready UI, is_live True. This is the prod 0-path fix.
-        launch = f"SHANTY_AGENT={card.name} claude --no-chrome --settings {settings_path}"
+        flags = "--no-chrome"
+        # --dangerously-skip-permissions is OPT-IN per agent (card.dangerous), never
+        # global — a crew worker that must act without prompts sets it on its own
+        # card; nobody else inherits it (the pilot, aegis-qdal.5).
+        if card.dangerous:
+            flags += " --dangerously-skip-permissions"
+        launch = f"SHANTY_AGENT={card.name} claude {flags} --settings {settings_path}"
+        # Launch IN the agent's workspace so Claude Code auto-loads its .mcp.json +
+        # CLAUDE.md from there — the launcher wires the agent's servers + charter
+        # WITHOUT ever reading their (secret-bearing) contents. cd prefix, so the
+        # single send-keys still delivers one line.
+        if card.workspace:
+            launch = f"cd {card.workspace} && {launch}"
         # The invariant, asserted where it is made. If this ever fails, the bug is
         # here, not downstream — a settings-less string must be UNREACHABLE.
         assert "--settings" in launch, "compose produced a settings-less launch"

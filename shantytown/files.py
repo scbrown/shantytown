@@ -28,6 +28,8 @@ class FilesRegistry:
             reports_to=d.get("reports_to"),
             pane=d.get("pane"),
             model=d.get("model"),
+            workspace=d.get("workspace"),
+            dangerous=d.get("dangerous", False),
         )
 
     def set(self, agent: Agent) -> None:
@@ -50,6 +52,12 @@ class FilesRegistry:
         # instead of wiping it (#9).
         if agent.model is not None:
             existing["model"] = agent.model
+        # workspace + dangerous are launch config the tier does not own — preserve
+        # them across a role change the same way (write only when carried).
+        if agent.workspace is not None:
+            existing["workspace"] = agent.workspace
+        if agent.dangerous:
+            existing["dangerous"] = agent.dangerous
         p.write_text(json.dumps(existing, indent=2, sort_keys=True))
 
     def all(self) -> list[Agent]:
