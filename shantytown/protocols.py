@@ -108,6 +108,11 @@ class Panes(Protocol):
     # send(), NOT a Panes verb — that boundary keeps handoff from leaking in.
     def new_session(self, name: str) -> str: ...
     def kill_session(self, name: str) -> None: ...
+    # Ownership provenance (aegis-ac5g, dearing's safety requirement). new_session
+    # marks the session st-owned; owns() reports it. `st stop` refuses to reap a
+    # session it does not own, even on an exact name match — the registry pane
+    # names collide with the live crew, so a name match is not permission to kill.
+    def owns(self, name: str) -> bool: ...
 
 
 @dataclass(frozen=True)

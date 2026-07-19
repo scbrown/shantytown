@@ -285,6 +285,17 @@ def _cmd_stop(a) -> int:
     if not session or not panes.exists(session):
         print(f"  {a.agent} was not running.")
         return OK
+    # OWNERSHIP GUARD (aegis-ac5g). The session is live — but st only reaps what
+    # st launched. The registry pane names COLLIDE with the live crew
+    # (ellie.json pane = "aegis-crew-ellie" == the real gt session on gt-ae5f35),
+    # so on the production socket `st stop ellie` would kill the live crew member.
+    # A name match is not permission to kill: refuse unless st owns the session.
+    if not panes.owns(session):
+        print(f"  refused: {a.agent} ({session}) was not launched by st — refusing "
+              f"to stop a session st does not own. A name match is not permission "
+              f"to kill (the registry pane names collide with the live crew).",
+              file=sys.stderr)
+        return REFUSED
     if a.dry_run:
         print(f"  would: kill-session {session}")
         return OK

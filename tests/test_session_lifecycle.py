@@ -9,12 +9,15 @@ session primitives + stop + log, both outcomes for each, as he specified.
 """
 from __future__ import annotations
 import json
+import shutil
+import subprocess
+import uuid
 from pathlib import Path
 
 import pytest
 
 from shantytown import cli
-from shantytown.tmux import NullPanes
+from shantytown.tmux import NullPanes, Tmux
 
 
 # --- the Panes session primitives, both outcomes each -----------------------
@@ -88,7 +91,8 @@ def test_stop_reports_not_running_when_absent(tmp_path, monkeypatch, capsys):
 
 def test_stop_kills_and_verifies_when_present(tmp_path, monkeypatch, capsys):
     root = _world(tmp_path)
-    panes = NullPanes(live={"aegis-crew-ellie"})
+    # owned: a session st launched — the only kind st stop acts on (aegis-ac5g).
+    panes = NullPanes(live={"aegis-crew-ellie"}, owned={"aegis-crew-ellie"})
     monkeypatch.setattr(cli, "Tmux", lambda: panes)
     rc = cli._cmd_stop(_Args(root=root))
     assert rc == cli.OK
@@ -103,7 +107,7 @@ def test_stop_returns_2_if_the_kill_did_not_take(tmp_path, monkeypatch, capsys):
     class _StubbornPanes(NullPanes):
         def kill_session(self, name):     # pretends to kill, session stays
             pass
-    panes = _StubbornPanes(live={"aegis-crew-ellie"})
+    panes = _StubbornPanes(live={"aegis-crew-ellie"}, owned={"aegis-crew-ellie"})
     root = _world(tmp_path)
     monkeypatch.setattr(cli, "Tmux", lambda: panes)
     rc = cli._cmd_stop(_Args(root=root))
@@ -128,3 +132,94 @@ def test_log_says_not_running_when_no_session(tmp_path, monkeypatch, capsys):
     rc = cli._cmd_log(_Args(root=root))
     assert rc == cli.OK
     assert "not running" in capsys.readouterr().out
+
+
+# --- the ownership guard (aegis-ac5g, dearing's safety requirement) ----------
+# st stop must NEVER reap a session it did not launch. The registry pane names
+# COLLIDE with the live crew (ellie.json pane = "aegis-crew-ellie" == the real gt
+# session on gt-ae5f35), so on the production socket a name match must not be
+# permission to kill. Proven at three levels: the marker mechanism (owns), the
+# CLI policy (st stop refuses), and real tmux (a foreign session survives).
+
+def test_new_session_marks_ownership_kill_clears_it():
+    p = NullPanes(live=set())
+    p.new_session("aegis-crew-ellie")
+    assert p.owns("aegis-crew-ellie")           # st launched it -> owned
+    p.kill_session("aegis-crew-ellie")
+    assert not p.owns("aegis-crew-ellie")
+
+
+def test_a_live_session_st_did_not_launch_is_not_owned():
+    p = NullPanes(live={"aegis-crew-ellie"})    # live, but st did not create it
+    assert p.exists("aegis-crew-ellie")
+    assert not p.owns("aegis-crew-ellie")
+
+
+def test_stop_REFUSES_a_live_session_st_did_not_launch(tmp_path, monkeypatch, capsys):
+    """THE SAFETY POSITIVE CONTROL. A live pane st never launched (a real crew
+    member behind the colliding name) must be REFUSED, not reaped."""
+    root = _world(tmp_path)
+    panes = NullPanes(live={"aegis-crew-ellie"})   # live, NOT owned
+    monkeypatch.setattr(cli, "Tmux", lambda: panes)
+    rc = cli._cmd_stop(_Args(root=root))
+    assert rc == cli.REFUSED
+    assert "not launched by st" in capsys.readouterr().err
+    assert panes.exists("aegis-crew-ellie")        # still alive — not reaped
+
+
+def test_stop_dry_run_also_refuses_an_unowned_session(tmp_path, monkeypatch, capsys):
+    root = _world(tmp_path)
+    monkeypatch.setattr(cli, "Tmux", lambda: NullPanes(live={"aegis-crew-ellie"}))
+    rc = cli._cmd_stop(_Args(root=root, dry_run=True))
+    assert rc == cli.REFUSED                        # the guard runs before dry-run
+
+
+# --- real tmux: the marker actually distinguishes ours from foreign -----------
+
+pytestmark_tmux = pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux not installed")
+
+
+@pytest.fixture()
+def sock():
+    name = "st-ac5g-" + uuid.uuid4().hex[:8]
+    yield name
+    subprocess.run(["tmux", "-L", name, "kill-server"], capture_output=True, text=True)
+
+
+@pytestmark_tmux
+def test_real_new_session_is_owned_and_reapable(sock):
+    t = Tmux(socket=sock)
+    t.new_session("st-owned")
+    assert t.exists("st-owned")
+    assert t.owns("st-owned")                       # SHANTY_OWNED marker on the real session
+    t.kill_session("st-owned")
+    assert not t.exists("st-owned")
+
+
+@pytestmark_tmux
+def test_real_foreign_session_is_refused_by_st_stop_and_survives(sock, tmp_path, monkeypatch):
+    """The proof dearing required, on real tmux: a session st did NOT launch (no
+    marker) — the stand-in for the live crew behind the colliding name — is
+    refused by `st stop` and is still alive after the refusal."""
+    foreign = "aegis-crew-ellie"
+    subprocess.run(["tmux", "-L", sock, "new-session", "-d", "-s", foreign, "sleep 300"],
+                   check=True)
+    t = Tmux(socket=sock)
+    assert t.exists(foreign) and not t.owns(foreign)
+
+    root = _world(tmp_path)
+    monkeypatch.setenv("SHANTY_TMUX_SOCKET", sock)   # cli builds Tmux() from the env
+    rc = cli._cmd_stop(_Args(root=root))
+    assert rc == cli.REFUSED
+    assert t.exists(foreign)                         # REFUSED, and still alive
+
+
+@pytestmark_tmux
+def test_real_kill_session_stays_idempotent_and_tree_killing(sock):
+    """The guard is at the st stop POLICY layer; the kill_session adapter contract
+    (idempotent, orphan-proof) is unchanged — a second reap does not raise."""
+    t = Tmux(socket=sock)
+    t.new_session("st-idem")
+    t.kill_session("st-idem")
+    t.kill_session("st-idem")                        # idempotent: no raise
+    assert not t.exists("st-idem")

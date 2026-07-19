@@ -24,6 +24,23 @@ import os
 import subprocess
 
 
+# Provenance marker for the ownership guard (aegis-ac5g). st new sets it in the
+# session environment; st stop refuses to reap any session that does not carry
+# it. It is a tmux SESSION variable, so it is bound to that session's lifetime:
+# if the session dies and something else (a real gt crew launch) recreates a
+# session with the same name, the new session does not carry the marker and st
+# correctly refuses to kill it. A file-based marker could not make that
+# distinction — it would go stale and name-match a session st never launched.
+# The whole footgun is that the registry pane names COLLIDE with the live crew
+# (ellie.json pane = "aegis-crew-ellie" == the real gt session on gt-ae5f35), so
+# a name match must never be sufficient permission to kill.
+_OWNED_ENV = "SHANTY_OWNED"
+
+
+class OwnershipError(RuntimeError):
+    """st refused to reap a session it did not launch (no _OWNED_ENV marker)."""
+
+
 class Tmux:
     def __init__(self, socket: str | None = None) -> None:
         # Explicit arg wins; else the env; else bare tmux (default server).
@@ -71,7 +88,30 @@ class Tmux:
         if self.exists(name):
             raise RuntimeError(f"session {name!r} already exists — stop it first")
         subprocess.run(self._cmd("new-session", "-d", "-s", name), check=True)
+        # Provenance marker (aegis-ac5g): st launched this session, so st may stop
+        # it. Set immediately; if it fails, tear the session down rather than
+        # leave an un-owned session st created (which its own guard could never
+        # reap — a leak). All-or-nothing: a killable session, or nothing.
+        try:
+            subprocess.run(
+                self._cmd("set-environment", "-t", name, _OWNED_ENV, name), check=True)
+        except Exception:
+            subprocess.run(self._cmd("kill-session", "-t", name),
+                           capture_output=True, text=True)
+            raise
         return name
+
+    def owns(self, name: str) -> bool:
+        """True iff this session carries st's provenance marker — i.e. st launched
+        it and it is still the same session. A missing session, or a live session
+        st did not create (a real crew session behind a colliding name), is not
+        owned. tmux prints `SHANTY_OWNED=<v>` (rc 0) when set and `unknown
+        variable` (rc 1) for an unset var or a missing session."""
+        r = subprocess.run(
+            self._cmd("show-environment", "-t", name, _OWNED_ENV),
+            capture_output=True, text=True,
+        )
+        return r.returncode == 0 and r.stdout.startswith(f"{_OWNED_ENV}=")
 
     def kill_session(self, name: str) -> None:
         """Destroy the session AND the process tree in its pane. IDEMPOTENT.
@@ -136,9 +176,14 @@ class NullPanes:
     _exists = True
 
     def __init__(self, screen: str = "", drops: bool = False,
-                 live: set | None = None) -> None:
+                 live: set | None = None, owned: set | None = None) -> None:
         self.sent = []
         self.screen = screen
+        # Ownership provenance (aegis-ac5g). new_session marks a session owned;
+        # `owned=` seeds sessions as if st had launched them (for the owned-kill
+        # path). A session that is `live` but NOT `owned` models the footgun: a
+        # real crew session behind a colliding name that st must refuse to reap.
+        self._owned: set = set(owned) if owned is not None else set()
         # drops=True models a send that does NOT land — send-keys "succeeds" but
         # the pane never shows the text. This is what #2's verify must catch, and
         # it is the ONLY way to prove verify can fail (a verifier never seen
@@ -173,10 +218,15 @@ class NullPanes:
         if name in self._live:
             raise RuntimeError(f"session {name!r} already exists — stop it first")
         self._live.add(name)
+        self._owned.add(name)       # st launched it -> st owns it (aegis-ac5g)
         return name
+
+    def owns(self, name: str) -> bool:
+        return name in self._owned
 
     def kill_session(self, name: str) -> None:
         """Idempotent: discard removes if present, no-op if absent."""
         if self._live is None:
             self._live = set()
         self._live.discard(name)
+        self._owned.discard(name)
