@@ -149,7 +149,19 @@ def settings_for_role(role: str) -> dict:
         stop = [_STOP_DRAIN]
     else:
         raise ValueError(f"unknown role {role!r}; expected worker/lead/administrator")
-    return {"hooks": {"Stop": [{"hooks": stop}]}}
+    return {
+        "hooks": {"Stop": [{"hooks": stop}]},
+        # Pre-answer the project-MCP consent screen. A FRESH workspace makes Claude
+        # Code ask "N new MCP servers found — enable?" and that prompt BLOCKS the
+        # ready UI, so is_live sees nothing and st new reports could-not-tell for an
+        # agent that is actually fine (observed on harding's first launch: it sat on
+        # the picker until a human pressed Enter). Same third-state class the launch
+        # already handles for chrome with --no-chrome.
+        # Not a widening of trust: the launcher already elects the agent's workspace
+        # — and therefore ITS .mcp.json — by putting it on the card. This only stops
+        # us asking a human to re-affirm a choice the card already made.
+        "enableAllProjectMcpServers": True,
+    }
 
 
 class ClaudeRuntime:

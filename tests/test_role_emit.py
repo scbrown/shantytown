@@ -62,6 +62,17 @@ def test_hook_interpreter_actually_exists():
             )
 
 
+def test_every_role_pre_answers_the_project_mcp_prompt():
+    """A fresh workspace asks 'N new MCP servers found — enable?', and that picker
+    BLOCKS the ready UI: st new then reports could-not-tell for a healthy agent
+    (observed on harding's first launch — it sat there until a human hit Enter).
+    Every role must launch past it, or launching a NEW agent always needs a human."""
+    for role in ("worker", "lead", "administrator"):
+        assert settings_for_role(role).get("enableAllProjectMcpServers") is True, (
+            f"{role} would stall on the project-MCP consent screen"
+        )
+
+
 def test_unknown_role_is_refused():
     with pytest.raises(ValueError):
         settings_for_role("overlord")
