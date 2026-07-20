@@ -59,6 +59,18 @@ def test_compose_carries_no_chrome():
     assert "--no-chrome" in launch
 
 
+def test_compose_exports_BOBBIN_ROLE_so_the_guard_has_a_scope():
+    """hank's policy guard resolves its scope from --tenant, then BOBBIN_ROLE
+    (hank#20). Scopes live under [hank.policy.scopes.<role>], so exporting the
+    role per agent is what lets ONE hook registration serve every role. Without
+    it the guard has no scope to enforce and every agent is effectively
+    ungoverned — the guard would run and decide nothing."""
+    rt = ClaudeRuntime(NullPanes(), _ok_settings)
+    for role in ("worker", "lead", "administrator"):
+        launch = rt.compose(Agent(name="x", role=role))
+        assert f"BOBBIN_ROLE={role}" in launch, f"{role} launches with no policy scope"
+
+
 def test_compose_enables_remote_control_BY_DEFAULT():
     """Remote Control is on for every agent, named after the agent (Stiwi
     2026-07-19). A fleet you cannot reach is a fleet you cannot run: a crew

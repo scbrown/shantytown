@@ -92,27 +92,38 @@ def test_every_role_gets_the_hank_policy_guard():
             assert tool in matcher, f"{role} guard does not cover {tool}"
 
 
-def test_the_guard_fails_OPEN():
-    """NON-NEGOTIABLE. A guard that failed closed would brick every crew agent the
-    moment hank was absent, crashed, or lagging a release — a code-intelligence
-    nicety turned into a fleet outage. hank denies via block JSON on stdout with
-    exit 0, so failing open cannot swallow a real deny."""
-    cmd = _guard_commands(settings_for_role("worker"))[0]
-    assert "command -v hank" in cmd, "guard does not check hank is installed"
-    assert "|| exit 0" in cmd, "guard does not fail open on hank failure"
+def test_the_guard_is_emitted_verbatim_per_the_pinned_contract():
+    """No shell wrapper. An earlier version wrapped the command in
+    `command -v hank ... || exit 0` to force fail-open. Under the pinned contract
+    (hank#20) that is redundant AND harmful: exit 2 is Claude Code's only blocking
+    channel and hank never exits 2, so fail-open is a property of the CONTRACT.
+    Worse, `|| exit 0` can pass through partial stdout from a crashed hank — and
+    stdout is exactly where a permission decision is forged."""
+    hook = settings_for_role("worker")["hooks"]["PreToolUse"][0]["hooks"][0]
+    assert hook["command"] == "hank hook pre-edit", "guard is not the contract command"
+    assert hook.get("timeout") == 5, "guard has no timeout; a hung guard stalls every edit"
+    assert "||" not in hook["command"] and "&&" not in hook["command"], (
+        "guard has a shell wrapper; it must be emitted verbatim"
+    )
 
 
-def test_guard_fail_open_actually_allows_when_hank_is_missing(tmp_path):
-    """Prove it by RUNNING it, not by reading it: with hank absent from PATH the
-    guard must exit 0 (allow) and emit no deny."""
+def test_guard_can_never_produce_the_blocking_exit_code(tmp_path):
+    """THE fail-open invariant, stated correctly and PROVEN by running it.
+
+    Exit 2 is the ONLY code that blocks a tool call. So the requirement is not
+    "always exits 0" — a missing hank exits 127, which is fine — it is "can never
+    exit 2". A guard that could exit 2 would brick every crew agent the moment
+    hank was absent, crashed, or lagging a release.
+    """
     import subprocess
     cmd = _guard_commands(settings_for_role("worker"))[0]
     empty = tmp_path / "emptybin"
     empty.mkdir()
     r = subprocess.run(cmd, shell=True, capture_output=True, text=True,
                        env={"PATH": str(empty)})
-    assert r.returncode == 0, f"guard blocked when hank was absent: rc={r.returncode}"
-    assert "deny" not in r.stdout.lower()
+    assert r.returncode != 2, f"guard hard-blocked with hank absent (rc={r.returncode})"
+    # ALLOW IS SILENCE: it must not forge a permission decision either way.
+    assert "permissionDecision" not in r.stdout, "guard forged a decision with no hank"
 
 
 def test_unknown_role_is_refused():

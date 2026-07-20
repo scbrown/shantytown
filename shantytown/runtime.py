@@ -154,17 +154,31 @@ def _stop_cmd(mode: str, root=None) -> dict:
 # turning a code-intelligence nicety into a fleet outage. hank denies by emitting
 # the block JSON on stdout with exit 0, so a real deny is never confused with a
 # failure, and this wrapper cannot swallow it.
-_HANK_GUARD = (
-    "command -v hank >/dev/null 2>&1 && hank hook pre-edit || exit 0"
-)
+_HANK_GUARD = "hank hook pre-edit"
 
 
 def _guard_hook() -> dict:
+    """Emitted EXACTLY as hank pinned it (hank#20 contract, weaver 2026-07-19).
+
+    Deliberately a bare command with no shell wrapper. An earlier version wrapped
+    it in `command -v hank ... || exit 0` to force fail-open; that is both
+    redundant and harmful under the pinned contract:
+
+      - Exit 2 is Claude Code's ONLY blocking channel, and hank never exits 2.
+        So no hank crash — and no missing binary (127) — can hard-block an agent.
+        Fail-open is a property of the contract, not of a wrapper we bolt on.
+      - ALLOW IS SILENCE: allow is exit 0 with EMPTY stdout. The guard must never
+        emit permissionDecision:"allow", because that value SUPPRESSES the user's
+        own permission prompt — a guard that emitted it would silently downgrade
+        every agent's permission posture. The guard only ever SUBTRACTS permission.
+        A `|| exit 0` wrapper risks passing through partial stdout from a crashed
+        hank, which is exactly the thing that must never be forged.
+
+    DENY is exit 0 + hookSpecificOutput{permissionDecision:"deny", ...}.
+    """
     return {
-        # Matches hank's own contract (spec FR-30: PreToolUse on Edit|Write|MultiEdit).
-        # NotebookEdit is included because it is an edit by any other name.
-        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
-        "hooks": [{"type": "command", "command": _HANK_GUARD}],
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [{"type": "command", "command": _HANK_GUARD, "timeout": 5}],
     }
 
 
@@ -283,7 +297,15 @@ class ClaudeRuntime:
         # card; nobody else inherits it (the pilot, aegis-qdal.5).
         if card.dangerous:
             flags += " --dangerously-skip-permissions"
-        launch = f"SHANTY_AGENT={card.name} claude {flags} --settings {settings_path}"
+        # BOBBIN_ROLE is how hank's policy guard resolves WHICH scope applies
+        # (hank#20: tenant is resolved --tenant, then BOBBIN_ROLE; scopes live in
+        # .bobbin/config.toml under [hank.policy.scopes.<role>]). Exporting it per
+        # agent is what lets ONE hook registration serve every role — without it
+        # the guard has no scope to enforce and every agent is ungoverned.
+        launch = (
+            f"SHANTY_AGENT={card.name} BOBBIN_ROLE={card.role} "
+            f"claude {flags} --settings {settings_path}"
+        )
         # Launch IN the agent's workspace so Claude Code auto-loads its .mcp.json +
         # CLAUDE.md from there — the launcher wires the agent's servers + charter
         # WITHOUT ever reading their (secret-bearing) contents. cd prefix, so the
