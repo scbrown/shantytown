@@ -26,5 +26,23 @@ packages = ["shantytown"]
 [project.scripts]
 st = "shantytown.cli:main"
 
+# EXPLICIT, not auto-discovered. setuptools' flat-layout discovery scans the repo
+# ROOT for top-level packages, so the moment `assets/` was added for the README
+# logo (41d9fc2) it found two — `assets` and `shantytown` — and REFUSED to build:
+#
+#   error: Multiple top-level packages discovered in a flat-layout:
+#          ['assets', 'shantytown']
+#
+# The repo was uninstallable from that commit onward and nothing said so: the test
+# suite is run from the source tree, so 497 tests stayed green while
+# `pipx install .` could not produce a wheel at all. It surfaced only when a deploy
+# was attempted, and the error names the packaging layout rather than the docs
+# commit that caused it.
+#
+# Pinning the list means any future top-level directory — docs/, examples/, more
+# assets — is inert to the build instead of breaking it.
+[tool.setuptools]
+packages = ["shantytown"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
