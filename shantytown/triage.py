@@ -70,6 +70,49 @@ def mid_flight(screen: str) -> bool:
     return any(m in _tail(screen) for m in INFLIGHT_MARKERS)
 
 
+# --- the dispatcher's question: who is FREE? (aegis-o8we) --------------------
+
+# The four answers, as printed. `?` is a first-class value, not a rounding of
+# idle: "I could not tell" and "nobody is working" are different facts, and the
+# whole cost of collapsing them is on record in this file (context_high, which
+# reported False for every real pane and looked fine doing it).
+BUSY, IDLE, WEDGED, UNSURE = "busy", "idle", "wedged", "?"
+
+
+def work_state(screen: str, ui_up: bool) -> str:
+    """Is this agent WORKING right now? The verdict `st crew` never asked for.
+
+    The predicates already existed — dispatch.py has refused sends into busy
+    panes since #1 — but only the dispatcher ever consulted them, and only for
+    one agent at a time. So an administrator planning a round had to run `st log`
+    per agent and eyeball "Envisioning…" against an empty prompt (measured,
+    sattler 2026-07-19, feeding five workers on a handoff's word). This is the
+    same judgement, exposed as a value that can be printed for a whole roster.
+
+    `ui_up` is the RUNTIME's answer to "is your UI on this screen" — passed in,
+    not computed here, so triage stays runtime-blind (a second runtime has its own
+    ready markers). It is what separates idle from unsure: a bare shell, a crashed
+    runtime and a first-run consent prompt all show no in-flight marker, and NONE
+    of them is an agent waiting for work. Without this check, "the pane is up and
+    quiet" would print `idle` for a pane with nothing running in it at all —
+    a dispatch target that would swallow the send into a shell.
+
+    DELIBERATELY NOT is_live(): that also fails on DEAD_MARKERS, one of which is
+    "Traceback". Agents print tracebacks constantly (running a failing test prints
+    one), so keying free-ness on it would mark a genuinely free agent unsure right
+    after it did its job — the aegis-hd2q mistake, which cost a healthy agent a
+    RESTART verdict, repeated one column over. Only the POSITIVE ready signal is
+    consulted here.
+    """
+    if looks_wedged(screen):
+        return WEDGED
+    if mid_flight(screen):
+        return BUSY
+    if not ui_up:
+        return UNSURE
+    return IDLE
+
+
 CTX_HINT = re.compile(r"/clear to save ([0-9.]+)k tokens")
 CONTEXT_HIGH_TOKENS_K = 400.0
 

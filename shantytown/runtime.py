@@ -267,7 +267,20 @@ class ClaudeRuntime:
     # Code" was a GUESS and never appears — a marker never observed passing is not
     # a marker (my validate-the-instrument rule); it is now replaced with two that
     # were watched to match a real ready pane.
-    READY_MARKERS = ("? for shortcuts", "Claude Code v")
+    # "shift+tab to cycle" added 2026-07-20 (aegis-o8we), and it is not a
+    # widening — it is a MISS the earlier measurement could not see. Swept all 9
+    # live crew panes on this fleet: ZERO carried "? for shortcuts". Every one
+    # showed the mode line instead —
+    #     ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents
+    # — because that line REPLACES the shortcuts hint whenever a permission mode
+    # is on, and every crew agent here runs with one. So the pinned markers
+    # matched nothing in production: `st new` could only ever return
+    # could-not-tell (2) for a launch that was fine, and the work column read `?`
+    # for eight genuinely idle agents. The lesson from the line above it applies
+    # to itself: a marker validated once, on one configuration, is evidence about
+    # that configuration. Re-swept, both are kept — "? for shortcuts" is still
+    # what a default-mode pane shows.
+    READY_MARKERS = ("? for shortcuts", "Claude Code v", "shift+tab to cycle")
     # Definitely-not-live signals — a failed launch, seen as loudly as possible.
     DEAD_MARKERS = ("command not found", "no such file", "not found", "Traceback")
     # A first-run consent screen (e.g. "Claude in Chrome extension detected") is a
@@ -381,6 +394,16 @@ class ClaudeRuntime:
             return False                       # a failed launch is never live
         if self.waiting_for_human(screen):
             return False                       # blocked on consent — not up yet
+        return self.shows_ready_ui(screen)
+
+    def shows_ready_ui(self, screen: str) -> bool:
+        """The POSITIVE half of is_live, on its own: is this runtime's UI on the
+        screen at all? Separated out for triage.work_state (aegis-o8we), which
+        must NOT use is_live: is_live also fails on DEAD_MARKERS, and one of those
+        is "Traceback" — which healthy agents print constantly. Asking is_live
+        "can I dispatch to this agent" would answer no for a free agent that had
+        just run a failing test. Runtime-specific by construction: a second
+        runtime knows its own ready markers, and triage knows none of them."""
         return any(mark in screen for mark in self.READY_MARKERS)
 
     def waiting_for_human(self, screen: str) -> bool:

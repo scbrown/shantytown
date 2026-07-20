@@ -27,6 +27,7 @@ from pathlib import Path
 
 from . import beads as beads_mod
 from . import roles as roles_mod
+from . import triage as triage_mod
 from .dispatch import Dispatcher, TriageRefused, SendUnverified
 from .files import FilesRegistry, FilesTracker, plate as files_plate
 from .launched import FilesLaunches, CURRENT, STALE, UNKNOWN
@@ -690,7 +691,7 @@ def _cmd_go(a) -> int:
 
 
 def _cmd_crew(a) -> int:
-    """crew — who exists, what state, what role, and WHAT SETTINGS THEY ARE ON.
+    """crew — who exists, what state, what role, WHAT SETTINGS, and WHO IS FREE.
 
     The settings column is aegis-nipg. `up` was the only health this ever
     reported, and `up` is exactly what a deaf agent looks like: kelly and gennaro
@@ -699,6 +700,22 @@ def _cmd_crew(a) -> int:
     question `up` cannot — is this agent running the settings we currently
     believe are deployed? — and answers it in three values, because `unknown` is a
     real state and rounding it to `current` would recreate the bug.
+
+    The WORK column is aegis-o8we, and it answers the only question a dispatcher
+    actually has: who can take the next item? `up` is a LAUNCH fact, not a WORK
+    fact — an agent three hours into a refactor and an agent sitting at an empty
+    prompt both print `up`. The verdict is triage's, unchanged and already
+    load-bearing (dispatch.py refuses sends into busy panes); `st crew` simply
+    never asked it. Measured cost of not asking: a 5-worker dispatch round fed on
+    a handoff's word, with no way to verify it short of `st log` per agent and
+    eyeballing the scrape (sattler, 2026-07-19).
+
+    It also answers the roster's OTHER blind spot without inventing anything: the
+    work verdict is derived from the PANE, so it is available for the agents that
+    have no launch stamp — over half the roster — where the settings column can
+    only honestly say `?`. We do NOT backfill a stamp to make that column look
+    answered: a stamp records WHICH BYTES an agent launched with, and one we did
+    not observe would be a fabricated measurement, which is worse than a blank.
     """
     panes = Tmux()
     try:
@@ -710,13 +727,26 @@ def _cmd_crew(a) -> int:
         print("  no agents. `shanty new <agent>`.")
         return OK
     launches = _launches(a)
-    stale, unknown = [], []
+    runtime = _runtime(a, panes)
+    stale, unknown, free, busy = [], [], [], []
     print()
     for ag in sorted(agents, key=lambda x: x.name):
         if ag.pane:
             state = "up" if panes.exists(ag.pane) else "down"
         else:
             state = "no pane"          # not "down" — we did not look
+        # WORK: only a live pane has one. A down agent is not idle-and-available,
+        # it is not there — printing `idle` for it would put it on the free list
+        # and send work into a session that does not exist.
+        if state == "up":
+            screen = panes.capture(ag.pane)
+            work = triage_mod.work_state(screen, runtime.shows_ready_ui(screen))
+            if work == triage_mod.IDLE:
+                free.append(ag.name)
+            elif work == triage_mod.BUSY:
+                busy.append(ag.name)
+        else:
+            work = "—"
         # Only a LIVE agent can be running stale settings. A down agent has no
         # loaded settings to be stale, and will read the current file when it
         # next starts, so reporting on it would be noise that hides the real hits.
@@ -729,8 +759,19 @@ def _cmd_crew(a) -> int:
         else:
             verdict = "—"
         print(f"  {ag.name:<11} {ag.role:<14} {state:<8} {verdict:<8} "
-              f"{ag.pane or '—'}")
+              f"{work:<7} {ag.pane or '—'}")
     print()
+    # The dispatcher's answer, said out loud. A column still makes the operator
+    # scan 14 rows; the question is "who can take this", so print the list.
+    if free:
+        print(f"  {len(free)} free: {', '.join(free)}")
+    elif busy:
+        print("  0 free — every live agent is mid-flight. Dispatching now "
+              "interrupts work.")
+    if busy:
+        print(f"  {len(busy)} busy: {', '.join(busy)}")
+    if free or busy:
+        print()
     # Say the consequence, not just the state. The operator who needs this line is
     # the one who just rewrote a settings file and has no reason to suspect it did
     # not go anywhere.

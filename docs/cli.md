@@ -14,7 +14,7 @@ shanty prime                      who am I, what's on my plate         <- the pr
 shanty go <item> [agent]          dispatch. this is the one that matters.
 shanty mail <agent> <message>     send a message to an agent (tmux send-keys)
 shanty task <title>               create a work item
-shanty crew                       who exists, what state, what role
+shanty crew                       who exists, what state, what role, WHO IS FREE
 shanty roles [--check]            the hierarchy, and whether it's real
 shanty role set <agent> <role>    generative: rewrites cards, emits hooks
 shanty new <agent>                create an agent from a card
