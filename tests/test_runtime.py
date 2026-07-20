@@ -59,6 +59,20 @@ def test_compose_carries_no_chrome():
     assert "--no-chrome" in launch
 
 
+def test_compose_enables_remote_control_BY_DEFAULT():
+    """Remote Control is on for every agent, named after the agent (Stiwi
+    2026-07-19). A fleet you cannot reach is a fleet you cannot run: a crew
+    session sat unreachable for a day with an unsubmitted prompt in its input
+    line and no way to drive it from outside. Default, not opt-in — the agent you
+    forgot to enable it on is exactly the one you will need to reach."""
+    rt = ClaudeRuntime(NullPanes(), _ok_settings)
+    for name in ("ellie", "weaver"):
+        launch = rt.compose(Agent(name=name, role="worker"))
+        assert f"--remote-control {name}" in launch, (
+            f"{name} would launch unreachable"
+        )
+
+
 # --- the capability gate, BOTH outcomes (the positive control matters) ------
 
 def test_lead_on_claude_PASSES():

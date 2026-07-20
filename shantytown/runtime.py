@@ -161,7 +161,9 @@ _HANK_GUARD = (
 
 def _guard_hook() -> dict:
     return {
-        "matcher": "Edit|Write|NotebookEdit",
+        # Matches hank's own contract (spec FR-30: PreToolUse on Edit|Write|MultiEdit).
+        # NotebookEdit is included because it is an edit by any other name.
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
         "hooks": [{"type": "command", "command": _HANK_GUARD}],
     }
 
@@ -268,7 +270,14 @@ class ClaudeRuntime:
         # live and returns could-not-tell (2) for an agent that would be fine.
         # Live-fire confirmed (aegis-84z1): `claude --no-chrome` goes straight to
         # the ready UI, is_live True. This is the prod 0-path fix.
-        flags = "--no-chrome"
+        # Remote Control ON BY DEFAULT (Stiwi 2026-07-19). A fleet you cannot reach
+        # is a fleet you cannot run: this session sat unreachable for a day with an
+        # unsubmitted prompt in its input line and no way to drive it from outside
+        # (the gastown weaver stall). Naming the session after the agent is what
+        # makes a 6-agent fleet addressable rather than a wall of anonymous panes.
+        # Default, not opt-in — an agent you forgot to enable it on is exactly the
+        # one you will need to reach.
+        flags = f"--no-chrome --remote-control {card.name}"
         # --dangerously-skip-permissions is OPT-IN per agent (card.dangerous), never
         # global — a crew worker that must act without prompts sets it on its own
         # card; nobody else inherits it (the pilot, aegis-qdal.5).
