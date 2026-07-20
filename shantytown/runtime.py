@@ -30,6 +30,7 @@ HONEST BOUNDARY (say it so nobody over-claims):
     never be read as "hooks registered" — it cannot show that.
 """
 from __future__ import annotations
+import sys
 from dataclasses import dataclass
 from typing import Callable, Protocol, runtime_checkable
 
@@ -110,8 +111,17 @@ SettingsResolver = Callable[[Agent], "str | None"]
 
 # The internal entry the emitted Stop hooks call (arnold's #6 ruling). NOT an st
 # subcommand — plumbing, so the command-count test never sees it.
-_STOP_SEND = {"type": "command", "command": "python -m shantytown.stop_event send"}
-_STOP_DRAIN = {"type": "command", "command": "python -m shantytown.stop_event drain"}
+
+# The interpreter RUNNING shantytown, never the bare name "python". Stock Ubuntu
+# ships python3 with NO unversioned `python`, so the hardcoded name made EVERY
+# emitted Stop hook die with `/bin/sh: 1: python: not found` — found in live use
+# on the first real launch (harding, the qdal pilot). The hook failed on every
+# turn, which silently killed the whole stop-event route (send/drain, #6): the
+# feature looked shipped and had never once run. sys.executable is by
+# construction an interpreter that exists and can import shantytown.
+_PY = sys.executable or "python3"
+_STOP_SEND = {"type": "command", "command": f"{_PY} -m shantytown.stop_event send"}
+_STOP_DRAIN = {"type": "command", "command": f"{_PY} -m shantytown.stop_event drain"}
 
 
 def settings_for_role(role: str) -> dict:

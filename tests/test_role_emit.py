@@ -5,6 +5,8 @@ st new then finds the settings it refused for a moment ago.
 """
 from __future__ import annotations
 import json
+import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -22,22 +24,42 @@ def _stop_commands(settings: dict) -> list[str]:
     return [h["command"] for h in hooks]
 
 
+_PY = sys.executable or "python3"
+
+
 def test_worker_settings_send_only():
     cmds = _stop_commands(settings_for_role("worker"))
-    assert cmds == ["python -m shantytown.stop_event send"]
+    assert cmds == [f"{_PY} -m shantytown.stop_event send"]
 
 
 def test_lead_settings_send_and_drain():
     """A lead sends its OWN stop up AND drains its reports' — send + drain."""
     cmds = _stop_commands(settings_for_role("lead"))
-    assert cmds == ["python -m shantytown.stop_event send",
-                    "python -m shantytown.stop_event drain"]
+    assert cmds == [f"{_PY} -m shantytown.stop_event send",
+                    f"{_PY} -m shantytown.stop_event drain"]
 
 
 def test_administrator_settings_drain_only():
     """Root: receives only; its own stop terminates (no send)."""
     cmds = _stop_commands(settings_for_role("administrator"))
-    assert cmds == ["python -m shantytown.stop_event drain"]
+    assert cmds == [f"{_PY} -m shantytown.stop_event drain"]
+
+
+def test_hook_interpreter_actually_exists():
+    """The emitted hook must be RUNNABLE, not merely well-formed.
+
+    Regression guard for the live-use bug: the command hardcoded the bare name
+    `python`, which does not exist on stock Ubuntu (python3 only), so every Stop
+    hook died with `/bin/sh: 1: python: not found` and the whole send/drain route
+    silently never ran. A settings file whose interpreter is absent is not a
+    hook; it is a no-op that reports success.
+    """
+    for role in ("worker", "lead", "administrator"):
+        for cmd in _stop_commands(settings_for_role(role)):
+            interp = cmd.split()[0]
+            assert os.path.isabs(interp) and os.path.exists(interp), (
+                f"{role} hook interpreter {interp!r} does not exist"
+            )
 
 
 def test_unknown_role_is_refused():
@@ -60,7 +82,7 @@ def test_role_set_emits_the_settings_file(tmp_path):
     assert rc == OK
     p = root / "settings" / "worker.settings.json"
     assert p.is_file(), "role set did not emit the role's settings.json"
-    assert _stop_commands(json.loads(p.read_text())) == ["python -m shantytown.stop_event send"]
+    assert _stop_commands(json.loads(p.read_text())) == [f"{_PY} -m shantytown.stop_event send"]
 
 
 def test_role_set_dry_run_emits_nothing(tmp_path):
