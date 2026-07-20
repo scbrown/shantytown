@@ -1,4 +1,4 @@
-"""An agent's model persists on its card — shantytown #9 / aegis-qdal.
+"""An agent's model persists on its card — shantytown #9.
 
 #9: the per-agent model was not persisted, so a restart silently reverted to the
 default. The reason it was lost is that it had no home — Agent/registry never
@@ -6,7 +6,7 @@ carried it. This adds the storage half: model on the card, read by get, and
 PRESERVED by set (a role change must not wipe it, same as pane).
 
 The honor-at-launch half (new/restart reads agent.model and launches with it) is
-gated on #5 (st new is unbuilt) — tracked on qdal.1. These tests prove the field
+gated on #5 (st new is unbuilt), and tracked separately. These tests prove the field
 survives, which is the "persisted" in "not persisted, lost on restart".
 """
 from __future__ import annotations

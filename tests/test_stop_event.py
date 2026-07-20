@@ -1,5 +1,5 @@
 """stop_event — SEND (route+persist) and RECEIVE (drain->block, block-once).
-shantytown #6 (aegis-ct5q, arnold's ruling). The two tests arnold insisted on:
+shantytown #6 (arnold's ruling). The two tests arnold insisted on:
 survival-vs-delivery are separate, and BLOCK-ONCE (deliver once, then idle).
 """
 from __future__ import annotations
@@ -21,9 +21,9 @@ def _reg(tmp_path: Path) -> FilesRegistry:
     (crew / "ellie.json").write_text(json.dumps(
         {"role": "worker", "reports_to": "maldoon", "pane": "p-ellie"}))
     (crew / "maldoon.json").write_text(json.dumps(
-        {"role": "lead", "reports_to": "goldblum", "pane": "p-maldoon"}))
-    (crew / "goldblum.json").write_text(json.dumps(
-        {"role": "administrator", "pane": "p-goldblum"}))
+        {"role": "lead", "reports_to": "hammond", "pane": "p-maldoon"}))
+    (crew / "hammond.json").write_text(json.dumps(
+        {"role": "administrator", "pane": "p-hammond"}))
     return FilesRegistry(crew)
 
 
@@ -94,7 +94,7 @@ def test_send_RISES_to_admin_when_the_lead_is_down(tmp_path):
     ev = FilesEvents(tmp_path / "events")
     rc = stop_event._send(reg, ev, _Panes(set()), "ellie")     # nothing up
     assert rc == 0
-    to_admin = ev.drain("goldblum")
+    to_admin = ev.drain("hammond")
     assert len(to_admin) == 1
     assert to_admin[0].rose is True
     assert to_admin[0].reason == "lead-unreachable"
@@ -130,8 +130,8 @@ def test_drain_with_nothing_pending_is_silent(tmp_path, capsys):
 
 def test_drain_reason_flags_a_rise(tmp_path, capsys):
     ev = FilesEvents(tmp_path / "events")
-    ev.persist(to="goldblum", frm="ellie", reason="lead-unreachable", rose=True)
-    stop_event._drain(ev, "goldblum")
+    ev.persist(to="hammond", frm="ellie", reason="lead-unreachable", rose=True)
+    stop_event._drain(ev, "hammond")
     payload = json.loads(capsys.readouterr().out)
     assert "ROSE: lead-unreachable" in payload["reason"]
 
@@ -323,7 +323,7 @@ def test_send_RISES_when_the_lead_is_UP_but_CANNOT_DRAIN(tmp_path):
     rc = stop_event._send(reg, ev, panes, "ellie")
     assert rc == 0
     assert ev.drain("maldoon") == []              # NOT delivered to the deaf lead
-    risen = ev.drain("goldblum")                  # rose to the administrator
+    risen = ev.drain("hammond")                  # rose to the administrator
     assert len(risen) == 1
     assert risen[0].rose is True
     assert risen[0].reason == "lead-unreachable"
@@ -339,7 +339,7 @@ def test_positive_control_a_drain_capable_lead_still_receives(tmp_path):
     stop_event._send(reg, ev, panes, "ellie")
     got = ev.drain("maldoon")
     assert [(e.frm, e.rose) for e in got] == [("ellie", False)]
-    assert ev.drain("goldblum") == []
+    assert ev.drain("hammond") == []
 
 
 def test_unreadable_process_fails_toward_RISING(tmp_path):
@@ -350,4 +350,4 @@ def test_unreadable_process_fails_toward_RISING(tmp_path):
     panes = _Panes({"p-maldoon"}, cmdlines={})     # pane up, cmdline unreadable
     stop_event._send(reg, ev, panes, "ellie")
     assert ev.drain("maldoon") == []
-    assert len(ev.drain("goldblum")) == 1
+    assert len(ev.drain("hammond")) == 1

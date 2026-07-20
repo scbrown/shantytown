@@ -1,4 +1,4 @@
-"""Panes session surface + st stop/log — shantytown #5 / aegis-qdal.qdal.1.
+"""Panes session surface + st stop/log — shantytown #5.
 
 Arnold's ruling (his mail): new_session creates an EMPTY named session and RAISES
 if it already exists (never clobber a live agent); kill_session is idempotent;
@@ -24,22 +24,22 @@ from shantytown.tmux import NullPanes, Tmux
 
 def test_new_session_succeeds_on_a_free_name():
     p = NullPanes(live=set())
-    addr = p.new_session("aegis-crew-ellie")
-    assert addr == "aegis-crew-ellie"
-    assert p.exists("aegis-crew-ellie") is True
+    addr = p.new_session("crew-ellie")
+    assert addr == "crew-ellie"
+    assert p.exists("crew-ellie") is True
 
 
 def test_new_session_RAISES_over_a_live_session():
     """The clobber guard — never silently replace a running agent."""
-    p = NullPanes(live={"aegis-crew-ellie"})
+    p = NullPanes(live={"crew-ellie"})
     with pytest.raises(RuntimeError, match="already exists"):
-        p.new_session("aegis-crew-ellie")
+        p.new_session("crew-ellie")
 
 
 def test_kill_session_removes_a_present_one():
-    p = NullPanes(live={"aegis-crew-ellie"})
-    p.kill_session("aegis-crew-ellie")
-    assert p.exists("aegis-crew-ellie") is False
+    p = NullPanes(live={"crew-ellie"})
+    p.kill_session("crew-ellie")
+    assert p.exists("crew-ellie") is False
 
 
 def test_kill_session_is_a_noop_on_absent():
@@ -62,7 +62,7 @@ def test_new_then_kill_round_trip():
 
 # --- st stop, both outcomes -------------------------------------------------
 
-def _world(tmp_path: Path, pane="aegis-crew-ellie"):
+def _world(tmp_path: Path, pane="crew-ellie"):
     crew = tmp_path / "crew"; crew.mkdir()
     card = {"role": "worker"}
     if pane is not None:
@@ -91,13 +91,13 @@ def test_stop_reports_not_running_when_absent(tmp_path, monkeypatch, capsys):
 
 def test_stop_kills_and_verifies_when_present(tmp_path, monkeypatch, capsys):
     root = _world(tmp_path)
-    # owned: a session st launched — the only kind st stop acts on (aegis-ac5g).
-    panes = NullPanes(live={"aegis-crew-ellie"}, owned={"aegis-crew-ellie"})
+    # owned: a session st launched — the only kind st stop acts on.
+    panes = NullPanes(live={"crew-ellie"}, owned={"crew-ellie"})
     monkeypatch.setattr(cli, "Tmux", lambda: panes)
     rc = cli._cmd_stop(_Args(root=root))
     assert rc == cli.OK
     assert "stopped ellie" in capsys.readouterr().out
-    assert not panes.exists("aegis-crew-ellie"), "stop said done but session lives"
+    assert not panes.exists("crew-ellie"), "stop said done but session lives"
 
 
 def test_stop_returns_2_if_the_kill_did_not_take(tmp_path, monkeypatch, capsys):
@@ -107,7 +107,7 @@ def test_stop_returns_2_if_the_kill_did_not_take(tmp_path, monkeypatch, capsys):
     class _StubbornPanes(NullPanes):
         def kill_session(self, name):     # pretends to kill, session stays
             pass
-    panes = _StubbornPanes(live={"aegis-crew-ellie"}, owned={"aegis-crew-ellie"})
+    panes = _StubbornPanes(live={"crew-ellie"}, owned={"crew-ellie"})
     root = _world(tmp_path)
     monkeypatch.setattr(cli, "Tmux", lambda: panes)
     rc = cli._cmd_stop(_Args(root=root))
@@ -119,7 +119,7 @@ def test_stop_returns_2_if_the_kill_did_not_take(tmp_path, monkeypatch, capsys):
 
 def test_log_reads_the_session_pane(tmp_path, monkeypatch, capsys):
     root = _world(tmp_path)
-    panes = NullPanes(screen="… agent is working on aegis-x", live={"aegis-crew-ellie"})
+    panes = NullPanes(screen="… agent is working on st-x", live={"crew-ellie"})
     monkeypatch.setattr(cli, "Tmux", lambda: panes)
     rc = cli._cmd_log(_Args(root=root))
     assert rc == cli.OK
@@ -134,42 +134,42 @@ def test_log_says_not_running_when_no_session(tmp_path, monkeypatch, capsys):
     assert "not running" in capsys.readouterr().out
 
 
-# --- the ownership guard (aegis-ac5g, dearing's safety requirement) ----------
+# --- the ownership guard (dearing's safety requirement) ----------
 # st stop must NEVER reap a session it did not launch. The registry pane names
-# COLLIDE with the live crew (ellie.json pane = "aegis-crew-ellie" == the real gt
-# session on gt-ae5f35), so on the production socket a name match must not be
+# COLLIDE with a session somebody else already started under the same name,
+# so on a shared socket a name match must not be
 # permission to kill. Proven at three levels: the marker mechanism (owns), the
 # CLI policy (st stop refuses), and real tmux (a foreign session survives).
 
 def test_new_session_marks_ownership_kill_clears_it():
     p = NullPanes(live=set())
-    p.new_session("aegis-crew-ellie")
-    assert p.owns("aegis-crew-ellie")           # st launched it -> owned
-    p.kill_session("aegis-crew-ellie")
-    assert not p.owns("aegis-crew-ellie")
+    p.new_session("crew-ellie")
+    assert p.owns("crew-ellie")           # st launched it -> owned
+    p.kill_session("crew-ellie")
+    assert not p.owns("crew-ellie")
 
 
 def test_a_live_session_st_did_not_launch_is_not_owned():
-    p = NullPanes(live={"aegis-crew-ellie"})    # live, but st did not create it
-    assert p.exists("aegis-crew-ellie")
-    assert not p.owns("aegis-crew-ellie")
+    p = NullPanes(live={"crew-ellie"})    # live, but st did not create it
+    assert p.exists("crew-ellie")
+    assert not p.owns("crew-ellie")
 
 
 def test_stop_REFUSES_a_live_session_st_did_not_launch(tmp_path, monkeypatch, capsys):
     """THE SAFETY POSITIVE CONTROL. A live pane st never launched (a real crew
     member behind the colliding name) must be REFUSED, not reaped."""
     root = _world(tmp_path)
-    panes = NullPanes(live={"aegis-crew-ellie"})   # live, NOT owned
+    panes = NullPanes(live={"crew-ellie"})   # live, NOT owned
     monkeypatch.setattr(cli, "Tmux", lambda: panes)
     rc = cli._cmd_stop(_Args(root=root))
     assert rc == cli.REFUSED
     assert "not launched by st" in capsys.readouterr().err
-    assert panes.exists("aegis-crew-ellie")        # still alive — not reaped
+    assert panes.exists("crew-ellie")        # still alive — not reaped
 
 
 def test_stop_dry_run_also_refuses_an_unowned_session(tmp_path, monkeypatch, capsys):
     root = _world(tmp_path)
-    monkeypatch.setattr(cli, "Tmux", lambda: NullPanes(live={"aegis-crew-ellie"}))
+    monkeypatch.setattr(cli, "Tmux", lambda: NullPanes(live={"crew-ellie"}))
     rc = cli._cmd_stop(_Args(root=root, dry_run=True))
     assert rc == cli.REFUSED                        # the guard runs before dry-run
 
@@ -181,7 +181,7 @@ pytestmark_tmux = pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux 
 
 @pytest.fixture()
 def sock():
-    name = "st-ac5g-" + uuid.uuid4().hex[:8]
+    name = "st-test-" + uuid.uuid4().hex[:8]
     yield name
     subprocess.run(["tmux", "-L", name, "kill-server"], capture_output=True, text=True)
 
@@ -201,7 +201,7 @@ def test_real_foreign_session_is_refused_by_st_stop_and_survives(sock, tmp_path,
     """The proof dearing required, on real tmux: a session st did NOT launch (no
     marker) — the stand-in for the live crew behind the colliding name — is
     refused by `st stop` and is still alive after the refusal."""
-    foreign = "aegis-crew-ellie"
+    foreign = "crew-ellie"
     subprocess.run(["tmux", "-L", sock, "new-session", "-d", "-s", foreign, "sleep 300"],
                    check=True)
     t = Tmux(socket=sock)

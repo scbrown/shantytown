@@ -1,7 +1,6 @@
 """runtime — the launcher seam. Claude Code first-class, swappable.
 
-This is the SECOND HALF of the anti-handoff seam (arnold's #5 launch ruling,
-aegis-qdal). #5a gave Panes no handoff verb; this gives the launcher no
+This is the SECOND HALF of the anti-handoff seam (arnold's #5 launch ruling). #5a gave Panes no handoff verb; this gives the launcher no
 settings-less code path. The invariant is enforced from BOTH sides:
 
     Panes cannot express a handoff.  The launcher cannot express a settings-less
@@ -105,7 +104,7 @@ def require_capability(rt: Runtime, card: Agent) -> None:
 # A settings resolver maps a card -> the path to the settings file that wires the
 # hooks its ROLE needs. Returns None (or raises) if it cannot be materialized.
 # INJECTED, not hardcoded: the actual hook-file CONTENT is emitted by role
-# set / #6 (aegis-ct5q); #5 owns the launch SEAM and its invariant. The default
+# set / #6; #5 owns the launch SEAM and its invariant. The default
 # resolver expects the role's settings file to already exist and refuses if not
 # — that refusal IS the invariant working (no settings -> no launch).
 SettingsResolver = Callable[[Agent], "str | None"]
@@ -117,7 +116,7 @@ SettingsResolver = Callable[[Agent], "str | None"]
 # The interpreter RUNNING shantytown, never the bare name "python". Stock Ubuntu
 # ships python3 with NO unversioned `python`, so the hardcoded name made EVERY
 # emitted Stop hook die with `/bin/sh: 1: python: not found` — found in live use
-# on the first real launch (harding, the qdal pilot). The hook failed on every
+# on the first real launch of the pilot. The hook failed on every
 # turn, which silently killed the whole stop-event route (send/drain, #6): the
 # feature looked shipped and had never once run. sys.executable is by
 # construction an interpreter that exists and can import shantytown.
@@ -155,7 +154,7 @@ def _stop_cmd(mode: str, root=None) -> dict:
 # turning a code-intelligence nicety into a fleet outage. hank denies by emitting
 # the block JSON on stdout with exit 0, so a real deny is never confused with a
 # failure, and this wrapper cannot swallow it.
-# 2026-07-19 (aegis-iaef window, kelly): the "hank never exits 2" contract was
+# 2026-07-19 (window, kelly): the "hank never exits 2" contract was
 # FALSIFIED IN PRODUCTION and this line hard-blocked the whole fleet. Installed
 # hank 0.1.0 implements only `post-edit`; `hank hook pre-edit` is a clap USAGE
 # error, and clap exits 2 — Claude Code's one blocking code. Every Write/Edit by
@@ -383,13 +382,13 @@ class ClaudeRuntime:
 
     # Positive signal that Claude Code has taken over the pane. A capture that
     # contains none of these is NOT live (still a shell, an error, or nothing).
-    # CONFIRMED by live-fire against real claude v2.1.214 (aegis-zx7l probe,
+    # CONFIRMED by live-fire against real claude v2.1.214 (probe,
     # 2026-07-18): the ready UI carries the version banner "Claude Code v" AND the
     # persistent status line "? for shortcuts". The earlier "Welcome to Claude
     # Code" was a GUESS and never appears — a marker never observed passing is not
     # a marker (my validate-the-instrument rule); it is now replaced with two that
     # were watched to match a real ready pane.
-    # "shift+tab to cycle" added 2026-07-20 (aegis-o8we), and it is not a
+    # "shift+tab to cycle" added 2026-07-20, and it is not a
     # widening — it is a MISS the earlier measurement could not see. Swept all 9
     # live crew panes on this fleet: ZERO carried "? for shortcuts". Every one
     # showed the mode line instead —
@@ -409,7 +408,7 @@ class ClaudeRuntime:
     # THIRD state: not live, not failed — WAITING FOR A HUMAN. It blocks the ready
     # UI, so is_live correctly returns False and st new reports could-not-tell (2).
     # The real fix is to launch past it (a settings/config that pre-answers), which
-    # is entangled with what role-set emits — tracked on zx7l, not guessed here.
+    # is entangled with what role-set emits — tracked separately, not guessed here.
     CONSENT_MARKERS = ("Claude in Chrome extension detected", "keep browser tools off")
 
     def __init__(self, panes, resolve_settings: SettingsResolver, root=None) -> None:
@@ -438,7 +437,7 @@ class ClaudeRuntime:
         # this a first-run claude stops at a "Claude in Chrome extension detected"
         # consent prompt that BLOCKS the ready UI — so st new's verify never sees
         # live and returns could-not-tell (2) for an agent that would be fine.
-        # Live-fire confirmed (aegis-84z1): `claude --no-chrome` goes straight to
+        # Live-fire confirmed: `claude --no-chrome` goes straight to
         # the ready UI, is_live True. This is the prod 0-path fix.
         # Remote Control ON BY DEFAULT (Stiwi 2026-07-19). A fleet you cannot reach
         # is a fleet you cannot run: this session sat unreachable for a day with an
@@ -450,7 +449,7 @@ class ClaudeRuntime:
         flags = f"--no-chrome --remote-control {card.name}"
         # --dangerously-skip-permissions is OPT-IN per agent (card.dangerous), never
         # global — a crew worker that must act without prompts sets it on its own
-        # card; nobody else inherits it (the pilot, aegis-qdal.5).
+        # card; nobody else inherits it (the pilot).
         if card.dangerous:
             flags += " --dangerously-skip-permissions"
         # BOBBIN_ROLE is how hank's policy guard resolves WHICH scope applies
@@ -459,12 +458,12 @@ class ClaudeRuntime:
         # agent is what lets ONE hook registration serve every role — without it
         # the guard has no scope to enforce and every agent is ungoverned.
         # SHANTY_ROOT is the BELT to --settings' braces, and it exists because of a
-        # measured incident (aegis-nipg, sattler 2026-07-19). --settings is read ONCE,
+        # measured incident (sattler 2026-07-19). --settings is read ONCE,
         # at launch: when the Stop hook was later corrected on disk to carry an
         # absolute --root (c3fb472), every ALREADY-RUNNING agent kept the old unrooted
         # command forever. kelly's own pane showed it —
         #     stop_event send: no such agent: kelly (looked in
-        #     /home/braino/gt/beads_aegis/crew/kelly/.shanty/crew/kelly.json)
+        #     <agent-workspace>/.shanty/crew/<agent>.json)
         # — the cwd/.shanty default, resolved against the agent's OWN workspace, which
         # has no .shanty. The agent still looked "up" in `st crew`, still worked, still
         # committed; only its stop events vanished, so the administrator at the root of
@@ -477,7 +476,7 @@ class ClaudeRuntime:
         # the env carries it, because the env is read at hook-run time, not baked into
         # a settings snapshot. That is the whole point: this makes the NEXT settings
         # change survivable for agents launched before it. It does not make a stale
-        # settings file detectable — nipg items 1-2 (a doctor check, and role-set
+        # settings file detectable — items 1-2 (a doctor check, and role-set
         # naming the live agents it did NOT reach) are still open, and this must not be
         # mistaken for them.
         root_env = f"SHANTY_ROOT={Path(self._root).resolve()} " if self._root else ""
@@ -507,7 +506,7 @@ class ClaudeRuntime:
         version banner and a persistent "? for shortcuts" status line; a pane at a
         bare shell prompt, an error, or a first-run consent screen is NOT live.
 
-        LIVE-FIRE CONFIRMED (aegis-zx7l, real claude v2.1.214): the READY_MARKERS
+        LIVE-FIRE CONFIRMED (real claude v2.1.214): the READY_MARKERS
         were watched matching a real ready pane, and "Welcome to Claude Code" (the
         old guess) was watched NEVER appearing and removed. A consent screen is
         deliberately NOT live here — see waiting_for_human().
@@ -520,7 +519,7 @@ class ClaudeRuntime:
 
     def shows_ready_ui(self, screen: str) -> bool:
         """The POSITIVE half of is_live, on its own: is this runtime's UI on the
-        screen at all? Separated out for triage.work_state (aegis-o8we), which
+        screen at all? Separated out for triage.work_state, which
         must NOT use is_live: is_live also fails on DEAD_MARKERS, and one of those
         is "Traceback" — which healthy agents print constantly. Asking is_live
         "can I dispatch to this agent" would answer no for a free agent that had

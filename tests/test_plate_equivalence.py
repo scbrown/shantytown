@@ -5,7 +5,7 @@ so the second proves the first didn't leak. That only works if something asserts
 they AGREE. Nothing did for plate(), and they diverged: files.plate returned any
 non-closed assigned item, beads.plate filtered to hooked/in_progress, so the same
 logical dataset (an open-assigned bead) produced an item from one backend and None
-from the other. malcolm hit it live (aegis-260i). This test is the leak detector
+from the other. malcolm hit it live. This test is the leak detector
 that should have existed: build the identical dataset in both backends, assert the
 plate is the same id (or both None). If a future edit moves one reader's semantics
 and not the other's, this goes red.

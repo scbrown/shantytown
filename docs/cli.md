@@ -27,9 +27,9 @@ st project                    materialize the crew cards FROM the graph
 
 Thirteen. `--dry-run` is on every command that writes, from commit one. The surface grew past the
 original eight by five, each on a specific ask — not drift: **mail**/**task** (the dispatch/tracker
-pair, owner-directed), **context** (the bobbin Context protocol, aegis-rhhw), **doctor**
-(out-of-box detect/install, Stiwi's direct ask, aegis-q9eh), and **project** (the quipu-registry
-projection, aegis-gz57). Each is named on purpose: this doc once
+pair, owner-directed), **context** (the bobbin Context protocol), **doctor**
+(out-of-box detect/install, Stiwi's direct ask), and **project** (the quipu-registry
+projection). Each is named on purpose: this doc once
 said "eight" while the code had twelve, and a count nobody enforces is a comment — in the one repo
 whose whole pitch is the exact count, that was the bug.
 
@@ -55,7 +55,7 @@ $ st prime
   You own e2e test coverage.
 
   ON YOUR PLATE
-    ▶ aegis-9h2  Restore the den service        (in progress, 40m)
+    ▶ st-9h2  Restore the den service        (in progress, 40m)
 
   YOUR LEAD
     malcolm (lead) — up. Your stop events go to him.
@@ -64,7 +64,7 @@ $ st prime
     scripts/e2e/den.sh · roles/den_server/tasks/main.yml
 
   KNOWN (quipu)
-    "den.svc was cowboy-deployed and died once before" — 2026-06-30
+    "auth-api was cowboy-deployed and died once before" — 2026-06-30
 ```
 
 Four things, and each one has to earn its line:
@@ -89,16 +89,16 @@ and **writes nothing**, because the cost is 63 sequential Dolt connections durin
 any write*. Underneath, dispatch is `tmux send-keys`.
 
 ```
-$ st go aegis-9h2 ellie
+$ st go st-9h2 ellie
 
-  aegis-9h2 -> ellie          in progress
+  st-9h2 -> ellie          in progress
   sent to pane %5             0.4s
 ```
 
 ```
-$ st go aegis-9h2 ellie --dry-run
+$ st go st-9h2 ellie --dry-run
 
-  would: tracker.update(aegis-9h2, status=in_progress, assignee=ellie)
+  would: tracker.update(st-9h2, status=in_progress, assignee=ellie)
   would: send-keys -> pane %5
   would NOT: create a convoy, spawn a session, wait for ack
 

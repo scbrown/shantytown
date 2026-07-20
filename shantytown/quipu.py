@@ -1,4 +1,4 @@
-"""quipu — identity from the graph. The source of truth (aegis-gz57).
+"""quipu — identity from the graph. The source of truth.
 
 Stiwi: "quipu should be the source of truth." The hierarchy is a **query, not a
 thing to store**: the graph holds `aegis:reports_to` edges, and role
@@ -13,7 +13,7 @@ The load-bearing property (and the reason `roles --check` has an exit-2 path):
 `all()` **raises** when quipu is unreachable. It never returns `[]` on failure.
 "nobody exists" and "I could not look" are DIFFERENT ANSWERS — collapsing them
 is exactly the "reported CLEAR when it couldn't reach its target" bug
-(aegis-zczf). An errored query is not a zero-result; it is NO result.
+. An errored query is not a zero-result; it is NO result.
 """
 
 from __future__ import annotations
@@ -25,7 +25,12 @@ import urllib.request
 
 from .protocols import Agent
 
-ONTO = "http://aegis.gastown.local/ontology/"
+# The ontology IRI base. THIS IS DATA IDENTITY, NOT COSMETICS: every triple in a
+# graph is keyed under it, so a deployment that changes this value stops joining
+# its own existing facts — new entities land beside the old ones instead of on
+# them, and nothing errors. Set SHANTY_ONTO_NS once, per graph, and never again.
+# Read at import time because the SPARQL below is built at class-definition time.
+ONTO = os.environ.get("SHANTY_ONTO_NS") or "http://shantytown.example/ontology/"
 
 
 class QuipuUnreachable(Exception):
@@ -82,7 +87,9 @@ class QuipuRegistry:
     )
 
     def __init__(self, server: str | None = None, timeout: float = 5.0):
-        self.server = server or os.environ.get("QUIPU_SERVER") or "http://quipu.svc"
+        # QUIPU_SERVER is the variable the crew hooks already use. The default is
+        # a local quipu-server, not any particular deployment's hostname.
+        self.server = server or os.environ.get("QUIPU_SERVER") or "http://localhost:3030"
         self.timeout = timeout
 
     def _query(self, sparql: str) -> list[dict]:

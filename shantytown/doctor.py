@@ -1,6 +1,6 @@
 """st doctor — what tools are here, what version, what's missing, what's stale.
 
-The out-of-box feature (aegis-q9eh, Stiwi's ask: "I want `st` to facilitate
+The out-of-box feature (Stiwi's ask: "I want `st` to facilitate
 installing these other tools"). DETECT is the product; install is a flag. Detect
 is where the value measured out — "most users need to know the state far more
 often than they need a fresh install" — so this module earns its slot on the
@@ -25,6 +25,7 @@ exists:
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -52,8 +53,8 @@ class ToolSpec:
     version_broken: bool = False     # KNOWN upstream: --version fails; do NOT read that as absent
 
 
-# Surveyed, not assumed (aegis-q9eh). beads has NO releases → source build; quipu's
-# --version is known-broken; reactor has no install mechanism yet (blocked, k6hv).
+# Surveyed, not assumed. beads has NO releases → source build; quipu's
+# --version is known-broken; reactor has no install mechanism yet (blocked upstream).
 SPECS: tuple[ToolSpec, ...] = (
     ToolSpec(
         "beads", "bd", ("bd", "version"), r"(\d+\.\d+\.\d+)",
@@ -80,7 +81,7 @@ SPECS: tuple[ToolSpec, ...] = (
     ToolSpec(
         "reactor", "reactor", ("reactor", "--version"), r"(\d+\.\d+\.\d+)",
         toolchain="unknown",
-        installs_via="no install mechanism yet — upstream has no release (aegis-k6hv)",
+        installs_via="no install mechanism yet — upstream has no release",
         leverage="bead-lifecycle events feeding the harness",
         release=None,
     ),
@@ -140,9 +141,12 @@ def _fetch_latest(release: str | None, *, opener=urllib.request.urlopen) -> tupl
         kind, slug = release.split(":", 1)
     except ValueError:
         return None, f"bad release spec {release!r}"
+    # A self-hosted forge has no canonical hostname, so it is configurable and
+    # the default is a local one. github is the only fixed endpoint here.
+    forge = (os.environ.get("SHANTY_FORGEJO_URL") or "http://localhost:3000").rstrip("/")
     url = {
         "github": f"https://api.github.com/repos/{slug}/releases/latest",
-        "forgejo": f"http://git.svc/api/v1/repos/{slug}/releases/latest",
+        "forgejo": f"{forge}/api/v1/repos/{slug}/releases/latest",
     }.get(kind)
     if not url:
         return None, f"unknown release source {kind!r}"

@@ -1,5 +1,5 @@
 """Runtime launch composition — the anti-handoff seam from the launcher side.
-shantytown #5 launch ruling (aegis-qdal, arnold's mail gt-wisp-gp9g2g).
+shantytown #5 launch ruling (arnold's mail gt-wisp-gp9g2g).
 
 The invariant under test: the composed command ALWAYS carries --settings, or it
 is NOT composed at all. Plus the capability gate (a lead needs a runtime that can
@@ -51,7 +51,7 @@ def test_compose_sets_SHANTY_AGENT_for_identity():
 
 
 def test_compose_carries_no_chrome():
-    """--no-chrome is the prod 0-path fix (aegis-84z1): without it a first-run
+    """--no-chrome is the prod 0-path fix: without it a first-run
     claude stops at a Chrome-consent prompt that blocks the ready UI, so st new's
     verify never sees live. Live-fire confirmed it goes straight to ready."""
     rt = ClaudeRuntime(NullPanes(), _ok_settings)
@@ -72,7 +72,7 @@ def test_compose_exports_BOBBIN_ROLE_so_the_guard_has_a_scope():
 
 
 def test_compose_exports_SHANTY_ROOT_so_a_stale_hook_still_finds_the_store():
-    """The belt to --settings' braces (aegis-nipg).
+    """The belt to --settings' braces.
 
     --settings is read ONCE, at launch. When the Stop hook was corrected on disk
     to carry an absolute --root, every already-running agent kept the OLD
@@ -140,7 +140,7 @@ def test_administrator_on_codex_REFUSES():
     needs the same delivery capability."""
     rt = CodexRuntime(NullPanes(), _ok_settings)
     with pytest.raises(CapabilityError):
-        rt.compose(Agent(name="goldblum", role="administrator"))
+        rt.compose(Agent(name="hammond", role="administrator"))
 
 
 def test_worker_on_codex_is_FINE():
@@ -164,10 +164,10 @@ def test_capability_gate_keys_on_declaration_not_name():
 def test_start_sends_the_composed_launch_through_panes():
     panes = NullPanes()
     rt = ClaudeRuntime(panes, _ok_settings)
-    rt.start(Agent(name="ellie", role="worker"), "aegis-crew-ellie")
+    rt.start(Agent(name="ellie", role="worker"), "crew-ellie")
     assert len(panes.sent) == 1
     pane, text = panes.sent[0]
-    assert pane == "aegis-crew-ellie"
+    assert pane == "crew-ellie"
     assert "SHANTY_AGENT=ellie" in text and "--settings" in text
 
 
@@ -176,14 +176,14 @@ def test_start_REFUSES_before_sending_when_settings_missing():
     panes = NullPanes()
     rt = ClaudeRuntime(panes, _no_settings)
     with pytest.raises(SettingsError):
-        rt.start(Agent(name="ellie", role="worker"), "aegis-crew-ellie")
+        rt.start(Agent(name="ellie", role="worker"), "crew-ellie")
     assert panes.sent == [], "refused compose must not have sent anything"
 
 
 # --- is_live: the process-verify predicate, both outcomes -------------------
 
 def test_is_live_true_on_the_real_ready_ui():
-    """The markers are the ONES OBSERVED against real claude v2.1.214 (zx7l
+    """The markers are the ONES OBSERVED against real claude v2.1.214 (live-fire
     live-fire): the version banner and the '? for shortcuts' status line."""
     rt = ClaudeRuntime(NullPanes(), _ok_settings)
     assert rt.is_live(" ▐▛███▜▌   Claude Code v2.1.214\n  ⏸ manual mode on · ? for shortcuts")
@@ -191,7 +191,7 @@ def test_is_live_true_on_the_real_ready_ui():
 
 def test_is_live_false_on_a_bare_shell():
     rt = ClaudeRuntime(NullPanes(), _ok_settings)
-    assert not rt.is_live("braino@vati:~/x$ ")
+    assert not rt.is_live("user@host:~/x$ ")
 
 
 def test_is_live_false_on_a_failed_launch():
@@ -208,7 +208,7 @@ def test_is_live_false_on_the_old_hallucinated_marker():
 
 
 def test_consent_prompt_is_waiting_not_live():
-    """A first-run consent screen is a THIRD state: not live, not failed. zx7l
+    """A first-run consent screen is a THIRD state: not live, not failed. Live-fire
     live-fire found this is exactly why the original st new returned 2."""
     rt = ClaudeRuntime(NullPanes(), _ok_settings)
     screen = "  Claude in Chrome extension detected\n  ❯ 1. Yes  2. No, keep browser tools off"
@@ -223,8 +223,8 @@ def test_compose_launches_in_the_agent_workspace():
     CLAUDE.md — the launcher never reads their secret contents."""
     rt = ClaudeRuntime(NullPanes(), _ok_settings)
     launch = rt.compose(Agent(name="ellie", role="worker",
-                              workspace="/home/braino/gt/beads_aegis/crew/ellie"))
-    assert launch.startswith("cd /home/braino/gt/beads_aegis/crew/ellie && ")
+                              workspace="/home/user/agents/ellie"))
+    assert launch.startswith("cd /home/user/agents/ellie && ")
     assert "SHANTY_AGENT=ellie" in launch and "--settings" in launch
 
 

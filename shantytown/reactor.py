@@ -2,10 +2,10 @@
 
 docs/integrations.md is blunt about why this module is shaped the way it is:
 reactor is "present, running, monitored, green, and doing nothing" while a
-standing directive told 14 agents it was working (aegis-uyvs). It watched dead
+standing directive told 14 agents it was working. It watched dead
 databases for months with up{job=reactor}==1, systemd active(running), and zero
-alerts firing (aegis-lfhk/r2r0). Its own staleness alerts were dead rules and
-could not fire (aegis-5lnp).
+alerts firing. Its own staleness alerts were dead rules and
+could not fire.
 
 So this adapter has exactly one job and it is not "talk to reactor":
 
@@ -22,21 +22,22 @@ It does not subscribe. integrations.md sketches:
         def subscribe(self, kinds: list[str]) -> Iterator[Event]: ...
 
 **That protocol cannot be implemented against reactor as it exists.** Measured
-2026-07-16 against dolt.lan:8075 — its entire HTTP surface is /health and
+against a live deployment — its entire HTTP surface is /health and
 /metrics; /events, /subscribe, /api/events and every other path return 503.
 reactor is a PUSH system: it watches Dolt and fires actions. There is nothing to
 pull. Writing a subscribe() here would mean either inventing an endpoint reactor
 does not have, or polling /metrics and calling the delta an "event stream" —
 which is a made-up interface wearing a real one's name. That is the exact defect
 this repo exists to refuse, so the protocol stays unimplemented and the gap is
-reported (aegis-k6hv) rather than papered over.
+reported rather than papered over.
 
 The actual integration is the other direction and needs no code from us:
 reactor's own action config shells out to `shanty go <item> <agent>`. A shell
-out to our CLI, not an import (aegis-k6hv scope item 3). The CLI is the API.
+out to our CLI, not an import (scope item 3). The CLI is the API.
 """
 from __future__ import annotations
 
+import os
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -46,7 +47,7 @@ from dataclasses import dataclass
 # is dead" — see the verdict table. This is the boundary of what we know, not a
 # diagnosis.
 #
-# THE MISTAKE THAT PUT THIS COMMENT HERE (aegis-k6hv): v2 of this module treated
+# THE MISTAKE THAT PUT THIS COMMENT HERE: v2 of this module treated
 # idle > 300s as STALLED and I reported reactor stalled to its owner. It was not.
 # It was IDLE — 2 writes to beads_aegis in 15 minutes, because the crew had gone
 # to bed. The counter moved 27 -> 46 the moment work arrived. On a fleet that
@@ -55,7 +56,7 @@ from dataclasses import dataclass
 # mirror of v1 (live if delivered>0, which never fires): one detector that cannot
 # fire, one that cannot stop. I built both in twenty minutes.
 #
-# THE NUMBER IS NOW MEASURED, AND THE GUESS WAS WRONG (aegis-8qk1, dearing).
+# THE NUMBER IS NOW MEASURED, AND THE GUESS WAS WRONG (dearing).
 # reactor.reactor_events carries payload.created_at (the bd write) alongside its
 # own timestamp (when reactor handled it), so the end-to-end latency is an exact
 # subtraction — no join, no log, no SSH:
@@ -119,7 +120,7 @@ class Liveness:
             return "GREEN AND DEAD"
         if self.pending and self.pending > 0 and (
                 self.idle_s is None or self.idle_s > QUIET_AFTER_S):
-            # dearing's discriminator (aegis-4s5d): work is PENDING and nothing
+            # dearing's discriminator: work is PENDING and nothing
             # has been processed. Quiet cannot explain a backlog. This is the
             # one reading that separates "idle" from "dead" — when it fires.
             return "BACKLOGGED"
@@ -156,7 +157,9 @@ class Reactor:
     path that has to work.
     """
 
-    def __init__(self, base: str = "http://dolt.lan:8075", timeout: float = 5.0):
+    def __init__(self, base: str | None = None, timeout: float = 5.0):
+        # SHANTY_REACTOR_URL points at a deployment; the default is a local one.
+        base = base or os.environ.get("SHANTY_REACTOR_URL") or "http://localhost:8075"
         self.base = base.rstrip("/")
         self.timeout = timeout
 
@@ -170,7 +173,7 @@ class Reactor:
         Never raises — unreachable is a verdict, not an exception.
 
         THE COUNT ALONE IS NOT ENOUGH, and this module learned that the hard way
-        (aegis-k6hv). integrations.md says the health answer is "how many events
+. integrations.md says the health answer is "how many events
         have you delivered?" — and the first version of this method implemented
         exactly that: `live if delivered > 0`. Then I drove it against the real
         reactor while firing a real bead event, and it reported "live — 27 events
@@ -204,7 +207,7 @@ class Reactor:
         ts = _counter(body, "reactor_last_event_timestamp")
         idle = None if ts is None else max(0.0, now - float(ts))
 
-        # dearing's discriminator (aegis-4s5d), used ONE-WAY ONLY.
+        # dearing's discriminator, used ONE-WAY ONLY.
         #
         # pending > 0 + nothing processed  ->  DEAD. Quiet cannot explain a
         # backlog, so this is a true positive whenever it fires.

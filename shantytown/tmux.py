@@ -9,13 +9,13 @@ reports an empty list. So on a host whose agents live on a named socket, bare
 tmux reports EVERY LIVE AGENT AS DOWN, confidently and with exit 0.
 
 That is not hypothetical: standing shantytown up on its own host, `shanty crew`
-printed `down` for all 8 crew while every one of them was running on socket
-`gt-ae5f35`. A false negative about liveness is the worst answer this adapter can
+printed `down` for all 8 crew while every one of them was running on a named
+socket. A false negative about liveness is the worst answer this adapter can
 give — `crew` says everyone is dead, and `go` would refuse to dispatch to a pane
 that is right there.
 
 So the socket is configurable, and it is the ONLY tmux coupling here:
-    SHANTY_TMUX_SOCKET=gt-ae5f35        # or Tmux(socket="gt-ae5f35")
+    SHANTY_TMUX_SOCKET=my-socket        # or Tmux(socket="my-socket")
 Unset = bare tmux = the default server. Nothing else about the multiplexer leaks
 into the harness.
 """
@@ -24,16 +24,16 @@ import os
 import subprocess
 
 
-# Provenance marker for the ownership guard (aegis-ac5g). st new sets it in the
+# Provenance marker for the ownership guard. st new sets it in the
 # session environment; st stop refuses to reap any session that does not carry
 # it. It is a tmux SESSION variable, so it is bound to that session's lifetime:
 # if the session dies and something else (a real gt crew launch) recreates a
 # session with the same name, the new session does not carry the marker and st
 # correctly refuses to kill it. A file-based marker could not make that
 # distinction — it would go stale and name-match a session st never launched.
-# The whole footgun is that the registry pane names COLLIDE with the live crew
-# (ellie.json pane = "aegis-crew-ellie" == the real gt session on gt-ae5f35), so
-# a name match must never be sufficient permission to kill.
+# The whole footgun is that the registry pane names can COLLIDE with sessions
+# somebody else already started under the same name, so a name match must never
+# be sufficient permission to kill.
 _OWNED_ENV = "SHANTY_OWNED"
 
 
@@ -52,7 +52,7 @@ class Tmux:
 
     def exists(self, pane: str) -> bool:
         # Match sessions as well as pane ids: our panes are addressed by session
-        # name (`aegis-crew-ian`), and #{pane_id} only ever yields %N — so a
+        # name (`crew-ian`), and #{pane_id} only ever yields %N — so a
         # pane_id-only check reports "down" for every session-addressed agent.
         r = subprocess.run(
             self._cmd("list-panes", "-a", "-F", "#{pane_id} #{session_name}"),
@@ -158,7 +158,7 @@ class Tmux:
         if self.exists(name):
             raise RuntimeError(f"session {name!r} already exists — stop it first")
         subprocess.run(self._cmd("new-session", "-d", "-s", name), check=True)
-        # Provenance marker (aegis-ac5g): st launched this session, so st may stop
+        # Provenance marker: st launched this session, so st may stop
         # it. Set immediately; if it fails, tear the session down rather than
         # leave an un-owned session st created (which its own guard could never
         # reap — a leak). All-or-nothing: a killable session, or nothing.
@@ -188,7 +188,7 @@ class Tmux:
 
         kill-session alone is NOT enough for a real agent: killing the session
         SIGHUPs the pane's shell, but a child that ignores SIGHUP (measured: a
-        real claude survived a session kill during aegis-84z1 validation and had
+        real claude survived a session kill during teardown validation and had
         to be SIGKILLed by hand) can ORPHAN and keep running — burning tokens,
         invisible to `exists()`. So: capture the pane's process group BEFORE the
         kill, kill the session, then TERM the group and escalate to KILL. Best-
@@ -250,12 +250,12 @@ class NullPanes:
                  cmdlines: dict | None = None) -> None:
         self.sent = []
         self.screen = screen
-        # pane -> launch command line. Lets a test model the aegis-0v97 shape:
-        # a pane that EXISTS while the process in it carries someone else's
-        # wiring. Default None = "cannot read", which fails toward RISING — the
-        # safe direction, and the one a null adapter must take.
+        # pane -> launch command line. Lets a test model the green-and-dead
+        # shape: a pane that EXISTS while the process in it carries someone
+        # else's wiring. Default None = "cannot read", which fails toward
+        # RISING — the safe direction, and the one a null adapter must take.
         self._cmdlines = dict(cmdlines) if cmdlines is not None else None
-        # Ownership provenance (aegis-ac5g). new_session marks a session owned;
+        # Ownership provenance. new_session marks a session owned;
         # `owned=` seeds sessions as if st had launched them (for the owned-kill
         # path). A session that is `live` but NOT `owned` models the footgun: a
         # real crew session behind a colliding name that st must refuse to reap.
@@ -327,7 +327,7 @@ class NullPanes:
         if name in self._live:
             raise RuntimeError(f"session {name!r} already exists — stop it first")
         self._live.add(name)
-        self._owned.add(name)       # st launched it -> st owns it (aegis-ac5g)
+        self._owned.add(name)       # st launched it -> st owns it
         return name
 
     def owns(self, name: str) -> bool:

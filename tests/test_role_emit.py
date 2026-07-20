@@ -1,5 +1,5 @@
 """role set EMITS the settings.json — the content st new's --settings reads.
-shantytown #6 (aegis-ct5q, arnold's ruling). Closes the launch/hooks loop:
+shantytown #6 (arnold's ruling). Closes the launch/hooks loop:
 declaring a role writes its stop hooks in the SAME operation as the card, and
 st new then finds the settings it refused for a moment ago.
 """

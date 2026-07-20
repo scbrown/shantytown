@@ -48,7 +48,7 @@ def test_restart_when_wedged():
 
 
 def test_a_traceback_is_not_a_wedge():
-    """REGRESSION (aegis-hd2q). This used to RESTART, and RESTART relaunches.
+    """REGRESSION. This used to RESTART, and RESTART relaunches.
 
     Agents print tracebacks constantly — a failing test prints one. Measured: a
     healthy, idle agent whose pane showed a ZeroDivisionError and then "I'll fix
@@ -67,13 +67,13 @@ def test_a_traceback_is_not_a_wedge():
 
 
 def test_clear_when_high_context_and_unrelated():
-    """REGRESSION (aegis-hd2q): the CLEAR branch must be reachable FROM A REAL PANE.
+    """REGRESSION: the CLEAR branch must be reachable FROM A REAL PANE.
 
     This test used to synthesise a 500-line screen and assert CLEAR. It passed,
     and it was measuring nothing: Tmux.capture runs `capture-pane -p` with no
     -S, so a real pane yields ~24 lines. `len(screen) > 400` could never be
     true in production. The branch was dead and the test made it look alive —
-    a check incapable of one of its outcomes (aegis-mt0r), in the file written
+    a check incapable of one of its outcomes, in the file written
     to encode that lesson.
     So the screen here is 24 lines, the size a real capture actually is, and the
     signal is the one Claude Code itself prints.

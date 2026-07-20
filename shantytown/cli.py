@@ -10,9 +10,9 @@ already made itself the centre of the world.
 Gas Town ships ~110. This is not a smaller version of that list; it is the short
 set we measurably use, and the discipline is the point (docs/cli.md). The surface
 grew past the original ten by two, each on a specific ask — not drift:
-  · context — the bobbin Context protocol (aegis-rhhw)
-  · doctor  — out-of-box tool detect/install, Stiwi's direct ask (aegis-q9eh)
-  · project — materialize the crew cards from the graph (aegis-gz57)
+  · context — the bobbin Context protocol
+  · doctor  — out-of-box tool detect/install, Stiwi's direct ask
+  · project — materialize the crew cards from the graph
 The count is PINNED by a test (tests/test_command_count.py): the next command
 either updates this number or fails CI. This docstring used to say "ten" while the
 code had eleven (context landed unannounced) — a count nobody enforces is a
@@ -51,7 +51,7 @@ OK, REFUSED, CANNOT_TELL = 0, 1, 2
 
 
 def _registry(a):
-    """Identity backend for this invocation, selected by --registry (aegis-gz57).
+    """Identity backend for this invocation, selected by --registry.
 
     quipu is the SOURCE OF TRUTH (Stiwi: "quipu should be the source of truth");
     files is the projection/cache and the leak detector. Default stays files so
@@ -75,7 +75,7 @@ def _backend(a, default="files") -> str:
 
 
 def _tracker(a, default="files"):
-    """The tracker for this invocation, selected by --backend (aegis-kbuz #3).
+    """The tracker for this invocation, selected by --backend (#3).
 
     arnold added beads.plate() (the reader) but the CLI still wired FilesTracker
     unconditionally, so `st --backend beads` did not exist and his plate was
@@ -116,7 +116,7 @@ def build_parser() -> argparse.ArgumentParser:
                     help="bd -C <dir> when --backend beads")
     ap.add_argument("--registry", choices=["files", "quipu"], default="files",
                     help="identity backend: files (projection/default) or quipu "
-                         "(the graph, the source of truth). gz57")
+                         "(the graph, the source of truth).")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     pr = sub.add_parser("prime", help="who am I, what's on my plate")
@@ -171,7 +171,7 @@ def build_parser() -> argparse.ArgumentParser:
     ml.add_argument("message", nargs="+")
     ml.add_argument("-d", "--durable", action="store_true",
                     help="must-survive: persist to the tracker (beads-parity on "
-                         "the aegis store with --backend beads), then best-effort "
+                         "the shared store with --backend beads), then best-effort "
                          "live send. Default is ephemeral send-keys.")
     ml.add_argument("-n", "--dry-run", action="store_true")
 
@@ -197,11 +197,11 @@ def build_parser() -> argparse.ArgumentParser:
     dr.add_argument("--no-latest", action="store_true",
                     help="skip the release check (offline/fast) — detect local state only")
 
-    pj = sub.add_parser("project", help="materialize the crew cards FROM the graph (gz57)")
+    pj = sub.add_parser("project", help="materialize the crew cards FROM the graph")
     pj.add_argument("-n", "--dry-run", action="store_true",
                     help="show the diff, write nothing")
     pj.add_argument("--force", action="store_true",
-                    help="project even if it restructures LIVE agents (aegis-0v97)")
+                    help="project even if it restructures LIVE agents")
 
     return ap
 
@@ -241,7 +241,7 @@ def main(argv: list[str] | None = None) -> int:
 def _default_settings(root: Path):
     """Resolve a card -> the settings file that wires its ROLE's hooks.
 
-    The file is EMITTED by `role set` / #6 (aegis-ct5q); #5 owns the launch seam,
+    The file is EMITTED by `role set` / #6; #5 owns the launch seam,
     not the hook-file content. So this resolver READS: it returns the path if the
     role's settings file exists, else None -> compose refuses. That refusal IS the
     invariant working — no settings, no launch, never a settings-less fallback.
@@ -253,7 +253,7 @@ def _default_settings(root: Path):
 
 
 def _launches(a) -> FilesLaunches:
-    """The launch-stamp store for this invocation (aegis-nipg). Beside events/."""
+    """The launch-stamp store for this invocation. Beside events/."""
     return FilesLaunches(Path(a.root) / "launched")
 
 
@@ -280,7 +280,7 @@ def _observe_live(runtime, panes, session) -> bool:
 
 
 def _cmd_new(a) -> int:
-    """new <agent> — bring up a HOOKED agent session (aegis-qdal #5).
+    """new <agent> — bring up a HOOKED agent session (#5).
 
     new_session (empty pane) -> Runtime.start (compose w/ --settings, send) ->
     verify PROCESS live -> 0/1/2. The order is deliberate: everything that can
@@ -294,7 +294,10 @@ def _cmd_new(a) -> int:
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED
     runtime = _runtime(a, panes)
-    session = card.pane or f"aegis-crew-{card.name}"
+    # Fallback session name when the card names no pane. Deliberately prefixed
+    # `st-`: a session `st new` creates must never collide with one somebody
+    # else's tooling already launched under a name we'd also pick.
+    session = card.pane or f"st-{card.name}"
     # PRE-FLIGHT: compose refuses capability/settings BEFORE we touch tmux.
     try:
         launch = runtime.compose(card)
@@ -304,7 +307,7 @@ def _cmd_new(a) -> int:
     if a.dry_run:
         print(f"  would launch in {session}: {launch}")
         return OK
-    # WORKSPACE (aegis-isbs): the launch string `cd`s into card.workspace, so the
+    # WORKSPACE: the launch string `cd`s into card.workspace, so the
     # directory has to BE there. Ensure it (clone if absent, leave alone if
     # present) or REFUSE — before any tmux mutation, so a refusal still creates
     # nothing. Deliberately AFTER dry-run: dry-run must not clone.
@@ -321,7 +324,7 @@ def _cmd_new(a) -> int:
         return REFUSED
     # Deliver through the seam. Panes stays runtime-blind — sees a finished string.
     runtime.start(card, session)
-    # STAMP WHAT IT LAUNCHED ON (aegis-nipg), before we report anything. The
+    # STAMP WHAT IT LAUNCHED ON, before we report anything. The
     # agent has now read its --settings and will never read them again; this
     # records which bytes that was, so a later rewrite of the file is DETECTABLE
     # rather than silently unapplied. Best-effort on purpose: a stamp that cannot
@@ -332,7 +335,7 @@ def _cmd_new(a) -> int:
         return _verify_live_hooks(a, card, runtime, panes, session)
     # Not observed live. Distinguish "waiting for a human" (a first-run consent
     # prompt) from "unknown" — both are could-not-tell (2), but they need
-    # different human actions (aegis-zx7l live-fire found the consent case).
+    # different human actions (live-fire found the consent case).
     final = panes.capture(session)
     if getattr(runtime, "waiting_for_human", None) and runtime.waiting_for_human(final):
         print(f"  could not tell: {a.agent} ({session}) is WAITING ON A PROMPT "
@@ -426,7 +429,7 @@ def _verify_live_hooks(a, card, runtime, panes, session: str) -> int:
 
 
 def _cmd_stop(a) -> int:
-    """stop <agent> — kill the agent's session (aegis-qdal #5).
+    """stop <agent> — kill the agent's session (#5).
 
     kill_session is idempotent, so this is honest about the two states: an agent
     that is not running is ALREADY the desired end state (exit 0, "was not
@@ -444,10 +447,10 @@ def _cmd_stop(a) -> int:
     if not session or not panes.exists(session):
         print(f"  {a.agent} was not running.")
         return OK
-    # OWNERSHIP GUARD (aegis-ac5g). The session is live — but st only reaps what
-    # st launched. The registry pane names COLLIDE with the live crew
-    # (ellie.json pane = "aegis-crew-ellie" == the real gt session on gt-ae5f35),
-    # so on the production socket `st stop ellie` would kill the live crew member.
+    # OWNERSHIP GUARD. The session is live — but st only reaps what
+    # st launched. The registry pane names can COLLIDE with sessions somebody
+    # else already started under the same name, so on a shared socket
+    # `st stop ellie` would kill a session st never launched.
     # A name match is not permission to kill: refuse unless st owns the session.
     if not panes.owns(session):
         print(f"  refused: {a.agent} ({session}) was not launched by st — refusing "
@@ -465,7 +468,7 @@ def _cmd_stop(a) -> int:
         return CANNOT_TELL
     # The stamp described a LIVE launch; that launch is now gone. Leaving it would
     # let `st crew` report `current` for the settings of a process that no longer
-    # exists — a clean bill of health for nobody (aegis-nipg).
+    # exists — a clean bill of health for nobody.
     _launches(a).forget(a.agent)
     print(f"  stopped {a.agent} ({session}).")
     return OK
@@ -535,7 +538,7 @@ def _cmd_doctor(a) -> int:
 
 
 def _cmd_role(a) -> int:
-    """role set <agent> <role> [--reports a,b] — GENERATIVE (aegis-rpo1).
+    """role set <agent> <role> [--reports a,b] — GENERATIVE.
 
     Writes the card AND emits the stop-hook routing in one operation, so a lead
     card and its routing cannot disagree. Refuses (exit 1) on any rule violation
@@ -636,7 +639,7 @@ def _cmd_context(a) -> int:
 
 
 def _cmd_mail(a) -> int:
-    """mail is send-keys by default; -d/--durable persists first (aegis-qdal #7).
+    """mail is send-keys by default; -d/--durable persists first (#7).
 
     ROUTINE (default) — Stiwi, 2026-07-16: "st mail should just be tmux send keys."
     There is no bus, no queue, no store — nothing between the sender and the pane.
@@ -654,9 +657,9 @@ def _cmd_mail(a) -> int:
     live send is a bonus; if we persisted but the pane is gone, the message still
     survives and the recipient picks it up on their next `st prime`.
 
-    dearing's ruling (qdal.2): beads-parity on the AEGIS store, NOT a dedicated
+    dearing's ruling: beads-parity on the SHARED store, NOT a dedicated
     store. So durable reuses the SELECTED tracker — run `--backend beads --repo
-    <aegis>` for the aegis bead (survives cross-session, cross-host); the portable
+    <repo>` for a real bead (survives cross-session, cross-host); the portable
     files backend gives a lesser-but-real local durability. We PRINT where it
     landed so the durability is never ambiguous.
 
@@ -844,7 +847,7 @@ def _cmd_go(a) -> int:
         # docstring pins this to exit 2, and go() ran verify BEFORE the tracker
         # write, so NOTHING was recorded — a human re-dispatches rather than the
         # tracker claiming an assignment that may never have arrived. This must be
-        # a clean could-not-tell, NOT an uncaught traceback (found by the zx7l
+        # a clean could-not-tell, NOT an uncaught traceback (found by the
         # full-cycle validation against a real pane).
         print(f"  could not tell: {e} — recorded nothing; re-dispatch.",
               file=sys.stderr)
@@ -864,15 +867,15 @@ def _cmd_go(a) -> int:
 def _cmd_crew(a) -> int:
     """crew — who exists, what state, what role, WHAT SETTINGS, and WHO IS FREE.
 
-    The settings column is aegis-nipg. `up` was the only health this ever
-    reported, and `up` is exactly what a deaf agent looks like: kelly and gennaro
-    both sat here reading `up` while their stop hooks resolved against the wrong
+    The settings column exists because `up` was the only health this ever
+    reported, and `up` is exactly what a deaf agent looks like: two agents
+    sat here reading `up` while their stop hooks resolved against the wrong
     store and every stop event they emitted was discarded. The column answers the
     question `up` cannot — is this agent running the settings we currently
     believe are deployed? — and answers it in three values, because `unknown` is a
     real state and rounding it to `current` would recreate the bug.
 
-    The WORK column is aegis-o8we, and it answers the only question a dispatcher
+    The WORK column answers the only question a dispatcher
     actually has: who can take the next item? `up` is a LAUNCH fact, not a WORK
     fact — an agent three hours into a refactor and an agent sitting at an empty
     prompt both print `up`. The verdict is triage's, unchanged and already
@@ -1033,7 +1036,7 @@ def _cmd_roles(a) -> int:
 
 
 def _cmd_project(a) -> int:
-    """Materialize the crew cards FROM the graph (gz57). quipu is the authority;
+    """Materialize the crew cards FROM the graph. quipu is the authority;
     the cards are a generated projection — writes go to the graph, reads may come
     from the card, NEVER the reverse. Regenerating is idempotent; hand-edits are
     overwritten on the next project, which is the point.
@@ -1152,7 +1155,7 @@ def _cmd_project(a) -> int:
 
 
 def _not_yet(cmd: str) -> int:
-    """A guard, not a stub. As of qdal.1 EVERY command in the surface is wired
+    """A guard, not a stub. EVERY command in the surface is now wired
     (new/stop/log were the last three). Nothing routes here anymore; it exists so
     that a subcommand ADDED to the parser without a handler refuses loudly instead
     of silently doing nothing — the honest failure, not a plausible exit 0. If you

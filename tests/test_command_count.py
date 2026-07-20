@@ -1,4 +1,4 @@
-"""The count is the thesis — so pin it (malcolm, aegis-260i doc-defect #2).
+"""The count is the thesis — so pin it (malcolm doc-defect #2).
 
 cli.py's docstring once said "Ten commands" while the code had eleven (context
 landed unannounced) and docs/cli.md said "nine" and "eight" — a three-way drift in
@@ -59,7 +59,7 @@ def test_the_surface_is_thirteen():
     """A bare number check too, so 'the docs claim N' is itself pinned.
 
     Grew to 13 with `project` — materialize the crew cards from the graph (the
-    quipu-registry projection, aegis-gz57). Each command still earns its slot."""
+    quipu-registry projection). Each command still earns its slot."""
     assert len(_actual_subcommands()) == 13, (
         "the command count changed. If that's intended, update the number here and "
         "the cli.py docstring together — and say why the surface grew in docs/cli.md."

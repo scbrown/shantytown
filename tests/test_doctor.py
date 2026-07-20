@@ -1,8 +1,8 @@
-"""st doctor (aegis-q9eh). Every state is reached from injected probes, and each
+"""st doctor. Every state is reached from injected probes, and each
 one that could hide a lie is tested for BOTH outcomes:
 
   - absent AND present (a doctor that only ever says "healthy" is indistinguishable
-    from a broken one — aegis-mt0r; roles --check once printed "0 agents, every one
+    from a broken one; roles --check once printed "0 agents, every one
     reports somewhere" and exited 0 on a missing registry).
   - stale AND current (the positive control that STALE is a real signal, not always-on).
   - version-error is UNKNOWN, never ABSENT (quipu-server --version opens a store and

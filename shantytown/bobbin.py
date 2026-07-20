@@ -41,8 +41,10 @@ class BobbinContext:
 
     def __init__(self, server: str | None = None, repo: str | None = None,
                  mode: str = "hybrid", timeout: int = 20):
-        # BOBBIN_SERVER is the variable the crew hooks already use.
-        self.server = server or os.environ.get("BOBBIN_SERVER") or "http://search.svc"
+        # BOBBIN_SERVER is the variable the crew hooks already use, and it is
+        # passed straight through to the `bobbin` CLI below. The default is a
+        # local bobbin, not any particular deployment's hostname.
+        self.server = server or os.environ.get("BOBBIN_SERVER") or "http://localhost:8080"
         self.repo = repo
         self.mode = mode
         self.timeout = timeout

@@ -1,6 +1,6 @@
 # Docs are read by many and reviewed by few. A tracked text file silently classified
 # BINARY is undiffable, so no edit to it is ever reviewable. That happened to a skill
-# read by 14 clones and nobody noticed for weeks (aegis-6lwc). Start diffable.
+# read by 14 clones and nobody noticed for weeks. Start diffable.
 *.md   text diff
 *.py   text diff
 *.toml text diff

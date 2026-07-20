@@ -1,4 +1,4 @@
-"""kill_session kills the PROCESS TREE, not just the tmux session (aegis-84z1).
+"""kill_session kills the PROCESS TREE, not just the tmux session.
 
 A real agent survived a plain kill-session once (claude ignored SIGHUP and
 orphaned). The stand-in child MUST model that: a plain `sleep` dies fine on
@@ -61,7 +61,7 @@ def test_kill_session_reaps_the_pane_child_process():
         assert not t.exists("victim"), "session should be gone"
         # the hardened kill_session must have reaped the process group too — a
         # plain kill-session would leave this SIGHUP-ignoring child orphaned (the
-        # exact survival bug from the 84z1 real-claude incident).
+        # exact survival bug from the real-claude teardown incident).
         deadline = time.time() + 3
         while _alive(pane_pid) and time.time() < deadline:
             time.sleep(0.1)

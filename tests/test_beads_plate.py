@@ -1,4 +1,4 @@
-"""beads.plate() — the beads sibling of files.plate() (aegis-gqr8 ruling).
+"""beads.plate() — the beads sibling of files.plate() (ruling).
 
 RULING (arnold): "what's on my plate" is a per-backend PLATE READER injected into
 prime, NOT a third Tracker method. The two-function Tracker stays; ellie's test
@@ -72,7 +72,7 @@ def test_bd_failure_RAISES_not_returns_none():
 
 
 def test_open_assigned_IS_on_the_plate():
-    """The gap malcolm caught (aegis-260i): open-assigned work is real work.
+    """The gap malcolm caught: open-assigned work is real work.
 
     beads.plate used to filter to hooked/in_progress, so an agent with only
     open-assigned beads got None and looked idle. That reports 'nothing' when it

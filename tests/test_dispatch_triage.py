@@ -1,4 +1,4 @@
-"""st go now consults triage before it sends — shantytown #1 / aegis-kbuz.
+"""st go now consults triage before it sends — shantytown #1.
 
 Before this, `st go` went straight to send-keys, so dispatching to an agent that
 was mid-response interrupted its work. These tests prove the gate: an in-flight

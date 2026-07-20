@@ -96,7 +96,7 @@ def prime(
 
     `plate` is INJECTED rather than taken off the Tracker protocol, because
     Tracker is two functions and prime is not allowed to widen it alone
-    (aegis-gqr8 — see the note in protocols.Tracker). Pass files.plate bound to
+    (— see the note in protocols.Tracker). Pass files.plate bound to
     a tracker; pass None and prime honestly reports an empty plate rather than
     guessing. Note the tracker is not a parameter at all now: prime never writes,
     and the only thing it wanted from a tracker was this one read.

@@ -136,14 +136,14 @@ class FilesTracker:
 
 
 # Plate precedence, identical to beads._PLATE_RANK so both backends order a plate
-# the same way (two-implementation equivalence, aegis-260i).
+# the same way (two-implementation equivalence).
 _PLATE_RANK = {"hooked": 0, "in_progress": 1}
 
 
 def plate(tracker: FilesTracker, agent: str) -> WorkItem | None:
     """The ONE thing on an agent's plate, or None. A module function, not a method.
 
-    WHY IT LIVES HERE AND NOT ON THE PROTOCOL (aegis-gqr8): `shanty prime` must
+    WHY IT LIVES HERE AND NOT ON THE PROTOCOL: `shanty prime` must
     answer "what's on my plate" and Tracker cannot — get() needs an id you do not
     have yet. I first solved that by adding a third method, mine(), to Tracker.
     That broke test_swap's two-function assertion AND the BeadsTracker isinstance
@@ -171,7 +171,7 @@ def plate(tracker: FilesTracker, agent: str) -> WorkItem | None:
     ]
     if not mine:
         return None
-    # Shared precedence with beads.plate (aegis-260i): in-hand outranks
+    # Shared precedence with beads.plate: in-hand outranks
     # not-started, then id. Was pure filename order, which would surface an
     # unstarted open item over one you're mid-flight on — the wrong plate.
     mine.sort(key=lambda it: (_PLATE_RANK.get(it.status, 2), it.id))

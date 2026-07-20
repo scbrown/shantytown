@@ -15,7 +15,7 @@ That diagnosis was right and the fix was wrong. **A file in a workspace is still
 measured precisely what copies do here:
 
 - an allowlist lived in two places; updating one left the other stale, and it was invisible because
-  the two agents already covered were in *both* lists (aegis-u7fo)
+  the two agents already covered were in *both* lists
 - a hook script resolved per-crew, so **clone drift silently decided behaviour** — a stale clone fires
   successfully and just does the wrong thing
 - a vocabulary copied into a formula forked and rotted until it contradicted its own source
@@ -31,7 +31,7 @@ Checked against the live deployment, not from memory:
 ```
 targetClasses:  aegis:CrewMember   aegis:Rig   aegis:Polecat   aegis:Person   aegis:Overseer
 shapes:         aegis:ReportsToShape   aegis:ManagedByShape   aegis:MemberOfShape   aegis:OwnsShape
-live graph:     sentinel · ian · strider · mayor · arnold · goldblum · malcolm   (already populated)
+live graph:     sentinel · ian · strider · mayor · arnold · hammond · malcolm   (already populated)
 ```
 
 **`aegis:ReportsToShape` already exists.** The first draft invented a `reports_to:` YAML key for a

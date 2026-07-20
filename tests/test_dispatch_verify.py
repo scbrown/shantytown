@@ -75,11 +75,11 @@ def test_verify_reads_the_pane_back(world):
     """verify() is exactly 'is the item id on the pane?' — not send-and-assume."""
     crew, trk = world
     d = Dispatcher(FilesRegistry(crew), trk, NullPanes())
-    assert d.verify("%5", "aegis-x") is False           # empty pane
-    assert d.verify("%5", "aegis-x") is False
-    landed = NullPanes(screen="… Work is on your hook: aegis-x — do the thing")
+    assert d.verify("%5", "st-x") is False           # empty pane
+    assert d.verify("%5", "st-x") is False
+    landed = NullPanes(screen="… Work is on your hook: st-x — do the thing")
     d2 = Dispatcher(FilesRegistry(crew), trk, landed)
-    assert d2.verify("%5", "aegis-x") is True
+    assert d2.verify("%5", "st-x") is True
 
 
 class _ScrollbackPanes(NullPanes):
@@ -99,16 +99,16 @@ class _ScrollbackPanes(NullPanes):
 def test_verify_finds_an_id_that_only_survives_in_scrollback(world):
     """THE live bug: a visible-only check could never confirm a real delivery.
 
-    harding (first live dispatches) received aegis-j0nq and worked it, yet st go
+    an agent on its first live dispatch received st-j0nq and worked it, yet st go
     reported could-not-tell every time and never wrote the tracker — the agent's
     own output had pushed the echoed id off the visible pane before verify looked.
     verify must read scrollback, or it is a check incapable of succeeding.
     """
     crew, trk = world
     panes = _ScrollbackPanes(visible="● Bash(grep -rn ...)\n❯ ",
-                             history="Work is on your hook: aegis-j0nq — fix it\n● Bash(...)")
+                             history="Work is on your hook: st-j0nq — fix it\n● Bash(...)")
     d = Dispatcher(FilesRegistry(crew), trk, panes)
-    assert d.verify("%5", "aegis-j0nq") is True, "verify missed an id present in scrollback"
+    assert d.verify("%5", "st-j0nq") is True, "verify missed an id present in scrollback"
     assert any(h > 0 for h in panes.history_asked), "verify never asked for scrollback"
 
 
@@ -117,7 +117,7 @@ def test_verify_still_fails_when_the_id_is_nowhere(world):
     crew, trk = world
     panes = _ScrollbackPanes(visible="❯ ", history="nothing relevant here")
     d = Dispatcher(FilesRegistry(crew), trk, panes)
-    assert d.verify("%5", "aegis-j0nq") is False
+    assert d.verify("%5", "st-j0nq") is False
 
 
 def test_update_happens_AFTER_send_not_before(world):

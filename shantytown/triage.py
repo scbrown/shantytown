@@ -34,7 +34,7 @@ class Decision:
 # --- the honest unknowns. Crude, visible, tunable. -------------------------
 
 # A wedge is the SESSION being dead, not the agent printing something ugly.
-# "Traceback (most recent call last)" was removed 2026-07-16 (aegis-hd2q): agents
+# "Traceback (most recent call last)" was removed 2026-07-16: agents
 # print tracebacks constantly — running a failing test prints one — and RESTART
 # means LAUNCHER-RELAUNCH. MEASURED: a healthy, idle agent whose pane showed a
 # ZeroDivisionError traceback and then "I'll fix that now" was classified
@@ -113,15 +113,15 @@ def mid_flight(screen: str) -> bool:
     return any(m in _tail(screen) for m in INFLIGHT_MARKERS)
 
 
-# --- background shells: work that outlives the turn (aegis-q73g) -------------
+# --- background shells: work that outlives the turn -------------------------
 
 # Claude Code reports background shells in TWO places, and both were read off
 # live crew panes on 2026-07-20 (not quoted from a doc — swept with capture-pane
-# across every session on this host):
-#   turn-end summary:  "✻ Crunched for 7m 56s · 1 shell still running"  (goldblum,
-#                      maldoon, weaver — three agents, four occurrences)
+# across every session on the host):
+#   turn-end summary:  "✻ Crunched for 7m 56s · 1 shell still running"  (three
+#                      different agents, four occurrences)
 #   in-turn status:    "⏵⏵ bypass permissions on · 1 shell · esc to interrupt"
-#                      (weaver, mid-flight)
+#                      (one agent, mid-flight)
 # The first is the one that matters: it is printed exactly when the turn has
 # ENDED, which is the moment the whole tier currently books as "finished".
 _SHELLS_DONE = re.compile(r"(\d+)\s+shells?\s+still running")
@@ -135,13 +135,13 @@ def running_shells(screen: str) -> int | None:
     that is not showing the runtime's chrome (a bare shell, a scrolled view, a
     second runtime that has no such indicator) reports nothing, and "I could not
     see" is a different fact from "there are none". Collapsing those two is the
-    exact defect this bead names one level up — turn-end silently booked as
-    task-end — so it is not repeated inside the reader for it.
+    defect this reader exists to close, one level up — turn-end silently booked
+    as task-end — so it is not repeated inside the reader for it.
 
-    Tail-only, for the reason every predicate in this file is: sattler's own pane
-    contained the sentence "The pane shows 1 shell still running and a com…"
-    while sattler ran no background shell at all. That is an agent TALKING about
-    the state, and a whole-screen search would have read it as being in it.
+    Tail-only, for the reason every predicate in this file is: one agent's own
+    pane contained the sentence "The pane shows 1 shell still running and a com…"
+    while that agent ran no background shell at all. That is an agent TALKING
+    about the state, and a whole-screen search would have read it as being in it.
     """
     tail = _tail(screen)
     for pat in (_SHELLS_DONE, _SHELLS_LIVE):
@@ -151,7 +151,7 @@ def running_shells(screen: str) -> int | None:
     return None
 
 
-# --- what is in the input box? (aegis-x6xh) ---------------------------------
+# --- what is in the input box? ----------------------------------------------
 
 # ABSENT is not EMPTY and UNKNOWN is not EMPTY. Three different not-a-queue
 # answers, kept apart on purpose — collapsing "I did not see an input box",
@@ -169,7 +169,7 @@ def input_state(screen: str) -> str:
 
     Answers ONLY about the input box. It deliberately never says "the agent is
     idle": input state and run state are different questions, and the whole
-    aegis-x6xh incident is one being read as the other.
+    placeholder incident is one being read as the other.
 
     On a stripped capture with text in the box this returns UNKNOWN, never a
     guess. That is the point. The caller that dispatches on UNKNOWN would be
@@ -193,7 +193,7 @@ def input_state(screen: str) -> str:
     return INPUT_ABSENT
 
 
-# --- the dispatcher's question: who is FREE? (aegis-o8we) --------------------
+# --- the dispatcher's question: who is FREE? --------------------
 
 # The five answers, as printed. `?` is a first-class value, not a rounding of
 # idle: "I could not tell" and "nobody is working" are different facts, and the
@@ -228,7 +228,7 @@ def work_state(screen: str, ui_up: bool) -> str:
     DELIBERATELY NOT is_live(): that also fails on DEAD_MARKERS, one of which is
     "Traceback". Agents print tracebacks constantly (running a failing test prints
     one), so keying free-ness on it would mark a genuinely free agent unsure right
-    after it did its job — the aegis-hd2q mistake, which cost a healthy agent a
+    after it did its job — the wedged-marker mistake above, which cost a healthy agent a
     RESTART verdict, repeated one column over. Only the POSITIVE ready signal is
     consulted here.
     """
@@ -276,15 +276,15 @@ def context_high(screen: str, limit_k: float = CONTEXT_HIGH_TOKENS_K) -> bool:
     could only ever fire in a unit test that synthesised a 500-line screen — in
     production it was dead code, and `triage` was a nudge/refuse coin with a
     third face painted on.
-    MEASURED 2026-07-16 (aegis-hd2q): ian carried 737.6k tokens — the textbook
+    MEASURED on a live fleet: one agent carried 737.6k tokens — the textbook
     CLEAR case — and triage returned NUDGE. Every real pane returned
     context_high=False, always, for any input.
-    This is the aegis-mt0r class exactly ("a check incapable of one of its
+    This is the dead-branch class exactly ("a check incapable of one of its
     outcomes, and every one LOOKED FINE"), sitting in the file written to
     encode that lesson. The proxy was not too crude; it was measuring a
     different thing than the one it was named for.
     NOW: ask the runtime. Claude Code already counts the tokens and prints them.
-    Verified to fire on real panes: ian 737.6k, maldoon 694.3k, strider 436.9k.
+    Verified to fire on real panes: 737.6k, 694.3k and 436.9k tokens.
     """
     tokens = context_tokens_k(screen)
     return tokens is not None and tokens >= limit_k

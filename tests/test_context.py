@@ -1,7 +1,7 @@
 """The two facts that must never be the same bytes.
 
     "a none adapter returning nothing and a bobbin that is DOWN returning
-     nothing are the same bytes and opposite facts."     — ellie, aegis-rhhw
+     nothing are the same bytes and opposite facts."     — ellie
 
 So the tests that matter are not "does it search". They are:
   - unreachable  -> ContextUnavailable -> exit 2   (I could not look)
@@ -19,7 +19,7 @@ from shantytown.cli import main
 from shantytown.protocols import Context, ContextUnavailable, Snippet
 
 DEAD = "http://127.0.0.1:9"          # nothing listens on discard/9
-LIVE = "http://search.svc"
+LIVE = "http://bobbin.example.com"
 
 
 # --- the protocol holds, with two impls ---------------------------------------

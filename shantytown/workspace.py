@@ -1,6 +1,6 @@
 """workspace — ensure an agent's DIRECTORY exists before anything is launched.
 
-The workspace leg of #5 (aegis-isbs, split from aegis-qdal). #5's session half
+The workspace leg of #5 (split out from the session work). #5's session half
 rules the pane; this is the DISTINCT concern deliberately kept out of session
 lifecycle: the cwd the launch command runs in. Analogous to `gt crew add`'s clone
 step, NOT to session lifecycle.
@@ -20,7 +20,7 @@ had already been created. There was no ensure step and no clean refusal. A
 missing workspace must be caught HERE, before any tmux mutation, so the refusal
 creates nothing (arnold's #5 rule: "write nothing, launch nothing").
 
-WHERE IT IS CALLED, AND WHY NOT INSIDE compose() (ruled here, isbs):
+WHERE IT IS CALLED, AND WHY NOT INSIDE compose():
 The bead sketched "called by Runtime.start before compose delivers". It is called
 by the CLI instead, between compose's refusals and the tmux mutation. compose()
 is a PURE STRING BUILDER whose invariant is asserted on its own return value; a
@@ -31,8 +31,8 @@ the CLI ensures.
 
 NEVER TOUCHES AN EXISTING DIRECTORY. No fetch, no pull, no clean, no checkout. An
 agent's workspace may hold uncommitted work (a crew clone always does), and a
-launcher that "helpfully" syncs it is a launcher that eats work — see aegis-iaef,
-where concurrent operations on a shared checkout swallowed one agent's commit and
+launcher that "helpfully" syncs it is a launcher that eats work. We measured that:
+concurrent operations on a shared checkout swallowed one agent's commit and
 BOTH SIDES reported success. Present means present. That is the whole check.
 """
 from __future__ import annotations

@@ -18,18 +18,18 @@ version if there are duplicates, the most up to date stuff is on github."*
 | **beads** | github `scbrown/beads` | issue tracker on Dolt | **first-class tracker** |
 | **bobbin** | github `scbrown/bobbin` | code context / semantic search | **first-class context** |
 | **quipu** | github `scbrown/quipu` | RDF/SPARQL knowledge graph | **first-class knowledge** |
-| **tapestry** | forgejo `stiwi/tapestry` | HTMX dashboard over beads | **first-class dashboard** — see below |
+| **tapestry** | *(not public)* | HTMX dashboard over beads | **first-class dashboard** — see below |
 | **reactor** | — | watches bead lifecycle, fires actions | **event source**, with caveats |
 | **desire-path (dp)** | github `scbrown/desire-path` | records failed tool calls | **telemetry — the best idea nobody is using** |
-| **shanty** | forgejo `stiwi/shanty` | Go tmux wrapper | pane adapter, later |
-| **skein** | forgejo `stiwi/skein` | agent-skills spec + validator (aegis-61t9) | skills, later |
-| **gastown** | github `scbrown/gastown` | the harness this replaces | — |
-| gt-api | forgejo `stiwi/gt-api` | tapestry's intended backend | **do not build.** See below. |
+| **shanty** | github `scbrown/shanty` | Go tmux wrapper | pane adapter, later |
+| **skein** | github `scbrown/skein` | agent-skills spec + validator | skills, later |
+| **Gas Town** | github `gastownhall/gastown` | the harness this shrinks | — |
+| gt-api | *(not public)* | tapestry's intended backend | **do not build.** See below. |
 
-**A dangling reference, found while surveying:** `ssh://git@git.lan/stiwi/quipu.git` → *"Cannot find
-repository."* It does not exist. GitHub's `scbrown/quipu` has 58 branches and is the only quipu. Seven
-aegis beads cite the forgejo path. Nothing is stranded there — there is no there — but the citations
-are wrong and will send someone hunting.
+**A dangling reference, found while surveying:** a stale `ssh://` remote for quipu → *"Cannot find
+repository."* It does not exist. GitHub's `scbrown/quipu` has 58 branches and is the only quipu.
+Seven of our own issues still cite the dead path. Nothing is stranded there — there is no there —
+but the citations are wrong and will send someone hunting.
 
 ---
 
@@ -42,12 +42,12 @@ than an interface.
 
 ```
 gt dashboard    (:8080, Gas Town's built-in web server)   -> not running
-gastown-api.svc (:8080, tapestry's INTENDED backend)      -> 503, undeployed
-tapestry.svc    (reads Dolt directly, bypasses both)      -> 200  ✓  serving
+gastown-api     (:8080, the dashboard's INTENDED backend) -> 503, undeployed
+tapestry        (reads the store directly, bypasses both)  -> 200  ✓  serving
 ```
 
 Gas Town ships **two** servers for this. Both are dead. **Tapestry bypasses both and works.** Its
-config points at `dolt.svc:3306` — it reads the beads store directly and has never needed a harness
+config points straight at the SQL port — it reads the beads store directly and has never needed a harness
 API. `gt-api` was built to be its backend; it is entirely undeployed (no binary, no unit, no role —
 `service-catalog.yml:764` names an ansible role that does not exist), and **nobody noticed for
 months**, because its only consumer never needed it.
@@ -93,14 +93,14 @@ reactor watches the tracker's storage layer for lifecycle events (bead created /
 actions — the marquee one being **auto-ingest into quipu**.
 
 **It is the highest-value integration here and it is currently the most broken thing in the survey.**
-Both verified in aegis beads, not inferred:
+Both verified against the running deployment, not inferred:
 
-- **aegis-uyvs** — crew `CLAUDE.md` states *"Reactor handles bead lifecycle → Quipu ingestion
-  automatically."* **That directive is FALSE.** reactor has never watched `beads_aegis`. Every crew
-  member has been relying on it.
-- **aegis-lfhk / r2r0** — reactor watches **dead databases** (`aegis`, `gastown`), not the live one.
+- **The directive is false.** Crew `CLAUDE.md` states *"Reactor handles bead lifecycle → Quipu ingestion
+  automatically."* **That directive is FALSE.** reactor has never watched the live tracker database.
+  Every crew member has been relying on it.
+- **It watches the wrong thing.** Reactor is subscribed to **dead databases**, not the live one.
   `up{job=reactor}==1`, systemd `active(running)`, no alerts firing, **zero events processed**.
-- **aegis-5lnp** — its own staleness alerts (`ReactorEventStale`, `ReactorHighActionLatency`) are dead
+- **Its own alarms cannot ring.** Its staleness alerts (`ReactorEventStale`, `ReactorHighActionLatency`) are dead
   rules and cannot fire.
 
 So reactor is *present, running, monitored, green, and doing nothing* — while a standing directive
@@ -118,10 +118,10 @@ class Events(Protocol):                       # reactor
   function, we have made a directive that will one day be false.
 - **It must prove liveness, not presence.** `up==1` is what reactor has today and it means nothing.
   The adapter's health answer is **"how many events have you delivered?"** — a count, not a ping.
-- **Never claim it in docs before it is measured.** uyvs is a P1 whose entire content is that a doc
-  claimed reactor was working. We do not repeat that sentence in this repo.
+- **Never claim it in docs before it is measured.** The first bug filed against reactor was, in its
+  entirety, that a doc claimed reactor was working. We do not repeat that sentence in this repo.
 
-The reactor idea worth having is **aegis-nr7a**, the bead-advisor: on create, warn the author of
+The reactor idea worth having is **the bead-advisor**: on create, warn the author of
 duplicates, directive conflicts, known failure patterns, relitigated decisions. That is triage with a
 knowledge base, and it is exactly `docs/design.md`'s triage layer — *which must be able to refuse, not
 just nudge.* Design it as a **consumer of events**, never as a thing reactor hardcodes.
@@ -170,7 +170,7 @@ it already solved it by ignoring the harness entirely.
 
 ## Open
 
-- **skein** — agent-skills spec + validator. We have 22 skills (aegis-61t9). Skills are probably an
+- **skein** — agent-skills spec + validator. We have 22 skills. Skills are probably an
   adapter, not a core concept, but this needs reading before deciding.
 - **Does the bead-advisor belong in shantytown at all?** It is triage with a knowledge base, and
   triage IS in scope. Lean: the *interface* is (events + knowledge), and the advisor is a consumer that

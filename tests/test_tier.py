@@ -1,7 +1,7 @@
-"""The orchestration tier (aegis-rpo1).
+"""The orchestration tier.
 
 Every decision branch has a test that OBSERVES it firing. This suite exists in
-the shadow of aegis-hd2q, where a triage branch that could never fire passed its
+the shadow of the dead-CLEAR-branch bug, where a triage branch that could never fire passed its
 tests because the tests were built to fit the proxy, not to exercise the system.
 So: each branch is reached from realistic state, and the refusals are shown
 refusing for the RIGHT reason (the message names the rule), not merely raising.
