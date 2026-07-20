@@ -29,6 +29,7 @@ HONEST BOUNDARY (say it so nobody over-claims):
     never be read as "hooks registered" — it cannot show that.
 """
 from __future__ import annotations
+import os
 import json
 import sys
 from dataclasses import dataclass
@@ -275,8 +276,52 @@ def claude_settings_for_role(role: str, root=None) -> dict:
         # contract names as the place hank reads its tenant from. Without it the
         # guard resolves no scope and decides nothing — running, wired, and inert,
         # which is the failure mode this repo keeps naming.
-        "env": {"BOBBIN_ROLE": role},
+        "env": _settings_env(role, root),
     }
+
+
+# Deployment-supplied environment for emitted settings. NOT a list of values —
+# a list of NAMES to carry through, so no internal hostname ever lives in this
+# repo (that is what the public scrub was for).
+_CARRIED_ENV = ("QUIPU_SERVER", "SHANTY_ONTO_NS")
+
+
+def _settings_env(role: str, root=None) -> dict:
+    """The env block an emitted settings file carries.
+
+    BOBBIN_ROLE, plus any deployment config this install was given. The scrub that
+    made the graph's URL and namespace env-configurable did NOT teach the emitter
+    to emit them, so the live values survived only in two hand-maintained settings
+    files — and the next `role set` silently dropped them. That is exactly what
+    happened: a lead.settings.json emitted today came out with no QUIPU_SERVER and
+    no SHANTY_ONTO_NS, so that lead would launch pointed at the public default,
+    which is a dead localhost and a namespace holding none of this crew's facts.
+
+    The failure is quiet in the worst way. `QuipuRegistry.all()` RAISES on an
+    unreachable graph rather than returning [], so the agent gets an honest
+    "could not tell" — but a wrong-but-reachable namespace would answer "nobody
+    exists" with a straight face. Carrying the config is what keeps that from
+    being a coin flip.
+
+    Source order: <root>/env.json (deployment config, gitignored), then the
+    ambient environment. Absent both, the key is OMITTED and the agent falls back
+    to the library default — never a placeholder written into a live settings file.
+    """
+    env = {"BOBBIN_ROLE": role}
+    supplied: dict[str, str] = {}
+    if root is not None:
+        p = Path(root) / "env.json"
+        try:
+            loaded = json.loads(p.read_text())
+            if isinstance(loaded, dict):
+                supplied = {k: str(v) for k, v in loaded.items()}
+        except (OSError, ValueError):
+            supplied = {}
+    for key in _CARRIED_ENV:
+        val = supplied.get(key) or os.environ.get(key)
+        if val:
+            env[key] = val
+    return env
 
 
 def emitted_stop_directions(root, role: str) -> set[str] | None:
