@@ -115,7 +115,13 @@ class Panes(Protocol):
     # in it. history=N also returns the last N lines of scrollback, which is what
     # VERIFY needs: a fast agent scrolls the echoed dispatch off-screen before we
     # can look, so a visible-only check can never confirm a delivery that worked.
-    def capture(self, pane: str, history: int = 0) -> str: ...
+    # attrs=True keeps the RENDERING attributes (tmux `-e`), not just the text.
+    # Required by triage.input_state (aegis-x6xh): dim is the only thing that
+    # separates Claude Code's placeholder suggestion from real queued-unsubmitted
+    # input, both of which render as `❯ <text>`, and plain capture strips exactly
+    # that bit. An adapter that cannot supply attributes returns plain text and
+    # triage answers UNKNOWN — which is a refusal, not a guess.
+    def capture(self, pane: str, history: int = 0, attrs: bool = False) -> str: ...
                                                # it to decide, #2 verify reads it
                                                # to confirm a send landed. Both
                                                # Tmux and NullPanes implement it;

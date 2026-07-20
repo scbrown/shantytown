@@ -161,6 +161,54 @@ Count the connections. A stopwatch on a shared host is exactly the kind of numbe
 `gt sling` regression would have passed a "feels fine" check on a quiet night. **The observable is the
 count.**
 
+## Reading a pane: a dim suggestion is not queued input
+
+Pane text is this tier's **only** liveness oracle — `st crew` and `st go` both judge from it. So a
+state the pane renders ambiguously is a state the tier cannot reason about, and there was one:
+
+```
+❯ file the goldblum install role bead
+```
+
+That is either Claude Code's **dimmed placeholder** over an empty buffer (the agent is idle and
+fine), or **real unsubmitted text** left by a `send-keys` whose Enter never landed (the aegis-16e
+stall). `capture-pane -p` returns plain text, and the dim attribute is precisely the bit it strips —
+so the two are the same bytes. It was ambiguous in **both** directions, and both cost:
+
+* **False stall.** An administrator read the line above as a stalled dispatch and sent Enter into a
+  healthy agent's pane to "un-stall" it. Enter did nothing. Only typing a literal character — which
+  made the whole line vanish, because it was placeholder over an *empty* buffer — showed the agent
+  had never been stuck. That is the coordinator corrupting a pane it was trying to help.
+* **Hidden stall.** Symmetrically, a genuinely wedged worker reads as "just a suggestion, it's fine"
+  and gets left wedged.
+
+**The fix is to capture the bit, not to guess it.** `capture()` takes `attrs=True` (tmux `-e`) and
+`triage.input_state()` judges the box on the attribute. Measured across all 18 live panes,
+2026-07-20:
+
+```
+placeholder   \x1b[39m❯\xa0\x1b[2mbd ready — pick the next item\x1b[0m     <- SGR 2 = dim
+real input    \x1b[38;5;246m❯\xa0\x1b[39mzzPROBEzz                        <- no SGR at all
+empty         \x1b[38;5;246m❯\xa0\x1b[39m
+```
+
+`st crew` gains a fourth verdict beside `idle`/`busy`/`?`: **`queued`** — UI up, nothing in flight,
+and text sitting unsubmitted. Not free, not working. It never lands on the free list, because
+`send-keys` **appends** to a pane's buffer rather than replacing it: dispatching there produces one
+concatenated line that is neither message. `st go` REFUSEs the same pane.
+
+Two rules fall out, and they are the load-bearing part:
+
+1. **Do not "fix" a suspicious pane by pressing Enter at it.** That was the defect, not the remedy.
+   `queued` is a state to *report to the agent's owner*, never one to type your way out of.
+2. **When the attributes are missing, the answer is `?`.** A stripped capture with text in the box
+   returns `UNKNOWN`, which degrades to `?` in `st crew` and to REFUSE in `st go` — never to `idle`.
+   Refusing on doubt is cheap; dispatching into a buffer you cannot see is the incident.
+
+This is still a heuristic on somebody else's TUI rendering, and it is the *cheap* tier of the fix.
+The better one is for a worker's own hook to report `idle`/`running`/`queued` into `.shanty` so the
+tier reads a **fact instead of a rendering** — the Stop event is the natural carrier (aegis-w9z1).
+
 ## `st roles --check` — the hierarchy, verified
 
 ```

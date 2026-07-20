@@ -91,7 +91,7 @@ class _ScrollbackPanes(NullPanes):
         self._visible, self._history = visible, history
         self.history_asked = []
 
-    def capture(self, pane: str, history: int = 0) -> str:
+    def capture(self, pane: str, history: int = 0, attrs: bool = False) -> str:
         self.history_asked.append(history)
         return self._history if history > 0 else self._visible
 

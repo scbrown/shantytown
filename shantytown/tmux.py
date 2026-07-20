@@ -62,10 +62,16 @@ class Tmux:
             return False
         return any(pane in line.split() for line in r.stdout.splitlines())
 
-    def capture(self, pane: str, history: int = 0) -> str:
+    def capture(self, pane: str, history: int = 0, attrs: bool = False) -> str:
         # -S -N extends the capture back N lines into scrollback. Default 0 keeps
         # the VISIBLE-only behaviour triage depends on (see the Panes protocol).
+        # -e keeps the SGR sequences. Off by default because every plain-text
+        # consumer (verify's substring match, the `st log` dump) would otherwise
+        # have to strip them; on for triage, which needs dim to tell a
+        # placeholder from queued input (aegis-x6xh).
         args = ["capture-pane", "-t", pane, "-p"]
+        if attrs:
+            args.append("-e")
         if history > 0:
             args += ["-S", f"-{int(history)}"]
         r = subprocess.run(self._cmd(*args), capture_output=True, text=True)
@@ -202,8 +208,12 @@ class NullPanes:
             return pane in self._live
         return self._exists
 
-    def capture(self, pane: str, history: int = 0) -> str:
+    def capture(self, pane: str, history: int = 0, attrs: bool = False) -> str:
         # The double has no scrollback/visible split — one screen answers both.
+        # attrs is accepted and ignored: whatever the caller seeded IS the
+        # screen, escapes and all. Seed a screen with \x1b[2m in it to model a
+        # placeholder, with none to model a stripped capture (which triage must
+        # answer UNKNOWN for, not idle).
         return self.screen
 
     def send(self, pane: str, text: str) -> None:

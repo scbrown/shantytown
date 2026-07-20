@@ -89,7 +89,7 @@ class _Panes(NullPanes):
         super().__init__(live=set(screens))
         self._screens = screens
 
-    def capture(self, pane: str, history: int = 0) -> str:
+    def capture(self, pane: str, history: int = 0, attrs: bool = False) -> str:
         return self._screens.get(pane, "")
 
 

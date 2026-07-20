@@ -790,7 +790,7 @@ def _cmd_crew(a) -> int:
         return OK
     launches = _launches(a)
     runtime = _runtime(a, panes)
-    stale, unknown, free, busy, shelled = [], [], [], [], []
+    stale, unknown, free, busy, queued, shelled = [], [], [], [], [], []
     print()
     for ag in sorted(agents, key=lambda x: x.name):
         if ag.pane:
@@ -801,8 +801,13 @@ def _cmd_crew(a) -> int:
         # it is not there — printing `idle` for it would put it on the free list
         # and send work into a session that does not exist.
         if state == "up":
-            screen = panes.capture(ag.pane)
-            work = triage_mod.work_state(screen, runtime.shows_ready_ui(screen))
+            # attrs=True: work_state needs dim to tell a placeholder suggestion
+            # from queued-unsubmitted text (aegis-x6xh). shows_ready_ui matches
+            # PLAIN substrings and its markers arrive colour-split word by word,
+            # so it gets the stripped view of the very same capture.
+            screen = panes.capture(ag.pane, attrs=True)
+            work = triage_mod.work_state(
+                screen, runtime.shows_ready_ui(triage_mod.strip_attrs(screen)))
             # Background shells outlive the turn (aegis-q73g). An agent whose turn
             # ended with a build/test/`gh run watch` still live is NOT finished,
             # and every surface the administrator has was silent about it. Shown
@@ -816,6 +821,8 @@ def _cmd_crew(a) -> int:
                 free.append(ag.name)
             elif work.startswith(triage_mod.BUSY):
                 busy.append(ag.name)
+            elif work.startswith(triage_mod.QUEUED):
+                queued.append(ag.name)
         else:
             work = "—"
         # Only a LIVE agent can be running stale settings. A down agent has no
@@ -830,7 +837,7 @@ def _cmd_crew(a) -> int:
         else:
             verdict = "—"
         print(f"  {ag.name:<11} {ag.role:<14} {state:<8} {verdict:<8} "
-              f"{work:<9} {ag.pane or '—'}")
+              f"{work:<11} {ag.pane or '—'}")
     print()
     # The dispatcher's answer, said out loud. A column still makes the operator
     # scan 14 rows; the question is "who can take this", so print the list.
@@ -841,6 +848,19 @@ def _cmd_crew(a) -> int:
               "interrupts work.")
     if busy:
         print(f"  {len(busy)} busy: {', '.join(busy)}")
+    # Not free, not busy, and the one state an operator will otherwise "fix" by
+    # hand (aegis-x6xh). Say what it means and what NOT to do about it: the
+    # incident that produced this line was an administrator reading a pane,
+    # inferring a stall, and typing into a healthy agent's buffer.
+    if queued:
+        print(f"  {len(queued)} with UNSUBMITTED text in the input box: "
+              f"{', '.join(queued)}")
+        print(f"    Not idle and not working. Either a real stalled dispatch "
+              f"(text sent, never submitted) or a")
+        print(f"    human mid-sentence. A send-keys here APPENDS — do not "
+              f"dispatch, and do not press Enter at")
+        print(f"    someone else's pane to 'un-stall' it. Look with "
+              f"`st log <agent>` and ask its owner.")
     # Say the consequence, not just the count (aegis-q73g). The reader who needs
     # this line is the administrator about to book the previous item as done.
     if shelled:
@@ -851,7 +871,7 @@ def _cmd_crew(a) -> int:
         print("    unruled — but a build, a test run or a `gh run watch` is "
               "unfinished work, and the next")
         print("    item's output will land on top of it.")
-    if free or busy:
+    if free or busy or queued or shelled:
         print()
     # Say the consequence, not just the state. The operator who needs this line is
     # the one who just rewrote a settings file and has no reason to suspect it did

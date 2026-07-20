@@ -49,9 +49,52 @@ INFLIGHT_MARKERS = ("esc to interrupt", "Running…", "Running...", "tokens · e
 # contains every one of these strings.
 _TAIL_LINES = 8
 
+# --- attributes: the one bit `capture-pane -p` throws away (aegis-x6xh) ------
+#
+# MEASURED across 18 live panes, 2026-07-20, `capture-pane -p -e`:
+#
+#   placeholder   \x1b[39m❯\xa0\x1b[2mbd ready — pick the next item\x1b[0m
+#   real input    \x1b[38;5;246m❯\xa0\x1b[39mzzPROBEzz
+#   empty         \x1b[38;5;246m❯\xa0\x1b[39m
+#
+# SGR 2 (dim) wraps a placeholder and NOTHING else; real typed input carries no
+# SGR at all. Without -e all three collapse to `❯ …`, and the first two become
+# the same bytes — which is how an administrator read a healthy idle agent as a
+# stalled dispatch and typed into its buffer to "fix" it, and how a REAL stall
+# (text delivered by send-keys that never submitted) reads as "just a
+# suggestion". Ambiguous in both directions, on the tier's only liveness oracle.
+#
+# So: capture WITH attributes, judge the input box on the attribute, and strip
+# for every other predicate. Stripping is not optional — with -e the runtime
+# emits a colour run PER WORD, so "esc to interrupt" arrives as
+# `\x1b[38;5;246mesc\x1b[39m \x1b[38;5;246mto\x1b[39m …` and a substring match
+# for the marker silently stops matching. One capture, two views of the same
+# instant: a second capture-pane would be a different moment.
+_ANSI = re.compile(
+    r"\x1b\[[0-9;?]*[ -/]*[@-~]"          # CSI (colour, cursor, …)
+    r"|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)"  # OSC (hyperlinks: \x1b]8;;URL\x1b\)
+    r"|\x1b[@-Z\\-_]"                      # lone two-byte escapes
+)
+_DIM = "\x1b[2m"
+# ASCII `>` as well as `❯`: the runtime renders ❯, the tests and older panes `>`.
+_PROMPT_GLYPHS = ("❯", ">")
+
+
+def strip_attrs(screen: str) -> str:
+    """The plain-text view of an attribute-carrying capture.
+
+    Exported because callers OUTSIDE this module hand the same screen to
+    runtime.shows_ready_ui, whose markers are plain substrings and break on a
+    per-word colour run exactly like ours do.
+    """
+    return _ANSI.sub("", screen)
+
 
 def _tail(screen: str, n: int = _TAIL_LINES) -> str:
-    return "\n".join(screen.splitlines()[-n:])
+    # Strips: every text predicate below judges CONTENT, and content is what is
+    # left when the attributes come off. Doing it here means a screen captured
+    # with -e and one captured without are the same input to all of them.
+    return "\n".join(strip_attrs(screen).splitlines()[-n:])
 
 
 def looks_wedged(screen: str) -> bool:
@@ -108,13 +151,60 @@ def running_shells(screen: str) -> int | None:
     return None
 
 
+# --- what is in the input box? (aegis-x6xh) ---------------------------------
+
+# ABSENT is not EMPTY and UNKNOWN is not EMPTY. Three different not-a-queue
+# answers, kept apart on purpose — collapsing "I did not see an input box",
+# "the box was empty" and "the box had text I could not classify" into one
+# value is the shape of the bug this predicate exists to close.
+INPUT_EMPTY = "empty"              # box on screen, nothing in it
+INPUT_QUEUED = "queued"            # box on screen, REAL unsubmitted text in it
+INPUT_PLACEHOLDER = "placeholder"  # box on screen, dimmed suggestion, buffer empty
+INPUT_UNKNOWN = "?"                # box on screen with text, attributes stripped
+INPUT_ABSENT = "no-box"            # no prompt line in the tail — does not apply
+
+
+def input_state(screen: str) -> str:
+    """Placeholder or queued? Requires an ATTRIBUTE-CARRYING capture (`-e`).
+
+    Answers ONLY about the input box. It deliberately never says "the agent is
+    idle": input state and run state are different questions, and the whole
+    aegis-x6xh incident is one being read as the other.
+
+    On a stripped capture with text in the box this returns UNKNOWN, never a
+    guess. That is the point. The caller that dispatches on UNKNOWN would be
+    typing into a buffer whose contents it cannot see — which is what happened.
+    """
+    for raw in reversed(screen.splitlines()[-_TAIL_LINES:]):
+        plain = strip_attrs(raw).strip()
+        if not plain or plain[0] not in _PROMPT_GLYPHS:
+            continue
+        # \xa0 (NBSP) is what the runtime actually puts after ❯; ordinary space
+        # is what the older panes and the tests use. Both are the gutter.
+        if plain[1:].strip("\xa0 \t"):
+            after = raw[raw.find(plain[0]) + 1:]
+            if _DIM in after:
+                return INPUT_PLACEHOLDER
+            # No dim AND no escapes at all on this line = the attributes were
+            # stripped before we got here, so the absence of dim proves nothing.
+            # Measured: a live runtime always colours its own prompt glyph.
+            return INPUT_QUEUED if "\x1b" in raw else INPUT_UNKNOWN
+        return INPUT_EMPTY
+    return INPUT_ABSENT
+
+
 # --- the dispatcher's question: who is FREE? (aegis-o8we) --------------------
 
-# The four answers, as printed. `?` is a first-class value, not a rounding of
+# The five answers, as printed. `?` is a first-class value, not a rounding of
 # idle: "I could not tell" and "nobody is working" are different facts, and the
 # whole cost of collapsing them is on record in this file (context_high, which
 # reported False for every real pane and looked fine doing it).
-BUSY, IDLE, WEDGED, UNSURE = "busy", "idle", "wedged", "?"
+#
+# QUEUED joined them for the same reason (aegis-x6xh): a pane whose UI is up,
+# whose spinner is gone, and whose input box holds unsubmitted text is NOT idle.
+# It is the aegis-16e stall shape — and it used to print `idle` and land on the
+# free list, where the next send-keys would concatenate onto the stuck text.
+BUSY, IDLE, WEDGED, UNSURE, QUEUED = "busy", "idle", "wedged", "?", "queued"
 
 
 def work_state(screen: str, ui_up: bool) -> str:
@@ -148,6 +238,15 @@ def work_state(screen: str, ui_up: bool) -> str:
         return BUSY
     if not ui_up:
         return UNSURE
+    # The UI is up and nothing is in flight. That is NOT enough to say idle
+    # (aegis-x6xh): ask the input box, and believe it when it says it does not
+    # know. Pass this function a capture taken WITH attributes or UNKNOWN is
+    # the honest answer for every pane whose box has text in it.
+    ins = input_state(screen)
+    if ins == INPUT_QUEUED:
+        return QUEUED
+    if ins == INPUT_UNKNOWN:
+        return UNSURE
     return IDLE
 
 
@@ -163,7 +262,7 @@ def context_tokens_k(screen: str) -> float | None:
     in flight the spinner replaces that footer. Callers must not read None as a
     green light — which is fine here, because mid_flight is checked first.
     """
-    m = CTX_HINT.search(screen)
+    m = CTX_HINT.search(strip_attrs(screen))
     return float(m.group(1)) if m else None
 
 
@@ -206,7 +305,11 @@ def triage(panes, target: str, new_work: str) -> Decision:
         return Decision(Action.RESTART, "no session",
                         {"pane": target, "exists": False})
 
-    screen = panes.capture(target)
+    # WITH attributes (aegis-x6xh): dim is the only thing separating a
+    # placeholder suggestion from queued-unsubmitted text, and `-p` alone drops
+    # it. Every other predicate here strips internally, so this one capture
+    # serves both views of the SAME instant.
+    screen = panes.capture(target, attrs=True)
     lines = len(screen.splitlines())
     # Recorded on EVERY screen-based verdict, including the ones it does not
     # change (aegis-q73g ask 1). Whether a live background shell should block a
@@ -228,6 +331,26 @@ def triage(panes, target: str, new_work: str) -> Decision:
         return Decision(Action.REFUSE, "in-flight work",
                         {"pane": target, "shells": shells,
                          "marker": next(m for m in INFLIGHT_MARKERS if m in _tail(screen))})
+
+    # The input box, BEFORE any nudge/clear decision (aegis-x6xh). send-keys
+    # does not replace a pane's input buffer, it APPENDS to it — so sending into
+    # a box that already holds text produces one concatenated line that is
+    # neither message. REFUSE covers both the fact and the doubt:
+    #   queued  — there is real unsubmitted text in there (a live aegis-16e
+    #             stall, or a human mid-sentence). Either way, not ours to type
+    #             over, and "un-stalling" it by hand is the defect, not the fix.
+    #   unknown — the box has text and the capture carried no attributes, so
+    #             placeholder and queued are the same bytes. Dispatching here is
+    #             typing into a buffer we cannot see. REFUSE names the ambiguity
+    #             instead of resolving it in whichever direction looks calmer.
+    ins = input_state(screen)
+    if ins in (INPUT_QUEUED, INPUT_UNKNOWN):
+        return Decision(
+            Action.REFUSE,
+            "unsubmitted text in the input buffer" if ins == INPUT_QUEUED
+            else "cannot tell a placeholder from queued input (no attributes)",
+            {"pane": target, "input": ins,
+             "attrs": "\x1b" in screen})
 
     # context_k is the number the operator needs to audit a CLEAR. Record it
     # even when it is None ("unknown" — the pane was not offering a hint), so a
