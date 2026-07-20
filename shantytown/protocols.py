@@ -26,6 +26,20 @@ class Agent:
                                   # reading their contents (the pilot, aegis-qdal.5:
                                   # secrets stay in the agent's own files). None =
                                   # launch in the default cwd.
+    workspace_source: str | None = None
+                                  # where to CLONE the workspace from if it is
+                                  # absent (a git URL or a local path). The card
+                                  # carried a workspace PATH and no way to create
+                                  # it, so the "clone if absent" half of the
+                                  # ensure step was unbuildable (aegis-isbs).
+                                  # SEPARATE from workspace on purpose: the path
+                                  # is where the agent LIVES, the source is where
+                                  # it CAME FROM, and an agent whose dir already
+                                  # exists needs the first and never the second.
+                                  # None = the dir must already exist, or the
+                                  # launch is refused. We never derive a source
+                                  # from a naming convention: a guessed remote is
+                                  # how an agent gets launched into the wrong repo.
     dangerous: bool = False       # opt-in --dangerously-skip-permissions for THIS
                                   # agent. Per-agent, never global — a crew worker
                                   # that must act without permission prompts sets

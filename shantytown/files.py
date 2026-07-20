@@ -29,6 +29,7 @@ class FilesRegistry:
             pane=d.get("pane"),
             model=d.get("model"),
             workspace=d.get("workspace"),
+            workspace_source=d.get("workspace_source"),
             dangerous=d.get("dangerous", False),
         )
 
@@ -56,6 +57,8 @@ class FilesRegistry:
         # them across a role change the same way (write only when carried).
         if agent.workspace is not None:
             existing["workspace"] = agent.workspace
+        if agent.workspace_source is not None:
+            existing["workspace_source"] = agent.workspace_source
         if agent.dangerous:
             existing["dangerous"] = agent.dangerous
         p.write_text(json.dumps(existing, indent=2, sort_keys=True))

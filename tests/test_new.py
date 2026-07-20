@@ -18,11 +18,13 @@ from shantytown.tmux import NullPanes
 READY = "… Welcome to Claude Code …\n? for shortcuts"
 
 
-def _world(tmp_path: Path, *, role="worker", pane="aegis-crew-ellie", settings=True):
+def _world(tmp_path: Path, *, role="worker", pane="aegis-crew-ellie", settings=True,
+           **card_fields):
     """A crew card, and (optionally) the role's settings file — the thing #6
     emits. Present = compose can materialize; absent = compose refuses."""
     crew = tmp_path / "crew"; crew.mkdir()
     card = {"role": role}
+    card.update({k: v for k, v in card_fields.items() if v is not None})
     if pane is not None:
         card["pane"] = pane
     (crew / "ellie.json").write_text(json.dumps(card))
@@ -113,6 +115,48 @@ def test_new_refuses_to_clobber_a_live_session(tmp_path, monkeypatch, capsys):
     assert rc == cli.REFUSED
     assert "already exists" in capsys.readouterr().err
     assert panes.sent == [], "clobber-refuse must launch nothing"
+
+
+# --- the workspace leg (aegis-isbs): ensure the dir, or refuse -------------
+
+def test_new_refuses_when_the_workspace_does_not_exist(tmp_path, monkeypatch, capsys):
+    """The launch string `cd`s into card.workspace. If that directory is missing
+    and the card carries no source to clone it from, REFUSE — before tmux. Before
+    this, compose cd'd into nothing and the break surfaced downstream, as shell
+    noise inside a session that had already been created."""
+    root = _world(tmp_path, workspace=str(tmp_path / "gone"))
+    panes = NullPanes(screen=READY, live=set())
+    monkeypatch.setattr(cli, "Tmux", lambda: panes)
+    rc = cli._cmd_new(_Args(root=root))
+    assert rc == cli.REFUSED
+    assert "does not exist" in capsys.readouterr().err
+    assert not panes.exists("aegis-crew-ellie"), "refuse must create no session"
+    assert panes.sent == [], "refuse must launch nothing"
+
+
+def test_new_clones_an_absent_workspace_then_launches(tmp_path, monkeypatch, capsys):
+    ws = tmp_path / "ws" / "ellie"
+    root = _world(tmp_path, workspace=str(ws), workspace_source="src")
+    panes = NullPanes(screen=READY, live=set())
+    monkeypatch.setattr(cli, "Tmux", lambda: panes)
+    monkeypatch.setattr(cli, "ensure_workspace",
+                        lambda card: (ws.mkdir(parents=True), str(ws))[1])
+    rc = cli._cmd_new(_Args(root=root))
+    assert rc == cli.OK
+    assert ws.is_dir()
+    assert f"cd {ws} &&" in panes.sent[-1][1]
+
+
+def test_new_dry_run_does_not_ensure_the_workspace(tmp_path, monkeypatch, capsys):
+    """Dry-run composes and prints; it must not clone. A dry-run that touches the
+    disk is the thing design.md says must never happen."""
+    root = _world(tmp_path, workspace=str(tmp_path / "gone"), workspace_source="src")
+    monkeypatch.setattr(cli, "Tmux", lambda: NullPanes(live=set()))
+    called = []
+    monkeypatch.setattr(cli, "ensure_workspace", lambda card: called.append(card))
+    rc = cli._cmd_new(_Args(root=root, dry_run=True))
+    assert rc == cli.OK
+    assert called == [], "dry-run cloned"
 
 
 def test_new_dry_run_prints_and_creates_nothing(tmp_path, monkeypatch, capsys):

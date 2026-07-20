@@ -34,6 +34,7 @@ from .quipu import QuipuRegistry
 from .prime import Unreachable, prime as do_prime
 from .runtime import ClaudeRuntime, CapabilityError, SettingsError, settings_for_role
 from .tmux import Tmux
+from .workspace import WorkspaceError, ensure_workspace
 
 # `st new` liveness poll: how long to wait for the runtime to appear in the pane
 # before returning could-not-tell (2). Module constants so tests can shrink them
@@ -264,6 +265,15 @@ def _cmd_new(a) -> int:
     if a.dry_run:
         print(f"  would launch in {session}: {launch}")
         return OK
+    # WORKSPACE (aegis-isbs): the launch string `cd`s into card.workspace, so the
+    # directory has to BE there. Ensure it (clone if absent, leave alone if
+    # present) or REFUSE — before any tmux mutation, so a refusal still creates
+    # nothing. Deliberately AFTER dry-run: dry-run must not clone.
+    try:
+        ensure_workspace(card)
+    except WorkspaceError as e:
+        print(f"  refused: {e}", file=sys.stderr)
+        return REFUSED
     # Clobber guard: never replace a live agent (RAISES if the session exists).
     try:
         panes.new_session(session)
