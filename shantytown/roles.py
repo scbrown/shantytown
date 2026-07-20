@@ -131,14 +131,30 @@ def _live_verdict(a: Agent, agents: list[Agent], live) -> tuple[str, str]:
     fault this leg exists to catch is the one that path cannot see — pane UP,
     wiring WRONG, so nothing rises and nothing drains.
     """
-    directions = live(a.pane) if a.pane else None
-    if directions is None:
+    wiring = live(a.pane) if a.pane else None
+    if wiring is None:
         # Pane down, or nothing readable. Not a pass and not a failure: say so.
         return UNVERIFIED, ""
+    directions = wiring.directions
     need = _needs(a, agents)
     missing = need - directions
     if missing:
-        carries = sorted(directions) if directions else "NO stop hooks at all"
+        # SAY WHAT IT HAS, NOT ONLY WHAT IT LACKS (dearing, aegis-0v97). The
+        # first version of this said "carries NO stop hooks at all", which is
+        # false as English and false in the expensive direction: the 8 agents it
+        # named DO carry hooks — gastown's, including the rm -rf and force-push
+        # tap guards — they simply carry no `stop_event` direction. Read
+        # literally, the old string is aegis-05up ("respawn dropped --settings,
+        # the guards are gone"), a genuine emergency that was NOT happening.
+        # Whoever read it would either scramble for the wrong thing or start
+        # disbelieving 05up for when it does fire. Naming the settings path also
+        # makes the foreign launcher self-evident.
+        carries = (f"stop directions {sorted(directions)}" if directions
+                   else "no `stop_event` hook")
+        whence = (f", its --settings is {wiring.settings_path}"
+                  if wiring.settings_path
+                  else ", and its launch line carries NO --settings at all "
+                       "(this one IS the hookless-zombie case, cf. aegis-05up)")
         # Name EVERY consequence, not the first one. A lead missing both legs
         # strands its reports as well as itself, and reporting only "its own
         # stop dies here" would understate it by seven agents.
@@ -151,8 +167,8 @@ def _live_verdict(a: Agent, agents: list[Agent], live) -> tuple[str, str]:
                            "nothing reads")
         why = " AND ".join(because)
         return BROKEN, ("LIVE PROCESS DOES NOT MATCH THE GRAPH: the process in "
-                        f"pane {a.pane!r} carries {carries}, but this agent "
-                        f"needs {sorted(need)} — so {why}")
+                        f"pane {a.pane!r} carries {carries}{whence}, but this "
+                        f"agent needs {sorted(need)} — so {why}")
     return OK, ""
 
 

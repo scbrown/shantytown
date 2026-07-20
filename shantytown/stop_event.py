@@ -50,7 +50,7 @@ from pathlib import Path
 from . import triage
 from .events import FilesEvents, StopEvent
 from .files import FilesRegistry, FilesTracker, plate as files_plate
-from .runtime import ClaudeRuntime
+from .runtime import ClaudeRuntime, live_wiring
 from .tier import route_stop
 from .triage import running_shells
 from .tmux import Tmux
@@ -65,15 +65,41 @@ def _root(argv: list[str]) -> Path:
 
 
 def _lead_is_up(reg: FilesRegistry, panes) -> "callable":
-    """route_stop asks 'is this lead reachable?' — answer from the pane, so a
-    down lead makes the event RISE to the admin (Q3) rather than sit for a reader
-    that will never come."""
+    """route_stop asks 'is this lead reachable?' — and REACHABLE MEANS IT WILL
+    DRAIN, not that something answers to its name (dearing, aegis-0v97).
+
+    This used to be `pane exists`, and that is the same defect one layer over
+    from the checker's: a pane is a name, and a name is not a capability. It was
+    measured — dearing's pane was resurrected by a foreign launcher (gt-crew-up)
+    with settings carrying no `stop_event` hook, so:
+
+        lead_is_up(dearing) -> True     (the pane is right there)
+        7 workers  -> to=dearing, rose=False, no rise to the administrator
+        dearing    -> cannot drain. Every one of those events was write-only.
+
+    Being restarted made routing WORSE, because it made the lead look AVAILABLE.
+    A down lead at least rises (Q3); a live-but-deaf lead swallows silently, and
+    that is the failure mode this whole file exists to prevent.
+
+    So `up` now means: the pane exists AND the process in it actually carries the
+    `drain` direction. A lead that cannot drain is treated exactly like a lead
+    that is down — the event RISES to the administrator, loudly, with a reason.
+    That is strictly safer: the worst case is an event rising to the admin that a
+    lead could have taken, which is noisy. The old worst case was silence.
+
+    CANNOT-TELL FAILS TOWARD RISING on purpose. If we cannot read the process we
+    do not know it will drain, and "assume it drains" is the assumption that lost
+    the events.
+    """
     def up(name: str) -> bool:
         try:
             lead = reg.get(name)
         except LookupError:
             return False
-        return bool(lead.pane) and panes.exists(lead.pane)
+        if not lead.pane or not panes.exists(lead.pane):
+            return False
+        wiring = live_wiring(lead.pane, panes.cmdline)
+        return wiring is not None and "drain" in wiring.directions
     return up
 
 

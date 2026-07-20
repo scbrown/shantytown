@@ -30,8 +30,9 @@ from pathlib import Path
 
 from shantytown import roles
 from shantytown.files import FilesRegistry
-from shantytown.runtime import (live_stop_directions, settings_path_in_cmdline,
-                                stop_directions_in, settings_for_role)
+from shantytown.runtime import (LiveWiring, live_stop_directions, live_wiring,
+                                settings_path_in_cmdline, stop_directions_in,
+                                settings_for_role)
 
 
 def _card(d: Path, name: str, **fields) -> None:
@@ -57,8 +58,12 @@ def _tier(tmp: Path):
 
 
 def _live_from(mapping):
-    """A live reader driven by a pane -> directions map. None = cannot tell."""
-    return lambda pane: mapping.get(pane)
+    """A live reader driven by a pane -> directions map. Absent = cannot tell."""
+    def read(pane):
+        if pane not in mapping:
+            return None
+        return LiveWiring(directions=mapping[pane], settings_path="/fake/s.json")
+    return read
 
 
 # --- the parse helpers, which both readers share -------------------------
@@ -128,6 +133,38 @@ def test_the_note_names_every_consequence_not_just_the_first(tmp_path):
     assert "2 report(s)" in note
 
 
+def test_the_note_says_what_it_HAS_not_only_what_it_lacks(tmp_path):
+    """dearing's correction, and it is load-bearing. The first version said
+    "carries NO stop hooks at all". That is false as English and false in the
+    EXPENSIVE direction: the 8 real agents it named do carry hooks — gastown's,
+    including the rm -rf and force-push tap guards — they simply carry no
+    `stop_event` direction. Read literally the old string IS aegis-05up
+    ("respawn dropped --settings, the guards are gone"), a genuine emergency
+    that was not happening. A reader would scramble for the wrong thing, or
+    start disbelieving 05up for when it really fires."""
+    reg = _tier(tmp_path)
+    live = lambda p: LiveWiring(directions=set(),
+                                settings_path="/gt/crew/.claude/settings.json")
+    note = next(r for r in roles.check(reg, live=live).rows
+                if r.agent == "lead").note
+    assert "no `stop_event` hook" in note
+    assert "NO stop hooks at all" not in note
+    # Naming the path is what makes the FOREIGN LAUNCHER self-evident.
+    assert "/gt/crew/.claude/settings.json" in note
+
+
+def test_a_process_with_no_settings_at_all_is_still_called_out_as_05up(tmp_path):
+    """The genuinely hookless case must stay distinguishable from the
+    wrong-hooks case — that is the whole point of the wording fix. It is not
+    softened away, it is NAMED."""
+    reg = _tier(tmp_path)
+    live = lambda p: LiveWiring(directions=set(), settings_path=None)
+    note = next(r for r in roles.check(reg, live=live).rows
+                if r.agent == "lead").note
+    assert "NO --settings at all" in note
+    assert "aegis-05up" in note
+
+
 def test_a_healthy_tier_passes_all_three_legs(tmp_path):
     reg = _tier(tmp_path)
     live = _live_from({
@@ -181,7 +218,8 @@ def test_positive_control_defeating_the_leg_makes_the_defect_pass(tmp_path):
     exactly this change. The broken lead must then read as healthy, proving
     these tests detect leg three and not something incidental."""
     reg = _tier(tmp_path)
-    defeated = lambda _pane: {"send", "drain"}   # what the artifact would claim
+    defeated = lambda _pane: LiveWiring(directions={"send", "drain"},
+                                        settings_path="/fake/s.json")
     rep = roles.check(reg, live=defeated)
     assert rep.verdict == roles.OK
     assert next(r for r in rep.rows if r.agent == "lead").verdict == roles.OK

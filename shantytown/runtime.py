@@ -307,7 +307,28 @@ def settings_path_in_cmdline(cmdline: str) -> str | None:
     return None
 
 
+@dataclass(frozen=True)
+class LiveWiring:
+    """What a RUNNING process actually carries, and where it came from.
+
+    settings_path is part of the finding, not decoration (dearing, aegis-0v97):
+    a report that names only what is MISSING reads as "this agent has no hooks",
+    and the reader reasonably concludes aegis-05up — respawn dropped --settings,
+    the rm -rf and force-push guards are gone. That is a real emergency and it
+    was NOT what we measured. Naming the path says what the agent DOES have and
+    makes the foreign launcher self-evident in the output.
+    """
+    directions: set[str]
+    settings_path: str | None   # None = no --settings on the launch line at all
+
+
 def live_stop_directions(pane: str, cmdline_reader) -> set[str] | None:
+    """Back-compat shim: just the directions. Prefer live_wiring()."""
+    w = live_wiring(pane, cmdline_reader)
+    return None if w is None else w.directions
+
+
+def live_wiring(pane: str, cmdline_reader) -> LiveWiring | None:
     """What stop directions is the process ACTUALLY RUNNING in `pane` carrying?
 
     THE GAP THIS CLOSES (aegis-0v97). emitted_stop_directions answers "does the
@@ -340,8 +361,11 @@ def live_stop_directions(pane: str, cmdline_reader) -> set[str] | None:
         # repo refuses to compose. It is not "cannot tell" that it lacks hooks
         # — there is no settings file, so it carries no stop directions. That
         # is an EMPTY SET (a measurement), not None (a failure to measure).
-        return set()
-    return stop_directions_in(p)
+        return LiveWiring(directions=set(), settings_path=None)
+    d = stop_directions_in(p)
+    if d is None:
+        return None
+    return LiveWiring(directions=d, settings_path=p)
 
 
 class ClaudeRuntime:

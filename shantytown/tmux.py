@@ -246,9 +246,15 @@ class NullPanes:
     _exists = True
 
     def __init__(self, screen: str = "", drops: bool = False,
-                 live: set | None = None, owned: set | None = None) -> None:
+                 live: set | None = None, owned: set | None = None,
+                 cmdlines: dict | None = None) -> None:
         self.sent = []
         self.screen = screen
+        # pane -> launch command line. Lets a test model the aegis-0v97 shape:
+        # a pane that EXISTS while the process in it carries someone else's
+        # wiring. Default None = "cannot read", which fails toward RISING — the
+        # safe direction, and the one a null adapter must take.
+        self._cmdlines = dict(cmdlines) if cmdlines is not None else None
         # Ownership provenance (aegis-ac5g). new_session marks a session owned;
         # `owned=` seeds sessions as if st had launched them (for the owned-kill
         # path). A session that is `live` but NOT `owned` models the footgun: a
@@ -275,6 +281,15 @@ class NullPanes:
         # placeholder, with none to model a stripped capture (which triage must
         # answer UNKNOWN for, not idle).
         return self.screen
+
+    def cmdline(self, pane: str) -> str | None:
+        # None when unseeded: "could not read", never a fabricated launch line.
+        # A double that invented a plausible cmdline would let a test prove a
+        # lead drains when nothing was measured — the exact lie this whole leg
+        # exists to stop.
+        if self._cmdlines is None:
+            return None
+        return self._cmdlines.get(pane)
 
     def send(self, pane: str, text: str) -> None:
         self.sent.append((pane, text))

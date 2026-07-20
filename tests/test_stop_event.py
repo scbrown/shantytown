@@ -3,12 +3,15 @@ shantytown #6 (aegis-ct5q, arnold's ruling). The two tests arnold insisted on:
 survival-vs-delivery are separate, and BLOCK-ONCE (deliver once, then idle).
 """
 from __future__ import annotations
+import pathlib
+import tempfile
 import json
 from pathlib import Path
 
 import pytest
 
 from shantytown import stop_event
+from shantytown.runtime import settings_for_role
 from shantytown.events import FilesEvents
 from shantytown.files import FilesRegistry
 
@@ -24,12 +27,41 @@ def _reg(tmp_path: Path) -> FilesRegistry:
     return FilesRegistry(crew)
 
 
+# A drain-capable launch line. `up` alone is no longer enough to be routed to:
+# _lead_is_up now means "will it DRAIN", not "does a pane answer to that name"
+# (aegis-0v97). Panes listed in `up` are modelled as st-launched unless the test
+# overrides cmdlines to model a FOREIGN launcher.
+# REAL files, not string literals: live_wiring PARSES the settings the launch line
+# names, so a fake path reads as "cannot tell" and (correctly) rises. Modelling
+# drain-capability therefore needs a settings file that genuinely carries drain.
+_FAKE = pathlib.Path(tempfile.mkdtemp(prefix="st-stopev-"))
+(_FAKE / "settings").mkdir()
+(_FAKE / "settings" / "lead.settings.json").write_text(
+    json.dumps(settings_for_role("lead", root=_FAKE)))
+# A FOREIGN launcher's settings: real, readable, valid — and carrying no
+# stop_event hook. This is the gastown shape that made dearing look available.
+_FOREIGN = _FAKE / "foreign.settings.json"
+_FOREIGN.write_text(json.dumps({"hooks": {"Stop": [
+    {"hooks": [{"command": "/home/braino/.local/bin/gt costs record &"}]}]}}))
+
+DRAIN_CMDLINE = f"claude --settings {_FAKE / 'settings' / 'lead.settings.json'}"
+FOREIGN_CMDLINE = f"claude --settings {_FOREIGN}"
+
+
 class _Panes:
-    def __init__(self, up, screens=None):
+    def __init__(self, up, screens=None, cmdlines=None):
         self._up = set(up)
         self._screens = dict(screens or {})
+        # Default: every live pane is drain-capable, which preserves the intent
+        # of every test written before the rule changed. A test that wants the
+        # live-but-deaf lead passes cmdlines explicitly.
+        self._cmdlines = dict(cmdlines) if cmdlines is not None else None
     def exists(self, pane): return pane in self._up
     def capture(self, pane, history=0): return self._screens.get(pane, "")
+    def cmdline(self, pane):
+        if self._cmdlines is not None:
+            return self._cmdlines.get(pane)
+        return DRAIN_CMDLINE if pane in self._up else None
 
 
 # The two screens the drain-time verdict has to tell apart. Both are real shapes:
@@ -271,3 +303,51 @@ def test_main_send_end_to_end(tmp_path, monkeypatch):
     assert rc == 0
     got = FilesEvents(tmp_path / "events").drain("maldoon")
     assert [e.frm for e in got] == ["ellie"]
+
+
+def test_send_RISES_when_the_lead_is_UP_but_CANNOT_DRAIN(tmp_path):
+    """THE aegis-0v97 CASE, and the reason `up` stopped meaning "pane exists".
+
+    dearing's pane was resurrected by a FOREIGN launcher (gt-crew-up) carrying
+    gastown's settings — real hooks, but no `stop_event` direction. Under the old
+    predicate lead_is_up(dearing) was True, so seven workers routed TO it with
+    rose=False and nothing rose to the administrator. The lead could not drain,
+    so every one of those events was write-only.
+
+    Being restarted made routing WORSE than being down: a down lead at least
+    rises. This asserts the live-but-deaf lead now rises too.
+    """
+    reg = _reg(tmp_path)
+    ev = FilesEvents(tmp_path / "events")
+    panes = _Panes({"p-maldoon"}, cmdlines={"p-maldoon": FOREIGN_CMDLINE})
+    rc = stop_event._send(reg, ev, panes, "ellie")
+    assert rc == 0
+    assert ev.drain("maldoon") == []              # NOT delivered to the deaf lead
+    risen = ev.drain("goldblum")                  # rose to the administrator
+    assert len(risen) == 1
+    assert risen[0].rose is True
+    assert risen[0].reason == "lead-unreachable"
+
+
+def test_positive_control_a_drain_capable_lead_still_receives(tmp_path):
+    """The other outcome, on the SAME machinery. Without this, the test above
+    would also pass if `up` had simply been hardwired to False — which would
+    rise everything to the admin forever and look like a fix."""
+    reg = _reg(tmp_path)
+    ev = FilesEvents(tmp_path / "events")
+    panes = _Panes({"p-maldoon"}, cmdlines={"p-maldoon": DRAIN_CMDLINE})
+    stop_event._send(reg, ev, panes, "ellie")
+    got = ev.drain("maldoon")
+    assert [(e.frm, e.rose) for e in got] == [("ellie", False)]
+    assert ev.drain("goldblum") == []
+
+
+def test_unreadable_process_fails_toward_RISING(tmp_path):
+    """Cannot-tell must not be read as drain-capable. "Assume it drains" is the
+    assumption that lost the events in the first place."""
+    reg = _reg(tmp_path)
+    ev = FilesEvents(tmp_path / "events")
+    panes = _Panes({"p-maldoon"}, cmdlines={})     # pane up, cmdline unreadable
+    stop_event._send(reg, ev, panes, "ellie")
+    assert ev.drain("maldoon") == []
+    assert len(ev.drain("goldblum")) == 1

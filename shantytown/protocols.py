@@ -122,6 +122,15 @@ class Panes(Protocol):
     # that bit. An adapter that cannot supply attributes returns plain text and
     # triage answers UNKNOWN — which is a refusal, not a guess.
     def capture(self, pane: str, history: int = 0, attrs: bool = False) -> str: ...
+    # The launch command line of the process in the pane, or None if it cannot be
+    # read. A READ of the session surface, exactly like exists/capture — it adds
+    # no launch or handoff verb, so the #5 invariant (Panes cannot express a
+    # handoff) is untouched. Required because "is this lead up" must mean "will
+    # it drain", not "does something answer to its name": a pane resurrected by a
+    # FOREIGN launcher carries that launcher's wiring, and routing to it on the
+    # strength of the name alone loses every event (aegis-0v97). An adapter that
+    # cannot read it returns None, and the caller fails toward RISING.
+    def cmdline(self, pane: str) -> str | None: ...
                                                # it to decide, #2 verify reads it
                                                # to confirm a send landed. Both
                                                # Tmux and NullPanes implement it;
