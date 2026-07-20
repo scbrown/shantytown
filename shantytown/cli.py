@@ -181,7 +181,11 @@ def build_parser() -> argparse.ArgumentParser:
     dr.add_argument("--no-latest", action="store_true",
                     help="skip the release check (offline/fast) — detect local state only")
 
-    sub.add_parser("project", help="materialize the crew cards FROM the graph (gz57)")
+    pj = sub.add_parser("project", help="materialize the crew cards FROM the graph (gz57)")
+    pj.add_argument("-n", "--dry-run", action="store_true",
+                    help="show the diff, write nothing")
+    pj.add_argument("--force", action="store_true",
+                    help="project even if it restructures LIVE agents (aegis-0v97)")
 
     return ap
 
@@ -927,13 +931,110 @@ def _cmd_project(a) -> int:
     Refuses (2) if the graph is unreachable — a projection you could not source
     is not an empty projection. It projects the graph AS-IS, orphans included, so
     `roles --check` still surfaces them rather than project hiding a bad graph.
+
+    IT ALSO SHOWS ITS WORK AND REFUSES TO RESTRUCTURE A LIVE CREW SILENTLY
+    (aegis-0v97). "Hand-edits are overwritten, which is the point" is true of a
+    clean graph. It is catastrophic against a dirty one, and ours is dirty:
+    measured 2026-07-20, the graph declares `luvu` (a HOST — dolt/garage backups
+    live on it) and `mayor` (which this fleet has stated does not exist and never
+    will) as crew workers, plus two agents with no card and no session. Projecting
+    that would have demoted the live administrator to an orphan worker, cut nine
+    running agents loose, and materialized cards for a host and a ghost — with no
+    preview and no confirmation, because this function used to be a bare
+    `for ag in agents: files.set(ag)`.
+
+    So: always print the diff; write nothing on --dry-run; and REFUSE (1) when the
+    projection would change the role or supervisor of an agent that is LIVE RIGHT
+    NOW, unless --force. Being the declared authority is not the same as being
+    right, and a projection that cannot be previewed is a footgun regardless of
+    which side of the divergence is correct.
     """
     try:
         agents = QuipuRegistry().all()
     except Exception as e:
         print(f"  could not project: quipu unreachable: {e}", file=sys.stderr)
         return CANNOT_TELL
+
     files = FilesRegistry(a.root / "crew")
+    panes = Tmux()
+    dry = getattr(a, "dry_run", False)
+    force = getattr(a, "force", False)
+
+    def live(name: str) -> bool:
+        """Is this agent RUNNING? Liveness comes from the card's pane, because the
+        graph has no idea what is running — which is the whole reason it must not
+        be allowed to restructure the crew unsupervised."""
+        try:
+            card = files.get(name)
+        except LookupError:
+            return False
+        return bool(card.pane) and panes.exists(card.pane)
+
+    changes, harm = [], []
+    for ag in sorted(agents, key=lambda x: x.name):
+        try:
+            cur = files.get(ag.name)
+            before = (cur.role, cur.reports_to)
+        except LookupError:
+            cur, before = None, None
+        after = (ag.role, ag.reports_to)
+        if before == after:
+            continue
+        is_live = live(ag.name)
+        changes.append((ag.name, before, after, is_live, cur is None))
+        if is_live:
+            harm.append(ag.name)
+
+    # The subtle one, and the reason a per-agent diff is not enough: an agent that
+    # is NOT in the graph is left untouched, so it keeps pointing at a supervisor
+    # this projection may just have demoted. Nobody's own row shows that.
+    demoted = {n for n, b, af, _l, _new in changes
+               if b and b[0] in ("administrator", "lead") and af[0] not in ("administrator", "lead")}
+    dangling = []
+    if demoted:
+        graph_names = {ag.name for ag in agents}
+        for p in sorted((a.root / "crew").glob("*.json")):
+            nm = p.stem
+            if nm in graph_names:
+                continue
+            try:
+                card = files.get(nm)
+            except LookupError:
+                continue
+            if card.reports_to in demoted:
+                dangling.append((nm, card.reports_to, live(nm)))
+
+    if not changes:
+        print(f"\n  already projected: {len(agents)} cards match the graph. Nothing to do.\n")
+        return OK
+
+    print(f"\n  {len(changes)} card(s) would change:\n")
+    for name, before, after, is_live, is_new in changes:
+        mark = "LIVE " if is_live else "     "
+        if is_new:
+            print(f"  {mark}+ {name:<10} NEW CARD -> {after[0]}, reports_to {after[1] or '—'}")
+        else:
+            print(f"  {mark}~ {name:<10} {before[0]} -> {after[0]}, "
+                  f"reports_to {before[1] or '—'} -> {after[1] or '—'}")
+    if dangling:
+        print(f"\n  and {len(dangling)} card(s) NOT in the graph would be left pointing at a "
+              f"demoted supervisor:")
+        for nm, sup, is_live in dangling:
+            print(f"  {'LIVE ' if is_live else '     '}! {nm:<10} still reports_to {sup}")
+
+    if dry:
+        print("\n  --dry-run: nothing written.\n")
+        return OK
+
+    if harm and not force:
+        print(f"\n  REFUSED: {len(harm)} LIVE agent(s) would be restructured: "
+              f"{', '.join(sorted(harm))}.", file=sys.stderr)
+        print("  They are running right now. Projecting would change their role or "
+              "supervisor underneath them.", file=sys.stderr)
+        print("  Reconcile the graph first, or re-run with --force if you mean it.\n",
+              file=sys.stderr)
+        return REFUSED
+
     for ag in sorted(agents, key=lambda x: x.name):
         files.set(ag)
     print(f"\n  projected {len(agents)} cards from the graph -> {a.root / 'crew'}\n")
