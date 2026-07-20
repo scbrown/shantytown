@@ -28,7 +28,7 @@ from pathlib import Path
 from . import beads as beads_mod
 from . import roles as roles_mod
 from . import triage as triage_mod
-from .dispatch import Dispatcher, TriageRefused, SendUnverified
+from .dispatch import Dispatcher, TriageRefused, SendUnverified, AlreadyAssigned
 from .triage import Action
 from .files import FilesRegistry, FilesTracker, plate as files_plate
 from .launched import FilesLaunches, CURRENT, STALE, UNKNOWN
@@ -122,6 +122,10 @@ def build_parser() -> argparse.ArgumentParser:
                            "shell expansion in a --note string is the aegis-0214 "
                            "footgun.")
     go.add_argument("-n", "--dry-run", action="store_true")
+    go.add_argument("--reassign", action="store_true",
+                    help="take an item another agent already holds. Without this, "
+                         "dispatching an assigned item REFUSES rather than silently "
+                         "stealing it (aegis-uvw5)")
 
     sub.add_parser("crew", help="who exists, what state, what role")
 
@@ -696,7 +700,10 @@ def _cmd_go(a) -> int:
     if a.dry_run:
         try:
             decision = d.triage(a.item, a.agent, note)
-            p = d.go(a.item, a.agent, dry_run=True, note=note)
+            p = d.go(a.item, a.agent, dry_run=True, note=note, reassign=a.reassign)
+        except AlreadyAssigned as e:
+            print(f"  refused: {e}", file=sys.stderr)
+            return REFUSED
         except LookupError as e:
             print(f"  refused: {e}", file=sys.stderr)
             return REFUSED
@@ -704,7 +711,12 @@ def _cmd_go(a) -> int:
         print("  0 writes. 1 tracker call, 1 send-keys.")
         return OK
     try:
-        p = d.go(a.item, a.agent, note=note)
+        p = d.go(a.item, a.agent, note=note, reassign=a.reassign)
+    except AlreadyAssigned as e:
+        # Refuse rather than steal. Nothing written, nothing sent — two agents on
+        # one item is duplicated effort no tool ever flags (aegis-uvw5 / 7yeb).
+        print(f"  refused: {e}", file=sys.stderr)
+        return REFUSED
     except TriageRefused as e:
         # #1: pane not ready (in-flight/wedged/high-context). No write, no send.
         print(f"  refused: pane not ready — {e.decision.render()}", file=sys.stderr)

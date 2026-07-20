@@ -74,6 +74,24 @@ class SendUnverified(Exception):
         super().__init__(f"sent {item_id} to {pane} but could not confirm it landed")
 
 
+class AlreadyAssigned(Exception):
+    """The item is already held by a DIFFERENT agent. Refuse rather than steal.
+
+    Maps to exit 1 (precondition failure) like every other plan() refusal: nothing
+    is written and nothing is sent. Carries both names so the operator can see who
+    holds it and decide — reassignment is a real operation, it just has to be
+    deliberate (`--reassign`) rather than a silent side effect of dispatching.
+    """
+
+    def __init__(self, item_id: str, holder: str, requested: str):
+        self.item_id, self.holder, self.requested = item_id, holder, requested
+        super().__init__(
+            f"{item_id} is already assigned to {holder}; refusing to reassign it to "
+            f"{requested}. Re-dispatch to {holder} to re-nudge, or pass --reassign "
+            f"to take it deliberately."
+        )
+
+
 @dataclass
 class Plan:
     """What a dispatch WOULD do. --dry-run returns this and stops."""
@@ -106,7 +124,8 @@ class Dispatcher:
         self.tracker = tracker
         self.panes = panes
 
-    def plan(self, item_id: str, agent_name: str, note: str | None = None) -> Plan:
+    def plan(self, item_id: str, agent_name: str, note: str | None = None,
+             reassign: bool = False) -> Plan:
         """Resolve only. No writes. This is what --dry-run shows.
 
         Every refusal here is a precondition failure -> exit 1, and it happens
@@ -124,6 +143,18 @@ class Dispatcher:
         if not self.panes.exists(agent.pane):
             raise LookupError(f"pane {agent.pane} for {agent_name} does not exist")
         item = self.tracker.get(item_id)               # 1 tracker read
+        # Do not STEAL work someone is already doing (aegis-uvw5, the 7yeb shape).
+        # plan() used to read the item and overwrite status/assignee unconditionally,
+        # so dispatching an item another agent held silently reassigned it and two
+        # agents worked it in parallel. Measured 2026-07-19: two agents investigated
+        # uvw5 five minutes apart, ran the same commands, and reached the same wall —
+        # duplicated effort that no tool ever flagged.
+        # Re-dispatching to the SAME holder stays allowed: that is a re-nudge, not a
+        # steal, and it is how you recover a dropped send.
+        # Checked BEFORE composing the payload: a refusal should do no work at all.
+        holder = (item.assignee or "").strip()
+        if not reassign and holder and holder != agent_name and item.status != "closed":
+            raise AlreadyAssigned(item_id, holder, agent_name)
         text = f"Work is on your hook: {item_id} — {item.title}"
         flat = flatten_note(note) if note else ""
         if flat:
@@ -153,8 +184,8 @@ class Dispatcher:
         return triage(self.panes, p.pane, p.text)
 
     def go(self, item_id: str, agent_name: str, dry_run: bool = False,
-           note: str | None = None) -> Plan:
-        p = self.plan(item_id, agent_name, note)
+           note: str | None = None, reassign: bool = False) -> Plan:
+        p = self.plan(item_id, agent_name, note, reassign=reassign)
         if dry_run:
             return p
         # #1: consult triage BEFORE any write. A REFUSE/CLEAR/RESTART here means

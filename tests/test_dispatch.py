@@ -164,3 +164,62 @@ def test_exists_matches_session_names_not_only_pane_ids():
         assert t.exists("aegis-crew-nobody") is False
     finally:
         subprocess.run = orig
+
+
+# --- do not STEAL work another agent already holds (aegis-uvw5 / the 7yeb shape) ---
+
+def test_dispatching_an_item_another_agent_HOLDS_is_refused(world):
+    """plan() used to read the item and overwrite status/assignee unconditionally,
+    so dispatching an item someone else held silently reassigned it and two agents
+    worked it in parallel. Measured 2026-07-19: two agents investigated aegis-uvw5
+    five minutes apart, ran the same commands, hit the same wall — duplicated
+    effort no tool ever flagged. The refusal must write NOTHING and send NOTHING."""
+    from shantytown.dispatch import AlreadyAssigned
+    d, tracker, panes = world
+    tracker.update("item-1", assignee="kelly", status="in_progress")
+    tracker.updates = 0
+
+    with pytest.raises(AlreadyAssigned) as ei:
+        d.go("item-1", "ellie")
+
+    assert ei.value.holder == "kelly" and ei.value.requested == "ellie"
+    assert tracker.updates == 0, "refusal still wrote to the tracker"
+    assert panes.sent == [], "refusal still sent keys"
+    assert tracker.get("item-1").assignee == "kelly", "the holder was overwritten"
+
+
+def test_re_dispatching_to_the_SAME_holder_is_allowed(world):
+    """A re-nudge is not a steal. This is how you recover a dropped send, so it
+    must not be collateral damage of the anti-steal guard (the positive control)."""
+    d, tracker, panes = world
+    tracker.update("item-1", assignee="ellie", status="in_progress")
+    tracker.updates = 0
+
+    d.go("item-1", "ellie")
+
+    assert panes.sent, "re-nudging the current holder was blocked"
+
+
+def test_reassign_flag_takes_it_deliberately(world):
+    """Reassignment is a real operation — it just has to be deliberate rather than
+    a silent side effect of dispatching."""
+    d, tracker, panes = world
+    tracker.update("item-1", assignee="kelly", status="in_progress")
+    tracker.updates = 0
+
+    d.go("item-1", "ellie", reassign=True)
+
+    assert panes.sent, "--reassign did not take the item"
+    assert tracker.get("item-1").assignee == "ellie"
+
+
+def test_a_CLOSED_item_is_not_protected(world):
+    """The guard defends work IN FLIGHT. A closed item's stale assignee must not
+    become a permanent lock on re-dispatching it."""
+    d, tracker, panes = world
+    tracker.update("item-1", assignee="kelly", status="closed")
+    tracker.updates = 0
+
+    d.go("item-1", "ellie")
+
+    assert panes.sent, "a closed item's stale assignee blocked dispatch"
