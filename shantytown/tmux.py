@@ -62,9 +62,13 @@ class Tmux:
             return False
         return any(pane in line.split() for line in r.stdout.splitlines())
 
-    def capture(self, pane: str) -> str:
-        r = subprocess.run(self._cmd("capture-pane", "-t", pane, "-p"),
-                           capture_output=True, text=True)
+    def capture(self, pane: str, history: int = 0) -> str:
+        # -S -N extends the capture back N lines into scrollback. Default 0 keeps
+        # the VISIBLE-only behaviour triage depends on (see the Panes protocol).
+        args = ["capture-pane", "-t", pane, "-p"]
+        if history > 0:
+            args += ["-S", f"-{int(history)}"]
+        r = subprocess.run(self._cmd(*args), capture_output=True, text=True)
         return r.stdout if r.returncode == 0 else ""
 
     def send(self, pane: str, text: str) -> None:
@@ -198,7 +202,8 @@ class NullPanes:
             return pane in self._live
         return self._exists
 
-    def capture(self, pane: str) -> str:
+    def capture(self, pane: str, history: int = 0) -> str:
+        # The double has no scrollback/visible split — one screen answers both.
         return self.screen
 
     def send(self, pane: str, text: str) -> None:

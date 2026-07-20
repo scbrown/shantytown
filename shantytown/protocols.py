@@ -96,7 +96,12 @@ class Tracker(Protocol):
 class Panes(Protocol):
     def send(self, pane: str, text: str) -> None: ...
     def exists(self, pane: str) -> bool: ...
-    def capture(self, pane: str) -> str: ...   # read the pane back — triage reads
+    # history=0 (default) returns the VISIBLE pane — what triage must judge on,
+    # since a marker in scrollback is an agent TALKING about a state, not being
+    # in it. history=N also returns the last N lines of scrollback, which is what
+    # VERIFY needs: a fast agent scrolls the echoed dispatch off-screen before we
+    # can look, so a visible-only check can never confirm a delivery that worked.
+    def capture(self, pane: str, history: int = 0) -> str: ...
                                                # it to decide, #2 verify reads it
                                                # to confirm a send landed. Both
                                                # Tmux and NullPanes implement it;

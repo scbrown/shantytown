@@ -82,6 +82,44 @@ def test_verify_reads_the_pane_back(world):
     assert d2.verify("%5", "aegis-x") is True
 
 
+class _ScrollbackPanes(NullPanes):
+    """A pane whose ECHO has already scrolled off-screen — what a real Claude
+    Code agent looks like milliseconds after it accepts a dispatch."""
+
+    def __init__(self, visible: str, history: str):
+        super().__init__(screen=visible)
+        self._visible, self._history = visible, history
+        self.history_asked = []
+
+    def capture(self, pane: str, history: int = 0) -> str:
+        self.history_asked.append(history)
+        return self._history if history > 0 else self._visible
+
+
+def test_verify_finds_an_id_that_only_survives_in_scrollback(world):
+    """THE live bug: a visible-only check could never confirm a real delivery.
+
+    harding (first live dispatches) received aegis-j0nq and worked it, yet st go
+    reported could-not-tell every time and never wrote the tracker — the agent's
+    own output had pushed the echoed id off the visible pane before verify looked.
+    verify must read scrollback, or it is a check incapable of succeeding.
+    """
+    crew, trk = world
+    panes = _ScrollbackPanes(visible="● Bash(grep -rn ...)\n❯ ",
+                             history="Work is on your hook: aegis-j0nq — fix it\n● Bash(...)")
+    d = Dispatcher(FilesRegistry(crew), trk, panes)
+    assert d.verify("%5", "aegis-j0nq") is True, "verify missed an id present in scrollback"
+    assert any(h > 0 for h in panes.history_asked), "verify never asked for scrollback"
+
+
+def test_verify_still_fails_when_the_id_is_nowhere(world):
+    """The positive control: scrollback must not turn verify into a rubber stamp."""
+    crew, trk = world
+    panes = _ScrollbackPanes(visible="❯ ", history="nothing relevant here")
+    d = Dispatcher(FilesRegistry(crew), trk, panes)
+    assert d.verify("%5", "aegis-j0nq") is False
+
+
 def test_update_happens_AFTER_send_not_before(world):
     """The reorder is the point. If update preceded send, a dropped send would
     leave a stale in_progress. Prove update is last: on a dropped send, zero

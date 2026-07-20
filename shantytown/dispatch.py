@@ -9,10 +9,22 @@ This module does: one registry read, one tracker read, one tracker write,
 one send. That is the budget, and it is asserted in the tests.
 """
 from __future__ import annotations
+import time
 from dataclasses import dataclass, field
 
 from .protocols import Panes, Registry, Tracker
 from .triage import Action, Decision, triage
+
+# Verify reads SCROLLBACK and polls briefly. Measured against a real Claude Code
+# agent (harding, first live dispatches): a visible-pane one-shot check NEVER
+# confirmed a delivery that plainly worked — the agent consumes the input line on
+# submit and its own output scrolls the echoed id off the visible 24 lines before
+# we look. So `st go` always reported could-not-tell and NEVER recorded the
+# tracker update. The failure direction was safe, but the check was structurally
+# incapable of SUCCEEDING against the runtime we actually use.
+_VERIFY_HISTORY = 200
+_VERIFY_ATTEMPTS = 5
+_VERIFY_DELAY = 0.3
 
 
 class TriageRefused(Exception):
@@ -126,10 +138,21 @@ class Dispatcher:
         """Did the send land? Read the pane back and look for the item id.
 
         design.md: "verify reads the pane back. Send-and-assume is how you
-        believe work was assigned when it wasn't." The item id is in the text we
-        sent, so after a real send-keys it is on the pane's input line. A false
-        negative (the agent cleared it before we looked) is SAFE by construction:
-        it maps to exit 2 and leaves the tracker untouched, so a human
-        re-dispatches rather than the tracker lying — never the other direction.
+        believe work was assigned when it wasn't." A false negative (the agent
+        cleared it before we looked) is SAFE by construction: it maps to exit 2
+        and leaves the tracker untouched, so a human re-dispatches rather than
+        the tracker lying — never the other direction.
+
+        But safe-by-construction is not an excuse for a check that can only ever
+        fail. Reading the VISIBLE pane once never confirmed a real delivery to a
+        Claude Code agent (see the constants above), so this reads SCROLLBACK and
+        polls: the echoed id survives in history even after the agent's own
+        output pushes it off-screen. Still one-directional — we only ever return
+        True on positive evidence that the id reached the pane.
         """
-        return item_id in self.panes.capture(pane)
+        for attempt in range(_VERIFY_ATTEMPTS):
+            if item_id in self.panes.capture(pane, history=_VERIFY_HISTORY):
+                return True
+            if attempt + 1 < _VERIFY_ATTEMPTS:
+                time.sleep(_VERIFY_DELAY)
+        return False
