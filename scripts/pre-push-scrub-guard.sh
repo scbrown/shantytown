@@ -19,15 +19,34 @@ INTERNAL_HOST_RE='git\.lan'
 # Names that must not newly reach a public remote. Hostnames and infra
 # identifiers, not English words — a term that shows up in ordinary prose would
 # make this cry wolf.
-PATTERNS='dolt\.lan|quipu\.svc|bobbin-mcp\.svc|homelab-mcp\.svc|forgejo-mcp\.svc|agent-mcp\.svc|\bkota\b|\bluvu\b|\bvati\b|\bgoldblum\.lan\b|monitoring\.lan|persistence\.lan|matrix\.lan|traefik\.lan|secrets\.lan|message\.lan|dns\.lan|192\.168\.[0-9]+\.[0-9]+'
+#
+# Host names come from a place-name scheme (koror, palau, yap, kota, luvu, vati,
+# goldblum). They are matched with word boundaries because several are also
+# ordinary words or real geography — `vati` unanchored matches "activation" and
+# "derivative", which is 81 false positives in quipu alone and exactly the
+# cry-wolf that gets a guard switched off.
+#
+# The .lan/.svc match is GENERALISED rather than an enumerated list: the old list
+# named six specific services and would have sailed past koror.lan, yap.lan and
+# palau.lan, which are the most common internal names in quipu. Enumerating
+# known-bad is how a filter silently ages out.
+PATTERNS='[a-z0-9-]+\.(lan|svc)\b|\b(kota|luvu|vati|koror|palau|yap|goldblum)\b|(^|[^0-9.])(192\.168|10\.(1[0-9]|2[0-9]|3[01]|[0-9]))\.[0-9]+\.[0-9]+|/home/braino'
 
 if [ "${1:-}" = "--selftest" ]; then
   tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
-  printf 'clean line\n' > "$tmp/clean"
-  printf 'connect to dolt.lan:3306\n' > "$tmp/dirty"
+  # Clean text that MUST NOT trip it: English words containing host-name
+  # substrings. `vati` unanchored matches these, and that false-positive rate is
+  # what kills a guard.
+  printf 'the derivative activation of a private motivation\n' > "$tmp/clean"
   fail=0
-  if grep -nEq "$PATTERNS" "$tmp/dirty"; then echo "ok   detects an internal name"; else echo "FAIL misses an internal name"; fail=1; fi
-  if grep -nEq "$PATTERNS" "$tmp/clean"; then echo "FAIL fires on clean text"; fail=1; else echo "ok   silent on clean text"; fi
+  for bad in 'connect to dolt.lan:3306' 'rebuilt on koror' 'ssh yap.lan' 'addr 192.168.7.212' '/home/braino/gt/x' 'host palau'; do
+    printf '%s\n' "$bad" > "$tmp/dirty"
+    if grep -nEq "$PATTERNS" "$tmp/dirty"; then echo "ok   detects: $bad"; else echo "FAIL misses: $bad"; fail=1; fi
+  done
+  for ok in 'the derivative activation of a private motivation' 'version 1.2.3.4 released' 'see 8.8.8.8 for public dns'; do
+    printf '%s\n' "$ok" > "$tmp/clean"
+    if grep -nEq "$PATTERNS" "$tmp/clean"; then echo "FAIL fires on clean: $ok"; fail=1; else echo "ok   silent on: $ok"; fi
+  done
   if printf 'ssh://git@git.lan/stiwi/x.git' | grep -qE "$INTERNAL_HOST_RE"; then echo "ok   recognises the internal forge"; else echo "FAIL internal forge unrecognised"; fail=1; fi
   if printf 'git@github.com:scbrown/x.git' | grep -qE "$INTERNAL_HOST_RE"; then echo "FAIL treats github as internal"; fail=1; else echo "ok   treats github as public"; fi
   [ "$fail" -eq 0 ] && echo "selftest PASSED" || echo "selftest FAILED"
