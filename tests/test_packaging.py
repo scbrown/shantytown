@@ -48,6 +48,32 @@ def test_the_package_metadata_actually_builds():
         os.chdir(cwd)
 
 
+def test_the_st_entry_point_is_declared():
+    """The package must actually produce the `st` binary.
+
+    Earned the hard way: while reconciling a concurrent edit to pyproject I
+    deleted `[project.scripts]` outright. Metadata still built, all 522 tests
+    stayed green, and the wheel would have installed cleanly — with no `st` on
+    PATH. Every test here imports the module directly, so not one of them
+    exercises the console script. "It builds" is not "it installs something
+    usable", which is the same gap one notch smaller.
+    """
+    import tomllib
+    data = tomllib.loads((ROOT / "pyproject.toml").read_text())
+    scripts = data.get("project", {}).get("scripts", {})
+    assert scripts.get("st") == "shantytown.cli:main", (
+        "pyproject must declare the `st` console script; without it the package "
+        "installs successfully and provides no binary")
+
+
+def test_the_declared_entry_point_actually_resolves():
+    """...and it must point at something that EXISTS. A console script naming a
+    missing callable installs fine and fails at first invocation."""
+    import importlib
+    mod = importlib.import_module("shantytown.cli")
+    assert callable(getattr(mod, "main", None))
+
+
 def test_packages_are_declared_explicitly_not_auto_discovered():
     """Guards the FIX, which the build test alone cannot: with `packages` pinned,
     the build passes whether or not discovery would have worked, so a future
