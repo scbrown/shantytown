@@ -56,6 +56,7 @@ from .triage import Action
 from . import supervisor as sup_mod
 from . import tend as tend_mod
 from . import provision as prov_mod
+from . import notify as notify_mod
 from .files import FilesRegistry, FilesTracker, plate as files_plate
 from .launched import FilesLaunches, CURRENT, STALE, UNKNOWN
 from .quipu import QuipuRegistry
@@ -339,6 +340,10 @@ def build_parser() -> argparse.ArgumentParser:
                     help="undo --retire; the agent is tended again")
     td.add_argument("--interval", default="5min",
                     help="with --install: how often a pass runs (default 5min)")
+    td.add_argument("--loop", type=int, metavar="SECS",
+                    help="run a pass every SECS forever — the blocked-worker "
+                         "heartbeat. A blocked worker is pushed to "
+                         "its coordinator within one interval, on its own.")
     td.add_argument("-n", "--dry-run", action="store_true",
                     help="say what would be respawned; touch NOTHING")
 
@@ -1860,6 +1865,24 @@ def _cmd_tend(a) -> int:
               "look dead and be respawned onto the wrong server.", file=sys.stderr)
         return REFUSED
 
+    # --loop <secs>: run passes on an interval, so blocked-worker delivery is
+    # PROMPT ON ITS OWN (aegis-w0kk) rather than "on the coordinator's next stop".
+    # This is the heartbeat the bead's option 2 names; without a running st tend
+    # timer (its systemd install refuses while gastown-crew-watchdog holds the
+    # crew), a foreground/backgrounded `st tend --loop 30` is the runnable one.
+    loop = getattr(a, "loop", None)
+    if not loop:
+        return _tend_once(a)
+    import time
+    print(f"  tend heartbeat: a pass every {loop}s. Blocked workers are pushed to "
+          f"their coordinator within one interval. Ctrl-C to stop.",
+          file=sys.stderr)
+    while True:
+        _tend_once(a, quiet=True)
+        time.sleep(loop)
+
+
+def _tend_once(a, quiet: bool = False) -> int:
     panes = _panes(a)
     try:
         agents = _registry(a).all()
@@ -1875,9 +1898,20 @@ def _cmd_tend(a) -> int:
         log=lambda msg: print(f"  {msg}", file=sys.stderr),
     )
     rep = tender.pass_over(agents, dry_run=a.dry_run)
-    print()
-    print(rep.render())
-    print()
+    # DELIVER blocked workers to their coordinator (aegis-w0kk). Not on a dry run
+    # — a dry run pushes nothing, same as it launches nothing. Deduped, so a
+    # heartbeat does not re-spam a still-blocked worker every interval.
+    if not a.dry_run:
+        woke = notify_mod.Notifier(
+            Path(a.root), _registry(a), panes,
+            log=lambda msg: print(f"  {msg}", file=sys.stderr)).sweep(agents, runtime)
+        if woke:
+            print(f"  ⚠ pushed {len(woke)} blocked worker(s) to their "
+                  f"coordinator: {', '.join(woke)}", file=sys.stderr)
+    if not quiet:
+        print()
+        print(rep.render())
+        print()
     # The health signal, written even on a dry run — "a pass ran" is the fact
     # somebody needs when the supervisor itself has stopped. Recorded AFTER the
     # pass so it can never claim work that did not happen.
