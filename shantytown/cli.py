@@ -57,6 +57,7 @@ from . import tend as tend_mod
 from .files import FilesRegistry, FilesTracker, plate as files_plate
 from .launched import FilesLaunches, CURRENT, STALE, UNKNOWN
 from .quipu import QuipuRegistry
+from . import selfcheck
 from .anchor import Unreachable, anchor as do_anchor
 from .runtime import (ClaudeRuntime, CapabilityError, SettingsError,
                       emitted_stop_directions, live_stop_directions, live_wiring,
@@ -619,14 +620,25 @@ def _cmd_doctor(a) -> int:
 
     healths = doc.detect_all(specs, check_latest=not a.no_latest)
 
+    # ...and ask the question about ITSELF (aegis-daoh, dearing's ruling). doctor
+    # reported installed-vs-available for four tools and never once about `st`.
+    # The tool that audits deployment drift was the only one exempt, and it is the
+    # one whose staleness silently corrupts every other row it prints. Only
+    # rendered for a full run: `st doctor bobbin` asked about bobbin.
+    self_h = selfcheck.check_self() if len(specs) == len(doc.SPECS) else None
+
     if not a.install:
         print(doc.report(healths))
-        return doc.exit_code(healths)
+        if self_h is not None:
+            print(selfcheck.render(self_h))
+        return _doctor_exit(doc, healths, self_h)
 
     plans = [doc.plan_install(h) for h in healths]
     print(doc.report(healths, plans=plans))
+    if self_h is not None:
+        print(selfcheck.render(self_h))
     if a.dry_run:
-        return doc.exit_code(healths)  # planned only — nothing ran
+        return _doctor_exit(doc, healths, self_h)  # planned only — nothing ran
 
     failures = []
     for p in plans:
@@ -639,8 +651,30 @@ def _cmd_doctor(a) -> int:
             print(f, file=sys.stderr)
         return CANNOT_TELL
     # re-detect so the post-install report is the observed state, not the intent
-    print(doc.report(doc.detect_all(specs, check_latest=not a.no_latest)))
-    return doc.exit_code(doc.detect_all(specs, check_latest=not a.no_latest))
+    observed = doc.detect_all(specs, check_latest=not a.no_latest)
+    print(doc.report(observed))
+    # Re-run the self-check too: --install can have just replaced `st` itself.
+    self_after = selfcheck.check_self() if len(specs) == len(doc.SPECS) else None
+    if self_after is not None:
+        print(selfcheck.render(self_after))
+    return _doctor_exit(doc, observed, self_after)
+
+
+def _doctor_exit(doc, healths, self_h) -> int:
+    """Fold the self-check into doctor's exit code, keeping its meanings:
+    0 clean · 1 actionable · 2 could-not-tell. UNCERTAINTY DOMINATES — a report you
+    cannot trust is worse than one that says "fix this" — so a self-check that
+    could not read its own metadata forces 2 even when every tool row is green
+    (dearing's requirement 2: it must fail toward cannot-tell).
+    """
+    base = doc.exit_code(healths)
+    if self_h is None:
+        return base
+    if self_h.verdict == selfcheck.CANNOT_TELL or base == CANNOT_TELL:
+        return CANNOT_TELL
+    if self_h.verdict == selfcheck.BROKEN:
+        return max(base, REFUSED)
+    return base
 
 
 def _cmd_role(a) -> int:

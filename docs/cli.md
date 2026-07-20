@@ -265,6 +265,46 @@ $ st doctor
   • bobbin   0.3.1 installed — 0.6.0 available (STALE)
   ? quipu    present, but cannot report version (known upstream bug: --version opens a store)
   ✗ reactor  not installed
+  • st       installed from /home/braino/gt/shantytown @ 41d9fc2d
+```
+
+### …and it asks the question about ITSELF
+
+The last row is the one that was missing. doctor reported installed-vs-available for four tools and
+never once about `st` — the tool that audits deployment drift was the only tool exempt from the
+audit, and it is the one whose staleness silently corrupts every other row it prints.
+
+It is not a version check: `st --version` is permanently `0.0.1`, so a check built on it could never
+fail. It compares the two things that DO move — the **recorded source path** pipx would rebuild from,
+and that checkout's **git HEAD** against the canonical checkout.
+
+```
+  ✗ st       `st` was installed from '/home/braino/gt/shantytown-wt/dearing', NOT the canonical
+             checkout '/home/braino/gt/shantytown'. Whatever is in that directory — including
+             uncommitted work — is what the whole fleet is running, and a `pipx reinstall` will
+             faithfully rebuild it. Fix: pipx install --force /home/braino/gt/shantytown
+```
+
+That is a real condition that occurred on 2026-07-20 (aegis-daoh): a deploy run as
+`pipx install --force <my own worktree>` silently re-pointed the **fleet's** recorded source at one
+crew member's private tree, and a later `pipx reinstall` faithfully rebuilt *that* rather than the
+shared checkout somebody had just pulled. Nothing in the system could say so. Two rules, both
+load-bearing:
+
+1. **A recorded source that is not the canonical checkout is an ERROR, not a note.**
+2. **It fails toward "cannot tell."** If it cannot read its own pipx metadata or git HEAD, that is
+   exit 2 — never a pass. Uncertainty dominates the exit code, as everywhere else here.
+
+Honest boundary: a green row proves the *source path and HEAD* line up. It does **not** prove the
+installed **bytes** match that HEAD — pipx copied them at install time and the checkout can be pulled
+forward afterwards. That needs a build stamp; until then this is a floor, not a guarantee.
+
+**Deploying `st`:** always the canonical path explicitly, never bare `pipx reinstall` (it rebuilds
+whatever path was last recorded, which is exactly how the above happened).
+
+```
+cd /home/braino/gt/shantytown && git pull
+pipx install --force /home/braino/gt/shantytown
 ```
 
 Detect is the product; `--install` is a flag. Three states exist to stop three lies: **absent** vs
