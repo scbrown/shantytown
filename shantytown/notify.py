@@ -108,6 +108,123 @@ def _message(worker: str, state: str) -> str:
             f"on. (auto-notice from st tend; you were not asked to sweep.)")
 
 
+def saturated_agents(agents, panes, runtime):
+    """Up agents whose live pane reads SATURATED — idle AND past the cycle
+    threshold (aegis-bik9).
+
+    Only SATURATED, which work_state derives in the IDLE branch, so it is already
+    "idle and over the threshold": a busy agent past the threshold reads `busy`
+    (its "/clear to save Nk" footer is replaced by the spinner mid-turn, so the
+    number is unreadable), and we never interrupt a working agent. The cycle
+    prompt lands exactly on the agent that is idle-and-refused — the one that most
+    needs it and can act on it now. Every role, not just workers: a saturated
+    coordinator must cycle too.
+    """
+    out = []
+    for ag in sorted(agents, key=lambda a: a.name):
+        if not ag.pane or not panes.exists(ag.pane):
+            continue
+        screen = panes.capture(ag.pane, attrs=True)
+        plain = triage_mod.strip_attrs(screen)
+        state = triage_mod.work_state(
+            screen, runtime.shows_ready_ui(plain),
+            awaiting=asks_a_question(runtime, plain))
+        if state == triage_mod.SATURATED:
+            out.append(ag.name)
+    return out
+
+
+def _cycle_message() -> str:
+    # An INSTRUCTION the agent executes, NOT a bare `/clear` keystroke. The agent
+    # checkpoints FIRST, then clears — a raw /clear would drop unsaved work
+    # (h562's rule). Pushed as a user turn to the agent's own Claude, which then
+    # does checkpoint -> /clear -> resume, in that order.
+    return (
+        "⚠ st tend: you are PAST THE 400k CYCLE THRESHOLD. CYCLE NOW, and in this "
+        "order: (1) CHECKPOINT — write your current state to your active bead "
+        "(what you are mid-task on, decisions already made, the exact next step) "
+        "with `bd comment <id> --file <notes>`; (2) THEN run /clear to reset "
+        "context; (3) THEN resume from the bead. Do the checkpoint BEFORE /clear "
+        "— a bare /clear loses whatever was not written down. (auto-prompt from "
+        "st tend, once per saturation episode.)")
+
+
+def push_to_own_pane(reg, panes, agent: str, message: str) -> str | None:
+    """Deliver `message` into the AGENT'S OWN pane (aegis-bik9) — the cycle remedy
+    goes to the saturated agent itself, not to a coordinator. Returns the agent
+    name on a delivered push, None when its pane is unreachable (a failed push
+    stays pending, never a silent success)."""
+    try:
+        card = reg.get(agent)
+    except LookupError:
+        return None
+    if not card.pane or not panes.exists(card.pane):
+        return None
+    panes.send(card.pane, message)
+    return agent
+
+
+class CycleDriver:
+    """DRIVE the cycle, not just flag it (aegis-bik9). h562 detects + refuses a
+    saturated agent, but the remedy — checkpoint-to-bead then /clear — had no
+    delivery path, so a coordinator raw-tmux'd it by hand to three agents. This
+    pushes the checkpoint-then-clear INSTRUCTION to a saturated idle agent's own
+    pane automatically, so the agent cycles itself. It never sends a bare /clear.
+
+    Same dedup discipline as the blocked-worker push: ONCE per saturation episode
+    (a durable ledger, so a heartbeat does not re-prompt every interval and a
+    sweeper restart does not re-spam), re-armed when the agent drops back below the
+    threshold — so a later saturation prompts again. Fail-open: an unreachable pane
+    is retried next sweep, never swallowed.
+    """
+
+    def __init__(self, root, reg, panes, *, push=push_to_own_pane, log=None):
+        self.path = Path(root) / "notify" / "cycling.json"
+        self._reg = reg
+        self._panes = panes
+        self._push = push
+        self._log = log or (lambda msg: None)
+
+    def _load(self) -> dict:
+        try:
+            return json.loads(self.path.read_text())
+        except (OSError, ValueError):
+            return {}
+
+    def _save(self, ledger: dict) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_text(json.dumps(ledger, indent=2, sort_keys=True))
+
+    def sweep(self, agents, runtime) -> list[str]:
+        """One pass. PROMPT each newly-saturated agent to cycle, re-arm any that
+        recovered, and return the names actually prompted (empty when none are
+        newly saturated — the quiet, common case)."""
+        saturated = set(saturated_agents(agents, self._panes, runtime))
+        ledger = self._load()
+        prompted = []
+
+        # Re-arm: an agent no longer saturated (it cycled, or dropped below) is
+        # forgotten, so its next saturation prompts again.
+        for agent in list(ledger):
+            if agent not in saturated:
+                del ledger[agent]
+
+        for agent in sorted(saturated):
+            if ledger.get(agent) == "saturated":
+                continue                       # already prompted this episode
+            target = self._push(self._reg, self._panes, agent, _cycle_message())
+            if target is None:
+                self._log(f"cycle: {agent} is saturated but its pane was "
+                          f"unreachable — NOT prompted, will retry")
+                continue
+            ledger[agent] = "saturated"
+            prompted.append(agent)
+            self._log(f"cycle: prompted {agent} to checkpoint + /clear")
+
+        self._save(ledger)
+        return prompted
+
+
 class Notifier:
     """The dedup ledger + the push. A worker is woken-about ONCE per block episode.
 

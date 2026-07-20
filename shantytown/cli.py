@@ -2016,12 +2016,21 @@ def _tend_once(a, quiet: bool = False) -> int:
     # — a dry run pushes nothing, same as it launches nothing. Deduped, so a
     # heartbeat does not re-spam a still-blocked worker every interval.
     if not a.dry_run:
+        _log = lambda msg: print(f"  {msg}", file=sys.stderr)
         woke = notify_mod.Notifier(
-            Path(a.root), _registry(a), panes,
-            log=lambda msg: print(f"  {msg}", file=sys.stderr)).sweep(agents, runtime)
+            Path(a.root), _registry(a), panes, log=_log).sweep(agents, runtime)
         if woke:
             print(f"  ⚠ pushed {len(woke)} blocked worker(s) to their "
                   f"coordinator: {', '.join(woke)}", file=sys.stderr)
+        # DRIVE THE CYCLE (aegis-bik9): a saturated IDLE agent is prompted to
+        # checkpoint-then-/clear on its own pane, so it self-heals instead of
+        # sitting idle-and-refused until a human raw-tmuxes it. Deduped once per
+        # saturation episode; the instruction checkpoints BEFORE clearing.
+        cycled = notify_mod.CycleDriver(
+            Path(a.root), _registry(a), panes, log=_log).sweep(agents, runtime)
+        if cycled:
+            print(f"  ⚠ prompted {len(cycled)} saturated agent(s) to checkpoint "
+                  f"+ /clear: {', '.join(cycled)}", file=sys.stderr)
     if not quiet:
         print()
         print(rep.render())
