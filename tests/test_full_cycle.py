@@ -94,8 +94,12 @@ def test_full_crew_cycle_on_st_zero_gt(workspace, monkeypatch, capsys):
     assert run("log", "ellie") == OK
     assert "Claude Code" in capsys.readouterr().out
 
-    # 8. mail -d — durable message to a DOWN agent (maldoon not live): survives
-    assert run("mail", "-d", "maldoon", "HANDOFF", "the", "epic") == OK
+    # 8. mail -d — durable message to a DOWN agent (maldoon not live): survives.
+    # --backend files is EXPLICIT and load-bearing here: `-d` now defaults to
+    # BEADS (dearing, qdal.2), and this cycle is the files world end to end. A
+    # test that took the default would write a real bead into the shared store on
+    # every run — which it did once, before this flag was added.
+    assert run("--backend", "files", "mail", "-d", "maldoon", "HANDOFF", "the", "epic") == OK
     mail_items = [json.loads(p.read_text()) for p in (root / "items").glob("*.json")]
     assert any(m.get("assignee") == "maldoon" and m["title"].startswith("mail:")
                for m in mail_items), "durable mail did not persist"

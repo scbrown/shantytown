@@ -63,7 +63,18 @@ def _registry(a):
     return FilesRegistry(a.root / "crew")
 
 
-def _tracker(a):
+def _backend(a, default="files") -> str:
+    """The selected tracker backend, or `default` when --backend was not given.
+
+    ONE resolver, because the sentinel only buys honesty if nothing re-guesses
+    it. `--backend` now defaults to None so "the user said files" and "the user
+    said nothing" stop being the same value — which they had to stop being for
+    `mail -d` to default differently without overriding an explicit choice.
+    """
+    return getattr(a, "backend", None) or default
+
+
+def _tracker(a, default="files"):
     """The tracker for this invocation, selected by --backend (aegis-kbuz #3).
 
     arnold added beads.plate() (the reader) but the CLI still wired FilesTracker
@@ -72,7 +83,7 @@ def _tracker(a):
     bd's -C. Identity (registry) stays files — work lives in beads, identity does
     not.
     """
-    if getattr(a, "backend", "files") == "beads":
+    if _backend(a, default) == "beads":
         return beads_mod.BeadsTracker(repo=getattr(a, "repo", None))
     return FilesTracker(a.root / "items")
 
@@ -81,7 +92,7 @@ def _plate(a):
     """The plate reader matching the selected tracker — uses arnold's beads.plate
     for the beads backend (his is canonical; my duplicate was dropped)."""
     trk = _tracker(a)
-    if getattr(a, "backend", "files") == "beads":
+    if _backend(a) == "beads":
         return lambda who: beads_mod.plate(trk, who)
     return lambda who: files_plate(trk, who)
 
@@ -95,8 +106,12 @@ def build_parser() -> argparse.ArgumentParser:
     the command surface and pin it to the docstring — the count is the thesis."""
     ap = argparse.ArgumentParser(prog="st")
     ap.add_argument("--root", type=Path, default=Path.cwd() / ".shanty")
-    ap.add_argument("--backend", choices=["files", "beads"], default="files",
-                    help="tracker backend (identity is always files). #3")
+    ap.add_argument("--backend", choices=["files", "beads"], default=None,
+                    help="tracker backend (identity is always files). #3. "
+                         "Unset means per-command default: files everywhere, "
+                         "EXCEPT `mail -d`, which defaults to beads because a "
+                         "must-survive message belongs in the shared store "
+                         "(dearing, qdal.2). Pass --backend files to force local.")
     ap.add_argument("--repo", default=None,
                     help="bd -C <dir> when --backend beads")
     ap.add_argument("--registry", choices=["files", "quipu"], default="files",
@@ -685,7 +700,17 @@ def _cmd_mail(a) -> int:
 
 def _mail_durable(a, agent, msg: str, panes) -> int:
     """Persist-then-deliver. The tracker write is the guarantee; the send is speed."""
-    backend = getattr(a, "backend", "files")
+    # BEADS BY DEFAULT for -d (dearing, qdal.2 follow-up). `-d` is the flag you
+    # reach for when the message MUST survive your session dying. A local files
+    # store survives the session but NOT the host, not a clone being cleaned, and
+    # is invisible to every `bd` query the rest of the crew uses to find it — so
+    # a files default silently delivers the weaker half of the only guarantee the
+    # flag exists to make. Printing where it landed is real mitigation, and it is
+    # why this was a default worth changing rather than a bug: the person who most
+    # needs -d is at a session tail and is not reading output carefully.
+    # `--backend files` stays explicit and useful — when the store is unreachable,
+    # local-and-known beats the CANNOT_TELL that persist-first would return.
+    backend = _backend(a, default="beads")
     live = agent.pane is not None and panes.exists(agent.pane)
     if a.dry_run:
         print(f"  would: persist a durable message for {agent.name} via {backend}")
@@ -694,7 +719,7 @@ def _mail_durable(a, agent, msg: str, panes) -> int:
         return OK
     # PERSIST FIRST — the survival guarantee. If this cannot be done, the durable
     # promise cannot be kept; say so (2) rather than silently downgrade to routine.
-    tracker = _tracker(a)
+    tracker = _tracker(a, default="beads")
     try:
         item = tracker.create(f"mail: {msg}", assignee=a.agent)
     except Exception as e:                       # bd/store unreachable, etc.

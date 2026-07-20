@@ -24,7 +24,7 @@
 [![dispatch 3.4s](https://img.shields.io/badge/dispatch-3.4s-brightgreen)](#-speed)
 [![35x faster](https://img.shields.io/badge/vs%20gt%20sling-35%C3%97%20faster-brightgreen)](#-versus-gas-town)
 [![13 commands](https://img.shields.io/badge/commands-13-blue)](#-the-whole-surface)
-[![tests](https://img.shields.io/badge/tests-422%20passing-blue)](#-a-check-that-cannot-fail-is-not-a-check)
+[![tests](https://img.shields.io/badge/tests-430%20passing-blue)](#-a-check-that-cannot-fail-is-not-a-check)
 [![python](https://img.shields.io/badge/python-3.11%2B-blue)](#-install)
 [![license MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
