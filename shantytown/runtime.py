@@ -140,6 +140,32 @@ def _stop_cmd(mode: str, root=None) -> dict:
     return {"type": "command", "command": cmd}
 
 
+# --- hank policy guard (first-class, Stiwi 2026-07-19) --------------------------
+# Every shantytown-launched agent runs its edits past hank's guard: the agent's
+# edit tool call IS the change event (hank FR-30), so hank answers with a blast-
+# radius advisory and MAY deny. Wired here, once, rather than per-agent — that is
+# what "first class" means: you cannot launch an unguarded agent by forgetting a
+# flag.
+#
+# FAIL OPEN, deliberately and non-negotiably. `command -v` short-circuits when
+# hank is not installed, and `|| exit 0` swallows ANY hank failure (absent
+# subcommand, crashed daemon, timeout) into "allow". A guard that failed CLOSED
+# would brick every crew agent the moment hank was down or lagging a release —
+# turning a code-intelligence nicety into a fleet outage. hank denies by emitting
+# the block JSON on stdout with exit 0, so a real deny is never confused with a
+# failure, and this wrapper cannot swallow it.
+_HANK_GUARD = (
+    "command -v hank >/dev/null 2>&1 && hank hook pre-edit || exit 0"
+)
+
+
+def _guard_hook() -> dict:
+    return {
+        "matcher": "Edit|Write|NotebookEdit",
+        "hooks": [{"type": "command", "command": _HANK_GUARD}],
+    }
+
+
 def settings_for_role(role: str, root=None) -> dict:
     """The Claude Code settings.json a role needs — the CONTENT `role set` emits
     and `st new`'s launch reads via --settings (#6, arnold gt-wisp-w4j2af).
@@ -166,7 +192,11 @@ def settings_for_role(role: str, root=None) -> dict:
     else:
         raise ValueError(f"unknown role {role!r}; expected worker/lead/administrator")
     return {
-        "hooks": {"Stop": [{"hooks": stop}]},
+        "hooks": {
+            "Stop": [{"hooks": stop}],
+            # hank policy guard on every edit-shaped tool call. See _HANK_GUARD.
+            "PreToolUse": [_guard_hook()],
+        },
         # Pre-answer the project-MCP consent screen. A FRESH workspace makes Claude
         # Code ask "N new MCP servers found — enable?" and that prompt BLOCKS the
         # ready UI, so is_live sees nothing and st new reports could-not-tell for an

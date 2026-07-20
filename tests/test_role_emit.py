@@ -73,6 +73,48 @@ def test_every_role_pre_answers_the_project_mcp_prompt():
         )
 
 
+def _guard_commands(settings: dict) -> list[str]:
+    out = []
+    for entry in settings["hooks"].get("PreToolUse", []):
+        out += [h["command"] for h in entry["hooks"]]
+    return out
+
+
+def test_every_role_gets_the_hank_policy_guard():
+    """First-class means you cannot launch an UNGUARDED agent by forgetting a flag
+    (Stiwi 2026-07-19). Every role wires hank's pre-edit guard on edit-shaped tools."""
+    for role in ("worker", "lead", "administrator"):
+        cmds = _guard_commands(settings_for_role(role))
+        assert cmds, f"{role} has no hank guard — an unguarded agent is launchable"
+        assert "hank hook pre-edit" in cmds[0]
+        matcher = settings_for_role(role)["hooks"]["PreToolUse"][0]["matcher"]
+        for tool in ("Edit", "Write"):
+            assert tool in matcher, f"{role} guard does not cover {tool}"
+
+
+def test_the_guard_fails_OPEN():
+    """NON-NEGOTIABLE. A guard that failed closed would brick every crew agent the
+    moment hank was absent, crashed, or lagging a release — a code-intelligence
+    nicety turned into a fleet outage. hank denies via block JSON on stdout with
+    exit 0, so failing open cannot swallow a real deny."""
+    cmd = _guard_commands(settings_for_role("worker"))[0]
+    assert "command -v hank" in cmd, "guard does not check hank is installed"
+    assert "|| exit 0" in cmd, "guard does not fail open on hank failure"
+
+
+def test_guard_fail_open_actually_allows_when_hank_is_missing(tmp_path):
+    """Prove it by RUNNING it, not by reading it: with hank absent from PATH the
+    guard must exit 0 (allow) and emit no deny."""
+    import subprocess
+    cmd = _guard_commands(settings_for_role("worker"))[0]
+    empty = tmp_path / "emptybin"
+    empty.mkdir()
+    r = subprocess.run(cmd, shell=True, capture_output=True, text=True,
+                       env={"PATH": str(empty)})
+    assert r.returncode == 0, f"guard blocked when hank was absent: rc={r.returncode}"
+    assert "deny" not in r.stdout.lower()
+
+
 def test_unknown_role_is_refused():
     with pytest.raises(ValueError):
         settings_for_role("overlord")
