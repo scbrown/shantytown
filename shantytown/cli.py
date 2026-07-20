@@ -366,6 +366,57 @@ def _launches(a) -> FilesLaunches:
     return FilesLaunches(Path(a.root) / "launched")
 
 
+# Not looked at. A down agent's settings verdict is not "current" and not
+# "stale" — we did not ask, and rounding that to either is the bug nipg is about.
+NOT_LIVE = "—"
+
+
+def _settings_verdict(launches, name: str, live: bool) -> str:
+    """THE definition of one agent's settings verdict: is it running the file we
+    currently believe is deployed?
+
+    Only a LIVE agent can be running stale settings. A down agent has no loaded
+    settings to be stale and reads the current file when it next starts, so its
+    verdict is NOT_LIVE — reporting on it would be noise that buries the real hits.
+
+    `live` is passed IN rather than probed here on purpose: `crew` has already
+    established it while building its table, and re-probing would double the tmux
+    calls on the command an operator runs most.
+    """
+    return launches.verdict(name) if live else NOT_LIVE
+
+
+def _reach_buckets(verdicts) -> tuple[list[str], list[str]]:
+    """(stale, unknown) from an iterable of (name, verdict). Pure, and it is the
+    ONLY place a verdict becomes a bucket.
+
+    This exists because `crew` (which reports when asked) and `role set` (which
+    reports when it CAUSES the drift) must never disagree. Two copies of this
+    could, and the first symptom would be one surface calling an agent healthy
+    while the other called it stale — the exact ambiguity aegis-nipg is about.
+    That divergence was not hypothetical: this rule was written twice, once here
+    and once inline in `_cmd_crew`, and unifying them is what this change is.
+    """
+    v = list(verdicts)
+    return ([n for n, x in v if x == STALE],
+            [n for n, x in v if x == UNKNOWN])
+
+
+def _settings_reach(a, panes, agents) -> tuple[list[str], list[str]]:
+    """(stale, unknown) among the LIVE agents — who is NOT on the current file.
+
+    For callers that have NOT already computed liveness (`role set`). `crew`
+    builds the same buckets from the verdicts it is already rendering, via
+    _reach_buckets, so both surfaces share the verdict rule AND the bucket rule.
+    """
+    launches = _launches(a)
+    return _reach_buckets(
+        (ag.name,
+         _settings_verdict(launches, ag.name,
+                           bool(ag.pane and panes.exists(ag.pane))))
+        for ag in sorted(agents, key=lambda x: x.name))
+
+
 def _runtime(a, panes):
     """The runtime for this invocation. Claude Code is first-class; a second
     runtime (codex/opencode) would be selected here and its capability gate
@@ -741,7 +792,72 @@ def _cmd_role(a) -> int:
     emitted = _emit_role_settings(a.root, {ag.role for ag in plan.writes})
     for path in emitted:
         print(f"  hooks   {path}")
+    _report_who_the_rewrite_did_not_reach(a, {ag.role for ag in plan.writes})
     return OK
+
+
+def _report_who_the_rewrite_did_not_reach(a, roles: set[str]) -> None:
+    """aegis-nipg item 2: WRITING A SETTINGS FILE IS NOT DEPLOYING IT.
+
+    Emitting settings changes bytes on disk and reaches NOBODY already running —
+    `--settings` is read once, at launch. So the operator who just changed the
+    hooks has, at this moment, changed nothing about the live fleet, and until now
+    the command told them the opposite: it printed the paths it wrote and exited
+    0, which reads as done.
+
+    Both halves of the incident that produced this were invisible for exactly this
+    reason. A Stop-hook FIX was emitted and two live agents kept the broken hook,
+    staying deaf for the next hour. A PreToolUse guard that hard-blocks every edit
+    was emitted and the fleet stayed green for half an hour — not because the
+    guard was safe, but because nobody had relaunched into it; the first agent
+    restarted, for an unrelated reason, found it with its body.
+
+    So this prints at the moment of the change, unprompted. `st crew` can answer
+    the same question, but only if you think to ask it, and nobody in that
+    incident had any reason to. This is the half that does not require suspicion.
+
+    Best-effort and never fatal: it reports on a mutation that has ALREADY
+    succeeded and been printed. If the registry or tmux is unreachable we say we
+    could not tell, and still exit 0 — a report that could turn a completed
+    `role set` into a failure would be a worse bug than the one it warns about.
+    """
+    # EVERYTHING that can reach outside this process is inside the try, not just
+    # the registry read. The recovered version guarded only `_registry(a).all()`
+    # while `_settings_reach` goes on to call `panes.exists()` per agent — so an
+    # unreachable tmux raised straight out of a role set that had ALREADY written
+    # the cards and emitted the hooks. Caught by test_report_is_never_fatal_when_
+    # it_cannot_look. The docstring above promised "best-effort, never fatal"; it
+    # was not, and a traceback there would tell an operator their hook emission
+    # failed when it had in fact succeeded — the opposite of the reassurance this
+    # function exists to give.
+    try:
+        panes = Tmux()
+        agents = _registry(a).all()
+        agents = [ag for ag in agents if ag.role in roles]
+        stale, unknown = _settings_reach(a, panes, agents)
+    except Exception as e:
+        print(f"  ? could not tell which live agents this reached ({e}) — "
+              f"check `st crew`.", file=sys.stderr)
+        return
+    # NOTE on the filter above: `role set franklin worker` emits
+    # worker.settings.json and nothing else, so a stale administrator is genuinely
+    # stale but was NOT missed by THIS rewrite — and this function claims, by its
+    # own name, to report who the rewrite did not reach. Saying "not deployed to
+    # sattler" after a write that never touched sattler's file is the same
+    # over-claim, one level down, that this whole change is about.
+    if not stale and not unknown:
+        return
+    print()
+    if stale:
+        print(f"  ⚠ NOT DEPLOYED to {len(stale)} live agent(s): {', '.join(stale)}")
+        print(f"    They are still running the settings they launched with. The "
+              f"file you just wrote reaches")
+        print(f"    them only on relaunch: `st stop <agent> && st new <agent>`.")
+    if unknown:
+        print(f"  ? {len(unknown)} live agent(s) have no launch stamp, so whether "
+              f"this reached them is UNKNOWN:")
+        print(f"    {', '.join(unknown)}")
+        print(f"    Treat as not-reached until relaunched — unknown is not fine.")
 
 
 def _emit_role_settings(root: Path, roles: set[str]) -> list[Path]:
@@ -1210,7 +1326,8 @@ def _cmd_crew(a) -> int:
         return OK
     launches = _launches(a)
     runtime = _runtime(a, panes)
-    stale, unknown, free, busy, queued, shelled = [], [], [], [], [], []
+    free, busy, queued, shelled = [], [], [], []
+    verdicts = []
     print()
     for ag, state, work in _crew_states(agents, panes, runtime):
         if work.endswith("sh"):
@@ -1224,16 +1341,14 @@ def _cmd_crew(a) -> int:
         # Only a LIVE agent can be running stale settings. A down agent has no
         # loaded settings to be stale, and will read the current file when it
         # next starts, so reporting on it would be noise that hides the real hits.
-        if state == "up":
-            verdict = launches.verdict(ag.name)
-            if verdict == STALE:
-                stale.append(ag.name)
-            elif verdict == UNKNOWN:
-                unknown.append(ag.name)
-        else:
-            verdict = "—"
+        # Shared with `role set` (aegis-qio0): the verdict rule and the bucket
+        # rule each exist ONCE, so the column here and the warning there cannot
+        # disagree about the same agent.
+        verdict = _settings_verdict(launches, ag.name, state == "up")
+        verdicts.append((ag.name, verdict))
         print(f"  {ag.name:<11} {ag.role:<14} {state:<8} {verdict:<8} "
               f"{work:<11} {ag.pane or '—'}")
+    stale, unknown = _reach_buckets(verdicts)
     print()
     # The dispatcher's answer, said out loud. A column still makes the operator
     # scan 14 rows; the question is "who can take this", so print the list.
