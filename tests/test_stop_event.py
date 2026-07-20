@@ -351,3 +351,65 @@ def test_unreadable_process_fails_toward_RISING(tmp_path):
     stop_event._send(reg, ev, panes, "ellie")
     assert ev.drain("maldoon") == []
     assert len(ev.drain("hammond")) == 1
+
+
+# --- BLOCKED ON A QUESTION reaches the coordinator (aegis-qxc2) -----------------
+
+# A real picker footer, as captured off lowery's pane 2026-07-20. Colour-split per
+# word on the live pane; the plain form is what the runtime hands the predicate.
+PICKER_SCREEN = "  Chat about this\n\nEnter to select · ↑/↓ to navigate · Esc to cancel"
+
+
+def _asks(screen: str) -> bool:
+    """The runtime's picker check, as ClaudeRuntime.awaiting_answer does it."""
+    return "Enter to select" in screen or "Ready to submit your answers?" in screen
+
+
+def test_a_stop_from_an_agent_ON_A_PICKER_says_so(tmp_path, capsys):
+    """The coordinator must learn it WITHOUT scraping a pane — that scrape is the
+    whole investigation the stop event exists to save. Before this the verdict
+    read `?`, which is honest and gives the reader nothing to do."""
+    reg = _reg(tmp_path)
+    ev = FilesEvents(tmp_path / "events")
+    ev.persist(to="maldoon", frm="ellie", reason=None, rose=False,
+               item="it-9", item_status="in_progress")
+    stop_event._drain(ev, "maldoon", reg,
+                      _Panes({"p-ellie"}, {"p-ellie": PICKER_SCREEN}), _ready,
+                      _asks)
+    reason = json.loads(capsys.readouterr().out)["reason"]
+    assert "now: waiting" in reason
+    assert "BLOCKED ON A QUESTION" in reason
+    assert "held it-9 (in_progress)" in reason, "the other facts must survive"
+
+
+def test_without_the_picker_check_the_same_pane_is_only_unsure(tmp_path, capsys):
+    """The control. Same screen, no runtime answer — the line degrades to `?`,
+    never to a confident verdict, and never crashes the drain."""
+    reg = _reg(tmp_path)
+    ev = FilesEvents(tmp_path / "events")
+    ev.persist(to="maldoon", frm="ellie", reason=None, rose=False,
+               item="it-9", item_status="in_progress")
+    stop_event._drain(ev, "maldoon", reg,
+                      _Panes({"p-ellie"}, {"p-ellie": PICKER_SCREEN}), _ready)
+    reason = json.loads(capsys.readouterr().out)["reason"]
+    assert "now: ?" in reason
+    assert "BLOCKED ON A QUESTION" not in reason
+
+
+def test_a_waiting_sender_is_DELIVERED_not_deferred(tmp_path, capsys):
+    """Only BUSY defers. An agent stopped on a question is precisely who a
+    coordinator needs waking for — deferring it would hold the event until the
+    agent stopped being stuck, which is the thing that was never going to happen
+    on its own."""
+    reg = _reg(tmp_path)
+    ev = FilesEvents(tmp_path / "events")
+    ev.persist(to="maldoon", frm="ellie", reason=None, rose=False)
+    stop_event._drain(ev, "maldoon", reg,
+                      _Panes({"p-ellie"}, {"p-ellie": PICKER_SCREEN}), _ready,
+                      _asks)
+    out = capsys.readouterr()
+    # _drain returns 0 either way — delivery is observable ONLY in what it emits,
+    # so assert on the block decision itself and on the absence of the held-back
+    # notice. An rc check here would pass whether or not the event was delivered.
+    assert json.loads(out.out)["decision"] == "block"
+    assert "held back" not in out.err

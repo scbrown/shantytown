@@ -75,6 +75,26 @@ class SettingsError(RuntimeError):
     settings, we do not launch a settings-less fallback — we refuse."""
 
 
+def asks_a_question(rt, screen: str) -> bool:
+    """Does `rt` say a BLOCKING picker is up on this screen? (aegis-qxc2)
+
+    Tolerates a runtime that cannot answer. Pane-reading is an OPTIONAL capability
+    here — CodexRuntime implements neither this nor shows_ready_ui — and the two
+    consumers are `st crew` and the tend supervisor, so a hard AttributeError would
+    crash a watchdog over a runtime that simply reads no panes.
+
+    FALSE HERE MEANS "COULD NOT ASK", AND THAT IS SAFE ONLY BECAUSE OF WHERE IT
+    LANDS. Normally collapsing "I could not look" into "there is nothing there" is
+    the exact bug this codebase keeps paying for (None is not zero; `?` is not
+    idle). It is sound in this one spot: the flag can only ever UPGRADE a `?` to
+    `waiting`, so failing to ask leaves the verdict at `?` — the honest
+    could-not-tell — instead of inventing one. It can never turn a real
+    busy/idle/wedged into something else.
+    """
+    ask = getattr(rt, "awaiting_answer", None)
+    return bool(ask(screen)) if callable(ask) else False
+
+
 @runtime_checkable
 class Runtime(Protocol):
     """An agent runtime does three things (adapters.md). start() is this ruling."""
@@ -435,6 +455,12 @@ class ClaudeRuntime:
     # produce a working agent.
     TRUST_MARKERS = ("Do you trust the files in this folder",
                      "1. Yes, I trust this folder")
+    # An interactive picker BLOCKING the pane (aegis-qxc2). See awaiting_answer().
+    # Read off live panes 2026-07-20, both the unanswered and the answered shape.
+    QUESTION_MARKERS = ("Enter to select", "Ready to submit your answers?")
+    # Matched in the tail only — see awaiting_answer(). 8 lines, same window every
+    # text predicate in triage.py uses; the answered shape sits ~5 lines up.
+    _QUESTION_TAIL_LINES = 8
 
     def __init__(self, panes, resolve_settings: SettingsResolver, root=None) -> None:
         self._panes = panes
@@ -524,6 +550,62 @@ class ClaudeRuntime:
         nor "crashed" — it needs a person. st new surfaces this specifically so a
         could-not-tell (2) reads as 'go answer the prompt', not 'it died'."""
         return any(c in screen for c in self.CONSENT_MARKERS)
+
+    def awaiting_answer(self, screen: str) -> bool:
+        """Is an interactive option-picker up and BLOCKING this pane? (aegis-qxc2)
+
+        MEASURED 2026-07-20 (sattler): 7 of 10 workers were sitting on pickers at
+        once, every one of them printing `?` in `st crew` — which was honest and
+        useless. `?` means "I could not tell"; it does not tell a coordinator that
+        an agent is stalled on a question only they can answer. Two agents sat on
+        ANSWERED pickers for over an hour because a by-hand pane sweep missed them.
+
+        These strings are runtime chrome, so they live here beside CONSENT_MARKERS
+        and not in triage — triage stays runtime-blind by construction, and a
+        second runtime draws its pickers differently.
+
+        Both shapes were read off live panes with `capture-pane -p -e`, not quoted
+        from a doc:
+          unanswered  "Enter to select · ↑/↓ to navigate · n to add notes · Esc…"  (lowery)
+          answered    "Ready to submit your answers?" over "❯ 1. Submit answers"   (billy, kelly)
+        The second matters as much as the first: an answered picker is still
+        blocking, and it is the one that silently ate an hour.
+
+        Deliberately broad. A permission prompt or any other blocking chooser is
+        also "this pane is waiting on a person", which is exactly the fact the
+        coordinator needs; narrowing it to AskUserQuestion would re-hide the rest.
+
+        Caller must hand this the STRIPPED view: the runtime colours these footers
+        per WORD, so `Enter to select` arrives as
+        `\x1b[38;5;246mEnter\x1b[39m \x1b[38;5;246mto\x1b[39m …` and a substring
+        match silently stops matching — the same trap documented on READY_MARKERS.
+
+        TAIL-ONLY, and not as a micro-optimisation. A picker's chrome is a FOOTER;
+        the same words further up are an agent TALKING about pickers, not sitting
+        on one. That is not hypothetical here — the bead that asked for this
+        predicate quotes the marker string verbatim, so any agent reading it would
+        match on a whole-screen search and report itself stalled. Every text
+        predicate in triage.py is tail-only for this reason, one of them after a
+        healthy agent was classified wedged for printing a traceback.
+
+        TRAILING BLANKS ARE DROPPED FIRST. A fixed window off the raw bottom is
+        fragile: kelly's real pane carried five blank lines under the picker, which
+        pushed "Ready to submit your answers?" out of an 8-line tail and read as `?`
+        — the exact agent this predicate exists to catch, missed by padding. Blank
+        padding is not content, so it does not get to spend the window.
+
+        TRUST_MARKERS COUNT TOO. The folder-trust dialog is a different dialog
+        with the same consequence — a blocking chooser, before the ready UI, that
+        `st new` normally auto-answers. If one is still up when `st crew` looks,
+        the launcher did not answer it and that agent is stopped dead waiting for
+        a person. Reporting it as `?` would be the very bug this predicate closes,
+        one dialog over.
+        """
+        lines = screen.splitlines()
+        while lines and not lines[-1].strip():
+            lines.pop()
+        tail = "\n".join(lines[-self._QUESTION_TAIL_LINES:])
+        return any(m in tail for m in self.QUESTION_MARKERS + self.TRUST_MARKERS)
 
 
 class CodexRuntime:

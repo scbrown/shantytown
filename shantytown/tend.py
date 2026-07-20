@@ -52,7 +52,7 @@ from pathlib import Path
 
 from . import triage as triage_mod
 from .protocols import Agent
-from .runtime import live_wiring
+from .runtime import asks_a_question, live_wiring
 from .workspace import WorkspaceError, ensure_workspace
 
 
@@ -262,7 +262,10 @@ class Tender:
         if self._panes.exists(card.pane):
             screen = self._panes.capture(card.pane)
             work = triage_mod.work_state(
-                screen, self._runtime.shows_ready_ui(screen))
+                screen, self._runtime.shows_ready_ui(screen),
+                # An agent stalled on a picker is emphatically not a free pane to
+                # launch into: hands off for the same reason BUSY is (aegis-qxc2).
+                awaiting=asks_a_question(self._runtime, screen))
             why = (f"a session appeared at {card.pane!r} while this pass ran "
                    f"(triage: {work}) — hands off")
             self._log(f"SKIP {card.name}: {why}")

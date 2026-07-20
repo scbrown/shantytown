@@ -204,10 +204,20 @@ def input_state(screen: str) -> str:
 # whose spinner is gone, and whose input box holds unsubmitted text is NOT idle.
 # It is the aegis-16e stall shape — and it used to print `idle` and land on the
 # free list, where the next send-keys would concatenate onto the stuck text.
+#
+# WAITING joined them for the aegis-qxc2 measurement: 7 of 10 workers were sitting
+# on blocking option-pickers SIMULTANEOUSLY, and every one printed `?`. That was
+# honest — the ready UI is displaced by the picker, so `ui_up` is False and UNSURE
+# is the correct answer to the question being asked. It was also useless: "I could
+# not tell" and "this agent is stopped dead waiting for a person to answer it" are
+# different facts, and the coordinator can only act on the second. Folding the
+# actionable one into the unknown is the same collapse this file already carries
+# three scars from (context_high, placeholder-vs-queued, None-is-not-zero).
 BUSY, IDLE, WEDGED, UNSURE, QUEUED = "busy", "idle", "wedged", "?", "queued"
+WAITING = "waiting"           # a picker is up and BLOCKING — needs a person, not a nudge
 
 
-def work_state(screen: str, ui_up: bool) -> str:
+def work_state(screen: str, ui_up: bool, awaiting: bool = False) -> str:
     """Is this agent WORKING right now? The verdict `st crew` never asked for.
 
     The predicates already existed — dispatch.py has refused sends into busy
@@ -236,6 +246,15 @@ def work_state(screen: str, ui_up: bool) -> str:
         return WEDGED
     if mid_flight(screen):
         return BUSY
+    # AFTER mid_flight on purpose. A pane that is genuinely computing is BUSY even
+    # if a picker's chrome is somewhere on it, and this ordering means the new
+    # verdict can only ever convert a `?` — it cannot take an agent that used to
+    # read busy and start calling it stalled. Additive by construction.
+    #
+    # `awaiting` is the RUNTIME's answer, passed in exactly like `ui_up`, because
+    # picker chrome is runtime-specific and this module knows no runtime's markers.
+    if awaiting:
+        return WAITING
     if not ui_up:
         return UNSURE
     # The UI is up and nothing is in flight. That is NOT enough to say idle

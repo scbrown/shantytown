@@ -60,7 +60,7 @@ from .launched import FilesLaunches, CURRENT, STALE, UNKNOWN
 from .quipu import QuipuRegistry
 from . import selfcheck
 from .anchor import Unreachable, anchor as do_anchor
-from .runtime import (ClaudeRuntime, CapabilityError, SettingsError,
+from .runtime import (asks_a_question, ClaudeRuntime, CapabilityError, SettingsError,
                       emitted_stop_directions, live_stop_directions, live_wiring,
                       settings_for_role)
 from .tmux import Tmux
@@ -1328,6 +1328,7 @@ def _cmd_crew(a) -> int:
     runtime = _runtime(a, panes)
     free, busy, queued, shelled = [], [], [], []
     verdicts = []
+    waiting = []
     print()
     for ag, state, work in _crew_states(agents, panes, runtime):
         if work.endswith("sh"):
@@ -1338,6 +1339,8 @@ def _cmd_crew(a) -> int:
             busy.append(ag.name)
         elif work.startswith(triage_mod.QUEUED):
             queued.append(ag.name)
+        elif work.startswith(triage_mod.WAITING):
+            waiting.append(ag.name)
         # Only a LIVE agent can be running stale settings. A down agent has no
         # loaded settings to be stale, and will read the current file when it
         # next starts, so reporting on it would be noise that hides the real hits.
@@ -1372,6 +1375,24 @@ def _cmd_crew(a) -> int:
               f"dispatch, and do not press Enter at")
         print(f"    someone else's pane to 'un-stall' it. Look with "
               f"`st log <agent>` and ask its owner.")
+    # The whole point of the verdict (aegis-qxc2). A column still makes the reader
+    # scan 18 rows, and these agents are in NEITHER the free list nor the busy one
+    # — so before this block a coordinator's summary said "5 free, 9 busy" of 18
+    # agents and three stalled workers fell silently down the gap between the two
+    # numbers. That gap is the original bug one layer up: invisible to the person
+    # whose whole job is knowing who needs what.
+    if waiting:
+        print(f"  ⚠ {len(waiting)} agent(s) BLOCKED ON A QUESTION in their pane: "
+              f"{', '.join(waiting)}")
+        print(f"    Stopped until a person answers — not busy, not free, and it "
+              f"will not time out. An ANSWERED")
+        print(f"    picker still blocks until it is submitted; two agents sat on "
+              f"those for over an hour.")
+        print(f"    Answer it (`st log <agent>` to read the question), or tell "
+              f"them to put the decision on")
+        print(f"    the bead with a recommendation and carry on — a question in a "
+              f"pane reaches nobody and")
+        print(f"    dies with the session.")
     # Say the consequence, not just the count (aegis-q73g). The reader who needs
     # this line is the administrator about to book the previous item as done.
     if shelled:
@@ -1424,8 +1445,16 @@ def _crew_states(agents, panes, runtime):
             # substrings and its markers arrive colour-split word by word, so it
             # gets the stripped view of the very same capture.
             screen = panes.capture(ag.pane, attrs=True)
+            # One capture, two views of the same instant — a second capture-pane
+            # would be a different moment. Both plain-substring readers get the
+            # stripped view; only work_state's input-box check needs the attributes.
+            plain = triage_mod.strip_attrs(screen)
+            # awaiting: a BLOCKING picker (aegis-qxc2). Without it these panes
+            # print `?`, which is honest and unactionable — 7 of 10 workers read
+            # that way at once while every one of them sat on a question.
             work = triage_mod.work_state(
-                screen, runtime.shows_ready_ui(triage_mod.strip_attrs(screen)))
+                screen, runtime.shows_ready_ui(plain),
+                awaiting=asks_a_question(runtime, plain))
             # Background shells outlive the turn. An agent whose turn ended with a
             # build/test/`gh run watch` still live is NOT finished, and every
             # surface the administrator has was silent about it. Shown ON the work

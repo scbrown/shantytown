@@ -166,7 +166,8 @@ def _send(reg: FilesRegistry, events: FilesEvents, panes, me: str,
 DOWN = "down"        # a fifth verdict triage cannot produce: there is no pane.
 
 
-def _liveness(reg: FilesRegistry, panes, shows_ready_ui, name: str) -> str:
+def _liveness(reg: FilesRegistry, panes, shows_ready_ui, name: str,
+              awaiting_answer=None) -> str:
     """Is `name` working RIGHT NOW? The scrape sattler had to do by hand.
 
     Answered here, at read time, and never stored — a liveness verdict is only
@@ -185,7 +186,10 @@ def _liveness(reg: FilesRegistry, panes, shows_ready_ui, name: str) -> str:
     if not card.pane or not panes.exists(card.pane):
         return DOWN
     screen = panes.capture(card.pane)
-    return triage.work_state(screen, shows_ready_ui(screen))
+    # awaiting_answer is optional so a caller with no runtime still gets a verdict
+    # — one degraded to `?`, exactly as before, rather than a crash.
+    awaiting = bool(awaiting_answer(screen)) if awaiting_answer else False
+    return triage.work_state(screen, shows_ready_ui(screen), awaiting=awaiting)
 
 
 def _age(ts: float, now: float) -> str:
@@ -242,6 +246,16 @@ def _compose_reason(events: list[StopEvent], verdicts: dict, now: float,
             tag += (f" — STILL RUNNING {e.shells} background shell(s): its TURN "
                     f"ended, its WORK may not have")
         more = f" ({counts[name]} events)" if counts[name] > 1 else ""
+        # BLOCKED ON A QUESTION (aegis-qxc2). The bare verdict `waiting` is already
+        # better than the `?` it replaces, but a coordinator reading this line is
+        # deciding what to DO, and "waiting" alone does not say that the thing it is
+        # waiting for is THEM. Spelled out here rather than left to be inferred,
+        # because the whole failure was 7 stalled workers looking like 7 busy ones
+        # and two of them sitting an hour on questions that were already answered.
+        if verdicts.get(name) == triage.WAITING:
+            tag += (" — BLOCKED ON A QUESTION in its pane: it is stopped until "
+                    "someone answers. Answer it, or tell it to put the decision on "
+                    "the bead and carry on")
         lines.append(f"  - {name} stopped {_age(e.ts, now)} — now: "
                      f"{verdicts.get(name, '?')} · {_item_note(e)}{tag}{more}")
     if deferred:
@@ -251,7 +265,7 @@ def _compose_reason(events: list[StopEvent], verdicts: dict, now: float,
 
 
 def _drain(events: FilesEvents, me: str, reg=None, panes=None,
-           shows_ready_ui=None) -> int:
+           shows_ready_ui=None, awaiting_answer=None) -> int:
     """Deliver MY events — minus the ones whose sender is still working.
 
     reg/panes/shows_ready_ui are optional so a caller with no pane backend still
@@ -267,7 +281,8 @@ def _drain(events: FilesEvents, me: str, reg=None, panes=None,
         def accept(ev: StopEvent) -> bool:            # noqa: F811 — the wired form
             nonlocal deferred
             if ev.frm not in verdicts:
-                verdicts[ev.frm] = _liveness(reg, panes, shows_ready_ui, ev.frm)
+                verdicts[ev.frm] = _liveness(reg, panes, shows_ready_ui, ev.frm,
+                                             awaiting_answer)
             if verdicts[ev.frm] == triage.BUSY:
                 deferred += 1
                 return False                          # DEFER — still pending
@@ -309,7 +324,8 @@ def main(argv: list[str] | None = None) -> int:
     # shows_ready_ui is the RUNTIME's marker check (triage stays runtime-blind).
     # It reads only the screen, so the settings resolver it never calls is None.
     runtime = ClaudeRuntime(panes, lambda card: None, root=root)
-    return _drain(events, me, reg, panes, runtime.shows_ready_ui)
+    return _drain(events, me, reg, panes, runtime.shows_ready_ui,
+                  runtime.awaiting_answer)
 
 
 if __name__ == "__main__":
