@@ -50,8 +50,8 @@ class StopEvent:
 @runtime_checkable
 class Events(Protocol):
     """The stop-event stream. Two methods, and neither is get/update/create — this
-    is deliberately NOT the Tracker (whose three-method surface is pinned, aegis-
-    gqr8). Sharing the Tracker's SUBSTRATE (the aegis store) does not mean sharing
+    is deliberately NOT the Tracker (whose three-method surface is pinned by a
+    ruling). Sharing the Tracker's SUBSTRATE (one store) does not mean sharing
     its protocol; a stop event and a work item are different types on one store."""
     def persist(self, to: str, frm: str, reason: str | None, rose: bool) -> StopEvent:
         """SEND: durably record an event addressed to `to`. Survival guarantee —

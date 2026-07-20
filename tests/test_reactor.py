@@ -3,7 +3,7 @@
 test_green_and_dead_is_not_live reproduces the real outage: reactor answering
 /health with 200, up{job=reactor}==1, systemd active(running), no alerts firing
 — and ZERO events delivered, for months, while a directive told 14 agents it was
-working (aegis-uyvs / lfhk / r2r0 / 5lnp).
+working.
 
 If this adapter cannot tell that state from a healthy one, it is another light
 where a detector should be, and shantytown has reproduced the bug it was written
@@ -15,7 +15,7 @@ import pytest
 
 from shantytown.reactor import Liveness, NoReactor, Reactor, _counter
 
-# A real capture from dolt.lan:8075, 2026-07-16. Not invented.
+# A real capture from a running reactor. Not invented.
 REAL = """\
 reactor_uptime_seconds 749.3
 reactor_events_processed_total 27
@@ -56,7 +56,7 @@ def test_live_when_events_are_flowing():
 
 
 def test_idle_is_not_live_and_is_not_dead_either():
-    """TWO WRONG ANSWERS, BOTH MINE, TWENTY MINUTES APART (aegis-k6hv).
+    """TWO WRONG ANSWERS, BOTH MINE, TWENTY MINUTES APART.
 
     v1: `live if delivered > 0`. A cumulative counter never goes down, so it says
         "live" a week after death — up==1 with a bigger number. NEVER FIRES.
@@ -82,7 +82,7 @@ def test_idle_is_not_live_and_is_not_dead_either():
 
 
 def test_backlogged_is_dead_not_idle():
-    """dearing's discriminator (aegis-4s5d): quiet cannot explain a BACKLOG.
+    """dearing's discriminator: quiet cannot explain a BACKLOG.
 
     pending > 0 AND nothing processed = work is waiting and reactor is not doing
     it. That is the one reading which separates idle from dead, and it is a true
@@ -116,7 +116,7 @@ def test_pending_zero_does_NOT_prove_healthy():
 
 
 def test_600s_of_silence_is_INSIDE_the_measured_distribution():
-    """THE THRESHOLD WAS BELOW NORMAL AND THE MEASUREMENT PROVED IT (aegis-8qk1).
+    """THE THRESHOLD WAS BELOW NORMAL AND THE MEASUREMENT PROVED IT.
 
     Measured end-to-end latency on beads_aegis: n=66, min=0s, avg=45s, MAX=788s.
     The old QUIET_AFTER_S was 300 — **3 of 66 healthy events exceeded it**. All

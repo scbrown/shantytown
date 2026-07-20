@@ -1,4 +1,4 @@
-"""ensure_workspace — the workspace leg of #5 (aegis-isbs).
+"""ensure_workspace — the workspace leg of #5.
 
 Three outcomes, all with a positive AND a negative control: present -> untouched,
 absent -> cloned, cannot -> REFUSED. The one that matters most is the refusal: a
@@ -47,7 +47,7 @@ def test_present_workspace_is_returned_untouched(tmp_path):
     card = Agent(name="ellie", workspace=str(ws), workspace_source="git@x:repo.git")
     assert ensure_workspace(card, clone=clone) == str(ws)
     # A source on the card must not tempt it into re-cloning or syncing: an
-    # agent's workspace holds uncommitted work (aegis-iaef).
+    # agent's workspace holds uncommitted work.
     assert clone.calls == []
     assert (ws / "CLAUDE.md").read_text() == "uncommitted work"
 

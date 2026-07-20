@@ -1,4 +1,4 @@
-"""THE DONE GATE — a full crew cycle on shantytown, ZERO gt (aegis-qdal / zx7l).
+"""THE DONE GATE — a full crew cycle on shantytown, ZERO gt.
 
 dearing's gate for the epic: "one crew member runs a FULL cycle on st with ZERO
 gt — that's 'done'." Built SHIM-ONLY per her directive — every pane is a NullPanes,
@@ -40,13 +40,13 @@ class _CrewPanes(NullPanes):
 def workspace(tmp_path):
     root = tmp_path / ".shanty"
     (root / "crew").mkdir(parents=True)
-    # a worker (ellie) reporting to a lead (maldoon) under an admin (goldblum)
+    # a worker (ellie) reporting to a lead (maldoon) under an admin (hammond)
     (root / "crew" / "ellie.json").write_text(json.dumps(
-        {"role": "worker", "reports_to": "maldoon", "pane": "aegis-crew-ellie"}))
+        {"role": "worker", "reports_to": "maldoon", "pane": "crew-ellie"}))
     (root / "crew" / "maldoon.json").write_text(json.dumps(
-        {"role": "lead", "reports_to": "goldblum", "pane": "aegis-crew-maldoon"}))
-    (root / "crew" / "goldblum.json").write_text(json.dumps(
-        {"role": "administrator", "pane": "aegis-crew-goldblum"}))
+        {"role": "lead", "reports_to": "hammond", "pane": "crew-maldoon"}))
+    (root / "crew" / "hammond.json").write_text(json.dumps(
+        {"role": "administrator", "pane": "crew-hammond"}))
     return root
 
 
@@ -80,7 +80,7 @@ def test_full_crew_cycle_on_st_zero_gt(workspace, monkeypatch, capsys):
 
     # 5. new — bring ellie up: session created, --settings composed, verify live
     assert run("new", "ellie") == OK
-    assert panes.exists("aegis-crew-ellie"), "new did not create the session"
+    assert panes.exists("crew-ellie"), "new did not create the session"
     _, launch = panes.sent[-1]
     assert "SHANTY_AGENT=ellie" in launch and "--settings" in launch
 
@@ -102,19 +102,19 @@ def test_full_crew_cycle_on_st_zero_gt(workspace, monkeypatch, capsys):
 
     # 9. stop — kill ellie's session, VERIFIED gone
     assert run("stop", "ellie") == OK
-    assert not panes.exists("aegis-crew-ellie"), "stop left the session alive"
+    assert not panes.exists("crew-ellie"), "stop left the session alive"
 
     # 10. stop-event routing: ellie stops. maldoon (lead) is DOWN (not in live) ->
     #     the event RISES to the admin, durably, then the admin DRAINS it once.
     monkeypatch.setenv("SHANTY_AGENT", "ellie")
     assert stop_event.main(["send", "--root", str(root)]) == 0
     # the event ROSE to the admin (lead down) and survived on the store
-    assert [e.rose for e in FilesEvents(root / "events").drain("goldblum")] == [True]
+    assert [e.rose for e in FilesEvents(root / "events").drain("hammond")] == [True]
     # re-persist a fresh one so the admin's drain path has something to deliver
     monkeypatch.setenv("SHANTY_AGENT", "ellie")
     assert stop_event.main(["send", "--root", str(root)]) == 0
     capsys.readouterr()                        # clear accumulated stdout first
-    monkeypatch.setenv("SHANTY_AGENT", "goldblum")
+    monkeypatch.setenv("SHANTY_AGENT", "hammond")
     assert stop_event.main(["drain", "--root", str(root)]) == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["decision"] == "block" and "ellie stopped" in payload["reason"]

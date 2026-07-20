@@ -1,6 +1,6 @@
 """Launch stamps — can we tell which settings a live agent is ACTUALLY on?
 
-aegis-nipg. `--settings` is read once, at launch; every later rewrite reaches
+`--settings` is read once, at launch; every later rewrite reaches
 nobody already running. `st crew` reported `up` for two agents whose stop hooks
 were resolving against the wrong store, and `up` is what a deaf agent looks like.
 

@@ -1,4 +1,4 @@
-"""`st crew` answers "who is free?" — aegis-o8we.
+"""`st crew` answers "who is free?".
 
 The verdict is triage's and has been load-bearing since #1 (dispatch refuses a
 send into a busy pane); `st crew` just never asked it. These tests pin BOTH the
@@ -18,7 +18,7 @@ from shantytown.tmux import NullPanes
 # Real Claude Code chrome, as it appears at the bottom of a pane.
 IDLE_SCREEN = "> \n  ? for shortcuts"
 BUSY_SCREEN = "✻ Envisioning… (12s · 4.1k tokens · esc to interrupt)\n? for shortcuts"
-SHELL_SCREEN = "braino@vati:~$ "
+SHELL_SCREEN = "user@host:~$ "
 WEDGED_SCREEN = "[Process completed]"
 
 
@@ -38,7 +38,7 @@ def test_quiet_pane_with_no_runtime_ui_is_unsure_not_idle():
 
 
 def test_a_traceback_on_screen_does_not_hide_a_free_agent():
-    """The aegis-hd2q lesson, one column over: agents print tracebacks constantly
+    """The wedged-verdict lesson, one column over: agents print tracebacks constantly
     (a failing test prints one), so free-ness must key on the POSITIVE ready
     signal, never on is_live's DEAD_MARKERS."""
     screen = "Traceback (most recent call last):\nZeroDivisionError\n> \n? for shortcuts"
@@ -122,7 +122,7 @@ def test_a_down_agent_is_never_free(tmp_path, monkeypatch, capsys):
 
 
 def test_work_is_answered_for_agents_with_no_launch_stamp(tmp_path, monkeypatch, capsys):
-    """The roster's other blind spot (o8we, second defect): over half the fleet
+    """The roster's other blind spot (second defect): over half the fleet
     has no launch stamp, so the settings column can only say `?`. The work verdict
     is derived from the PANE, so it is answerable anyway — and the stamp is NOT
     backfilled to make the other column look answered."""
@@ -135,7 +135,7 @@ def test_work_is_answered_for_agents_with_no_launch_stamp(tmp_path, monkeypatch,
     assert not (Path(root) / "launched").exists(), "a stamp was fabricated"
 
 
-# --- the ready marker, re-measured (aegis-o8we) ------------------------------
+# --- the ready marker, re-measured ------------------------------
 
 # Verbatim from a live crew pane, 2026-07-20. Not a synthesised string: the
 # earlier marker set was validated on ONE pane in default mode and matched

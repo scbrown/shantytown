@@ -1,6 +1,6 @@
 """launched — what settings each live agent ACTUALLY came up on.
 
-WHY THIS EXISTS (aegis-nipg, measured 2026-07-19).
+WHY THIS EXISTS (measured 2026-07-19).
 
 `--settings` is read ONCE, at launch. Every later rewrite of that file lands on
 disk and reaches NOBODY who is already running. The failure is silent in both

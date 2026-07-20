@@ -1,4 +1,4 @@
-"""st new — bring up a HOOKED agent session. shantytown #5 (aegis-qdal.qdal.1).
+"""st new — bring up a HOOKED agent session. shantytown #5.
 
 The command chains the two seams: new_session (empty pane) -> Runtime.start
 (compose w/ --settings, send) -> verify PROCESS live -> 0/1/2. Every exit code
@@ -18,7 +18,7 @@ from shantytown.tmux import NullPanes
 READY = "… Welcome to Claude Code …\n? for shortcuts"
 
 
-def _world(tmp_path: Path, *, role="worker", pane="aegis-crew-ellie", settings=True,
+def _world(tmp_path: Path, *, role="worker", pane="crew-ellie", settings=True,
            **card_fields):
     """A crew card, and (optionally) the role's settings file — the thing #6
     emits. Present = compose can materialize; absent = compose refuses."""
@@ -65,7 +65,7 @@ def test_new_starts_and_verifies_live(tmp_path, monkeypatch, capsys):
     assert panes.sent, "st new claimed started but sent nothing"
     _, text = panes.sent[-1]
     assert "SHANTY_AGENT=ellie" in text and "--settings" in text
-    assert panes.exists("aegis-crew-ellie")
+    assert panes.exists("crew-ellie")
 
 
 # --- exit 2: launched but never observed live (THE negative control) --------
@@ -74,7 +74,7 @@ def test_new_returns_2_when_runtime_never_comes_up(tmp_path, monkeypatch, capsys
     """A launch that never comes up MUST be could-not-tell, never a cheerful 0.
     NullPanes with no banner: send lands, but the ready marker never appears."""
     root = _world(tmp_path)
-    panes = NullPanes(screen="braino@vati:~$", live=set())   # bare shell, no banner
+    panes = NullPanes(screen="user@host:~$", live=set())   # bare shell, no banner
     monkeypatch.setattr(cli, "Tmux", lambda: panes)
     rc = cli._cmd_new(_Args(root=root))
     assert rc == cli.CANNOT_TELL
@@ -102,14 +102,14 @@ def test_new_refuses_when_settings_cannot_be_materialized(tmp_path, monkeypatch,
     rc = cli._cmd_new(_Args(root=root))
     assert rc == cli.REFUSED
     assert "refused" in capsys.readouterr().err
-    assert not panes.exists("aegis-crew-ellie"), "refuse must create no session"
+    assert not panes.exists("crew-ellie"), "refuse must create no session"
     assert panes.sent == [], "refuse must launch nothing"
 
 
 def test_new_refuses_to_clobber_a_live_session(tmp_path, monkeypatch, capsys):
     """The clobber guard — never replace a running agent."""
     root = _world(tmp_path)
-    panes = NullPanes(screen=READY, live={"aegis-crew-ellie"})   # already live
+    panes = NullPanes(screen=READY, live={"crew-ellie"})   # already live
     monkeypatch.setattr(cli, "Tmux", lambda: panes)
     rc = cli._cmd_new(_Args(root=root))
     assert rc == cli.REFUSED
@@ -117,7 +117,7 @@ def test_new_refuses_to_clobber_a_live_session(tmp_path, monkeypatch, capsys):
     assert panes.sent == [], "clobber-refuse must launch nothing"
 
 
-# --- the workspace leg (aegis-isbs): ensure the dir, or refuse -------------
+# --- the workspace leg: ensure the dir, or refuse -------------
 
 def test_new_refuses_when_the_workspace_does_not_exist(tmp_path, monkeypatch, capsys):
     """The launch string `cd`s into card.workspace. If that directory is missing
@@ -130,7 +130,7 @@ def test_new_refuses_when_the_workspace_does_not_exist(tmp_path, monkeypatch, ca
     rc = cli._cmd_new(_Args(root=root))
     assert rc == cli.REFUSED
     assert "does not exist" in capsys.readouterr().err
-    assert not panes.exists("aegis-crew-ellie"), "refuse must create no session"
+    assert not panes.exists("crew-ellie"), "refuse must create no session"
     assert panes.sent == [], "refuse must launch nothing"
 
 
@@ -167,5 +167,23 @@ def test_new_dry_run_prints_and_creates_nothing(tmp_path, monkeypatch, capsys):
     assert rc == cli.OK
     out = capsys.readouterr().out
     assert "would launch" in out and "--settings" in out
-    assert not panes.exists("aegis-crew-ellie"), "dry-run must create no session"
+    assert not panes.exists("crew-ellie"), "dry-run must create no session"
     assert panes.sent == [], "dry-run must launch nothing"
+
+
+def test_new_falls_back_to_an_st_prefixed_session_when_the_card_names_no_pane(
+        tmp_path, monkeypatch, capsys):
+    """A card without a `pane` still has to land somewhere, and WHERE matters.
+
+    The fallback name is the one thing `st new` invents rather than reads, so it
+    is the one name that can collide with a session somebody else's tooling is
+    already running under. `st-` is reserved for sessions st created; anything
+    more generic (or borrowed from whatever crew convention happens to be local)
+    puts a live agent one name-match away from being targeted.
+    """
+    root = _world(tmp_path, pane=None)
+    panes = NullPanes(live=set())
+    monkeypatch.setattr(cli, "Tmux", lambda: panes)
+    rc = cli._cmd_new(_Args(root=root, dry_run=True))
+    assert rc == cli.OK
+    assert "st-ellie" in capsys.readouterr().out

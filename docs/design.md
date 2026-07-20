@@ -201,15 +201,15 @@ class of defect we keep finding by hand.
 
 Stop after 4 if the numbers don't hold. That's a real outcome, not a failure.
 
-**Step 4 result (aegis-jfxj, ruled PASSED by dearing):** `st go` is ~35x faster on the real path
+**Step 4 result (ruled PASSED by dearing):** `st go` is ~35x faster on the real path
 (3.4s vs gt sling's >120s), 63→3 Dolt connections. The literal "under a second" was MISSED at 3.4s —
-but that 3.4s is entirely `bd update`'s cost (a bd write is 17x a bd read, aegis-s9m7, root-caused to
+but that 3.4s is entirely `bd update`'s cost (a bd write is 17x a bd read, root-caused to
 an INFORMATION_SCHEMA check), not shantytown's; shantytown's own overhead is ~0.2s. "Under a second"
 was a bd target wearing shantytown's name. The gate passed on the corrected criterion (own-overhead
 ≤0.25s, ≥10x vs sling), so the project earns its existence and step 5 is unblocked.
 
-**The CLI + `prime` (aegis-gqr8) are NOT a numbered step** — they came from Stiwi's later "there needs
+**The CLI + `prime` are NOT a numbered step** — they came from Stiwi's later "there needs
 to be a cli and a primer" (2026-07-16), and `docs/cli.md` specifies them. They are the interface *over*
 steps 1–4, built after the gate passed, not a rung on the ladder to it. The orchestration tier
-(worker/lead/administrator, aegis-rpo1) is likewise a Stiwi-directed capability on top of a passed
+(worker/lead/administrator) is likewise a Stiwi-directed capability on top of a passed
 gate, not part of the original prove-it-is-faster sequence.

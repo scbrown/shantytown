@@ -23,7 +23,7 @@ class Agent:
                                   # auto-loads .mcp.json and CLAUDE.md from here,
                                   # so pointing at the agent's existing dir wires
                                   # its servers + charter WITHOUT the launcher ever
-                                  # reading their contents (the pilot, aegis-qdal.5:
+                                  # reading their contents (the pilot.5:
                                   # secrets stay in the agent's own files). None =
                                   # launch in the default cwd.
     workspace_source: str | None = None
@@ -31,7 +31,7 @@ class Agent:
                                   # absent (a git URL or a local path). The card
                                   # carried a workspace PATH and no way to create
                                   # it, so the "clone if absent" half of the
-                                  # ensure step was unbuildable (aegis-isbs).
+                                  # ensure step was unbuildable.
                                   # SEPARATE from workspace on purpose: the path
                                   # is where the agent LIVES, the source is where
                                   # it CAME FROM, and an agent whose dir already
@@ -70,7 +70,7 @@ class Registry(Protocol):
 class Tracker(Protocol):
     """Two functions. Anything more and the tracker is driving the harness.
 
-    UNRESOLVED, and deliberately not resolved here (aegis-gqr8): `shanty prime`
+    UNRESOLVED, and deliberately not resolved here: `shanty prime`
     must answer "what's on my plate", and it CANNOT through this protocol —
     get() needs an id you do not have yet. I briefly added a third method,
     mine(), and it broke test_swap's two-function assertion, which exists to
@@ -82,7 +82,7 @@ class Tracker(Protocol):
     holding position, not an answer — it means every new tracker owes a plate
     reader that the protocol does not describe.
 
-    RULED (arnold, aegis-gqr8): NO. "What's on my plate" is NOT a Tracker method.
+    RULED (arnold): NO. "What's on my plate" is NOT a Tracker method.
     It stays a per-backend PLATE READER (files.plate, beads.plate) injected into
     prime. Reasons: (1) the two-function contract is load-bearing — ellie's test
     and the BeadsTracker swap both depend on it, and mine() broke both; (2) a
@@ -121,13 +121,13 @@ class Panes(Protocol):
                                                # Tmux and NullPanes implement it;
                                                # it was a de-facto protocol method
                                                # that was never declared.
-    # #5 session lifecycle (aegis-qdal, arnold's ruling). new_session makes an
+    # #5 session lifecycle (arnold's ruling). new_session makes an
     # EMPTY pane and RAISES if the name exists (never clobber a live agent);
     # kill_session is idempotent. Launching the agent-with-hooks is a runtime
     # send(), NOT a Panes verb — that boundary keeps handoff from leaking in.
     def new_session(self, name: str) -> str: ...
     def kill_session(self, name: str) -> None: ...
-    # Ownership provenance (aegis-ac5g, dearing's safety requirement). new_session
+    # Ownership provenance (dearing's safety requirement). new_session
     # marks the session st-owned; owns() reports it. `st stop` refuses to reap a
     # session it does not own, even on an exact name match — the registry pane
     # names collide with the live crew, so a name match is not permission to kill.
@@ -157,7 +157,7 @@ class ContextUnavailable(Exception):
     results", and TWO facts need saying:
 
         the none-adapter, and a bobbin that is DOWN, return the same bytes
-        and mean opposite things.                                — ellie, aegis-rhhw
+        and mean opposite things.                                — ellie
 
     An empty list is a FINDING: I asked, and the answer was nothing. This is a
     FAILURE: I never got an answer. Callers map them to different exit codes (0
@@ -176,7 +176,7 @@ class Context(Protocol):
     ONE method. It cannot grow a query API the way a tracker can, and that is
     deliberate: an integration that exists because it is in a table is how you
     get to 110 commands. If you need a second method, THAT IS THE FINDING — put
-    it on the bead, not in this file. (aegis-rhhw; the same rule that caught a
+    it on the bead, not in this file. (the same rule that caught a
     third Tracker method inside a day.)
 
     Implementations MUST raise ContextUnavailable rather than return [] when

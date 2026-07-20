@@ -1,8 +1,8 @@
-"""st role set — the CLI wiring for the tier (aegis-rpo1).
+"""st role set — the CLI wiring for the tier.
 
 Was `_not_yet` (refused: not built). Now real. Tests the exit-code contract:
 0 did it, 1 refused. Measured directly, not through a pipe — the pipe-masks-$?
-bug (aegis-eu3s) is why the exit codes went unverified the first time by hand.
+bug is why the exit codes went unverified the first time by hand.
 """
 from __future__ import annotations
 import json

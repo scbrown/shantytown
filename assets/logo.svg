@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 190" width="400" height="190" role="img" aria-labelledby="title desc">
+  <title id="title">shantytown</title>
+  <desc id="desc">A small skyline of corrugated shacks on a shared ground line.</desc>
+
+  <!-- Colours are chosen to read on both light and dark backgrounds:
+       mid-tone slate walls, amber roofs, lit windows. No pure black or white. -->
+  <g fill="none" stroke="#7C8B9E" stroke-width="3" stroke-linejoin="round" stroke-linecap="round">
+
+    <!-- shack 1 -->
+    <path d="M28 168 V108 H86 V168" fill="#5E7186" fill-opacity="0.28"/>
+    <path d="M20 108 L92 100" stroke="#E0A040" stroke-width="6"/>
+    <rect x="42" y="124" width="16" height="14" fill="#F2C46B" fill-opacity="0.9" stroke="#B98A2E" stroke-width="2"/>
+    <path d="M70 78 V100" stroke="#93A3B5" stroke-width="3"/>
+    <circle cx="70" cy="75" r="3.5" fill="#93A3B5" stroke="none"/>
+
+    <!-- shack 2 (tall, leaning) -->
+    <path d="M96 168 V78 H142 V168" fill="#5E7186" fill-opacity="0.22"/>
+    <path d="M90 78 L148 70" stroke="#E0A040" stroke-width="6"/>
+    <rect x="108" y="94" width="18" height="16" fill="#F2C46B" fill-opacity="0.9" stroke="#B98A2E" stroke-width="2"/>
+    <path d="M108 128 H126" stroke="#93A3B5" stroke-width="3"/>
+
+    <!-- shack 3 (low, wide) -->
+    <path d="M152 168 V124 H226 V168" fill="#5E7186" fill-opacity="0.30"/>
+    <path d="M146 124 L232 118" stroke="#E0A040" stroke-width="6"/>
+    <rect x="166" y="138" width="16" height="14" fill="#F2C46B" fill-opacity="0.9" stroke="#B98A2E" stroke-width="2"/>
+    <path d="M198 138 V168" stroke="#93A3B5" stroke-width="3"/>
+
+    <!-- shack 4 (chimney + smoke) -->
+    <path d="M236 168 V98 H288 V168" fill="#5E7186" fill-opacity="0.24"/>
+    <path d="M230 98 L294 92" stroke="#E0A040" stroke-width="6"/>
+    <rect x="270" y="70" width="10" height="24" fill="#5E7186" fill-opacity="0.35" stroke="#7C8B9E" stroke-width="3"/>
+    <path d="M275 62 q8 -8 0 -16 q-8 -8 0 -16" stroke="#9CB0C4" stroke-width="2.5" stroke-opacity="0.85"/>
+    <rect x="250" y="116" width="18" height="16" fill="#F2C46B" fill-opacity="0.9" stroke="#B98A2E" stroke-width="2"/>
+
+    <!-- shack 5 -->
+    <path d="M298 168 V112 H352 V168" fill="#5E7186" fill-opacity="0.28"/>
+    <path d="M292 112 L358 106" stroke="#E0A040" stroke-width="6"/>
+    <rect x="314" y="128" width="16" height="14" fill="#F2C46B" fill-opacity="0.9" stroke="#B98A2E" stroke-width="2"/>
+    <path d="M366 168 V132 H386 V168" fill="#5E7186" fill-opacity="0.20"/>
+    <path d="M362 132 L390 128" stroke="#E0A040" stroke-width="5"/>
+
+    <!-- the ground everyone shares -->
+    <path d="M10 168 H392" stroke="#7C8B9E" stroke-width="4"/>
+    <path d="M16 178 H392" stroke="#7C8B9E" stroke-width="2" stroke-opacity="0.5"/>
+  </g>
+</svg>

@@ -1,6 +1,6 @@
 """tier — the orchestration tier. worker / lead / administrator.
 
-Built to docs/roles.md (aegis-rpo1). The middle role is the whole point:
+Built to docs/roles.md. The middle role is the whole point:
 A LEAD IS NOT A SMALLER ADMINISTRATOR. A LEAD IS A WORKER THAT ALSO ABSORBS.
 
 Why it exists, measured not theoretical: one agent received every stop report
@@ -10,7 +10,7 @@ coordinating; one who never does is a router that adds latency to trivia. The
 lead tier makes "just do it" a *legitimate* outcome at the layer where the
 information already is.
 
-THE FOUR OPEN QUESTIONS (roles.md) — RULED, as the design author (aegis-rpo1):
+THE FOUR OPEN QUESTIONS (roles.md) — RULED, as the design author:
 
   Q1 Can a lead have leads?            RULED: NO. Depth 2 exactly. N tiers is an
                                        org chart. set_role refuses a lead whose

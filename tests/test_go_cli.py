@@ -2,7 +2,7 @@
 
 Dispatch (#2) correctly RAISES SendUnverified when the pane does not confirm the
 send. But _cmd_go was catching only TriageRefused/LookupError, so SendUnverified
-propagated as an UNCAUGHT TRACEBACK (exit 1) — found by the zx7l full-cycle
+propagated as an UNCAUGHT TRACEBACK (exit 1) — found by the full-cycle
 validation against a real pane that could not echo. The exception's own docstring
 pins it to exit 2 (could-not-tell); this proves the CLI honors that.
 """

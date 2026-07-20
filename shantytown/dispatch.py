@@ -2,7 +2,7 @@
 
 The command this repo exists for. gt sling takes >120s; its --dry-run alone
 takes 51s and writes nothing, because the cost is 63 sequential Dolt
-connections during RESOLUTION, before any write (aegis-eu3s). Underneath,
+connections during RESOLUTION, before any write. Underneath,
 dispatch is tmux send-keys.
 
 This module does: one registry read, one tracker read, one tracker write,

@@ -33,9 +33,9 @@ def world(tmp_path: Path):
     _card(crew, "arya", role="worker")                       # orphan
     _card(crew, "ghostlead", role="worker", reports_to="nobody")
     tracker = FilesTracker(tmp_path / "items")
-    tracker.update("aegis-9h2", title="Restore the den service",
+    tracker.update("st-9h2", title="Restore the den service",
                    status="in_progress", assignee="ellie")
-    tracker.update("aegis-old", title="Done thing",
+    tracker.update("st-old", title="Done thing",
                    status="closed", assignee="ellie")
     return tmp_path, FilesRegistry(crew), tracker
 
@@ -103,7 +103,7 @@ def test_prime_is_idempotent(world):
 def test_one_item_never_a_backlog(world):
     """cli.md: "One item, or none. A primer that prints a backlog is a dashboard."""
     _, reg, trk = world
-    trk.update("aegis-2nd", title="Second thing", status="open", assignee="ellie")
+    trk.update("st-2nd", title="Second thing", status="open", assignee="ellie")
     p = prime("ellie", reg, NullPanes(), plate=lambda w, _t=trk: plate(_t, w))
     # The type says so, but assert the behaviour: one, not two.
     assert p.item is not None
@@ -112,7 +112,7 @@ def test_one_item_never_a_backlog(world):
 
 def test_closed_items_are_not_on_your_plate(world):
     _, reg, trk = world
-    trk.update("aegis-9h2", status="closed")
+    trk.update("st-9h2", status="closed")
     p = prime("ellie", reg, NullPanes(), plate=lambda w, _t=trk: plate(_t, w))
     assert p.item is None
     assert "nothing." in p.render()
@@ -196,6 +196,6 @@ def test_optional_sections_vanish(world):
 
     rich = prime("ellie", reg, NullPanes(), plate=lambda w, _t=trk: plate(_t, w),
                  context=["scripts/e2e/den.sh"],
-                 knowledge=['"den.svc was cowboy-deployed" — 2026-06-30']).render()
+                 knowledge=['"auth-api was cowboy-deployed" — 2026-06-30']).render()
     assert "CONTEXT (bobbin)" in rich
     assert "KNOWN (quipu)" in rich

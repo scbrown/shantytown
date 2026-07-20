@@ -1,5 +1,5 @@
 """The stop-event stream — persist(survival) + drain(delivery) + BLOCK-ONCE.
-shantytown #6 (aegis-ct5q, arnold's ruling gt-wisp-w4j2af).
+shantytown #6 (arnold's ruling gt-wisp-w4j2af).
 
 The two rails under test: (1) survival — an event persists even when the
 destination is down, and drains when the destination next stops; (2) BLOCK-ONCE —
@@ -31,8 +31,8 @@ def test_persist_survives_a_down_destination(store):
 
 
 def test_a_rise_carries_its_reason(store):
-    store.persist(to="goldblum", frm="ellie", reason="lead-unreachable", rose=True)
-    got = store.drain("goldblum")
+    store.persist(to="hammond", frm="ellie", reason="lead-unreachable", rose=True)
+    got = store.drain("hammond")
     assert len(got) == 1
     assert got[0].rose is True and got[0].reason == "lead-unreachable"
 
@@ -63,9 +63,9 @@ def test_a_new_event_after_a_drain_is_delivered(store):
 
 def test_drain_is_scoped_to_the_recipient(store):
     store.persist(to="maldoon", frm="ellie", reason=None, rose=False)
-    store.persist(to="goldblum", frm="grant", reason=None, rose=False)
+    store.persist(to="hammond", frm="grant", reason=None, rose=False)
     assert [e.frm for e in store.drain("maldoon")] == ["ellie"]
-    assert [e.frm for e in store.drain("goldblum")] == ["grant"]
+    assert [e.frm for e in store.drain("hammond")] == ["grant"]
 
 
 def test_empty_drain_is_not_an_error(store):

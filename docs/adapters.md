@@ -76,7 +76,7 @@ $ st role set malcolm lead
 ```
 
 **Which roles need it is not a fixed list — it is exactly the set of `route_stop` DESTINATIONS**
-(aegis-qdal, ruled against the tier in tier.py). A **worker** is only ever a stop *source*, so it
+(ruled against the tier in tier.py). A **worker** is only ever a stop *source*, so it
 needs nothing. A **lead** receives its reports' stops. An **administrator** receives *risen* stops —
 Q3 (a report's stop rises to the admin when its lead is down, LOUDLY, carrying `LEAD_UNREACHABLE`),
 Q4 (a lead-less worker routes straight to the admin), and lead escalations. So **both lead AND
@@ -114,8 +114,8 @@ class Knowledge(Protocol):      # quipu
     def record(self, episode: Episode) -> TxId: ...
 ```
 
-**`-> list[Snippet]` cannot say "I could not look", and it must.** Built 2026-07-16
-(aegis-rhhw); the hole was in this signature, not in the implementation. An empty
+**`-> list[Snippet]` cannot say "I could not look", and it must.** Built 2026-07-16; the hole was in
+this signature, not in the implementation. An empty
 list has to carry two opposite facts:
 
 | | means | exit |

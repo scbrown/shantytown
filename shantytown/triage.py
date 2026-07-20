@@ -34,7 +34,7 @@ class Decision:
 # --- the honest unknowns. Crude, visible, tunable. -------------------------
 
 # A wedge is the SESSION being dead, not the agent printing something ugly.
-# "Traceback (most recent call last)" was removed 2026-07-16 (aegis-hd2q): agents
+# "Traceback (most recent call last)" was removed 2026-07-16: agents
 # print tracebacks constantly — running a failing test prints one — and RESTART
 # means LAUNCHER-RELAUNCH. MEASURED: a healthy, idle agent whose pane showed a
 # ZeroDivisionError traceback and then "I'll fix that now" was classified
@@ -70,7 +70,7 @@ def mid_flight(screen: str) -> bool:
     return any(m in _tail(screen) for m in INFLIGHT_MARKERS)
 
 
-# --- the dispatcher's question: who is FREE? (aegis-o8we) --------------------
+# --- the dispatcher's question: who is FREE? --------------------
 
 # The four answers, as printed. `?` is a first-class value, not a rounding of
 # idle: "I could not tell" and "nobody is working" are different facts, and the
@@ -100,7 +100,7 @@ def work_state(screen: str, ui_up: bool) -> str:
     DELIBERATELY NOT is_live(): that also fails on DEAD_MARKERS, one of which is
     "Traceback". Agents print tracebacks constantly (running a failing test prints
     one), so keying free-ness on it would mark a genuinely free agent unsure right
-    after it did its job — the aegis-hd2q mistake, which cost a healthy agent a
+    after it did its job — the wedged-marker mistake above, which cost a healthy agent a
     RESTART verdict, repeated one column over. Only the POSITIVE ready signal is
     consulted here.
     """
@@ -139,15 +139,15 @@ def context_high(screen: str, limit_k: float = CONTEXT_HIGH_TOKENS_K) -> bool:
     could only ever fire in a unit test that synthesised a 500-line screen — in
     production it was dead code, and `triage` was a nudge/refuse coin with a
     third face painted on.
-    MEASURED 2026-07-16 (aegis-hd2q): ian carried 737.6k tokens — the textbook
+    MEASURED on a live fleet: one agent carried 737.6k tokens — the textbook
     CLEAR case — and triage returned NUDGE. Every real pane returned
     context_high=False, always, for any input.
-    This is the aegis-mt0r class exactly ("a check incapable of one of its
+    This is the dead-branch class exactly ("a check incapable of one of its
     outcomes, and every one LOOKED FINE"), sitting in the file written to
     encode that lesson. The proxy was not too crude; it was measuring a
     different thing than the one it was named for.
     NOW: ask the runtime. Claude Code already counts the tokens and prints them.
-    Verified to fire on real panes: ian 737.6k, maldoon 694.3k, strider 436.9k.
+    Verified to fire on real panes: 737.6k, 694.3k and 436.9k tokens.
     """
     tokens = context_tokens_k(screen)
     return tokens is not None and tokens >= limit_k

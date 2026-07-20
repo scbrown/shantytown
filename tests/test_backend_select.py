@@ -1,4 +1,4 @@
-"""--backend routes prime/dispatch to the right tracker — aegis-kbuz #3.
+"""--backend routes prime/dispatch to the right tracker #3.
 
 arnold landed beads.plate() (the reader) but the CLI wired FilesTracker
 unconditionally, so `st --backend beads` did not exist and the beads plate was

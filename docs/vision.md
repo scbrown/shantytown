@@ -4,7 +4,7 @@
 
 ## The problem, measured
 
-We run 14 coding agents on [Gas Town](https://github.com/scbrown/gastown). It works, and it earned its
+We run 14 coding agents on [Gas Town](https://github.com/gastownhall/gastown). It works, and it earned its
 complexity honestly — it was built for a world with polecats, a mayor, and an orchestration tier.
 
 We don't live in that world any more, and the numbers say so:
@@ -108,7 +108,7 @@ This is the difference between a tool for us and a tool for anyone.
 | layer | what it is | when |
 |---|---|---|
 | **bare tmux** | `send-keys`. Already how everything works. | The floor. Always available. |
-| **[shanty](https://git.lan/stiwi/shanty)** | Our Go tmux wrapper — Dracula, byobu keybindings, pluggable status segments. | You want the crew to *look* like a crew. |
+| **shanty** | A small Go tmux wrapper — Dracula, byobu keybindings, pluggable status segments. | You want the crew to *look* like a crew. |
 | **[herdr](https://github.com/ogulcancelik/herdr)** | An **agent multiplexer** — 16.8k stars, actively pushed. Purpose-built for exactly this. | Someone else maintains the hard part. |
 
 **shanty and herdr are not competitors.** shanty makes tmux *pleasant*; herdr manages *agents*. shanty

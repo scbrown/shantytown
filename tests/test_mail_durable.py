@@ -1,6 +1,6 @@
-"""st mail --durable — must-survive messages. shantytown #7 (aegis-qdal.qdal.2).
+"""st mail --durable — must-survive messages. shantytown #7.
 
-dearing's ruling: beads-parity on the aegis store, durable = must-survive only,
+dearing's ruling: beads-parity on the shared store, durable = must-survive only,
 routine = ephemeral. The contract: PERSIST first (the survival guarantee), THEN
 best-effort live send. If persist fails, that is CANNOT_TELL — we do NOT silently
 downgrade to a routine send and call it success. Routine mail is UNCHANGED (its
@@ -17,7 +17,7 @@ from shantytown.cli import main, OK, REFUSED, CANNOT_TELL
 from shantytown.protocols import WorkItem
 
 
-def _root(tmp_path: Path, pane="aegis-crew-ian") -> Path:
+def _root(tmp_path: Path, pane="crew-ian") -> Path:
     root = tmp_path / ".shanty"
     (root / "crew").mkdir(parents=True)
     card = {"role": "worker"}
@@ -34,7 +34,7 @@ class _RecordingTracker:
         self.created = []
     def create(self, title, **fields):
         self.created.append((title, fields))
-        return WorkItem(id="aegis-dur1", title=title, status="open",
+        return WorkItem(id="st-dur1", title=title, status="open",
                         assignee=fields.get("assignee"))
 
 
@@ -55,11 +55,11 @@ def test_durable_persists_when_recipient_is_down(tmp_path, monkeypatch):
         def exists(self, pane): return False
         def send(self, pane, text): raise AssertionError("recipient down — no send")
     monkeypatch.setattr(cli, "Tmux", lambda *a, **k: DownTmux())
-    rc = main(["--root", str(_root(tmp_path)), "mail", "-d", "ian", "HANDOFF: finish qdal.2"])
+    rc = main(["--root", str(_root(tmp_path)), "mail", "-d", "ian", "HANDOFF: finish the swap"])
     assert rc == OK
     assert len(trk.created) == 1
     title, fields = trk.created[0]
-    assert "HANDOFF: finish qdal.2" in title
+    assert "HANDOFF: finish the swap" in title
     assert fields.get("assignee") == "ian"
 
 
@@ -75,7 +75,7 @@ def test_durable_persists_AND_sends_when_recipient_is_live(tmp_path, monkeypatch
     rc = main(["--root", str(_root(tmp_path)), "mail", "-d", "ian", "protocol step 3"])
     assert rc == OK
     assert len(trk.created) == 1            # survived
-    assert sent == [("aegis-crew-ian", "protocol step 3")]   # and delivered live
+    assert sent == [("crew-ian", "protocol step 3")]   # and delivered live
 
 
 # --- the negative control: persist FAILED must NOT report success -----------

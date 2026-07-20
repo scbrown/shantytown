@@ -37,7 +37,7 @@ def test_mail_refuses_agent_with_no_pane(tmp_path):
 
 def test_mail_cannot_tell_when_pane_is_gone(tmp_path, monkeypatch):
     """A queue accepts a message for a reader that will never come; send-keys
-    cannot. 47 nudges sat queued for a mayor that does not exist (aegis-rvhn).
+    cannot. 47 nudges sat queued for a mayor that does not exist.
     An absent pane is CANNOT_TELL — never a cheerful success."""
     import shantytown.cli as cli
     class GoneTmux:
