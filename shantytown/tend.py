@@ -69,9 +69,10 @@ STALE = "stale-settings"      # alive, running settings older than the file
 BUSY = "busy"                 # a session appeared and is mid-flight — hands off
 REFUSED = "refused"           # could not act, and said why (workspace, launch)
 UNTENDABLE = "no-pane"        # no pane on the card: nothing to supervise
+UNEQUIPPED = "unequipped"     # alive, but its workspace lacks the tool kit
 
 
-_FAULTS = frozenset({RESURRECTED, DEAF, REFUSED})
+_FAULTS = frozenset({RESURRECTED, DEAF, REFUSED, UNEQUIPPED})
 
 
 @dataclass(frozen=True)
@@ -146,7 +147,7 @@ class Tender:
     """
 
     def __init__(self, panes, runtime, launches, *, spawn=None, refresh=None,
-                 ensure=ensure_workspace, log=None):
+                 ensure=ensure_workspace, log=None, gaps=None):
         self._panes = panes
         self._runtime = runtime
         self._launches = launches
@@ -156,6 +157,10 @@ class Tender:
         # refresh(path) -> str | None. ff-only pull; returns an error string.
         self._refresh = refresh
         self._ensure = ensure
+        # gaps(card) -> list of missing kit names. Injected so a pass can report
+        # a half-equipped agent — nothing in the tier reported that difference,
+        # which is how five agents worked a night without their tools.
+        self._gaps = gaps
         self._log = log or (lambda msg: None)
 
     def pass_over(self, agents: list[Agent], *, dry_run: bool = False) -> Report:
@@ -210,6 +215,15 @@ class Tender:
                            f"alive but carries {sorted(wiring.directions)}, "
                            f"needs {sorted(missing)} more{whence} — green and "
                            f"dead: it cannot report and nothing will rise")
+        if self._gaps is not None:
+            missing = self._gaps(card)
+            if missing:
+                return Finding(card.name, "up", UNEQUIPPED,
+                               f"alive, and its workspace is MISSING {', '.join(missing)} "
+                               f"— it accepts dispatch and silently lacks the tools "
+                               f"the work assumes. Re-provision, then relaunch: the "
+                               f"kit is read at launch, so a file written now does "
+                               f"not reach the running process")
         if self._launches is not None and self._launches.verdict(card.name) == "STALE":
             return Finding(card.name, "up", STALE,
                            "running settings OLDER than the file on disk — a "

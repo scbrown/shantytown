@@ -423,6 +423,18 @@ class ClaudeRuntime:
     # The real fix is to launch past it (a settings/config that pre-answers), which
     # is entangled with what role-set emits — tracked separately, not guessed here.
     CONSENT_MARKERS = ("Claude in Chrome extension detected", "keep browser tools off")
+    # THE FOLDER-TRUST GATE, measured 2026-07-20 and bigger than it looks: a
+    # FRESH workspace makes Claude Code ask "Do you trust the files in this
+    # folder?" and that dialog BLOCKS the ready UI until a human answers. It is
+    # not covered by --dangerously-skip-permissions (verified: a card with
+    # dangerous=True stalls on it exactly the same), and it is not the MCP
+    # consent screen. So EVERY agent launched into a newly cloned directory sat
+    # on this prompt, unusable, while `st new` reported could-not-tell — the
+    # symptom recorded against harding's first launch, and the same one a
+    # tend-respawn hits. A provisioning story that stops at files does not
+    # produce a working agent.
+    TRUST_MARKERS = ("Do you trust the files in this folder",
+                     "1. Yes, I trust this folder")
 
     def __init__(self, panes, resolve_settings: SettingsResolver, root=None) -> None:
         self._panes = panes
@@ -491,6 +503,20 @@ class ClaudeRuntime:
         just run a failing test. Runtime-specific by construction: a second
         runtime knows its own ready markers, and triage knows none of them."""
         return any(mark in screen for mark in self.READY_MARKERS)
+
+    def trust_prompt(self, screen: str) -> bool:
+        """Is the folder-trust dialog up? Distinguished from waiting_for_human
+        because this one the LAUNCHER may answer: the card already elected this
+        workspace, so trusting it re-affirms a decision that is already made
+        rather than making a new one. Every other first-run prompt still needs a
+        person."""
+        return any(m in screen for m in self.TRUST_MARKERS)
+
+    def trust_answer(self) -> str:
+        """The keystroke that accepts. Kept next to the markers so a runtime that
+        renders a different dialog answers its own, and nobody hardcodes a "1"
+        into the launcher."""
+        return "1"
 
     def waiting_for_human(self, screen: str) -> bool:
         """A THIRD state between live and failed: a first-run prompt (e.g. the

@@ -54,6 +54,7 @@ from .inbox import FilesInbox, TrackerInbox
 from .triage import Action
 from . import supervisor as sup_mod
 from . import tend as tend_mod
+from . import provision as prov_mod
 from .files import FilesRegistry, FilesTracker, plate as files_plate
 from .launched import FilesLaunches, CURRENT, STALE, UNKNOWN
 from .quipu import QuipuRegistry
@@ -64,6 +65,7 @@ from .runtime import (ClaudeRuntime, CapabilityError, SettingsError,
                       settings_for_role)
 from .tmux import Tmux
 from .workspace import WorkspaceError, ensure_workspace
+from .provision import ProvisionError, provision as provision_ws
 
 # `st new` liveness poll: how long to wait for the runtime to appear in the pane
 # before returning could-not-tell (2). Module constants so tests can shrink them
@@ -378,9 +380,24 @@ def _observe_live(runtime, panes, session) -> bool:
     enforced at COMPOSITION (the string provably carried --settings), not by pane
     inspection (arnold: that is GT's unanswerable 'did I get primed?'). A green
     verify here must never be read as 'hooks registered'."""
+    answered = False
     for _ in range(_LIVE_ATTEMPTS):
-        if runtime.is_live(panes.capture(session)):
+        screen = panes.capture(session)
+        if runtime.is_live(screen):
             return True
+        # THE FOLDER-TRUST GATE (measured 2026-07-20). A fresh workspace blocks on
+        # "Do you trust the files in this folder?" — before the ready UI, and NOT
+        # bypassed by --dangerously-skip-permissions. Answer it ONCE, and say so:
+        # the card already elected this workspace, so this re-affirms a decision
+        # the operator made when they wrote the card; it does not make a new one.
+        # Answering silently would be the wrong trade — the point is that a human
+        # can see the launcher did it.
+        if not answered and getattr(runtime, "trust_prompt", None) and \
+                runtime.trust_prompt(screen):
+            print(f"  first-run TRUST prompt in {session} — accepting the "
+                  f"workspace the card already elected.", file=sys.stderr)
+            panes.send(session, runtime.trust_answer())
+            answered = True
         if _LIVE_DELAY:
             time.sleep(_LIVE_DELAY)
     return False
@@ -423,6 +440,26 @@ def _cmd_new(a) -> int:
     except WorkspaceError as e:
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED
+    # EQUIPPED OR NOT CREATED. A workspace is not a provisioned agent: a fresh
+    # clone has no .mcp.json (it is uncommitted BY DESIGN — it carries a bearer
+    # token), so an agent launched from one has no code search, no graph and no
+    # ops tools, and looks identical to a healthy one on every surface. Five
+    # agents worked P1 beads for a night that way. Refuse instead.
+    try:
+        servers = provision_ws(card, Path(a.root))
+    except ProvisionError as e:
+        print(f"  refused: {e}", file=sys.stderr)
+        return REFUSED
+    if servers:
+        # Say what it CAN reach, parsed back out of the file we wrote — "the file
+        # is there" was true for every broken render.
+        print(f"  provisioned {len(servers)} MCP server(s): {', '.join(servers)}")
+    elif card.workspace:
+        # No template = this store defines no kit. Say it, every time: silence
+        # here is indistinguishable from the bug (an agent that launches with no
+        # tools and looks fine), and a deleted template would restore it.
+        print(f"  note: no provisioning template at {prov_mod.provision_dir(a.root)}"
+              f" — launching {card.name} with NO MCP kit.")
     # Clobber guard: never replace a live agent (RAISES if the session exists).
     try:
         panes.new_session(session)
@@ -1542,6 +1579,7 @@ def _cmd_tend(a) -> int:
         panes, runtime, _launches(a),
         spawn=None if a.dry_run else (lambda card, session: runtime.start(card, session)),
         refresh=None if a.dry_run else _refresh_clone,
+        gaps=lambda card: prov_mod.missing_kit(card, Path(a.root)),
         log=lambda msg: print(f"  {msg}", file=sys.stderr),
     )
     rep = tender.pass_over(agents, dry_run=a.dry_run)
