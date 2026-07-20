@@ -35,7 +35,7 @@ from .launched import FilesLaunches, CURRENT, STALE, UNKNOWN
 from .quipu import QuipuRegistry
 from .prime import Unreachable, prime as do_prime
 from .runtime import (ClaudeRuntime, CapabilityError, SettingsError,
-                      emitted_stop_directions, live_wiring,
+                      emitted_stop_directions, live_stop_directions, live_wiring,
                       settings_for_role)
 from .tmux import Tmux
 from .workspace import WorkspaceError, ensure_workspace
