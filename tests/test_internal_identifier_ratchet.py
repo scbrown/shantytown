@@ -86,6 +86,9 @@ def live_string_literals(source: str):
 BLOCK_TIER = {k: v for k, v in FORBIDDEN.items() if k != "internal ticket id"}
 
 # Generated/vendored things nobody hand-edits.
+GUARD_FILES = {"test_internal_identifier_ratchet.py",
+               "test_no_internal_ids_in_output.py",
+               "pre-push-scrub-guard.sh"}
 SKIP_DIR = ("/.git/", "/node_modules/", "/target/", "/dist/")
 SKIP_SUFFIX = {".png", ".jpg", ".svg", ".ico", ".pdf", ".zip", ".gz", ".lock",
                ".bin", ".wasm"}
@@ -109,8 +112,11 @@ def test_no_internal_hostnames_addresses_or_paths_anywhere():
     """The one that would have caught tonight's regression: prose in docs."""
     offenders = []
     for rel, text in tracked_text_files():
-        if rel == "tests/test_internal_identifier_ratchet.py":
-            continue          # this file names the patterns; that is its job
+        # A guard's positive control MUST contain the thing it forbids, or it
+        # is a check nobody has seen catch anything. Same exclusion the policy
+        # graph carries for these files.
+        if Path(rel).name in GUARD_FILES:
+            continue
         for i, line in enumerate(text.splitlines(), 1):
             for label, rx in BLOCK_TIER.items():
                 m = rx.search(line)
