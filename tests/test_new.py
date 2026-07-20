@@ -169,3 +169,108 @@ def test_new_dry_run_prints_and_creates_nothing(tmp_path, monkeypatch, capsys):
     assert "would launch" in out and "--settings" in out
     assert not panes.exists("aegis-crew-ellie"), "dry-run must create no session"
     assert panes.sent == [], "dry-run must launch nothing"
+
+
+# --- launch-time HOOK verification (aegis-8p0j gap 1, aegis-05up) ------------
+#
+# arnold: "the NEGATIVE control is the deliverable here. A test that only proves
+# the happy path is not evidence." That is literal — while this bug was live,
+# `st new` returned 0 and every happy-path test was green. The bug WAS the
+# happy path. So each test below launches an agent whose graph position REQUIRES
+# a direction, and varies only what the live process actually carries.
+
+def _hooked_world(tmp_path, *, directions=("send",), role="worker"):
+    """A crew where ellie REPORTS TO lead (so the graph requires `send`), and the
+    role's settings carry exactly `directions`."""
+    crew = tmp_path / "crew"; crew.mkdir()
+    (crew / "ellie.json").write_text(json.dumps(
+        {"role": role, "pane": "aegis-crew-ellie", "reports_to": "lead"}))
+    (crew / "lead.json").write_text(json.dumps({"role": "lead"}))
+    sdir = tmp_path / "settings"; sdir.mkdir()
+    hooks = [{"hooks": [{"command": f"python -m shantytown.stop_event {d}"}]}
+             for d in directions]
+    (sdir / f"{role}.settings.json").write_text(
+        json.dumps({"hooks": {"Stop": hooks}}))
+    return tmp_path
+
+
+def test_new_FAILS_when_the_live_process_came_up_hookless(tmp_path, monkeypatch, capsys):
+    """THE aegis-05up FAILURE MODE. The pane is live, the process is running, and
+    it carries no stop hooks. Before this, that was exit 0 and the word
+    'started'."""
+    root = _hooked_world(tmp_path, directions=())        # settings emit NOTHING
+    panes = NullPanes(screen=READY, live=set())
+    monkeypatch.setattr(cli, "Tmux", lambda: panes)
+
+    rc = cli._cmd_new(_Args(root=root))
+
+    err = capsys.readouterr().err
+    assert rc == cli.REFUSED, "a hookless launch reported success"
+    assert "HOOKLESS" in err
+    assert "'send'" in err or "send" in err, "did not name the missing direction"
+    assert "NO stop hooks at all" in err
+
+
+def test_new_FAILS_naming_only_the_direction_that_is_MISSING(tmp_path, monkeypatch, capsys):
+    """A lead that can send but cannot drain strands its reports, not itself.
+    The message must name drain — the one that is missing — not just 'hooks'."""
+    crew = tmp_path / "crew"; crew.mkdir()
+    (crew / "ellie.json").write_text(json.dumps(
+        {"role": "lead", "pane": "aegis-crew-ellie", "reports_to": "admin"}))
+    (crew / "admin.json").write_text(json.dumps({"role": "admin"}))
+    (crew / "w1.json").write_text(json.dumps({"role": "worker", "reports_to": "ellie"}))
+    sdir = tmp_path / "settings"; sdir.mkdir()
+    (sdir / "lead.settings.json").write_text(json.dumps(
+        {"hooks": {"Stop": [{"hooks": [{"command": "python -m shantytown.stop_event send"}]}]}}))
+    panes = NullPanes(screen=READY, live=set())
+    monkeypatch.setattr(cli, "Tmux", lambda: panes)
+
+    rc = cli._cmd_new(_Args(root=tmp_path))
+
+    err = capsys.readouterr().err
+    assert rc == cli.REFUSED
+    assert "drain" in err
+    assert "['send']" in err, "did not report what it DOES carry"
+
+
+def test_new_is_OK_when_the_live_process_carries_what_the_graph_needs(tmp_path, monkeypatch, capsys):
+    """The positive control. Same code path, same graph requirement — the only
+    difference is that the process really is hooked."""
+    root = _hooked_world(tmp_path, directions=("send",))
+    panes = NullPanes(screen=READY, live=set())
+    monkeypatch.setattr(cli, "Tmux", lambda: panes)
+
+    rc = cli._cmd_new(_Args(root=root))
+
+    assert rc == cli.OK
+    assert "VERIFIED" in capsys.readouterr().out
+
+
+def test_new_is_CANNOT_TELL_when_the_hooks_cannot_be_READ(tmp_path, monkeypatch, capsys):
+    """Unreadable is not hookless, and must never be reported as either a pass
+    or a failure — the same contract live_stop_directions already holds."""
+    root = _hooked_world(tmp_path)
+    panes = NullPanes(screen=READY, live=set())
+    monkeypatch.setattr(cli, "Tmux", lambda: panes)
+    monkeypatch.setattr(panes, "cmdline", lambda pane: None)   # cannot look
+
+    rc = cli._cmd_new(_Args(root=root))
+
+    err = capsys.readouterr().err
+    assert rc == cli.CANNOT_TELL
+    assert "UNVERIFIED" in err
+    assert "HOOKLESS" not in err, "reported a cannot-tell as a definite failure"
+
+
+def test_a_FAILED_verification_still_leaves_the_pane_for_inspection(tmp_path, monkeypatch, capsys):
+    """Documented choice, pinned so it cannot change silently: we do NOT reap on
+    a verdict. The pane is the evidence of what went wrong, and a launcher that
+    kills on a bad verdict is one bad verdict away from killing healthy agents.
+    The operator is told to run `st stop`."""
+    root = _hooked_world(tmp_path, directions=())
+    panes = NullPanes(screen=READY, live=set())
+    monkeypatch.setattr(cli, "Tmux", lambda: panes)
+
+    assert cli._cmd_new(_Args(root=root)) == cli.REFUSED
+    assert panes.exists("aegis-crew-ellie"), "reaped the evidence"
+    assert "st stop ellie" in capsys.readouterr().err, "did not name the remedy"

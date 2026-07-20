@@ -12,7 +12,8 @@ from pathlib import Path
 import pytest
 
 from shantytown.protocols import Agent
-from shantytown.workspace import WorkspaceError, ensure_workspace, git_clone
+from shantytown.workspace import (WorkspaceError, ensure_workspace, git_clone,
+                                  git_origin)
 
 
 def _fake_clone(marker="cloned"):
@@ -26,6 +27,20 @@ def _fake_clone(marker="cloned"):
 
     clone.calls = calls
     return clone
+
+
+def _fake_origin(marker="cloned"):
+    """An origin reader that PAIRS with _fake_clone: it reports what was cloned.
+
+    Deliberately consistent with the fake cloner rather than hardcoded, so the
+    fake pair models the real one — real `git clone` leaves an origin that real
+    `git remote get-url` reads back. A fake origin that always matched would make
+    the idempotence tests pass without exercising the check at all.
+    """
+    def origin(path):
+        f = Path(path) / marker
+        return f.read_text() if f.exists() else None
+    return origin
 
 
 # --- no workspace elected: nothing to ensure, and that is not a failure -------
@@ -45,7 +60,10 @@ def test_present_workspace_is_returned_untouched(tmp_path):
     clone = _fake_clone()
 
     card = Agent(name="ellie", workspace=str(ws), workspace_source="git@x:repo.git")
-    assert ensure_workspace(card, clone=clone) == str(ws)
+    # The tree IS the card's source (aegis-8p0j gap 2 now checks this), so the
+    # adopt is legitimate and the original property holds unchanged.
+    ok_origin = lambda p: "git@x:repo.git"          # noqa: E731
+    assert ensure_workspace(card, clone=clone, origin=ok_origin) == str(ws)
     # A source on the card must not tempt it into re-cloning or syncing: an
     # agent's workspace holds uncommitted work (aegis-iaef).
     assert clone.calls == []
@@ -56,8 +74,9 @@ def test_ensure_is_idempotent_across_runs(tmp_path):
     ws = tmp_path / "ellie"
     card = Agent(name="ellie", workspace=str(ws), workspace_source="src")
     clone = _fake_clone()
-    first = ensure_workspace(card, clone=clone)
-    second = ensure_workspace(card, clone=clone)
+    origin = _fake_origin()
+    first = ensure_workspace(card, clone=clone, origin=origin)
+    second = ensure_workspace(card, clone=clone, origin=origin)
     assert first == second == str(ws)
     assert len(clone.calls) == 1, "the second run re-cloned an existing workspace"
 
@@ -159,3 +178,142 @@ def test_git_clone_failure_raises_workspace_error(tmp_path):
     with pytest.raises(WorkspaceError) as e:
         git_clone(str(tmp_path / "nope"), tmp_path / "dest")
     assert "failed" in str(e.value)
+
+
+# --- present but the WRONG TREE: refuse, never silently adopt (aegis-8p0j) ----
+#
+# The negative controls are the deliverable here. Before this, `if path.is_dir():
+# return` adopted anything shaped like a directory, so an agent could be launched
+# into a clone of a different repo and nothing downstream could tell. A happy-path
+# test cannot catch that — the happy path was already green while the bug was live.
+
+def test_present_but_clone_of_another_repo_is_refused(tmp_path):
+    ws = tmp_path / "ellie"
+    ws.mkdir()
+    card = Agent(name="ellie", workspace=str(ws), workspace_source="git@x:right.git")
+    clone = _fake_clone()
+
+    with pytest.raises(WorkspaceError) as e:
+        ensure_workspace(card, clone=clone,
+                         origin=lambda p: "git@x:WRONG.git")
+
+    msg = str(e.value)
+    # Name BOTH sides. "wrong repo" without the two URLs makes the operator go
+    # find them, and the whole point is that the two are hard to tell apart.
+    assert "git@x:right.git" in msg and "git@x:WRONG.git" in msg
+    assert clone.calls == [], "refused, but cloned anyway"
+
+
+def test_present_with_unreadable_origin_is_refused_as_UNVERIFIABLE(tmp_path):
+    """No origin is CANNOT-TELL, and it must not be reported as 'wrong repo'."""
+    ws = tmp_path / "ellie"
+    ws.mkdir()
+    card = Agent(name="ellie", workspace=str(ws), workspace_source="git@x:right.git")
+
+    with pytest.raises(WorkspaceError) as e:
+        ensure_workspace(card, clone=_fake_clone(), origin=lambda p: None)
+
+    msg = str(e.value)
+    assert "no readable git origin" in msg
+    # We do NOT know it is a different repo, so we must not say it is.
+    assert "WRONG" not in msg
+
+
+def test_no_workspace_source_still_adopts_and_never_reads_origin(tmp_path):
+    """Absent a source there is nothing to check AGAINST — inventing one is the
+    guessed-remote failure the module already refuses below."""
+    ws = tmp_path / "ellie"
+    ws.mkdir()
+    card = Agent(name="ellie", workspace=str(ws))     # no workspace_source
+    looked = []
+
+    got = ensure_workspace(card, clone=_fake_clone(),
+                           origin=lambda p: looked.append(p) or "anything")
+
+    assert got == str(ws)
+    assert looked == [], "checked an origin with nothing to check it against"
+
+
+@pytest.mark.parametrize("expected,found", [
+    ("git@x:repo.git", "git@x:repo"),        # .git suffix
+    ("git@x:repo",     "git@x:repo.git"),
+    ("git@x:repo",     "git@x:repo/"),       # trailing slash
+    ("git@x:repo.git", "git@x:repo.git/"),   # both
+])
+def test_cosmetic_url_spellings_are_the_same_repo(tmp_path, expected, found):
+    """A false refusal is cheap but not free — don't refuse over a `.git`."""
+    ws = tmp_path / "ellie"
+    ws.mkdir()
+    card = Agent(name="ellie", workspace=str(ws), workspace_source=expected)
+    assert ensure_workspace(card, clone=_fake_clone(),
+                            origin=lambda p: found) == str(ws)
+
+
+def test_normalizer_does_NOT_equate_different_transports(tmp_path):
+    """ssh and https CAN be the same repo — or a fork on another host. This
+    answer decides whether we refuse a launch, so it stays conservative."""
+    ws = tmp_path / "ellie"
+    ws.mkdir()
+    card = Agent(name="ellie", workspace=str(ws),
+                 workspace_source="ssh://git@host/x/repo.git")
+    with pytest.raises(WorkspaceError):
+        ensure_workspace(card, clone=_fake_clone(),
+                         origin=lambda p: "https://host/x/repo.git")
+
+
+# --- the REAL origin reader, against real git (no network) --------------------
+#
+# Every test above injects a fake origin. That validates the REFUSAL LOGIC and
+# nothing about git_origin itself — and an unverified reader that always returned
+# None would refuse every existing workspace in production while the suite stayed
+# green. Validate the instrument, not just the code that consumes it.
+
+def _real_repo(tmp_path, name="origin"):
+    origin = tmp_path / name
+    origin.mkdir()
+    _git("init", "-q", cwd=origin)
+    (origin / "README.md").write_text("hello")
+    _git("add", "-A", cwd=origin)
+    _git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init", cwd=origin)
+    return origin
+
+
+def test_git_origin_reads_a_real_clone_and_is_None_off_a_repo(tmp_path):
+    origin = _real_repo(tmp_path)
+    card = Agent(name="ellie", workspace=str(tmp_path / "ws"),
+                 workspace_source=str(origin))
+    ws = Path(ensure_workspace(card))
+
+    assert git_origin(ws) == str(origin), "cannot read back an origin it just cloned"
+    # The cannot-tell arm, on the real reader: a plain directory has no origin.
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    assert git_origin(plain) is None
+
+
+def test_real_clone_is_idempotent_through_the_real_origin_check(tmp_path):
+    """The end-to-end property gap 2 must not break: clone once, adopt after.
+
+    This is the test that would have caught an over-strict check. The fakes are
+    self-consistent by construction; real git has to actually agree with them.
+    """
+    origin = _real_repo(tmp_path)
+    card = Agent(name="ellie", workspace=str(tmp_path / "ws"),
+                 workspace_source=str(origin))
+    first = ensure_workspace(card)
+    second = ensure_workspace(card)          # real git_origin, real clone
+    assert first == second
+
+
+def test_real_clone_of_the_WRONG_repo_is_refused_end_to_end(tmp_path):
+    right = _real_repo(tmp_path, "right")
+    wrong = _real_repo(tmp_path, "wrong")
+    ws = tmp_path / "ws"
+    ensure_workspace(Agent(name="ellie", workspace=str(ws),
+                           workspace_source=str(wrong)))          # clone the WRONG one
+    assert ws.is_dir()
+
+    card = Agent(name="ellie", workspace=str(ws), workspace_source=str(right))
+    with pytest.raises(WorkspaceError) as e:
+        ensure_workspace(card)               # no fakes anywhere in this path
+    assert str(right) in str(e.value) and str(wrong) in str(e.value)

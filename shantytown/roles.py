@@ -88,14 +88,25 @@ class Report:
         return "\n".join(L)
 
 
-def _needs(a: Agent, agents: list[Agent]) -> set[str]:
-    """What stop directions THIS agent's position in the graph requires."""
+def required_stop_directions(a: Agent, agents: list[Agent]) -> set[str]:
+    """What stop directions THIS agent's position in the graph requires.
+
+    PUBLIC because `st new` asks the same question at LAUNCH time (aegis-8p0j
+    gap 1) that `--check` asks after the fact. There must be exactly ONE
+    definition of "what does this agent need": if the launcher and the checker
+    computed it separately, a disagreement between them would be unattributable —
+    you could not tell a real drift from two implementations of the graph rule.
+    That is the identical argument runtime.py makes for its two settings parsers.
+    """
     need = set()
     if a.reports_to is not None:
         need.add("send")
     if any(o.reports_to == a.name for o in agents):
         need.add("drain")
     return need
+
+
+_needs = required_stop_directions       # the in-module name, unchanged
 
 
 def _live_verdict(a: Agent, agents: list[Agent], live) -> tuple[str, str]:

@@ -284,6 +284,25 @@ class NullPanes:
         if not self._drops:
             self.screen += ("\n" if self.screen else "") + text
 
+    def cmdline(self, pane: str) -> str | None:
+        """The launch line of the "process" in `pane` — i.e. what was SENT to it.
+
+        The second impl of Tmux.cmdline, and faithful for the reason that matters
+        to aegis-8p0j: a real pane's process cmdline IS the string the launcher
+        typed into it. Modelling it as the last send keeps the launch-time hook
+        check honest in tests — a double that always returned a well-formed
+        cmdline would make `st new`'s verification unfalsifiable, which is the
+        one thing this check must not be.
+
+        None when nothing was ever sent to that pane: an empty pane has no
+        process, so there is nothing to read. That is a cannot-tell, and the
+        caller must not render it as a pass.
+        """
+        for p, text in reversed(self.sent):
+            if p == pane:
+                return text
+        return None
+
     def new_session(self, name: str) -> str:
         """RAISES if the name is live; else creates an empty session. Requires
         session-lifecycle mode (live set) — new_session on the ambient default

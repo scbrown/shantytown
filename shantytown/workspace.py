@@ -78,8 +78,89 @@ def git_clone(source: str, dest: Path) -> None:
         )
 
 
-def ensure_workspace(card: Agent, clone: Cloner = git_clone) -> str | None:
-    """Guarantee card.workspace exists and return the path Runtime uses as cwd.
+def normalize_source(url: str) -> str:
+    """Reduce a git URL to something two spellings of the SAME repo agree on.
+
+    Deliberately CONSERVATIVE. It strips only what is provably cosmetic — a
+    trailing slash and a trailing `.git`, which git itself treats as the same
+    remote — and lowercases nothing else. It does NOT try to equate
+    ssh://git@host/x with https://host/x: those CAN be the same repo, but they
+    can also be a fork on a different host, and this function's answer decides
+    whether we refuse a launch. An over-eager normalizer would hand back the
+    silent adopt we are here to remove, just with extra steps.
+
+    The cost of being conservative is a false refusal, which is loud, names both
+    URLs, and a human fixes in one edit. The cost of being clever is launching an
+    agent into the wrong tree, which nothing detects. Not a close call.
+    """
+    u = (url or "").strip()
+    while u.endswith("/"):
+        u = u[:-1]
+    if u.endswith(".git"):
+        u = u[:-4]
+    return u
+
+
+def git_origin(path: Path) -> str | None:
+    """The `origin` remote of an existing tree, or None if there isn't one.
+
+    None means CANNOT TELL — not a repo, no origin, or git unavailable. The
+    caller keeps that distinct from a mismatch, because they warrant different
+    sentences: "this is a clone of something else" and "I could not establish
+    what this is" are different facts, and collapsing them is how a checker
+    starts lying.
+    """
+    r = subprocess.run(
+        ["git", "-C", str(path), "remote", "get-url", "origin"],
+        capture_output=True, text=True,
+    )
+    if r.returncode != 0:
+        return None
+    return r.stdout.strip() or None
+
+
+# Reading the origin is INJECTED for the same reason cloning is: the refusal has
+# to be testable without a network or a real remote.
+OriginReader = Callable[[Path], "str | None"]
+
+
+def _refuse_wrong_tree(card: Agent, path: Path, origin: OriginReader) -> None:
+    """RAISE if an existing workspace is not a clone of the card's source.
+
+    Returns silently on a match. Two distinct failures, named separately on
+    purpose — an operator fixes them differently:
+
+      MISMATCH     the tree is a clone of a different remote. We can say exactly
+                   what we expected and what we found, so we do.
+      CANNOT TELL  no origin readable (not a repo, no remote). We refuse too, but
+                   we do NOT claim it is the wrong repo, because we do not know
+                   that. "There but WRONG is an error" covers this: a directory
+                   we cannot identify is not a directory we have verified, and
+                   the whole contract of this module is "never return a path we
+                   did not verify".
+    """
+    found = origin(path)
+    if found is None:
+        raise WorkspaceError(
+            f"workspace for {card.name} already exists at {path}, but it has no "
+            f"readable git origin, so it CANNOT be confirmed as a clone of "
+            f"{card.workspace_source!r}. Refusing to adopt an unverifiable tree. "
+            f"Fix: point workspace at the right directory, clear workspace_source "
+            f"if this tree is deliberately not a clone, or move {path} aside."
+        )
+    if normalize_source(found) != normalize_source(card.workspace_source):
+        raise WorkspaceError(
+            f"workspace for {card.name} at {path} is a clone of the WRONG repo. "
+            f"expected: {card.workspace_source!r}  found: {found!r}. "
+            f"Refusing to launch into it — an agent in the wrong tree looks "
+            f"exactly like an agent in the right one. Fix: move {path} aside, or "
+            f"correct workspace_source on the card."
+        )
+
+
+def ensure_workspace(card: Agent, clone: Cloner = git_clone,
+                     origin: OriginReader = git_origin) -> str | None:
+    """Guarantee card.workspace exists AND IS THE RIGHT TREE; return it as cwd.
 
     Returns None when the card elects no workspace — that is not a failure, it is
     "launch in the default cwd", which is what compose() already does when
@@ -91,7 +172,21 @@ def ensure_workspace(card: Agent, clone: Cloner = git_clone) -> str | None:
     path = Path(card.workspace).expanduser()
 
     if path.is_dir():
-        return str(path)                 # IDEMPOTENT: present -> leave it alone
+        # PRESENT IS NOT THE SAME AS CORRECT (aegis-8p0j gap 2). This used to be a
+        # bare `return str(path)` — idempotence read as "present -> leave it
+        # alone". But dearing's rule is: already there AND CORRECT is success;
+        # there but WRONG is an error, never a silent adopt. If the card names a
+        # workspace_source and this tree is a clone of something ELSE, adopting it
+        # launches the agent into the wrong repo — and a wrong workspace is
+        # indistinguishable from a right one once the agent is up. That is the
+        # SAME justification already written below for refusing a guessed remote;
+        # it was simply never applied to the directory that already existed.
+        if card.workspace_source:
+            _refuse_wrong_tree(card, path, origin)
+        # No workspace_source: nothing to check it AGAINST, and inventing a
+        # expectation from a naming convention is the guessed-remote failure
+        # again. Adopt, exactly as before.
+        return str(path)
 
     if path.exists():
         # A file (or socket, or symlink to one) sitting where the workspace should

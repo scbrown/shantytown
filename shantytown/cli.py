@@ -314,8 +314,7 @@ def _cmd_new(a) -> int:
     # never turn a successful launch into a failure.
     _launches(a).record(card.name, _default_settings(a.root)(card))
     if _observe_live(runtime, panes, session):
-        print(f"  started {a.agent} ({session}) — --settings composed, runtime live.")
-        return OK
+        return _verify_live_hooks(a, card, runtime, panes, session)
     # Not observed live. Distinguish "waiting for a human" (a first-run consent
     # prompt) from "unknown" — both are could-not-tell (2), but they need
     # different human actions (aegis-zx7l live-fire found the consent case).
@@ -329,6 +328,71 @@ def _cmd_new(a) -> int:
           f"live in {session} within the timeout. It may still be coming up; "
           f"check `st log {a.agent}`.", file=sys.stderr)
     return CANNOT_TELL
+
+
+def _verify_live_hooks(a, card, runtime, panes, session: str) -> int:
+    """The launch is live — but is it HOOKED? (aegis-8p0j gap 1, aegis-05up.)
+
+    THE GAP THIS CLOSES. runtime.py already states the boundary honestly:
+    compose() guarantees --settings was REQUESTED; it does not guarantee hooks
+    FIRED, and _observe_live only proves the PROCESS is up. So `st new` could
+    print "started" and exit 0 for an agent that came up carrying no stop hooks
+    at all. That is not a hypothetical shape of bug — measured 2026-07-20
+    (aegis-0v97), all 8 gastown-launched crew were running RIGHT THEN with no
+    stop hooks; they could not even SEND, and nothing detected it for the entire
+    time it was true. `st roles --check` finds it, but only if someone runs it.
+    Here it is caught at the moment of launch, by the process's own cmdline.
+
+    Three outcomes, and the middle one is the whole point:
+
+      hooks match the graph   -> OK. Say what was verified, not just "started".
+      MEASURED missing        -> REFUSED. Loud, naming the missing direction.
+      could not look (None)   -> CANNOT_TELL. Never rendered as a pass.
+
+    WHY THIS DOES NOT KILL THE SESSION. A defective agent is left RUNNING and the
+    operator is told to remove it. Two reasons: the pane is the evidence (killing
+    it destroys the cmdline that proves what went wrong, which is exactly what
+    made aegis-0v97 hard to see), and a launcher that reaps on a verdict is one
+    bad verdict away from killing healthy agents. `st stop` already exists and is
+    one command. If arnold rules teardown belongs here, it is a small change —
+    but it should be a ruling, not a side effect of adding a check.
+    """
+    need = roles_mod.required_stop_directions(card, _registry(a).all())
+    if not need:
+        # NOTHING REQUIRED -> nothing to verify, and we must not manufacture
+        # doubt about a requirement that does not exist. An isolated agent (no
+        # lead above, no reports below) has no stop event to route in either
+        # direction; reporting could-not-tell here would be a false alarm on
+        # every leaf agent, and false alarms are what teach an operator to stop
+        # reading the output.
+        print(f"  started {a.agent} ({session}) — runtime live; the graph "
+              f"requires no stop directions of this agent.")
+        return OK
+    # cmdline is deliberately NOT a Panes protocol method (arnold's non-goal for
+    # this bead: Panes gains nothing). We read it off the adapter if it has one;
+    # an adapter that cannot show a process cmdline genuinely cannot answer the
+    # question, and that is a cannot-tell, not a pass.
+    reader = getattr(panes, "cmdline", None)
+    directions = live_stop_directions(session, reader) if reader else None
+    if directions is None:
+        print(f"  could not tell: {a.agent} ({session}) is live, but its stop "
+              f"hooks could NOT be read from the running process, so it is "
+              f"UNVERIFIED — not confirmed hooked. Check `st roles --check`.",
+              file=sys.stderr)
+        return CANNOT_TELL
+    missing = need - directions
+    if missing:
+        carries = sorted(directions) if directions else "NO stop hooks at all"
+        print(f"  FAILED: {a.agent} ({session}) came up HOOKLESS. The live "
+              f"process carries {carries}, but this agent needs "
+              f"{sorted(need)} — missing {sorted(missing)}. It is running and it "
+              f"is broken: remove it with `st stop {a.agent}`, fix the settings "
+              f"it launches with, and start it again.", file=sys.stderr)
+        return REFUSED
+    verified = sorted(need) if need else "none required by the graph"
+    print(f"  started {a.agent} ({session}) — runtime live, stop hooks VERIFIED "
+          f"on the live process: {verified}.")
+    return OK
 
 
 def _cmd_stop(a) -> int:
