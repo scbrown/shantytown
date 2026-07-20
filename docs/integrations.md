@@ -71,14 +71,14 @@ here costs zero lines**, because the coupling point is a database that already h
 
 ### What this forbids
 
-- **No `shanty dashboard`.** Gas Town has one; it is not running; nobody filed a bead.
+- **No `st dashboard`.** Gas Town has one; it is not running; nobody filed a bead.
 - **No `shanty-api`.** Gas Town built one; it is undeployed; its only consumer routed around it.
 - **No dashboard-shaped writes on the dispatch path.** `gt sling` auto-creates a convoy per dispatch
   *for dashboard visibility* — a write on the hot path, for a reader that doesn't need it.
 
 ### What this obliges
 
-State must be **legible in the tracker**, not just in the harness's head. If `shanty go` sets
+State must be **legible in the tracker**, not just in the harness's head. If `st go` sets
 `status=in_progress, assignee=ellie` and nothing else, Tapestry already renders it. If shantytown
 wants to show "absorbed by lead" it writes that to the item — it does not grow an endpoint.
 

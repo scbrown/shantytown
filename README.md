@@ -23,8 +23,8 @@
 
 [![dispatch 3.4s](https://img.shields.io/badge/dispatch-3.4s-brightgreen)](#-speed)
 [![35x faster](https://img.shields.io/badge/vs%20gt%20sling-35%C3%97%20faster-brightgreen)](#-versus-gas-town)
-[![10 commands](https://img.shields.io/badge/commands-10-blue)](#-the-whole-surface)
-[![tests](https://img.shields.io/badge/tests-57%20passing-blue)](#-a-check-that-cannot-fail-is-not-a-check)
+[![13 commands](https://img.shields.io/badge/commands-13-blue)](#-the-whole-surface)
+[![tests](https://img.shields.io/badge/tests-300%20passing-blue)](#-a-check-that-cannot-fail-is-not-a-check)
 [![python](https://img.shields.io/badge/python-3.11%2B-blue)](#-install)
 [![license MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
@@ -67,7 +67,7 @@ st mail ian "go read st-1"
 - 📋 **`st task`** — create work, get an id back. The id is the product; it's what step 2 says.
 - 🚀 **`st go`** — dispatch: bind an item to an agent and tell them. **35× faster than `gt sling`.**
 - 🧭 **`st prime`** — who am I, what's on my plate. A **read**; it never writes.
-- 🚦 **`st triage`** — refuse / nudge / clear, judged from what the runtime actually prints on screen.
+- 🚦 **Triage before every dispatch** — refuse / nudge / clear / restart, judged from what the runtime actually prints on screen. Not a command you remember to run: `st go` consults it and *refuses* rather than type into a working agent. `st go --dry-run` shows the verdict.
 - 👥 **`st crew`** — who exists, who's up, what role. Reports **down** only when it's really down.
 - 🔌 **Pluggable trackers** — beads today, files tomorrow, yours next. *Same dispatch code.* Proven by a swap test, not by an interface.
 - 🖥️ **tmux-native** — bring your own panes. Named sockets supported, so it works from cron and systemd too.
@@ -98,6 +98,9 @@ st role set <agent> <role>        generative: rewrites cards, emits hooks
 st new <agent>                    create an agent from a card
 st stop <agent>                   stop it
 st log [agent]                    what happened
+st context <query>                what code should I be looking at?
+st doctor [--install]             what's installed, what's stale, what's missing
+st project                        materialize the crew cards FROM the graph
 ```
 
 ## 🆚 Versus Gas Town
@@ -106,7 +109,7 @@ Gas Town is the parent, and it earned its complexity honestly — it was built f
 
 | | Gas Town | shantytown |
 |---|---|---|
-| Commands | ~110 | **10** |
+| Commands | ~110 | **13** |
 | Dispatch | `gt sling` → convoy + formula + hook | **`tmux send-keys`** |
 | Dispatch cost | >120 s, 63 Dolt conns | **3.4 s, 3 conns** |
 | Messaging | `gt mail` → bus + queue + router | **`st mail` → send-keys** |
@@ -125,7 +128,7 @@ Gas Town is the parent, and it earned its complexity honestly — it was built f
 |---|---|
 | [`docs/vision.md`](docs/vision.md) | what this replaces, and how we'll know it failed |
 | [`docs/design.md`](docs/design.md) | the shape: dispatch, triage, trackers, panes |
-| [`docs/cli.md`](docs/cli.md) | the eight commands, and `st prime` |
+| [`docs/cli.md`](docs/cli.md) | the thirteen commands, and `st prime` |
 | [`docs/agent-card.md`](docs/agent-card.md) | identity — the graph is the truth, the card is a projection |
 | [`docs/roles.md`](docs/roles.md) | worker / lead / administrator, and why a lead absorbs |
 | [`docs/adapters.md`](docs/adapters.md) | first-class defaults, pluggable everything |
@@ -136,7 +139,7 @@ Gas Town is the parent, and it earned its complexity honestly — it was built f
 ```bash
 git clone https://github.com/scbrown/shantytown && cd shantytown
 pip install -e .
-shanty prime
+st prime
 ```
 
 Python 3.11+ and `tmux`. A tracker backend (Beads) is optional — the files tracker needs nothing.

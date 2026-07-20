@@ -30,18 +30,33 @@ verification discipline we needed had to be hand-built last time.
 
 ## The two protocols
 
-Everything pluggable is exactly two small interfaces. If either grows a third method, push back.
+Everything pluggable is a few small interfaces. Every method below has had to argue for its slot.
+
+This block is the **shipped** protocol — `shantytown/protocols.py` is the authority and this is a
+copy of it, not a sketch of what we hoped for. It used to be the sketch (`create`/`hint`), and it
+disagreed with the code for months; a design doc that describes an interface the code doesn't have
+teaches the reader the wrong thing with full confidence (GitHub #8).
 
 ```python
 class Tracker(Protocol):
-    def create(self, title: str, body: str) -> str: ...     # → id
-    def hint(self, id: str) -> str: ...                     # → "go read aegis-1234"
+    def get(self, item_id: str) -> WorkItem: ...
+    def update(self, item_id: str, **fields) -> None: ...
+    def create(self, title: str, **fields) -> WorkItem: ...
 
-class Pane(Protocol):
-    def exists(self, target: str) -> bool: ...
-    def send(self, target: str, text: str) -> None: ...
-    def capture(self, target: str, lines: int = 40) -> str: ...   # for triage + verification
+class Panes(Protocol):
+    def send(self, pane: str, text: str) -> None: ...
+    def exists(self, pane: str) -> bool: ...
+    def capture(self, pane: str, history: int = 0) -> str: ...   # for triage + verification
+    # session lifecycle — `st new` / `st stop`, and triage's RESTART
+    def new_session(self, name: str) -> str: ...
+    def kill_session(self, name: str) -> None: ...
+    def owns(self, name: str) -> bool: ...
 ```
+
+**Why the tracker is three and not two.** The two-function pitch (`create` + `hint`) is still the
+*adoption* claim — writing a backend is small — but dispatch needs to READ an item it did not create
+(`get`) and to MARK it assigned (`update`), and faking either through `create` is worse than
+admitting the third method. `hint` never shipped: it was rendering, and rendering belongs to the CLI.
 
 `capture` is not optional. **You cannot triage a session you cannot look at, and you cannot verify a
 dispatch you cannot read back.** A Pane that can only write is a Pane that always reports success.
@@ -186,7 +201,7 @@ class of defect we keep finding by hand.
 
 Stop after 4 if the numbers don't hold. That's a real outcome, not a failure.
 
-**Step 4 result (aegis-jfxj, ruled PASSED by dearing):** `shanty go` is ~35x faster on the real path
+**Step 4 result (aegis-jfxj, ruled PASSED by dearing):** `st go` is ~35x faster on the real path
 (3.4s vs gt sling's >120s), 63→3 Dolt connections. The literal "under a second" was MISSED at 3.4s —
 but that 3.4s is entirely `bd update`'s cost (a bd write is 17x a bd read, aegis-s9m7, root-caused to
 an INFORMATION_SCHEMA check), not shantytown's; shantytown's own overhead is ~0.2s. "Under a second"

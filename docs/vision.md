@@ -85,12 +85,18 @@ If shantytown grows an orchestration tier, we got it wrong.
 
 ## Bring your own tracker
 
-shantytown must not know what a bead is. A backend implements two functions:
+shantytown must not know what a bead is. A backend implements three small functions:
 
 ```python
-create(title: str, body: str) -> str          # returns an id
-hint(id: str) -> str                          # "go read aegis-1234"
+create(title: str, **fields) -> WorkItem      # returns the item, id included
+get(item_id: str) -> WorkItem                 # read one back
+update(item_id: str, **fields) -> None        # mark it assigned
 ```
+
+*(This vision doc originally promised two — `create` and a `hint` renderer. Dispatch has to read an
+item it did not create and mark it assigned, and faking those through `create` would have been the
+dishonest kind of small. `hint` was rendering and moved to the CLI. Three is the shipped number;
+`shantytown/protocols.py` is the authority. — GitHub #8)*
 
 Reference adapters ship for **beads**, **GitHub issues**, and **plain files** (`./work/<uuid>.md`).
 Someone on Jira, Linear, or nothing at all writes ten lines and it works.
