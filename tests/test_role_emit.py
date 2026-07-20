@@ -157,6 +157,19 @@ def test_guard_cannot_block_when_hank_is_present_but_stale(tmp_path):
     assert "permissionDecision" not in r.stdout, "guard forged a decision from a failed hank"
 
 
+def test_settings_env_carries_BOBBIN_ROLE_for_the_guard_tenant():
+    """hank's shipped spec puts BOBBIN_ROLE in the settings `env` block, and that
+    is where the guard reads its tenant. A launch-string export sets it for the
+    agent PROCESS, but a hook is re-exec'd by the harness — so settings.env is the
+    binding that actually reaches the guard. Without it the guard resolves no
+    scope and decides nothing: running, wired, and inert."""
+    for role in ("worker", "lead", "administrator"):
+        env = settings_for_role(role).get("env", {})
+        assert env.get("BOBBIN_ROLE") == role, (
+            f"{role} settings carry no tenant; its guard would decide nothing"
+        )
+
+
 def test_unknown_role_is_refused():
     with pytest.raises(ValueError):
         settings_for_role("overlord")

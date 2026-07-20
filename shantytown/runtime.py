@@ -236,6 +236,13 @@ def settings_for_role(role: str, root=None) -> dict:
         # — and therefore ITS .mcp.json — by putting it on the card. This only stops
         # us asking a human to re-affirm a choice the card already made.
         "enableAllProjectMcpServers": True,
+        # BOBBIN_ROLE in the SETTINGS env, per hank's shipped spec — not only as a
+        # launch-string export. The launch export sets it for the agent PROCESS;
+        # a hook is re-exec'd by the harness, and settings.env is what the shipped
+        # contract names as the place hank reads its tenant from. Without it the
+        # guard resolves no scope and decides nothing — running, wired, and inert,
+        # which is the failure mode this repo keeps naming.
+        "env": {"BOBBIN_ROLE": role},
     }
 
 
