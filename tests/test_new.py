@@ -12,10 +12,28 @@ from pathlib import Path
 import pytest
 
 from shantytown import cli
+from shantytown import harness as harness_mod
 from shantytown.tmux import NullPanes
 
 
 READY = "… Welcome to Claude Code …\n? for shortcuts"
+
+
+class _NonBlockingHarness:
+    """Registered but cannot deliver blocking stop hooks — lets the capability gate
+    be exercised end-to-end through `st new` on a program the CARD names. That path
+    is the one aegis-85ox says a directly-constructed CodexRuntime never covers."""
+    name = "codex-test"
+
+    def launch(self, card, settings_path, root=None):
+        return f"SHANTY_AGENT={card.name} codex-test --settings {settings_path}"
+
+    def settings(self, role, root=None):
+        return {}
+
+    def hooks(self, card):
+        from shantytown.runtime import HookSpec
+        return HookSpec(blocking_stop=False)
 
 
 def _world(tmp_path: Path, *, role="worker", pane="crew-ellie", settings=True,
@@ -91,6 +109,48 @@ def test_new_refuses_unknown_agent(tmp_path, monkeypatch, capsys):
     rc = cli._cmd_new(_Args(root=root, agent="nobody"))
     assert rc == cli.REFUSED
     assert "refused" in capsys.readouterr().err
+
+
+def test_new_refuses_a_card_naming_an_unknown_harness(tmp_path, monkeypatch, capsys):
+    """The traceback bug (aegis-85ox): an unimplemented harness is a REFUSAL, so
+    st new must exit 1 with `refused:` like every other refusal, never crash with a
+    stack trace. --dry-run, the bead's stated verification — and it must still
+    create and launch nothing."""
+    root = _world(tmp_path, harness="nonesuch")
+    panes = NullPanes(live=set())
+    monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: panes)
+    rc = cli._cmd_new(_Args(root=root, dry_run=True))
+    assert rc == cli.REFUSED
+    assert "refused" in capsys.readouterr().err
+    assert panes.sent == [], "a refusal must launch nothing"
+
+
+def test_new_refuses_a_lead_on_a_non_blocking_harness(tmp_path, monkeypatch, capsys):
+    """The capability gate THROUGH THE CLI, on the harness the card selects. Before
+    aegis-85ox the CLI's hardcoded ClaudeRuntime (blocking_stop=True) rubber-stamped
+    this lead and emitted lead settings for a tier that would absorb nothing."""
+    monkeypatch.setitem(harness_mod._HARNESSES, "codex-test", _NonBlockingHarness())
+    root = _world(tmp_path, role="lead", harness="codex-test")
+    panes = NullPanes(live=set())
+    monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: panes)
+    rc = cli._cmd_new(_Args(root=root))
+    assert rc == cli.REFUSED
+    err = capsys.readouterr().err
+    assert "refused" in err and "blocking stop hooks" in err
+    assert panes.sent == [], "a refused lead must launch nothing"
+
+
+def test_new_ALLOWS_a_worker_on_a_non_blocking_harness(tmp_path, monkeypatch, capsys):
+    """The gate OPENS too: a worker needs no stop delivery, so the same non-blocking
+    harness hosts it — and the composed launch names the CARD's program, proving
+    compose went through card.harness rather than claude's argv."""
+    monkeypatch.setitem(harness_mod._HARNESSES, "codex-test", _NonBlockingHarness())
+    root = _world(tmp_path, role="worker", harness="codex-test")
+    panes = NullPanes(live=set())
+    monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: panes)
+    rc = cli._cmd_new(_Args(root=root, dry_run=True))
+    assert rc == cli.OK
+    assert "codex-test --settings" in capsys.readouterr().out
 
 
 def test_new_refuses_when_settings_cannot_be_materialized(tmp_path, monkeypatch, capsys):

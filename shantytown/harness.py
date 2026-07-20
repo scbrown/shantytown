@@ -32,9 +32,16 @@ A card with no `harness` field means "claude" — every card in existence today.
 """
 from __future__ import annotations
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable, TYPE_CHECKING
 
 from .protocols import Agent
+
+if TYPE_CHECKING:
+    # Type-only: the capability declaration returns runtime.HookSpec, but harness
+    # must not import runtime at module load (the import graph is one-directional —
+    # runtime imports harness, never the reverse; see settings() below). The real
+    # value is produced by a call-time import inside hooks().
+    from .runtime import HookSpec
 
 # The default, and the answer for every card that does not say otherwise.
 DEFAULT = "claude"
@@ -61,6 +68,18 @@ class Harness(Protocol):
         """The CONTENT of the settings file `launch` points at, for a ROLE. This
         is the file format half — Claude Code's hooks schema is Claude Code's,
         and a second harness emits its own."""
+        ...
+
+    def hooks(self, card: Agent) -> "HookSpec":
+        """The CAPABILITY declaration the gate keys on: can the program this
+        harness launches deliver a blocking stop hook to the MODEL?
+
+        It lives HERE, on the harness, because it is a property of the PROGRAM —
+        and the program is what the card selects (for_card), NOT the Runtime the
+        CLI happens to construct. That mismatch was the whole of aegis-85ox: the
+        gate asked a hardcoded ClaudeRuntime while the launched program came from
+        card.harness. A capability declared on the object the card cannot pick is
+        a gate that cannot see what it is gating."""
         ...
 
 
@@ -141,6 +160,17 @@ class ClaudeHarness:
         # graph one-directional (runtime imports harness, never the reverse).
         from .runtime import claude_settings_for_role
         return claude_settings_for_role(role, root=root)
+
+    def hooks(self, card: Agent) -> "HookSpec":
+        # Claude Code delivers blocking stop hooks — measured, load-bearing: a
+        # lead/administrator's reports' stop events reach the MODEL via a blocking
+        # Stop hook's `reason` (a non-blocking hook's stdout is discarded). This is
+        # the SINGLE literal declaration of the capability now; ClaudeRuntime.hooks
+        # forwards here rather than restating it, so the two cannot drift apart
+        # (which is how the gate came to rubber-stamp a non-claude card, aegis-85ox).
+        # Call-time import, same one-directional reason as settings() above.
+        from .runtime import HookSpec
+        return HookSpec(blocking_stop=True)
 
 
 _HARNESSES = {h.name: h for h in (ClaudeHarness(),)}

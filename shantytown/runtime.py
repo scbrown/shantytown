@@ -106,19 +106,26 @@ class Runtime(Protocol):
     def hooks(self, card: Agent) -> HookSpec: ...          # capability declaration
 
 
-def require_capability(rt: Runtime, card: Agent) -> None:
-    """Refuse a card whose role needs a capability its runtime cannot declare.
+def require_capability(program, card: Agent) -> None:
+    """Refuse a card whose ROLE needs a capability the launched PROGRAM lacks.
+
+    `program` is the object that ACTUALLY runs the agent — the Harness the card
+    selects (harness.for_card), not a hardcoded runtime. That distinction is the
+    whole of aegis-85ox: the CLI only ever builds ClaudeRuntime (blocking_stop=
+    True), so asking `self` rubber-stamped every card while the program that ran
+    came from card.harness. Ask the harness and the gate sees what it is gating.
 
     This is the capability gate adapters.md sketches:
-        role 'lead' requires on_report_stop delivery; runtime 'codex' does not
+        role 'lead' requires on_report_stop delivery; a harness that does not
         declare blocking stop hooks -> malcolm stays worker, nothing written.
-    Keyed on the runtime's DECLARED hooks(), not on a hardcoded name check, so a
-    third runtime that happens to support blocking stop hooks passes without a
-    code change here — the declaration is the source of truth.
+    Keyed on the DECLARED hooks(), never a name (adapters.md:86-87), so a third
+    capable program passes without editing here — the declaration is the source of
+    truth. Duck-typed on `.hooks()`/`.name`: a Harness satisfies it, and so does a
+    self-contained runtime that is its own program (CodexRuntime, the test double).
     """
-    if card.role in _ROLES_NEEDING_STOP and not rt.hooks(card).blocking_stop:
+    if card.role in _ROLES_NEEDING_STOP and not program.hooks(card).blocking_stop:
         raise CapabilityError(
-            f"runtime {rt.name!r} does not declare blocking stop hooks; "
+            f"harness {program.name!r} does not declare blocking stop hooks; "
             f"role {card.role!r} requires stop-event delivery to the model. "
             f"{card.name} stays worker. Nothing written, nothing launched."
         )
@@ -573,30 +580,39 @@ class ClaudeRuntime:
         self._root = root
 
     def hooks(self, card: Agent) -> HookSpec:
-        # Claude Code declares blocking stop hooks — measured, load-bearing.
-        return HookSpec(blocking_stop=True)
+        # FORWARDS to the card's harness — the single source of truth for this
+        # capability (aegis-85ox). ClaudeRuntime used to answer blocking_stop=True
+        # for itself, which is exactly what let the gate rubber-stamp a card whose
+        # harness was not claude. Forwarding keeps one literal declaration (on the
+        # harness) and makes this answer honest for a card naming another program.
+        from . import harness as harness_mod
+        return harness_mod.for_card(card).hooks(card)
 
     def compose(self, card: Agent) -> str:
         """Build the launch string, or RAISE. Never returns a settings-less launch.
 
-        Order matters: capability first (a lead on a runtime that cannot host it
-        must refuse before we bother materializing settings), then settings.
+        Order matters. Resolve the harness the CARD names FIRST — an unknown one
+        raises UnknownHarness, a clean refusal — then gate on ITS declared
+        capability (aegis-85ox: the gate must ask the program that actually
+        launches, not this hardcoded ClaudeRuntime), then materialize settings.
+        Capability still precedes settings: a lead the program cannot host refuses
+        before we bother writing anything.
         """
-        require_capability(self, card)                 # CapabilityError -> refuse
+        # THE ARGV, THE SETTINGS FORMAT, AND THE CAPABILITY ARE ALL THE HARNESS'S
+        # (harness.py). This method keeps only what is the RUNTIME's — the
+        # settings-or-nothing invariant and the assert below — and asks the harness
+        # the CARD names for everything program-specific. One resolve, so the gate
+        # and the launch cannot disagree about which program this is.
+        from . import harness as harness_mod
+        program = harness_mod.for_card(card)           # UnknownHarness -> refuse
+        require_capability(program, card)              # CapabilityError -> refuse
         settings_path = self._resolve(card)
         if not settings_path:
             raise SettingsError(
                 f"could not materialize settings for {card.name} "
                 f"(role {card.role!r}); refusing to launch a settings-less agent."
             )
-        # THE ARGV IS THE HARNESS'S (harness.py). This method keeps what is the
-        # RUNTIME's — the capability gate, the settings-or-nothing invariant, and
-        # the assert below — and delegates the program-specific string to the
-        # harness the CARD names. A card that names one we cannot host raises
-        # UnknownHarness, which is a refusal, not a fallback.
-        from . import harness as harness_mod
-        launch = harness_mod.for_card(card).launch(card, settings_path,
-                                                   root=self._root)
+        launch = program.launch(card, settings_path, root=self._root)
         # The invariant, asserted where it is made. If this ever fails, the bug is
         # here, not downstream — a settings-less string must be UNREACHABLE.
         assert "--settings" in launch, "compose produced a settings-less launch"

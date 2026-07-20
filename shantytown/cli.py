@@ -505,10 +505,14 @@ def _cmd_new(a) -> int:
     # `st-`: a session `st new` creates must never collide with one somebody
     # else's tooling already launched under a name we'd also pick.
     session = card.pane or f"st-{card.name}"
-    # PRE-FLIGHT: compose refuses capability/settings BEFORE we touch tmux.
+    # PRE-FLIGHT: compose refuses capability/settings/unknown-harness BEFORE we
+    # touch tmux. UnknownHarness is a REFUSAL by design (harness.py) but was not in
+    # this except, so a card naming a harness we cannot host exited with a
+    # traceback instead of the `refused:` exit-1 path every other refusal uses
+    # (aegis-85ox). It belongs here with the others: same seam, same outcome.
     try:
         launch = runtime.compose(card)
-    except (CapabilityError, SettingsError) as e:
+    except (CapabilityError, SettingsError, harness_mod.UnknownHarness) as e:
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED
     if a.dry_run:
