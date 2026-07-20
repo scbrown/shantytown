@@ -204,17 +204,17 @@ def build_parser() -> argparse.ArgumentParser:
                            "dispatch — it rides the triage gate with the work, "
                            "so it cannot arrive after the worker has acted. "
                            "Flattened to one line (the transport submits on "
-                           "newline). aegis-8013")
+                           "newline).")
     note.add_argument("--note-file", type=Path, default=None,
                       help="read the note from a file (or - for stdin). Use this "
                            "for anything long or containing quotes/backticks — "
-                           "shell expansion in a --note string is the aegis-0214 "
+                           "shell expansion in a --note string is a real "
                            "footgun.")
     go.add_argument("-n", "--dry-run", action="store_true")
     go.add_argument("--reassign", action="store_true",
                     help="take an item another agent already holds. Without this, "
                          "dispatching an assigned item REFUSES rather than silently "
-                         "stealing it (aegis-uvw5)")
+                         "stealing it.")
 
     cr = sub.add_parser("crew", help="who exists, what state, what role")
     cr.add_argument("--count", action="store_true",
@@ -521,7 +521,7 @@ def _verify_live_hooks(a, card, runtime, panes, session: str) -> int:
         whence = (f", its --settings is {wiring.settings_path}"
                   if wiring.settings_path
                   else ", and its launch line carries NO --settings at all "
-                       "(this one IS the hookless-zombie case, cf. aegis-05up)")
+                       "(this one IS the hookless-zombie case)")
         print(f"  FAILED: {a.agent} ({session}) came up WITHOUT the stop hooks "
               f"its position requires. The live process carries {carries}"
               f"{whence}, but this agent needs {sorted(need)} — missing "
