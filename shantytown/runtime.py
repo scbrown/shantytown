@@ -154,7 +154,20 @@ def _stop_cmd(mode: str, root=None) -> dict:
 # turning a code-intelligence nicety into a fleet outage. hank denies by emitting
 # the block JSON on stdout with exit 0, so a real deny is never confused with a
 # failure, and this wrapper cannot swallow it.
-_HANK_GUARD = "hank hook pre-edit"
+# 2026-07-19 (aegis-iaef window, kelly): the "hank never exits 2" contract was
+# FALSIFIED IN PRODUCTION and this line hard-blocked the whole fleet. Installed
+# hank 0.1.0 implements only `post-edit`; `hank hook pre-edit` is a clap USAGE
+# error, and clap exits 2 — Claude Code's one blocking code. Every Write/Edit by
+# every shantytown worker was refused with:
+#   PreToolUse:Write hook error: invalid value 'pre-edit' for '<EVENT>'
+# The old fail-open test only ever ran with hank ABSENT (127), so it stayed green
+# through the outage. Fail-open cannot be delegated to someone else's exit codes.
+#
+# The wrapper below launders the exit code WITHOUT the hazard the pinned contract
+# warned about: stdout is captured, and it is echoed ONLY when hank exited 0. A
+# crashed or stale hank therefore contributes exactly nothing to stdout, so no
+# partial output can ever be read as a forged permission decision.
+_HANK_GUARD = 'out=$(hank hook pre-edit) || exit 0; printf %s "$out"'
 
 
 def _guard_hook() -> dict:

@@ -92,19 +92,21 @@ def test_every_role_gets_the_hank_policy_guard():
             assert tool in matcher, f"{role} guard does not cover {tool}"
 
 
-def test_the_guard_is_emitted_verbatim_per_the_pinned_contract():
-    """No shell wrapper. An earlier version wrapped the command in
-    `command -v hank ... || exit 0` to force fail-open. Under the pinned contract
-    (hank#20) that is redundant AND harmful: exit 2 is Claude Code's only blocking
-    channel and hank never exits 2, so fail-open is a property of the CONTRACT.
-    Worse, `|| exit 0` can pass through partial stdout from a crashed hank — and
-    stdout is exactly where a permission decision is forged."""
+def test_the_guard_invokes_hanks_pre_edit_event():
+    """The guard must still CALL hank — laundering the exit code must not become
+    "stop asking hank". It wraps the call; it does not replace it.
+
+    The previous version of this test asserted the command was `hank hook pre-edit`
+    VERBATIM, on the reasoning that a `||` wrapper was redundant because "hank never
+    exits 2". That reasoning was falsified in production on 2026-07-19: installed
+    hank 0.1.0 knows only `post-edit`, clap treated `pre-edit` as a usage error, and
+    clap exits 2 — blocking every Write/Edit for every worker. The wrapper is now
+    mandatory, and the stdout hazard it was accused of is handled by only echoing
+    hank's output when hank exited 0 (see _HANK_GUARD).
+    """
     hook = settings_for_role("worker")["hooks"]["PreToolUse"][0]["hooks"][0]
-    assert hook["command"] == "hank hook pre-edit", "guard is not the contract command"
+    assert "hank hook pre-edit" in hook["command"], "guard no longer consults hank"
     assert hook.get("timeout") == 5, "guard has no timeout; a hung guard stalls every edit"
-    assert "||" not in hook["command"] and "&&" not in hook["command"], (
-        "guard has a shell wrapper; it must be emitted verbatim"
-    )
 
 
 def test_guard_can_never_produce_the_blocking_exit_code(tmp_path):
@@ -124,6 +126,35 @@ def test_guard_can_never_produce_the_blocking_exit_code(tmp_path):
     assert r.returncode != 2, f"guard hard-blocked with hank absent (rc={r.returncode})"
     # ALLOW IS SILENCE: it must not forge a permission decision either way.
     assert "permissionDecision" not in r.stdout, "guard forged a decision with no hank"
+
+
+def test_guard_cannot_block_when_hank_is_present_but_stale(tmp_path):
+    """THE REGRESSION. hank ABSENT (127) was already covered; hank PRESENT and
+    older than the event name was not — and that is the case that took the fleet
+    down on 2026-07-19. A CLI that does not know the subcommand exits 2 (clap's
+    usage-error code), which is the one code Claude Code treats as a hard block.
+
+    Specimen: `hank hook pre-edit` against hank 0.1.0 ->
+        error: invalid value 'pre-edit' for '<EVENT>'   (exit 2)
+    """
+    import subprocess
+    cmd = _guard_commands(settings_for_role("worker"))[0]
+    stale = tmp_path / "stalebin"
+    stale.mkdir()
+    fake = stale / "hank"
+    fake.write_text(
+        "#!/bin/sh\n"
+        "echo \"error: invalid value 'pre-edit' for '<EVENT>'\" >&2\n"
+        "exit 2\n"
+    )
+    fake.chmod(0o755)
+    r = subprocess.run(cmd, shell=True, capture_output=True, text=True,
+                       env={"PATH": str(stale)})
+    assert r.returncode != 2, (
+        f"guard passed a stale hank's usage-error exit 2 straight through (rc={r.returncode}) "
+        "— this is the fleet-wide edit outage"
+    )
+    assert "permissionDecision" not in r.stdout, "guard forged a decision from a failed hank"
 
 
 def test_unknown_role_is_refused():
