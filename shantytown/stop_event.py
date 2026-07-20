@@ -52,7 +52,7 @@ from .events import FilesEvents, StopEvent
 from .files import FilesRegistry, FilesTracker, plate as files_plate
 from .runtime import ClaudeRuntime, live_wiring
 from .tier import route_stop
-from .triage import running_shells
+from .triage import running_shells, context_tokens_k, CONTEXT_HIGH_TOKENS_K
 from .tmux import Tmux
 
 
@@ -123,6 +123,23 @@ def _my_shells(reg: FilesRegistry, panes, me: str) -> int | None:
         return None
 
 
+def _my_context_k(reg: FilesRegistry, panes, me: str) -> float | None:
+    """My context depth AT MY OWN STOP, in k tokens (aegis-h562).
+
+    Read off my own pane, the same route as _my_shells — the "/clear to save N
+    tokens" footer the runtime prints. A destination told only "gennaro stopped"
+    hands gennaro the next item; told "gennaro stopped at 687k / 172%" it does
+    not. None on any failure, and — like shells — never a fabricated 0: a stop
+    taken mid-turn has no footer to read, and "not reported" is the truth there,
+    not "context is fine".
+    """
+    try:
+        pane = reg.get(me).pane
+        return context_tokens_k(panes.capture(pane)) if pane else None
+    except Exception:
+        return None
+
+
 def _plate_of(root: Path, me: str) -> tuple[str | None, str | None]:
     """What `me` held when it stopped: (item_id, status).
 
@@ -155,14 +172,18 @@ def _send(reg: FilesRegistry, events: FilesEvents, panes, me: str,
         return 1
     reason = routing.reason.value if routing.reason else None
     shells = _my_shells(reg, panes, me)
+    context_k = _my_context_k(reg, panes, me)
     item, item_status = _plate_of(root, me) if root is not None else (None, "?")
     ev = events.persist(to=routing.to, frm=me, reason=reason, rose=routing.rose,
-                        shells=shells, item=item, item_status=item_status)
+                        shells=shells, item=item, item_status=item_status,
+                        context_k=context_k)
+    over = context_k is not None and context_k >= CONTEXT_HIGH_TOKENS_K
     # Silent on stdout (a non-blocking Stop hook's stdout is discarded anyway);
     # a terse stderr line is useful when a human runs it by hand.
     print(f"stop_event: {me} stopped -> persisted {ev.id} to {routing.to}"
           + (f" (ROSE: {reason})" if routing.rose else "")
-          + (f" [{shells} shell(s) still running]" if shells else ""), file=sys.stderr)
+          + (f" [{shells} shell(s) still running]" if shells else "")
+          + (f" [SATURATED {int(context_k)}k]" if over else ""), file=sys.stderr)
     return 0
 
 
@@ -248,6 +269,16 @@ def _compose_reason(events: list[StopEvent], verdicts: dict, now: float,
         if e.shells:
             tag += (f" — STILL RUNNING {e.shells} background shell(s): its TURN "
                     f"ended, its WORK may not have")
+        # SATURATED (aegis-h562), from the latest event's own reading. This is the
+        # difference between "gennaro stopped" and "gennaro stopped as a wall": a
+        # destination that hands the next item to an over-limit agent is piling
+        # onto an agent that cannot hold it. context_k is None when the stop was
+        # mid-turn (no footer) — not reported, so not asserted.
+        if e.context_k is not None and e.context_k >= CONTEXT_HIGH_TOKENS_K:
+            ratio = e.context_k / CONTEXT_HIGH_TOKENS_K
+            tag += (f" — SATURATED at {int(e.context_k)}k ({ratio:.0%} of limit): "
+                    f"do NOT hand it the next item until it checkpoints to its "
+                    f"bead and /clears")
         more = f" ({counts[name]} events)" if counts[name] > 1 else ""
         # BLOCKED ON A QUESTION (aegis-qxc2). The bare verdict `waiting` is already
         # better than the `?` it replaces, but a coordinator reading this line is

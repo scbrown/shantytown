@@ -1429,6 +1429,7 @@ def _cmd_crew(a) -> int:
     free, busy, queued, shelled = [], [], [], []
     verdicts = []
     waiting = []
+    saturated = []
     print()
     for ag, state, work in _crew_states(agents, panes, runtime):
         if work.endswith("sh"):
@@ -1441,6 +1442,10 @@ def _cmd_crew(a) -> int:
             queued.append(ag.name)
         elif work.startswith(triage_mod.WAITING):
             waiting.append(ag.name)
+        elif work.startswith(triage_mod.SATURATED):
+            # A `context_k=NNN` rides in the work cell (see _crew_states), so the
+            # coordinator sees HOW over-limit, not just that it is.
+            saturated.append(ag.name)
         # Only a LIVE agent can be running stale settings. A down agent has no
         # loaded settings to be stale, and will read the current file when it
         # next starts, so reporting on it would be noise that hides the real hits.
@@ -1450,7 +1455,7 @@ def _cmd_crew(a) -> int:
         verdict = _settings_verdict(launches, ag.name, state == "up")
         verdicts.append((ag.name, verdict))
         print(f"  {ag.name:<11} {ag.role:<14} {state:<8} {verdict:<8} "
-              f"{work:<11} {ag.pane or '—'}")
+              f"{work:<16} {ag.pane or '—'}")
     stale, unknown = _reach_buckets(verdicts)
     print()
     # The dispatcher's answer, said out loud. A column still makes the operator
@@ -1503,7 +1508,25 @@ def _cmd_crew(a) -> int:
         print("    unruled — but a build, a test run or a `gh run watch` is "
               "unfinished work, and the next")
         print("    item's output will land on top of it.")
-    if free or busy or queued or shelled:
+    # The bead this state was built for (aegis-h562). A saturated agent reads as
+    # `idle` on every prior version of this command, so it lands on the free list
+    # and gets work piled on — three agents sat at 131–172% of limit for fifteen
+    # hours exactly that way. It is the fail-SILENT case this whole file exists to
+    # convert: the number was on the pane the entire time.
+    if saturated:
+        print(f"  ⚠ {len(saturated)} agent(s) OVER the context limit — NOT free, "
+              f"a dispatch wall: {', '.join(saturated)}")
+        print(f"    They read as idle but cannot hold new work: they drop earlier "
+              f"context, re-derive settled")
+        print(f"    decisions, and miss constraints stated long ago. `st go` "
+              f"REFUSES them (see the ratio in")
+        print(f"    the work cell). Remedy: the agent writes its state to its "
+              f"bead, then /clear (or hand off to")
+        print(f"    a fresh session) — do NOT auto-clear, it loses whatever was "
+              f"not saved. The saturated agent is")
+        print(f"    the LEAST able to notice it must clear, so this is the "
+              f"coordinator's to drive.")
+    if free or busy or queued or waiting or saturated or shelled:
         print()
     # Say the consequence, not just the state. The operator who needs this line is
     # the one who just rewrote a settings file and has no reason to suspect it did
@@ -1563,6 +1586,14 @@ def _crew_states(agents, panes, runtime):
             shells = triage_mod.running_shells(screen)
             if shells:
                 work = f"{work}+{shells}sh"
+            # The saturation ratio rides in the cell (aegis-h562), so the
+            # coordinator sees HOW over-limit — 172% is a different decision from
+            # 101%. Only when the verdict is saturated; a healthy pane's token
+            # count is not this column's business.
+            if work.startswith(triage_mod.SATURATED):
+                tokens = triage_mod.context_tokens_k(plain)
+                if tokens is not None:
+                    work = f"{work}·{int(tokens)}k"
         else:
             work = "—"
         yield ag, state, work

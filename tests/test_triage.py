@@ -108,14 +108,27 @@ def test_context_high_is_reachable_from_a_real_capture():
     assert context_high("\n".join("x" for _ in range(500))) is False
 
 
-def test_high_context_but_RELATED_still_nudges():
-    """The discriminating case: high context alone must NOT trigger CLEAR."""
+def test_over_limit_REFUSES_even_related_work():
+    """CONTRACT CHANGE (aegis-h562). This test used to assert that high-context
+    RELATED work NUDGES — that the `unrelated` gate discriminated. That gate is
+    exactly what let a 687k agent keep taking work: related continuation slipped
+    through as `healthy NUDGE`, and three agents sat at 131–172% of limit for
+    fifteen hours because of it. At/over the limit, related work degrades the
+    agent too (it drops earlier context, re-derives settled decisions), so the
+    gate is dropped: over the line, do not pile on — related or not.
+
+    737.6k is 184% of the 400k limit. It refuses now, and `overlap: related`
+    records that relatedness WAS considered and overridden, not ignored.
+    """
     screen = "\n".join(
         ["● restore the den dashboard service step %d" % i for i in range(20)]
         + ["                  new task? /clear to save 737.6k tokens"]
     )
     d = triage(panes(screen), "%1", "restore the den dashboard service")
-    assert d.action is Action.NUDGE, "CLEAR fired on RELATED work — it isn't discriminating"
+    assert d.action is Action.CLEAR, "over-limit related work must refuse, not nudge"
+    assert "saturated" in d.why
+    assert d.inputs["overlap"] == "related"
+    assert d.inputs["ratio"] == "184%"
 
 
 def test_every_decision_is_inspectable():

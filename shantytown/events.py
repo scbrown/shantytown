@@ -77,6 +77,14 @@ class StopEvent:
                                  # event written before aegis-w9z1) — the reader
                                  # must render that as "age unknown", never as
                                  # "just now", which is the one wrong answer.
+    context_k: float | None = None
+                                 # the sender's context depth AT STOP, in k tokens
+                                 # (aegis-h562). "gennaro stopped" and "gennaro
+                                 # stopped at 172% of its context limit" are
+                                 # different facts, and only the second tells the
+                                 # destination not to hand it the next item. None
+                                 # = NOT REPORTED (a turn was in flight so the
+                                 # footer was gone), never "fine".
     item: str | None = None      # what `frm` held at its stop, if anything
     item_status: str | None = None
                                  # its status, or "?" meaning COULD NOT LOOK.
@@ -95,7 +103,8 @@ class Events(Protocol):
     its protocol; a stop event and a work item are different types on one store."""
     def persist(self, to: str, frm: str, reason: str | None, rose: bool,
                 shells: int | None = None, item: str | None = None,
-                item_status: str | None = None) -> StopEvent:
+                item_status: str | None = None,
+                context_k: float | None = None) -> StopEvent:
         """SEND: durably record an event addressed to `to`. Survival guarantee —
         it is on the store before it is read, so it cannot vanish if `to` is down.
 
@@ -159,15 +168,17 @@ class FilesEvents:
 
     def persist(self, to: str, frm: str, reason: str | None, rose: bool,
                 shells: int | None = None, item: str | None = None,
-                item_status: str | None = None) -> StopEvent:
+                item_status: str | None = None,
+                context_k: float | None = None) -> StopEvent:
         self.root.mkdir(parents=True, exist_ok=True)
         ev = StopEvent(id=self._next_id(), to=to, frm=frm, reason=reason, rose=rose,
                        shells=shells, ts=time.time(), item=item,
-                       item_status=item_status)
+                       item_status=item_status, context_k=context_k)
         (self.root / f"{ev.id}.json").write_text(json.dumps({
             "to": ev.to, "frm": ev.frm, "reason": ev.reason,
             "rose": ev.rose, "delivered": ev.delivered, "shells": ev.shells,
             "ts": ev.ts, "item": ev.item, "item_status": ev.item_status,
+            "context_k": ev.context_k,
         }, indent=2, sort_keys=True))
         return ev
 
@@ -179,7 +190,8 @@ class FilesEvents:
                          rose=d.get("rose", False), delivered=d.get("delivered", False),
                          shells=d.get("shells"),
                          ts=float(d.get("ts") or 0.0), item=d.get("item"),
-                         item_status=d.get("item_status"))
+                         item_status=d.get("item_status"),
+                         context_k=d.get("context_k"))
 
     def pending(self, me: str) -> list[StopEvent]:
         """PURE READ — no mkdir, no rewrite, nothing marked."""
@@ -219,11 +231,12 @@ class NullEvents:
 
     def persist(self, to: str, frm: str, reason: str | None, rose: bool,
                 shells: int | None = None, item: str | None = None,
-                item_status: str | None = None) -> StopEvent:
+                item_status: str | None = None,
+                context_k: float | None = None) -> StopEvent:
         self._n += 1
         ev = StopEvent(id=f"ev-{self._n}", to=to, frm=frm, reason=reason, rose=rose,
                        shells=shells, ts=time.time(), item=item,
-                       item_status=item_status)
+                       item_status=item_status, context_k=context_k)
         self._events.append(ev)
         return ev
 
@@ -238,5 +251,5 @@ class NullEvents:
             self._events[self._events.index(e)] = StopEvent(
                 id=e.id, to=e.to, frm=e.frm, reason=e.reason, rose=e.rose,
                 delivered=True, shells=e.shells, ts=e.ts, item=e.item,
-                item_status=e.item_status)
+                item_status=e.item_status, context_k=e.context_k)
         return mine

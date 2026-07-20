@@ -215,9 +215,11 @@ def input_state(screen: str) -> str:
 # three scars from (context_high, placeholder-vs-queued, None-is-not-zero).
 BUSY, IDLE, WEDGED, UNSURE, QUEUED = "busy", "idle", "wedged", "?", "queued"
 WAITING = "waiting"           # a picker is up and BLOCKING — needs a person, not a nudge
+SATURATED = "saturated"       # over the context limit — looks free, is a wall (aegis-h562)
 
 
-def work_state(screen: str, ui_up: bool, awaiting: bool = False) -> str:
+def work_state(screen: str, ui_up: bool, awaiting: bool = False,
+               limit_k: float = None) -> str:
     """Is this agent WORKING right now? The verdict `st crew` never asked for.
 
     The predicates already existed — dispatch.py has refused sends into busy
@@ -266,6 +268,24 @@ def work_state(screen: str, ui_up: bool, awaiting: bool = False) -> str:
         return QUEUED
     if ins == INPUT_UNKNOWN:
         return UNSURE
+    # The pane is up, quiet, and its box is empty — which reads as IDLE, the free
+    # list, the next dispatch target. But an agent OVER its context limit is not
+    # free: it is a wall (aegis-h562). Three agents sat here at 131–172% of limit
+    # for fifteen hours, printed `idle`, and had work piled on that they could not
+    # hold. The number was already on the pane ("/clear to save 687.8k tokens")
+    # and already read by context_tokens_k; the tier just never asked whether it
+    # was over the line. SATURATED converts what would be IDLE — it never takes an
+    # agent that reads busy/queued/waiting, so like every state above it, additive.
+    #
+    # ONLY detectable here, and that is honest, not a gap: while a turn is in
+    # flight the runtime replaces the "/clear to save" footer with the spinner, so
+    # context_tokens_k returns None and a BUSY agent's saturation is genuinely
+    # unreadable from the pane. We do not guess it — a busy-saturated agent reads
+    # busy, and the number becomes available the moment it idles.
+    limit = CONTEXT_HIGH_TOKENS_K if limit_k is None else limit_k
+    tokens = context_tokens_k(screen)
+    if tokens is not None and tokens >= limit:
+        return SATURATED
     return IDLE
 
 
@@ -283,6 +303,24 @@ def context_tokens_k(screen: str) -> float | None:
     """
     m = CTX_HINT.search(strip_attrs(screen))
     return float(m.group(1)) if m else None
+
+
+def saturated(screen: str, limit_k: float = CONTEXT_HIGH_TOKENS_K) -> bool:
+    """Is this agent AT OR OVER its context limit? (aegis-h562)
+
+    The same reading as context_high today, given the same threshold — but named
+    for the DECISION it drives, not the heuristic. context_high answers "worth
+    clearing if the new work is unrelated"; this answers "over the line, and more
+    work degrades it regardless of relatedness". A saturated agent does not just
+    go slow: it loses earlier context, re-derives settled decisions, and misses
+    constraints stated hundreds of thousands of tokens ago. Piling on produces
+    worse output, not merely later output.
+
+    None (footer not showing — a turn in flight) is NOT saturated: unknown is not
+    over-limit, and mid_flight is judged first anyway.
+    """
+    tokens = context_tokens_k(screen)
+    return tokens is not None and tokens >= limit_k
 
 
 def context_high(screen: str, limit_k: float = CONTEXT_HIGH_TOKENS_K) -> bool:
@@ -376,11 +414,25 @@ def triage(panes, target: str, new_work: str) -> Decision:
     # NUDGE never silently means "I couldn't see".
     tokens = context_tokens_k(screen)
     hi = context_high(screen)
-    if hi and unrelated(screen, new_work):
-        return Decision(Action.CLEAR, "high context, unrelated",
+    # SATURATION REFUSES, unconditional on relatedness (aegis-h562). This is the
+    # bug fix, and it is a deliberate WIDENING of the branch below it: that branch
+    # only cleared when the pane was high AND the new work was unrelated, so a
+    # 687k agent handed RELATED continuation work slipped through as `healthy
+    # NUDGE` — which is exactly how three agents stayed over-limit for fifteen
+    # hours. At/over the limit, related work degrades the agent too, so the gate
+    # is dropped: over the line, do not pile on. `overlap` is still recorded, so
+    # the operator can see it was considered and overridden, not ignored.
+    if tokens is not None and tokens >= CONTEXT_HIGH_TOKENS_K:
+        ratio = f"{tokens / CONTEXT_HIGH_TOKENS_K:.0%}"
+        return Decision(Action.CLEAR, "saturated — over the context limit",
                         {"pane": target, "context_k": tokens, "shells": shells,
-                         "limit_k": CONTEXT_HIGH_TOKENS_K,
-                         "screen_lines": lines, "overlap": "below threshold"})
+                         "limit_k": CONTEXT_HIGH_TOKENS_K, "ratio": ratio,
+                         "overlap": "unrelated" if unrelated(screen, new_work)
+                         else "related",
+                         "remedy": "checkpoint state to the bead, then /clear "
+                                   "(or hand off to a fresh session) BEFORE "
+                                   "dispatching — do not auto-clear, it loses "
+                                   "context that was not saved"})
 
     return Decision(Action.NUDGE, "healthy",
                     {"pane": target, "context_k": tokens, "shells": shells,
