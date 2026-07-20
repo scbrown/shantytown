@@ -71,6 +71,38 @@ def test_compose_exports_BOBBIN_ROLE_so_the_guard_has_a_scope():
         assert f"BOBBIN_ROLE={role}" in launch, f"{role} launches with no policy scope"
 
 
+def test_compose_exports_SHANTY_ROOT_so_a_stale_hook_still_finds_the_store():
+    """The belt to --settings' braces (aegis-nipg).
+
+    --settings is read ONCE, at launch. When the Stop hook was corrected on disk
+    to carry an absolute --root, every already-running agent kept the OLD
+    unrooted command — and stop_event's last-resort default is cwd/.shanty,
+    resolved against the agent's own workspace, which has none. Measured on
+    kelly: `no such agent: kelly (looked in .../crew/kelly/.shanty/crew/
+    kelly.json)`. The agent looked up and worked fine; only its stop events
+    vanished, leaving the administrator deaf to it.
+
+    stop_event resolves `--root`, else $SHANTY_ROOT, else cwd/.shanty — and the
+    ENV is read when the hook RUNS, not snapshotted at launch. So exporting the
+    root means a hook that lost its --root still lands in the right store.
+    """
+    rt = ClaudeRuntime(NullPanes(), _ok_settings, root="/srv/shanty/.shanty")
+    launch = rt.compose(Agent(name="kelly", role="worker"))
+    assert "SHANTY_ROOT=/srv/shanty/.shanty" in launch
+    # ...and it must precede the binary, i.e. be an env export for the launch,
+    # not an argument to claude.
+    assert launch.index("SHANTY_ROOT=") < launch.index("claude ")
+
+
+def test_compose_omits_SHANTY_ROOT_when_the_runtime_has_no_root():
+    """No root known -> export nothing. An empty or invented SHANTY_ROOT would be
+    WORSE than absent: stop_event would trust it and write into a store that does
+    not exist, instead of falling through to its documented cwd default."""
+    rt = ClaudeRuntime(NullPanes(), _ok_settings)
+    launch = rt.compose(Agent(name="kelly", role="worker"))
+    assert "SHANTY_ROOT" not in launch
+
+
 def test_compose_enables_remote_control_BY_DEFAULT():
     """Remote Control is on for every agent, named after the agent (Stiwi
     2026-07-19). A fleet you cannot reach is a fleet you cannot run: a crew

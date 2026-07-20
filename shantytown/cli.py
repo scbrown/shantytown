@@ -215,7 +215,7 @@ def _runtime(a, panes):
     """The runtime for this invocation. Claude Code is first-class; a second
     runtime (codex/opencode) would be selected here and its capability gate
     (runtime.require_capability) would refuse a lead it cannot host."""
-    return ClaudeRuntime(panes, _default_settings(a.root))
+    return ClaudeRuntime(panes, _default_settings(a.root), root=a.root)
 
 
 def _observe_live(runtime, panes, session) -> bool:

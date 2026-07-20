@@ -270,9 +270,10 @@ class ClaudeRuntime:
     # is entangled with what role-set emits — tracked on zx7l, not guessed here.
     CONSENT_MARKERS = ("Claude in Chrome extension detected", "keep browser tools off")
 
-    def __init__(self, panes, resolve_settings: SettingsResolver) -> None:
+    def __init__(self, panes, resolve_settings: SettingsResolver, root=None) -> None:
         self._panes = panes
         self._resolve = resolve_settings
+        self._root = root
 
     def hooks(self, card: Agent) -> HookSpec:
         # Claude Code declares blocking stop hooks — measured, load-bearing.
@@ -315,8 +316,31 @@ class ClaudeRuntime:
         # .bobbin/config.toml under [hank.policy.scopes.<role>]). Exporting it per
         # agent is what lets ONE hook registration serve every role — without it
         # the guard has no scope to enforce and every agent is ungoverned.
+        # SHANTY_ROOT is the BELT to --settings' braces, and it exists because of a
+        # measured incident (aegis-nipg, sattler 2026-07-19). --settings is read ONCE,
+        # at launch: when the Stop hook was later corrected on disk to carry an
+        # absolute --root (c3fb472), every ALREADY-RUNNING agent kept the old unrooted
+        # command forever. kelly's own pane showed it —
+        #     stop_event send: no such agent: kelly (looked in
+        #     /home/braino/gt/beads_aegis/crew/kelly/.shanty/crew/kelly.json)
+        # — the cwd/.shanty default, resolved against the agent's OWN workspace, which
+        # has no .shanty. The agent still looked "up" in `st crew`, still worked, still
+        # committed; only its stop events vanished, so the administrator at the root of
+        # the tier was silently deaf to it. Reproduced by mechanism from another
+        # worker's cwd (rooted -> "persisted ev-2 to sattler", exit 0; unrooted ->
+        # the same LookupError, exit 1).
+        #
+        # stop_event resolves root as `--root`, else $SHANTY_ROOT, else cwd/.shanty. A
+        # hook that has lost its --root therefore lands in the RIGHT store anyway once
+        # the env carries it, because the env is read at hook-run time, not baked into
+        # a settings snapshot. That is the whole point: this makes the NEXT settings
+        # change survivable for agents launched before it. It does not make a stale
+        # settings file detectable — nipg items 1-2 (a doctor check, and role-set
+        # naming the live agents it did NOT reach) are still open, and this must not be
+        # mistaken for them.
+        root_env = f"SHANTY_ROOT={Path(self._root).resolve()} " if self._root else ""
         launch = (
-            f"SHANTY_AGENT={card.name} BOBBIN_ROLE={card.role} "
+            f"{root_env}SHANTY_AGENT={card.name} BOBBIN_ROLE={card.role} "
             f"claude {flags} --settings {settings_path}"
         )
         # Launch IN the agent's workspace so Claude Code auto-loads its .mcp.json +
