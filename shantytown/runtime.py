@@ -30,6 +30,7 @@ HONEST BOUNDARY (say it so nobody over-claims):
     never be read as "hooks registered" — it cannot show that.
 """
 from __future__ import annotations
+import json
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -244,6 +245,43 @@ def settings_for_role(role: str, root=None) -> dict:
         # which is the failure mode this repo keeps naming.
         "env": {"BOBBIN_ROLE": role},
     }
+
+
+def emitted_stop_directions(root, role: str) -> set[str] | None:
+    """READ BACK which stop directions a role's EMITTED settings file actually
+    carries: a subset of {"send", "drain"}, or None if it could not be read.
+
+    settings_for_role WRITES this artifact; this READS it. They are deliberately
+    separate — a check that asks the writer what it would write proves nothing
+    about what is on disk, which is the whole complaint in GitHub #6: `roles
+    --check` printed "hooks: ok" for every agent while never opening a hook file.
+
+    None is NOT an empty set. Missing file / unparseable JSON means CANNOT TELL,
+    and the caller must not render that as a pass — a role whose hooks we failed
+    to read is not a role with no hooks.
+    """
+    p = Path(root) / "settings" / f"{role}.settings.json"
+    try:
+        data = json.loads(p.read_text())
+    except (OSError, ValueError):
+        return None
+    found: set[str] = set()
+    try:
+        for block in data["hooks"]["Stop"]:
+            for hook in block["hooks"]:
+                cmd = hook.get("command", "")
+                if "shantytown.stop_event" not in cmd:
+                    continue
+                for mode in ("send", "drain"):
+                    # Match the token, not a substring: "send" must be the
+                    # stop_event subcommand, not a stray word in a path.
+                    if mode in cmd.split():
+                        found.add(mode)
+    except (KeyError, TypeError, AttributeError):
+        # The file exists but is not shaped like settings we emitted. That is a
+        # cannot-tell, not "no hooks" — see above.
+        return None
+    return found
 
 
 class ClaudeRuntime:
