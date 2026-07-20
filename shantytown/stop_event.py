@@ -19,15 +19,38 @@ TWO MODES, the two halves of arnold's frame:
           here (arnold's rail 2). drain is BLOCK-ONCE (the store marks delivered),
           so a later stop with nothing new prints nothing and the destination
           idles instead of wedging.
+
+A STOP EVENT IS A TURN BOUNDARY, NOT AN IDLE AGENT (aegis-w9z1). Claude Code's
+Stop hook fires at the end of every TURN. So `send` cannot know whether the agent
+it names is finished or merely between thoughts, and it must not pretend: the
+only pane it could inspect is its own, from inside its own blocking hook, and any
+verdict it stamped would be stale before anyone read it. So the two halves split
+the question by WHO CAN ANSWER IT:
+
+  send  records only what is true at emit — ts, and the item it held (with its
+        status), so the destination need not go re-read the tracker per agent.
+  drain answers "is this agent free RIGHT NOW" itself, against a live pane, at the
+        moment the decision is made. An agent still mid-flight is DEFERRED (not
+        delivered, not marked) — so a turn boundary no longer wakes the root of
+        the tier, and the event is still waiting when that agent really does stop.
+
+The measurement that forced this: sattler was handed "tim stopped / kelly stopped
+/ kelly stopped", opened the panes, and found both agents working (kelly's two
+events were one continuous stretch of work). Trusting the event name would have
+re-dispatched over live agents; distrusting it made the event worthless, since
+the safe read was to scrape every pane by hand. drain now does that scrape.
 """
 from __future__ import annotations
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
-from .events import FilesEvents
-from .files import FilesRegistry
+from . import triage
+from .events import FilesEvents, StopEvent
+from .files import FilesRegistry, FilesTracker, plate as files_plate
+from .runtime import ClaudeRuntime
 from .tier import route_stop
 from .triage import running_shells
 from .tmux import Tmux
@@ -71,7 +94,29 @@ def _my_shells(reg: FilesRegistry, panes, me: str) -> int | None:
         return None
 
 
-def _send(reg: FilesRegistry, events: FilesEvents, panes, me: str) -> int:
+def _plate_of(root: Path, me: str) -> tuple[str | None, str | None]:
+    """What `me` held when it stopped: (item_id, status).
+
+    Three distinct answers, and the third is why this returns a pair instead of an
+    id: (None, None) = the plate was empty; (id, status) = it held that; and
+    (None, "?") = THE TRACKER DID NOT ANSWER. A lookup that failed must not render
+    as finished work — that is the whole aegis-mt0r lesson, and it is one `except`
+    away from happening here.
+
+    Files backend only, deliberately: the emitted hook command carries no --backend
+    (test_role_emit pins it), so a beads path here would be a branch nothing can
+    reach. Never fatal — a stop event that cannot name an item is still worth far
+    more than no stop event.
+    """
+    try:
+        item = files_plate(FilesTracker(root / "items"), me)
+    except Exception:
+        return None, "?"
+    return (item.id, item.status) if item else (None, None)
+
+
+def _send(reg: FilesRegistry, events: FilesEvents, panes, me: str,
+          root: Path | None = None) -> int:
     try:
         routing = route_stop(reg, me, lead_is_up=_lead_is_up(reg, panes))
     except LookupError as e:
@@ -81,8 +126,9 @@ def _send(reg: FilesRegistry, events: FilesEvents, panes, me: str) -> int:
         return 1
     reason = routing.reason.value if routing.reason else None
     shells = _my_shells(reg, panes, me)
+    item, item_status = _plate_of(root, me) if root is not None else (None, "?")
     ev = events.persist(to=routing.to, frm=me, reason=reason, rose=routing.rose,
-                        shells=shells)
+                        shells=shells, item=item, item_status=item_status)
     # Silent on stdout (a non-blocking Stop hook's stdout is discarded anyway);
     # a terse stderr line is useful when a human runs it by hand.
     print(f"stop_event: {me} stopped -> persisted {ev.id} to {routing.to}"
@@ -91,27 +137,128 @@ def _send(reg: FilesRegistry, events: FilesEvents, panes, me: str) -> int:
     return 0
 
 
-def _compose_reason(events) -> str:
-    lines = [f"{len(events)} stop event(s) routed to you — handle each (absorb / "
-             f"delegate / escalate); they will NOT be redelivered:"]
-    for e in events:
+DOWN = "down"        # a fifth verdict triage cannot produce: there is no pane.
+
+
+def _liveness(reg: FilesRegistry, panes, shows_ready_ui, name: str) -> str:
+    """Is `name` working RIGHT NOW? The scrape sattler had to do by hand.
+
+    Answered here, at read time, and never stored — a liveness verdict is only
+    true at the instant it is taken, and this is that instant.
+
+    `down` is separate from triage's four on purpose: a missing card or a dead
+    pane is not `?` ("I looked and could not tell"), it is "there is nothing to
+    look at", and it is a fact the coordinator must ACT on rather than wait out.
+    Anything that is not BUSY gets delivered — an agent that is wedged, gone, or
+    unreadable is exactly who a coordinator needs waking for.
+    """
+    try:
+        card = reg.get(name)
+    except Exception:
+        return DOWN
+    if not card.pane or not panes.exists(card.pane):
+        return DOWN
+    screen = panes.capture(card.pane)
+    return triage.work_state(screen, shows_ready_ui(screen))
+
+
+def _age(ts: float, now: float) -> str:
+    """How stale is this event? 'age unknown' for an unstamped one — the one
+    answer that is never wrong. Rendering it as 'just now' would put a lie in
+    the exact field the coordinator reads to decide whether to trust the rest."""
+    if not ts:
+        return "age unknown"
+    d = max(0, int(now - ts))
+    if d < 60:
+        return f"{d}s ago"
+    if d < 3600:
+        return f"{d // 60}m ago"
+    return f"{d // 3600}h{(d % 3600) // 60:02d}m ago"
+
+
+def _item_note(e: StopEvent) -> str:
+    if e.item:
+        return f"held {e.item} ({e.item_status or 'status ?'})"
+    if e.item_status == "?":
+        return "item: could not read the tracker"
+    return "no open item"
+
+
+def _compose_reason(events: list[StopEvent], verdicts: dict, now: float,
+                    deferred: int = 0) -> str:
+    """One line per AGENT, not per event — and every line carries the three facts
+    the old payload lacked: when, what it held, and whether it is free now.
+
+    Collapsing by agent is not cosmetic. kelly emitted TWO events for one
+    continuous stretch of work (turn boundaries), and two lines saying "kelly
+    stopped" invite two decisions about one agent. The latest event wins; the
+    count is still printed, because "this agent turned over 3 times" is itself a
+    signal and hiding it would trade one wrong impression for another.
+    """
+    latest: dict[str, StopEvent] = {}
+    counts: dict[str, int] = {}
+    for e in sorted(events, key=lambda x: (x.ts, x.id)):
+        counts[e.frm] = counts.get(e.frm, 0) + 1
+        latest[e.frm] = e                          # sorted -> last one wins
+    lines = [f"{len(latest)} agent(s) stopped — handle each (absorb / delegate / "
+             f"escalate); they will NOT be redelivered. A stop is a TURN boundary, "
+             f"so `now:` is the pane verdict taken just now, and it is the one to "
+             f"act on:"]
+    for name in sorted(latest):
+        e = latest[name]
         tag = f" (ROSE: {e.reason})" if e.rose else (f" [{e.reason}]" if e.reason else "")
         # The shell count is the difference between "its turn ended" and "it is
         # finished" (aegis-q73g). Said in the destination's own words, because
-        # the destination is the one about to book the item as done.
+        # the destination is the one about to book the item as done. Taken from
+        # the LATEST event only: an earlier count is a fact about an earlier turn,
+        # and re-asserting it here would report a shell that has since exited.
         if e.shells:
             tag += (f" — STILL RUNNING {e.shells} background shell(s): its TURN "
                     f"ended, its WORK may not have")
-        lines.append(f"  - {e.frm} stopped{tag}")
+        more = f" ({counts[name]} events)" if counts[name] > 1 else ""
+        lines.append(f"  - {name} stopped {_age(e.ts, now)} — now: "
+                     f"{verdicts.get(name, '?')} · {_item_note(e)}{tag}{more}")
+    if deferred:
+        lines.append(f"  ({deferred} more held back: those agents are mid-flight "
+                     f"right now. They will be delivered when they actually stop.)")
     return "\n".join(lines)
 
 
-def _drain(events: FilesEvents, me: str) -> int:
-    got = events.drain(me)                        # BLOCK-ONCE happens in drain()
+def _drain(events: FilesEvents, me: str, reg=None, panes=None,
+           shows_ready_ui=None) -> int:
+    """Deliver MY events — minus the ones whose sender is still working.
+
+    reg/panes/shows_ready_ui are optional so a caller with no pane backend still
+    gets delivery (verdicts read `?`). Without them nothing is deferred: refusing
+    to deliver on the strength of a check we did not run would be worse than the
+    bug being fixed.
+    """
+    now = time.time()
+    verdicts: dict[str, str] = {}
+    deferred = 0
+    accept = None
+    if reg is not None and panes is not None and shows_ready_ui is not None:
+        def accept(ev: StopEvent) -> bool:            # noqa: F811 — the wired form
+            nonlocal deferred
+            if ev.frm not in verdicts:
+                verdicts[ev.frm] = _liveness(reg, panes, shows_ready_ui, ev.frm)
+            if verdicts[ev.frm] == triage.BUSY:
+                deferred += 1
+                return False                          # DEFER — still pending
+            return True
+
+    got = events.drain(me, accept)                 # BLOCK-ONCE happens in drain()
     if not got:
-        return 0                                  # nothing pending -> idle, no block
+        # Nothing to act on -> NO block -> idle. This is now also the turn-boundary
+        # case: every pending sender is still mid-flight, so there is no decision
+        # to make and waking the destination would be the aegis-w9z1 bug itself.
+        if deferred:
+            print(f"stop_event: {deferred} event(s) held back — sender(s) still "
+                  f"mid-flight", file=sys.stderr)
+        return 0
     # Deliver to the MODEL via the block protocol. reason, never systemMessage.
-    print(json.dumps({"decision": "block", "reason": _compose_reason(got)}))
+    print(json.dumps({"decision": "block",
+                      "reason": _compose_reason(got, verdicts, now, deferred)}))
     return 0
 
 
@@ -130,9 +277,13 @@ def main(argv: list[str] | None = None) -> int:
     root = _root(argv)
     reg = FilesRegistry(root / "crew")
     events = FilesEvents(root / "events")
+    panes = Tmux()
     if mode == "send":
-        return _send(reg, events, Tmux(), me)
-    return _drain(events, me)
+        return _send(reg, events, panes, me, root)
+    # shows_ready_ui is the RUNTIME's marker check (triage stays runtime-blind).
+    # It reads only the screen, so the settings resolver it never calls is None.
+    runtime = ClaudeRuntime(panes, lambda card: None, root=root)
+    return _drain(events, me, reg, panes, runtime.shows_ready_ui)
 
 
 if __name__ == "__main__":

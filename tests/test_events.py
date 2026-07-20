@@ -68,6 +68,46 @@ def test_drain_is_scoped_to_the_recipient(store):
     assert [e.frm for e in store.drain("goldblum")] == ["grant"]
 
 
+# --- accept: DEFERRAL, not filtering (aegis-w9z1) --------------------------------
+
+def test_a_rejected_event_stays_pending_and_delivers_later(store):
+    """The reader declines to be woken by a turn boundary. If `accept` DROPPED the
+    event instead of holding it, a stop would be lost every time its sender
+    happened to still be mid-flight — a silent hole exactly where the tier is
+    supposed to be durable."""
+    store.persist(to="maldoon", frm="ellie", reason=None, rose=False)
+    assert store.drain("maldoon", lambda e: False) == [], "rejected -> not delivered"
+    assert [e.frm for e in store.drain("maldoon")] == ["ellie"], \
+        "a rejected event was consumed, not deferred — the stop is gone"
+
+
+def test_accept_is_per_event(store):
+    store.persist(to="maldoon", frm="ellie", reason=None, rose=False)
+    store.persist(to="maldoon", frm="tim", reason=None, rose=False)
+    got = store.drain("maldoon", lambda e: e.frm == "tim")
+    assert [e.frm for e in got] == ["tim"]
+    assert [e.frm for e in store.drain("maldoon")] == ["ellie"]
+
+
+# --- the fields that make an event actionable ------------------------------------
+
+def test_persist_stamps_a_time_and_records_the_item(store):
+    ev = store.persist(to="maldoon", frm="ellie", reason=None, rose=False,
+                       item="it-7", item_status="in_progress")
+    assert ev.ts > 0, "no timestamp -> events cannot be ordered, aged, or trusted"
+    got = store.drain("maldoon")[0]
+    assert (got.item, got.item_status, got.ts) == ("it-7", "in_progress", ev.ts)
+
+
+def test_drain_returns_events_oldest_first(store):
+    """ev-10 sorts BEFORE ev-2 as a string, and the reader now picks the LATEST
+    event per agent — so a lexicographic order would hand it the wrong one."""
+    for i in range(11):
+        store.persist(to="maldoon", frm=f"a{i}", reason=None, rose=False)
+    got = store.drain("maldoon")
+    assert [e.frm for e in got] == [f"a{i}" for i in range(11)]
+
+
 def test_empty_drain_is_not_an_error(store):
     """A destination with nothing pending drains [] — the idle case, the common
     case, and NOT a failure."""
