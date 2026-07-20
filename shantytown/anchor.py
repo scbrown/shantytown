@@ -1,20 +1,26 @@
-"""prime — the primer. `shanty prime`, no arguments.
+"""anchor — what holds an agent to its work. `st anchor`, no arguments.
 
-The most-used surface in any harness: every session starts here (Gas Town's ran
-21x in the measurement window). Four things, each earning its line (docs/cli.md):
+The most-used surface in any harness: every session starts here (Gas Town's
+equivalent ran 21x in the measurement window). Four things, each earning its line
+(docs/cli.md):
 
   1. identity, from the registry — one source, not an env var
-  2. the work — ONE item or none. A primer that prints a backlog is a dashboard.
+  2. the work — ONE item or none. A surface that prints a backlog is a dashboard.
   3. where your stop events go, AND whether that agent is up
   4. context + knowledge — both optional; with `none` adapters they vanish
 
-PRIME IS A READ. IT MUST NEVER WRITE.
+ANCHOR IS A READ. IT MUST NEVER WRITE.
 
-Gas Town's primer mutates state from a SessionStart hook, which is why "did I
-get primed?" became unanswerable when the hook silently didn't register. Nothing
-in this module writes, and test_prime_writes_nothing asserts it against the
-filesystem rather than trusting this docstring — a comment claiming purity is
-the thing we keep finding untrue.
+The name is the noun AND the verb (Stiwi, 2026-07-19): an agent's anchor is what
+holds it to its work, and `st anchor` is the act of taking hold. It was called
+`prime` until then, which named the HARNESS's act (loading a session) rather than
+the agent's — and it inherited that name from the tool we left.
+
+Gas Town's primer mutates state from a SessionStart hook, which is why "did I get
+primed?" became unanswerable when the hook silently didn't register. Nothing in
+this module writes, and test_anchor_writes_nothing asserts it against the
+filesystem rather than trusting this docstring — a comment claiming purity is the
+thing we keep finding untrue.
 """
 from __future__ import annotations
 
@@ -33,8 +39,8 @@ class Unreachable(Exception):
 
 
 @dataclass
-class Priming:
-    """What prime found. Rendering is separate so the finding is testable."""
+class Anchoring:
+    """What anchor found. Rendering is separate so the finding is testable."""
     me: Agent
     item: WorkItem | None
     lead: Agent | None
@@ -84,21 +90,21 @@ class Priming:
         return "\n".join(L)
 
 
-def prime(
+def anchor(
     me: str,
     registry: Registry,
     panes: Panes,
     plate: Callable[[str], WorkItem | None] | None = None,
     context: list[str] | None = None,
     knowledge: list[str] | None = None,
-) -> Priming:
+) -> Anchoring:
     """Resolve the four things. Reads only.
 
     `plate` is INJECTED rather than taken off the Tracker protocol, because
-    Tracker is two functions and prime is not allowed to widen it alone
+    Tracker is two functions and anchor is not allowed to widen it alone
     (aegis-gqr8 — see the note in protocols.Tracker). Pass files.plate bound to
-    a tracker; pass None and prime honestly reports an empty plate rather than
-    guessing. Note the tracker is not a parameter at all now: prime never writes,
+    a tracker; pass None and anchor honestly reports an empty plate rather than
+    guessing. Note the tracker is not a parameter at all now: anchor never writes,
     and the only thing it wanted from a tracker was this one read.
 
     Raises LookupError  -> exit 1 (refused: you are not in the registry)
@@ -123,7 +129,7 @@ def prime(
         # ...and whether that agent is UP. No pane on the card = cannot tell.
         lead_up = panes.exists(lead.pane) if lead.pane else None
 
-    return Priming(
+    return Anchoring(
         me=agent,
         item=item,
         lead=lead,

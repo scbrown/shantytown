@@ -40,6 +40,18 @@ class Agent:
                                   # launch is refused. We never derive a source
                                   # from a naming convention: a guessed remote is
                                   # how an agent gets launched into the wrong repo.
+    harness: str | None = None    # WHICH agent program this card runs (harness.py).
+                                  # None = "claude", which is every card that
+                                  # exists today. It is on the CARD and not a
+                                  # global because the harness is a property of the
+                                  # AGENT — a fleet is allowed to be mixed, and the
+                                  # only way to find out that it is not is to have
+                                  # somewhere to say so. The launcher hardcoded
+                                  # `claude` and its settings FORMAT in two
+                                  # separate functions; this field is what selects
+                                  # between them (Stiwi: the harness should be
+                                  # mappable, "like claude code" — i.e. Claude Code
+                                  # is one harness, not the shape of the world).
     dangerous: bool = False       # opt-in --dangerously-skip-permissions for THIS
                                   # agent. Per-agent, never global — a crew worker
                                   # that must act without permission prompts sets

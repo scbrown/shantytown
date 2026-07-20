@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from .inbox import is_message
 from .protocols import Agent, WorkItem
 
 
@@ -30,6 +31,7 @@ class FilesRegistry:
             model=d.get("model"),
             workspace=d.get("workspace"),
             workspace_source=d.get("workspace_source"),
+            harness=d.get("harness"),
             dangerous=d.get("dangerous", False),
         )
 
@@ -59,6 +61,11 @@ class FilesRegistry:
             existing["workspace"] = agent.workspace
         if agent.workspace_source is not None:
             existing["workspace_source"] = agent.workspace_source
+        # harness, like model/workspace: launch config the tier does not own, so
+        # write it only when carried. A `role set` must never silently move an
+        # agent back onto the default harness.
+        if agent.harness is not None:
+            existing["harness"] = agent.harness
         if agent.dangerous:
             existing["dangerous"] = agent.dangerous
         p.write_text(json.dumps(existing, indent=2, sort_keys=True))
@@ -168,6 +175,10 @@ def plate(tracker: FilesTracker, agent: str) -> WorkItem | None:
         for p in sorted(root.glob("*.json"))
         if (item := tracker._read(p, p.stem)).assignee == agent
         and item.status != "closed"
+        # A MESSAGE is not work (inbox.py). The plate holds at most one item, so
+        # a message that reached it would EVICT the agent's actual work. Shared
+        # predicate with beads.plate — one judgment, both backends.
+        and not is_message(item.title)
     ]
     if not mine:
         return None
@@ -176,3 +187,20 @@ def plate(tracker: FilesTracker, agent: str) -> WorkItem | None:
     # unstarted open item over one you're mid-flight on — the wrong plate.
     mine.sort(key=lambda it: (_PLATE_RANK.get(it.status, 2), it.id))
     return mine[0]
+
+
+def items(tracker: FilesTracker) -> list[WorkItem]:
+    """EVERY item in this store. The per-backend LISTER, injected into
+    TrackerInbox exactly the way plate() is injected into anchor — a query, and
+    queries stay off the three-function Tracker protocol (aegis-gqr8).
+
+    Returns [] for an absent store, which is correct HERE and would not be in
+    all(): a tracker directory that does not exist yet is a store with no items,
+    and update()/create() will make it on the first write. (Contrast
+    FilesRegistry.all, which RAISES — you cannot have an agent whose identity you
+    cannot read, but you can absolutely have an empty tracker.)
+    """
+    root = Path(tracker.root)
+    if not root.is_dir():
+        return []
+    return [tracker._read(p, p.stem) for p in sorted(root.glob("*.json"))]

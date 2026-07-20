@@ -16,6 +16,7 @@ import json
 import re
 import subprocess
 
+from .inbox import is_message
 from .protocols import WorkItem
 
 
@@ -122,6 +123,12 @@ def plate(tracker: "BeadsTracker", agent: str) -> "WorkItem | None":
         x for x in rows
         if x.get("assignee") in (agent, agent.split("/")[-1])
         and x.get("status") != "closed"
+        # A MESSAGE is not work (inbox.py). On THIS backend the exclusion is not
+        # structural — a tracker-backed inbox lives on the same store by design —
+        # so the marker is the mechanism, and it is the same predicate files.plate
+        # uses. Measured need: `st mail -d` items titled "mail: ..." are open and
+        # assigned on the live aegis store today, i.e. sitting on real plates.
+        and not is_message(x.get("title", ""))
     ]
     if not mine:
         return None
@@ -140,3 +147,19 @@ def plate(tracker: "BeadsTracker", agent: str) -> "WorkItem | None":
         status=top.get("status", "open"),
         assignee=top.get("assignee"),
     )
+
+
+def items(tracker: "BeadsTracker") -> list[WorkItem]:
+    """EVERY item on the store — the beads sibling of files.items, injected into
+    TrackerInbox. ONE `bd` call (the connection budget is the test, not a
+    stopwatch — see this module's docstring), and it RAISES rather than returning
+    [] when bd could not answer: an inbox that reports "no messages" because it
+    could not look is the could-not-tell-rendered-as-fine bug this repo names in
+    every other reader."""
+    r = tracker._bd("list", "--json")
+    if r.returncode != 0:
+        raise RuntimeError(f"bd list failed: {r.stderr.strip()[:120]}")
+    rows = json.loads(r.stdout) if r.stdout.strip() else []
+    return [WorkItem(id=x.get("id", ""), title=x.get("title", ""),
+                     status=x.get("status", "open"), assignee=x.get("assignee"))
+            for x in rows]

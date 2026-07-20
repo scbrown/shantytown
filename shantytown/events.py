@@ -61,6 +61,16 @@ class Events(Protocol):
         """RECEIVE: return MY undelivered events and MARK them delivered (block-
         once). A second drain with nothing new returns [] — the destination idles."""
         ...
+    def pending(self, me: str) -> list[StopEvent]:
+        """LOOK, don't take: MY undelivered events, marking NOTHING (aegis status
+        flags). This is the third method on a protocol that is proud of having two,
+        and it earns the slot for one reason — the only other way to ask "how many
+        events am I holding?" was drain(), which ANSWERS BY CONSUMING. A status bar
+        polling drain() would deliver every event to /dev/null and the destination
+        would never be told it had them: the delivery guarantee destroyed by a
+        read. So the read exists, separately, and drain() is defined in terms of
+        it — pending() and drain() cannot disagree about what is pending."""
+        ...
 
 
 class FilesEvents:
@@ -95,7 +105,8 @@ class FilesEvents:
         return StopEvent(id=p.stem, to=d["to"], frm=d["frm"], reason=d.get("reason"),
                          rose=d.get("rose", False), delivered=d.get("delivered", False))
 
-    def drain(self, me: str) -> list[StopEvent]:
+    def pending(self, me: str) -> list[StopEvent]:
+        """PURE READ — no mkdir, no rewrite, nothing marked."""
         if not self.root.is_dir():
             return []
         mine = []
@@ -103,11 +114,17 @@ class FilesEvents:
             ev = self._read(p)
             if ev.to == me and not ev.delivered:
                 mine.append(ev)
-                # BLOCK-ONCE: mark delivered NOW, so the next stop drains empty and
-                # the destination can idle instead of re-blocking every turn.
-                d = json.loads(p.read_text())
-                d["delivered"] = True
-                p.write_text(json.dumps(d, indent=2, sort_keys=True))
+        return mine
+
+    def drain(self, me: str) -> list[StopEvent]:
+        mine = self.pending(me)
+        for ev in mine:
+            # BLOCK-ONCE: mark delivered NOW, so the next stop drains empty and
+            # the destination can idle instead of re-blocking every turn.
+            p = self.root / f"{ev.id}.json"
+            d = json.loads(p.read_text())
+            d["delivered"] = True
+            p.write_text(json.dumps(d, indent=2, sort_keys=True))
         return mine
 
 
@@ -125,8 +142,11 @@ class NullEvents:
         self._events.append(ev)
         return ev
 
+    def pending(self, me: str) -> list[StopEvent]:
+        return [e for e in self._events if e.to == me and not e.delivered]
+
     def drain(self, me: str) -> list[StopEvent]:
-        mine = [e for e in self._events if e.to == me and not e.delivered]
+        mine = self.pending(me)
         # replace with delivered=True copies (frozen dataclass) — block-once.
         for e in mine:
             self._events[self._events.index(e)] = StopEvent(
