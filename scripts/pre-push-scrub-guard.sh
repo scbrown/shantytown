@@ -102,6 +102,16 @@ if [ -z "$PATTERNS" ]; then
 fi
 [ "${1:-}" = "--check-unconfigured" ] && exit 0
 
+# Files whose JOB is to contain pattern samples (this guard, the ratchets). Their
+# fixtures are not leaks; scanning them refuses a push for the guard working. Same
+# set the policy graph exempts. git exclude pathspecs, so the hunks never appear.
+GUARD_EXCLUDE=(
+  ':(exclude,glob)**/pre-push-scrub-guard.sh'
+  ':(exclude,glob)**/no_internal_identifiers.rs'
+  ':(exclude,glob)**/test_internal_identifier_ratchet.py'
+  ':(exclude,glob)**/test_no_internal_ids_in_output.py'
+)
+
 REMOTE_URL="${2:-}"
 if printf '%s' "$REMOTE_URL" | grep -qE "$INTERNAL_HOST_RE"; then
   exit 0   # internal forge — internal names belong there
@@ -113,10 +123,10 @@ while read -r _lref lsha _rref rsha; do
   [ "$lsha" = "0000000000000000000000000000000000000000" ] && continue
   if [ "$rsha" = "0000000000000000000000000000000000000000" ]; then
     range="$lsha"          # new branch: check the commit itself
-    diffcmd=(git show --format=%B "$lsha")
+    diffcmd=(git show --format=%B "$lsha" -- . "${GUARD_EXCLUDE[@]}")
   else
     range="$rsha..$lsha"
-    diffcmd=(git diff "$rsha" "$lsha")
+    diffcmd=(git diff "$rsha" "$lsha" -- . "${GUARD_EXCLUDE[@]}")
   fi
   # ADDED lines only (+ prefix), so pre-existing occurrences never trip it.
   added=$("${diffcmd[@]}" 2>/dev/null | grep -E '^\+' | grep -nE "$PATTERNS" || true)
