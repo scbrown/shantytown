@@ -1515,22 +1515,24 @@ def _cmd_crew(a) -> int:
         print("    item's output will land on top of it.")
     # The bead this state was built for (aegis-h562). A saturated agent reads as
     # `idle` on every prior version of this command, so it lands on the free list
-    # and gets work piled on — three agents sat at 131–172% of limit for fifteen
-    # hours exactly that way. It is the fail-SILENT case this whole file exists to
-    # convert: the number was on the pane the entire time.
+    # and gets work piled on — three agents sat past the threshold (687k/562k/524k)
+    # for fifteen hours exactly that way. It is the fail-SILENT case this whole
+    # file exists to convert: the number was on the pane the entire time. 400k is
+    # a CYCLE threshold, not the ~1M limit — the depth shows as raw k tokens in the
+    # work cell, never as a "% of limit" (that framing was a lie, Stiwi's rule).
     if saturated:
-        print(f"  ⚠ {len(saturated)} agent(s) OVER the context limit — NOT free, "
-              f"a dispatch wall: {', '.join(saturated)}")
+        print(f"  ⚠ {len(saturated)} agent(s) PAST THE 400k CYCLE THRESHOLD — NOT "
+              f"free, a dispatch wall: {', '.join(saturated)}")
         print(f"    They read as idle but cannot hold new work: they drop earlier "
               f"context, re-derive settled")
         print(f"    decisions, and miss constraints stated long ago. `st go` "
-              f"REFUSES them (see the ratio in")
-        print(f"    the work cell). Remedy: the agent writes its state to its "
-              f"bead, then /clear (or hand off to")
-        print(f"    a fresh session) — do NOT auto-clear, it loses whatever was "
-              f"not saved. The saturated agent is")
-        print(f"    the LEAST able to notice it must clear, so this is the "
-              f"coordinator's to drive.")
+              f"REFUSES them (the depth is in the")
+        print(f"    work cell). Remedy: the agent CHECKPOINTS its state to its "
+              f"bead, THEN /clears (or hands off to")
+        print(f"    a fresh session), THEN takes the task — do NOT auto-clear, it "
+              f"loses whatever was not saved. The")
+        print(f"    saturated agent is the LEAST able to notice it must cycle, so "
+              f"this is the coordinator's to drive.")
     if free or busy or queued or waiting or saturated or shelled:
         print()
     # Say the consequence, not just the state. The operator who needs this line is

@@ -112,23 +112,26 @@ def test_over_limit_REFUSES_even_related_work():
     """CONTRACT CHANGE (aegis-h562). This test used to assert that high-context
     RELATED work NUDGES — that the `unrelated` gate discriminated. That gate is
     exactly what let a 687k agent keep taking work: related continuation slipped
-    through as `healthy NUDGE`, and three agents sat at 131–172% of limit for
-    fifteen hours because of it. At/over the limit, related work degrades the
-    agent too (it drops earlier context, re-derives settled decisions), so the
-    gate is dropped: over the line, do not pile on — related or not.
+    through as `healthy NUDGE`, and three agents sat past the threshold for
+    fifteen hours because of it. Past 400k, related work degrades the agent too
+    (it drops earlier context, re-derives settled decisions), so there is NO
+    relatedness gate: past the line, cycle first — related or not.
 
-    737.6k is 184% of the 400k limit. It refuses now, and `overlap: related`
-    records that relatedness WAS considered and overridden, not ignored.
+    737.6k is well past the 400k cycle threshold. It refuses now, with NO
+    relatedness recorded (Stiwi's corrected rule: unconditional) and NO
+    "% of limit" (400k is a cycle point, not the ~1M ceiling).
     """
     screen = "\n".join(
         ["● restore the den dashboard service step %d" % i for i in range(20)]
         + ["                  new task? /clear to save 737.6k tokens"]
     )
     d = triage(panes(screen), "%1", "restore the den dashboard service")
-    assert d.action is Action.CLEAR, "over-limit related work must refuse, not nudge"
-    assert "saturated" in d.why
-    assert d.inputs["overlap"] == "related"
-    assert d.inputs["ratio"] == "184%"
+    assert d.action is Action.CLEAR, "past-threshold related work must refuse, not nudge"
+    assert "cycle threshold" in d.why and "checkpoint" in d.why
+    assert "overlap" not in d.inputs and "ratio" not in d.inputs, "relatedness/% gone"
+    assert d.inputs["context_k"] == 737.6
+    assert d.inputs["cycle_threshold_k"] == 400.0
+    assert "checkpoint" in d.inputs["remedy"] and "THEN /clear" in d.inputs["remedy"]
 
 
 def test_every_decision_is_inspectable():

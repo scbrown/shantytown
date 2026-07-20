@@ -80,11 +80,11 @@ class StopEvent:
     context_k: float | None = None
                                  # the sender's context depth AT STOP, in k tokens
                                  # (aegis-h562). "gennaro stopped" and "gennaro
-                                 # stopped at 172% of its context limit" are
-                                 # different facts, and only the second tells the
-                                 # destination not to hand it the next item. None
-                                 # = NOT REPORTED (a turn was in flight so the
-                                 # footer was gone), never "fine".
+                                 # stopped past the 400k cycle threshold at 687k"
+                                 # are different facts, and only the second tells
+                                 # the destination not to hand it the next item
+                                 # until it cycles. None = NOT REPORTED (a turn was
+                                 # in flight so the footer was gone), never "fine".
     item: str | None = None      # what `frm` held at its stop, if anything
     item_status: str | None = None
                                  # its status, or "?" meaning COULD NOT LOOK.

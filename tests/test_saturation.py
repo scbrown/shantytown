@@ -1,4 +1,4 @@
-"""Saturation: an agent over its context limit is a WALL, not an idle slot.
+"""Saturation: an agent PAST THE 400k CYCLE THRESHOLD is a WALL, not an idle slot.
 
 aegis-h562. Three agents (687k, 562k, 524k vs a 400k limit) sat idle for fifteen
 hours reading `idle` while the tier piled work on them. The number was on the pane
@@ -74,9 +74,11 @@ def test_saturation_never_overrides_a_more_urgent_state():
 def test_st_go_REFUSES_a_saturated_pane():
     d = run_triage(_Panes(_saturated_pane(687.8)), "%1", "some new item")
     assert d.action is Action.CLEAR          # not NUDGE -> dispatch refuses
-    assert "saturated" in d.why
-    assert d.inputs["ratio"] == "172%"
-    assert "checkpoint" in d.inputs["remedy"]
+    assert "cycle threshold" in d.why and "checkpoint" in d.why
+    # NO "% of limit" and NO relatedness — 400k is a cycle point, not the ceiling,
+    # and the rule is unconditional (Stiwi's correction).
+    assert "ratio" not in d.inputs and "overlap" not in d.inputs
+    assert "checkpoint" in d.inputs["remedy"] and "THEN /clear" in d.inputs["remedy"]
 
 
 def test_a_healthy_pane_still_nudges():
@@ -86,8 +88,8 @@ def test_a_healthy_pane_still_nudges():
 
 def test_the_refusal_records_the_number_so_it_is_auditable():
     d = run_triage(_Panes(_saturated_pane(524.1)), "%1", "x")
-    assert d.inputs["context_k"] == 524.1
-    assert d.inputs["limit_k"] == 400.0
+    assert d.inputs["context_k"] == 524.1          # raw depth, not a fraction
+    assert d.inputs["cycle_threshold_k"] == 400.0
 
 
 # --- part 3: the stop event carries it --------------------------------------
@@ -134,9 +136,9 @@ def test_the_drain_message_tells_the_destination_not_to_pile_on(tmp_path):
     reason = stop_event._compose_reason(ev.drain("sattler"),
                                         {"gennaro": triage.SATURATED}, now=0.0,
                                         deferred=0)
-    assert "SATURATED" in reason
-    assert "687k" in reason and "172%" in reason
-    assert "do NOT hand it the next item" in reason
+    assert "CYCLE THRESHOLD" in reason
+    assert "687k" in reason and "%" not in reason   # raw depth, no "% of limit"
+    assert "do NOT hand it the next item" in reason and "CHECKPOINTS" in reason
 
 
 def test_a_clean_stop_says_nothing_about_saturation(tmp_path):
