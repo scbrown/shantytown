@@ -46,6 +46,12 @@ set -uo pipefail
 CONF="${SCRUB_PATTERNS_FILE:-$HOME/.config/aegis/scrub-patterns.conf}"
 INTERNAL_HOST_RE=""
 PATTERNS=""
+# Ticket IDs (aegis-9cr1). Projected SEPARATELY from block-tier names because they
+# are enforced differently: internal names are refused in the diff AND commit
+# messages; ticket IDs are refused only in FILE CONTENT (a public CHANGELOG or a
+# source comment — the quipu #38 leak), NOT in commit messages, which keep the
+# bead ref for internal git history. Same graph rule, distinct enforcement point.
+TICKET_PATTERNS=""
 if [ -r "$CONF" ]; then
   # shellcheck disable=SC1090
   internal_host_re=""; patterns=""
@@ -53,6 +59,7 @@ if [ -r "$CONF" ]; then
     case "$k" in
       internal_host_re) INTERNAL_HOST_RE="$v" ;;
       patterns)         PATTERNS="$v" ;;
+      ticket_patterns)  TICKET_PATTERNS="$v" ;;
     esac
   done < "$CONF"
 fi
@@ -85,6 +92,18 @@ if [ "${1:-}" = "--selftest" ]; then
             '/home/user/src/x'; do
     printf '%s\n' "$ok" > "$tmp/clean"
     if grep -nEq "$PATTERNS" "$tmp/clean"; then echo "FAIL fires on clean: $ok"; fail=1; else echo "ok   silent on: $ok"; fi
+  done
+  # Ticket IDs (aegis-9cr1). Synthetic prefix `zz-` so no real tracker prefix
+  # appears in this public file. MUST detect a ticket in file content; MUST NOT
+  # fire on ordinary prose that merely contains a hyphenated word.
+  TICKET_PATTERNS='\bzz-[a-z0-9]{3,6}\b'
+  for bad in '- Fixed the thing (zz-1a2b)' '// see zz-9x8w for the reason'; do
+    printf '%s\n' "$bad" > "$tmp/dirty"
+    if grep -nEq "$TICKET_PATTERNS" "$tmp/dirty"; then echo "ok   detects ticket: $bad"; else echo "FAIL misses ticket: $bad"; fail=1; fi
+  done
+  for ok in 'a well-formed sentence with a hyphen' 'the zz top of the file'; do
+    printf '%s\n' "$ok" > "$tmp/clean"
+    if grep -nEq "$TICKET_PATTERNS" "$tmp/clean"; then echo "FAIL ticket fires on clean: $ok"; fail=1; else echo "ok   ticket silent on: $ok"; fi
   done
   if printf 'ssh://git@forge.invalid/x/y.git' | grep -qE "$INTERNAL_HOST_RE"; then echo "ok   recognises the internal forge"; else echo "FAIL internal forge unrecognised"; fail=1; fi
   if printf 'git@github.com:scbrown/x.git' | grep -qE "$INTERNAL_HOST_RE"; then echo "FAIL treats github as internal"; fail=1; else echo "ok   treats github as public"; fi
@@ -129,14 +148,22 @@ while read -r _lref lsha _rref rsha; do
     diffcmd=(git diff "$rsha" "$lsha" -- . "${GUARD_EXCLUDE[@]}")
   fi
   # ADDED lines only (+ prefix), so pre-existing occurrences never trip it.
-  added=$("${diffcmd[@]}" 2>/dev/null | grep -E '^\+' | grep -nE "$PATTERNS" || true)
+  addedlines=$("${diffcmd[@]}" 2>/dev/null | grep -E '^\+' || true)
+  added=$(printf '%s\n' "$addedlines" | grep -nE "$PATTERNS" || true)
   msgs=$(git log --format=%B "$range" 2>/dev/null | grep -nE "$PATTERNS" || true)
-  if [ -n "$added" ] || [ -n "$msgs" ]; then
+  # Ticket IDs are checked in FILE CONTENT only (the diff), never in commit
+  # messages — a bead ref in a subject is the fleet's deliberate internal habit,
+  # but the same ref in a CHANGELOG or a source comment reaching a public repo is
+  # a leak a stranger cannot resolve (aegis-9cr1, the quipu #38 CHANGELOG).
+  tickets=""
+  [ -n "$TICKET_PATTERNS" ] && tickets=$(printf '%s\n' "$addedlines" | grep -nE "$TICKET_PATTERNS" || true)
+  if [ -n "$added" ] || [ -n "$msgs" ] || [ -n "$tickets" ]; then
     violations=1
-    echo "✗ REFUSED: this push would add internal names to a PUBLIC remote." >&2
+    echo "✗ REFUSED: this push would add internal identifiers to a PUBLIC remote." >&2
     echo "  remote: $REMOTE_URL" >&2
-    [ -n "$added" ] && { echo "  in the diff:" >&2; printf '%s\n' "$added" | head -10 | sed 's/^/    /' >&2; }
-    [ -n "$msgs" ]  && { echo "  in commit messages:" >&2; printf '%s\n' "$msgs" | head -10 | sed 's/^/    /' >&2; }
+    [ -n "$added" ]   && { echo "  internal names in the diff:" >&2; printf '%s\n' "$added" | head -10 | sed 's/^/    /' >&2; }
+    [ -n "$msgs" ]    && { echo "  internal names in commit messages:" >&2; printf '%s\n' "$msgs" | head -10 | sed 's/^/    /' >&2; }
+    [ -n "$tickets" ] && { echo "  internal ticket IDs in file content (CHANGELOG / source comments):" >&2; printf '%s\n' "$tickets" | head -10 | sed 's/^/    /' >&2; }
   fi
 done
 
