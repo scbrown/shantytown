@@ -45,7 +45,7 @@ line: the hierarchy isn't a new thing to store, it's a query.
     ellie  a aegis:CrewMember ; aegis:reports_to malcolm ; aegis:role "worker"
     malcolm a aegis:CrewMember ; aegis:reports_to arnold  ; aegis:role "lead"
            │
-           │  shanty project        (materialize — one direction, always)
+           │  st project        (materialize — one direction, always)
            ▼
   card   ── a cache the runtime can read ───────────────────────
     crew/ellie.yaml     # GENERATED. Do not edit. Edits are overwritten.
@@ -64,10 +64,10 @@ single authority** — which is the exact fix u7fo landed on: one authority, no 
 Card-as-truth gives you 14 sources and silent drift. Card-as-projection gives you 1 source and 14
 caches that a query can check. **The difference isn't the copy. It's whether the drift is detectable.**
 
-## `shanty role set` — writes the graph, then re-projects
+## `st role set` — writes the graph, then re-projects
 
 ```
-$ shanty role set malcolm lead --reports ellie,ian --dry-run
+$ st role set malcolm lead --reports ellie,ian --dry-run
 
   quipu   malcolm  aegis:role     "worker" -> "lead"
   quipu   ellie    aegis:reports_to        -> malcolm
@@ -84,10 +84,10 @@ types, it creates these stop hooks for you and changes the agent card."* The onl
 truth lands*: the graph first, then the card and the hooks fall out of it. Card and hooks are both
 projections of one write, which is why they cannot disagree.
 
-## `shanty roles --check` — now a real check, because there's something to check against
+## `st roles --check` — now a real check, because there's something to check against
 
 ```
-$ shanty roles --check
+$ st roles --check
 
   malcolm    lead           reports: ellie, ian    card: fresh    hooks: ok
   ellie      worker         reports_to: malcolm    card: fresh    hooks: ok
@@ -126,7 +126,11 @@ call rather than my preference:
 
 - **The projection is the degraded mode.** Quipu down → the harness still *runs* on last-known cards;
   it just refuses to *change* roles. Identity reads survive an outage; identity writes don't.
-- **The registry interface is tiny** — `who_am_i`, `reports_to`, `role`, `set_role`. Small enough that
+- **The registry interface is tiny** — two reads, `get(name)` and `all()`, each returning an `Agent`
+  that carries `role` and `reports_to` (so the four accessors this doc first sketched are two calls
+  and two fields). Writes live on a *separate* `MutableRegistry.set(agent)`, which `role set` needs
+  and a read-only backend simply doesn't implement — splitting them is what lets identity reads
+  survive a Quipu outage while identity writes refuse. Small enough that
   a second implementation (even a flat file) is a weekend, which is `adapters.md`'s own two-
   implementations rule applied here. If that second implementation is hard, the registry has leaked.
 

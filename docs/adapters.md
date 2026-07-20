@@ -69,7 +69,7 @@ events from below". So `hooks()` is not metadata; it's a **capability declaratio
 must refuse a card whose role needs a capability its runtime doesn't have:
 
 ```
-$ shanty role set malcolm lead
+$ st role set malcolm lead
   ERROR: runtime 'codex' does not declare blocking stop hooks.
          role 'lead' requires on_report_stop delivery to the model.
          malcolm stays worker. Nothing written.
