@@ -122,3 +122,29 @@ def test_the_cli_builds_its_panes_on_the_declared_socket(tmp_path, monkeypatch):
     assert cli._panes(_A()).socket == "gt-fleet", \
         "the CLI built a BARE tmux — from any named-socket pane that reports the " \
         "whole fleet down"
+
+
+# --- the guard: supervision must do NOTHING on a wrong socket ----------------
+
+def test_tend_REFUSES_on_a_wrong_socket_and_respawns_nothing(tmp_path, monkeypatch, capsys):
+    """The fleet-destroying interaction, prevented. `tend --install` runs from a
+    systemd timer with no $TMUX, so an undeclared socket makes every agent look
+    DOWN — and a supervisor that sees the whole fleet dead respawns the whole
+    fleet, onto the wrong server, duplicating every agent."""
+    crew = tmp_path / "crew"; crew.mkdir()
+    (crew / "ellie.json").write_text(json.dumps({"role": "worker", "pane": "p-ellie"}))
+
+    monkeypatch.setattr(cli, "_socket_check",
+                        lambda a: (doc.SOCKET_WRONG, "0/18 visible here, 18 elsewhere"))
+    started = []
+    monkeypatch.setattr(cli, "_runtime", lambda a, p: started.append(p))
+
+    class _A:
+        root = tmp_path; registry = "files"; backend = None; repo = None
+        install = uninstall = status = False
+        retire = unretire = None; interval = "5min"; dry_run = False
+
+    assert cli._cmd_tend(_A()) == cli.REFUSED
+    err = capsys.readouterr().err
+    assert "refused" in err and "respawned onto the wrong server" in err
+    assert started == [], "built a runtime — it got past the guard"

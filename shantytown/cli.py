@@ -1808,6 +1808,23 @@ def _cmd_tend(a) -> int:
     if a.status:
         return _tend_status(a)
 
+    # THE SOCKET GUARD, and it prevents a fleet-destroying interaction between two
+    # of this repo's own features. `tend --install` runs from a systemd --user
+    # timer, which has NO $TMUX at all — so on a host whose fleet lives on a named
+    # socket, an undeclared socket makes every agent look DOWN to the supervisor,
+    # and a supervisor that sees the whole fleet dead RESPAWNS THE WHOLE FLEET,
+    # onto a different server, duplicating every agent. Measured before the
+    # declaration existed: `crew --count` from a caller with no $TMUX said 0/0
+    # while eighteen agents were up. A wrong socket is the one condition under
+    # which this command must do NOTHING.
+    from . import doctor as _doc
+    sock_v, sock_why = _socket_check(a)
+    if sock_v == _doc.SOCKET_WRONG:
+        print(f"  refused: {sock_why}", file=sys.stderr)
+        print("  Supervision does NOTHING on a wrong socket: every agent would "
+              "look dead and be respawned onto the wrong server.", file=sys.stderr)
+        return REFUSED
+
     panes = _panes(a)
     try:
         agents = _registry(a).all()
