@@ -149,19 +149,27 @@ def test_attach_refuses_a_down_agent_by_name_not_a_raw_tmux_error(tmp_path, monk
     assert "weaver is down" in err and "st crew" in err
 
 
-def test_no_arg_falls_back_to_SHANTY_AGENT(tmp_path, monkeypatch):
-    root = _world(tmp_path, {"weaver": "shanty-weaver"})
+def test_no_arg_defaults_to_the_administrator_not_SHANTY_AGENT(tmp_path, monkeypatch):
+    # The coordinator is the useful default — NOT the operator's own pane. Even
+    # with SHANTY_AGENT set to a worker, no-arg opens the administrator.
+    crew = tmp_path / "crew"; crew.mkdir()
+    (crew / "weaver.json").write_text(json.dumps({"role": "worker", "pane": "shanty-weaver"}))
+    (crew / "sattler.json").write_text(json.dumps({"role": "administrator", "pane": "shanty-sattler"}))
+    (tmp_path / "settings").mkdir(); (tmp_path / "settings" / "tmux-socket").write_text("gt-ae5f35")
     monkeypatch.setenv("SHANTY_AGENT", "weaver")
-    rc, argv, _ = _run(monkeypatch, _Args(root, agent=None), live={"shanty-weaver"})
+    rc, argv, _ = _run(monkeypatch, _Args(tmp_path, agent=None),
+                       live={"shanty-weaver", "shanty-sattler"})
     assert rc == cli.OK
-    assert argv == ["shanty", "attach", "shanty-weaver"]
+    assert argv == ["shanty", "attach", "shanty-sattler"], "no-arg must open the admin"
 
 
-def test_no_arg_no_identity_lists_choices(tmp_path, monkeypatch, capsys):
-    root = _world(tmp_path, {"weaver": "shanty-weaver", "ellie": "aegis-crew-ellie"})
+def test_no_arg_no_administrator_lists_choices(tmp_path, monkeypatch, capsys):
+    # No administrator in the registry -> list, don't error.
+    root = _world(tmp_path, {"weaver": "shanty-weaver", "ellie": "shanty-ellie"})
     monkeypatch.delenv("SHANTY_AGENT", raising=False)
     rc, argv, _ = _run(monkeypatch, _Args(root, agent=None), live={"shanty-weaver"})
     assert rc == cli.OK
     assert argv is None, "listing choices must not exec"
     out = capsys.readouterr().out
+    assert "no administrator" in out
     assert "ellie" in out and "weaver" in out

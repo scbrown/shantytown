@@ -354,7 +354,7 @@ def build_parser() -> argparse.ArgumentParser:
     at = sub.add_parser("attach", help="attach to a crew member by name "
                                        "(socket + pane resolved for you)")
     at.add_argument("agent", nargs="?",
-                    help="whose pane; defaults to $SHANTY_AGENT, or lists choices")
+                    help="whose pane; defaults to the administrator (the coordinator)")
     at.add_argument("-r", "--read-only", action="store_true",
                     help="observe only — no keystroke can land in their work")
 
@@ -1893,18 +1893,31 @@ def _cmd_attach(a, *, execer=_exec_attach, which=None) -> int:
     panes = _panes(a)
     socket = declared_socket(getattr(a, "root", None) or ".")
 
-    name = a.agent or os.environ.get("SHANTY_AGENT")
+    name = a.agent
     if not name:
-        # No agent named and no identity to fall back to — LIST, don't error.
+        # DEFAULT TO THE ADMINISTRATOR (aegis-83w2), not $SHANTY_AGENT. The
+        # tier-root coordinator is who the operator most often wants to look at,
+        # and st knows it from the registry — so `st attach` with no arg opens the
+        # coordinator, and an explicit <agent> still targets that agent. Falling
+        # back to $SHANTY_AGENT would open the OPERATOR's own pane, which they are
+        # already in; the useful default is the one they'd otherwise type.
+        from .tier import _find_administrator
         try:
-            agents = reg.all()
+            name = _find_administrator(reg)
         except Exception as e:
             print(f"  could not tell: {e}", file=sys.stderr)
             return CANNOT_TELL
-        print("  attach to which? name one:")
-        for ag in sorted(agents, key=lambda x: x.name):
-            print(f"    {ag.name}")
-        return OK
+        if not name:
+            # No administrator in the registry — LIST, don't error.
+            try:
+                agents = reg.all()
+            except Exception as e:
+                print(f"  could not tell: {e}", file=sys.stderr)
+                return CANNOT_TELL
+            print("  no administrator to default to — attach to which? name one:")
+            for ag in sorted(agents, key=lambda x: x.name):
+                print(f"    {ag.name}")
+            return OK
 
     try:
         card = reg.get(name)
