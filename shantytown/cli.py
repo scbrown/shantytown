@@ -29,6 +29,7 @@ from . import beads as beads_mod
 from . import roles as roles_mod
 from . import triage as triage_mod
 from .dispatch import Dispatcher, TriageRefused, SendUnverified
+from .triage import Action
 from .files import FilesRegistry, FilesTracker, plate as files_plate
 from .launched import FilesLaunches, CURRENT, STALE, UNKNOWN
 from .quipu import QuipuRegistry
@@ -672,6 +673,15 @@ def _cmd_go(a) -> int:
     except TriageRefused as e:
         # #1: pane not ready (in-flight/wedged/high-context). No write, no send.
         print(f"  refused: pane not ready — {e.decision.render()}", file=sys.stderr)
+        # #5: a RESTART verdict used to dead-end here — shantytown could diagnose
+        # a wedged session and then say nothing about acting on it, because
+        # new/stop did not exist. They do now, so the diagnosis names the remedy.
+        # We do NOT relaunch automatically: killing an agent as a side effect of a
+        # dispatch is exactly the kind of thing that must stay an explicit act.
+        if e.decision.action is Action.RESTART:
+            print(f"  remedy: st stop {a.agent} && st new {a.agent}   "
+                  f"(launcher-relaunch, never handoff — a handoff drops --settings "
+                  f"and produces a hookless agent)", file=sys.stderr)
         return REFUSED
     except SendUnverified as e:
         # #2: we sent, but reading the pane back did NOT confirm it landed. Its
