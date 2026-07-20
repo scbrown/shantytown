@@ -24,7 +24,13 @@ def _stop_commands(settings: dict) -> list[str]:
     return [h["command"] for h in hooks]
 
 
-_PY = sys.executable or "python3"
+# The interpreter the EMITTER chooses, which is no longer simply sys.executable:
+# it must be one that can actually import shantytown (aegis-0v97 — a lead's hooks
+# were emitted naming /usr/bin/python3, which cannot, so they were dead). These
+# tests are about send/drain DIRECTIONS; the interpreter property itself is
+# covered by tests/test_hook_interpreter.py.
+from shantytown.runtime import _hook_interpreter
+_PY = _hook_interpreter()
 
 
 def test_worker_settings_send_only():

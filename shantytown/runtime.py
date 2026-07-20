@@ -31,6 +31,8 @@ HONEST BOUNDARY (say it so nobody over-claims):
 from __future__ import annotations
 import os
 import json
+import shutil
+import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -141,7 +143,65 @@ SettingsResolver = Callable[[Agent], "str | None"]
 # turn, which silently killed the whole stop-event route (send/drain, #6): the
 # feature looked shipped and had never once run. sys.executable is by
 # construction an interpreter that exists and can import shantytown.
-_PY = sys.executable or "python3"
+# ...BUT "by construction" was an ASSUMPTION, and it is false in the case that
+# matters. sys.executable is the interpreter that RAN THE EMITTER, which is only
+# the interpreter that can import shantytown when the emitter was invoked through
+# the installed entry point. Emit from a source checkout with the system python —
+# `python3 -m shantytown.cli role set ...`, which is exactly how one regenerates
+# settings while developing — and you bake in `/usr/bin/python3`, which cannot
+# import shantytown at all.
+#
+# MEASURED on the live store, 2026-07-20: lead.settings.json carried
+#     /usr/bin/python3 -m shantytown.stop_event send|drain
+# and `/usr/bin/python3 -c "import shantytown"` is a ModuleNotFoundError. So the
+# lead's hooks were dead — the identical silent outcome as the `python: not found`
+# bug above, reintroduced through a different door, in the file the whole
+# stop-event route depends on. The comment above asserted the property; nothing
+# checked it.
+#
+# So CHECK it. A hook interpreter that cannot import the package is not a hook.
+def _usable(py: str) -> bool:
+    """Can this interpreter actually import shantytown? Asked, not assumed."""
+    if not py:
+        return False
+    try:
+        # cwd="/" ON PURPOSE. Python prepends the CWD to sys.path for -c, so
+        # running this from a source checkout imports the LOCAL shantytown/ dir
+        # and every interpreter looks usable — my first version of this check
+        # returned True for /usr/bin/python3, which cannot import shantytown at
+        # all, because I ran it from the worktree. The emitted hook executes in
+        # the AGENT'S workspace, which has no shantytown/, so "/" is the honest
+        # model of where it will actually run.
+        return subprocess.run([py, "-c", "import shantytown"], cwd="/",
+                              capture_output=True, timeout=15).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def _hook_interpreter() -> str:
+    """The interpreter to bake into emitted Stop hooks.
+
+    Prefers the one running us (correct when invoked via the installed `st`), then
+    the interpreter beside the installed console script — which is what a
+    dev-shell invocation must fall back to, since the settings it writes are for
+    the DEPLOYED agents, not for the shell that happened to emit them.
+
+    RAISES rather than emitting a dead hook: this repo refuses settings-less
+    launches for the same reason, and a hook that cannot start is indistinguishable
+    from a tier with no hooks at all.
+    """
+    if _usable(sys.executable):
+        return sys.executable
+    st = shutil.which("st")
+    if st:
+        cand = str(Path(st).resolve().parent / "python")
+        if _usable(cand):
+            return cand
+    raise SettingsError(
+        "no interpreter available that can import shantytown — refusing to emit a "
+        f"Stop hook that cannot run (tried {sys.executable!r} and the interpreter "
+        "beside the installed `st`). Install shantytown, or run this through the "
+        "installed entry point.")
 
 
 def _stop_cmd(mode: str, root=None) -> dict:
@@ -155,7 +215,7 @@ def _stop_cmd(mode: str, root=None) -> dict:
     workers, zero events). Baking the absolute root is what makes send/drain
     reach the real store no matter where the agent is launched.
     """
-    cmd = f"{_PY} -m shantytown.stop_event {mode}"
+    cmd = f"{_hook_interpreter()} -m shantytown.stop_event {mode}"
     if root is not None:
         cmd += f" --root {Path(root).resolve()}"
     return {"type": "command", "command": cmd}
