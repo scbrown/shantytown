@@ -6,7 +6,7 @@ so the loop NEVER launches a real agent (an earlier live-fire probe proved a rea
 `claude` can survive teardown; the loop must never spawn one). The cycle:
 
     role set (emit hooks) -> prime -> task -> prime(plate) -> new -> go(dispatch)
-    -> log -> mail -d(durable, survives) -> stop -> stop-event routes + drains
+    -> log -> inbox -d(durable, survives, readable) -> stop -> stop-event routes + drains
 
 Each step asserts its MEASURED outcome (exit code + the state it changed), and the
 final check asserts NO real claude process was spawned anywhere in the cycle — the
@@ -68,14 +68,14 @@ def test_full_crew_cycle_on_st_zero_gt(workspace, monkeypatch, capsys):
     assert (root / "settings" / "worker.settings.json").is_file()
 
     # 2. prime — identity + EMPTY plate
-    assert run("prime", "ellie") == OK
+    assert run("anchor", "ellie") == OK
     assert "nothing" in capsys.readouterr().out.lower()
 
     # 3. task — create work assigned to ellie
     assert run("task", "fix", "the", "widget", "-a", "ellie") == OK
 
     # 4. prime — the item now APPEARS on the plate (measured transition)
-    assert run("prime", "ellie") == OK
+    assert run("anchor", "ellie") == OK
     assert "fix the widget" in capsys.readouterr().out
 
     # 5. new — bring ellie up: session created, --settings composed, verify live
@@ -94,15 +94,20 @@ def test_full_crew_cycle_on_st_zero_gt(workspace, monkeypatch, capsys):
     assert run("log", "ellie") == OK
     assert "Claude Code" in capsys.readouterr().out
 
-    # 8. mail -d — durable message to a DOWN agent (maldoon not live): survives.
-    # --backend files is EXPLICIT and load-bearing here: `-d` now defaults to
-    # BEADS (dearing, qdal.2), and this cycle is the files world end to end. A
-    # test that took the default would write a real bead into the shared store on
-    # every run — which it did once, before this flag was added.
-    assert run("--backend", "files", "mail", "-d", "maldoon", "HANDOFF", "the", "epic") == OK
-    mail_items = [json.loads(p.read_text()) for p in (root / "items").glob("*.json")]
-    assert any(m.get("assignee") == "maldoon" and m["title"].startswith("mail:")
-               for m in mail_items), "durable mail did not persist"
+    # 8. inbox -d — durable message to a DOWN agent (maldoon not live): survives
+    #    in maldoon's INBOX, and — the half that was missing until the inbox
+    #    existed — is READABLE back. It must also stay OFF the plate: `st anchor`
+    #    for maldoon still says "nothing", because a message is not work.
+    #    --backend files is EXPLICIT and load-bearing: `-d` defaults to BEADS, and
+    #    this cycle is the files world end to end. A test that took the default
+    #    would write a real bead into the shared store on every run — which it did
+    #    once, before this flag was added.
+    assert run("--backend", "files", "inbox", "-d", "maldoon", "HANDOFF", "the", "epic") == OK
+    capsys.readouterr()
+    assert run("--backend", "files", "inbox", "--count", "maldoon") == OK
+    assert capsys.readouterr().out == "1\n", "durable message did not reach the inbox"
+    assert run("anchor", "maldoon") == OK
+    assert "nothing" in capsys.readouterr().out.lower(), "a message reached the plate"
 
     # 9. stop — kill ellie's session, VERIFIED gone
     assert run("stop", "ellie") == OK

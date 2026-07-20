@@ -34,7 +34,7 @@
 
 ```bash
 st task "fix the login timeout"      # → st-1
-st mail ada "go read st-1"           # → straight into ada's pane
+st inbox ada "go read st-1"           # → straight into ada's pane
 st crew                              # → who's up, who's on what
 ```
 
@@ -102,10 +102,10 @@ $ st crew
     (`st stop <agent> && st new <agent>`) re-reads it.
 ```
 
-And every session starts from the primer — identity, one item, and where your stop events go:
+And every session starts from the anchor — identity, one item, and where your stop events go:
 
 ```text
-$ st prime ada
+$ st anchor ada
 
   You are ada — worker, reports to cy.
 
@@ -119,7 +119,7 @@ $ st prime ada
 A message to an agent that isn't there is **never** reported as delivered:
 
 ```text
-$ st mail di "protocol step 3"
+$ st inbox di "protocol step 3"
   could not tell: pane crew-di is not there (agent down?)
 $ echo $?
 2
@@ -186,7 +186,7 @@ plus every script on one fleet. Full write-up in [`docs/vision.md`](docs/vision.
 
 - 🛖 **A town with no town hall.** No daemon, no broker, no message bus, no scheduler. `st` is a
   process that runs, does one thing, and exits.
-- 📮 **`st mail` *is* `tmux send-keys`.** Nothing sits between you and the agent — which is exactly
+- 📮 **`st inbox` *is* `tmux send-keys`.** Nothing sits between you and the agent — which is exactly
   why an undeliverable message can't be quietly queued and reported as sent.
 - 📋 **`st task` gives you an id.** Create work, get `st-1` back. That id is the whole reason step
   two has anything to say.
@@ -195,7 +195,7 @@ plus every script on one fleet. Full write-up in [`docs/vision.md`](docs/vision.
 - 🚦 **Triage before every dispatch.** Refuse · nudge · clear · restart, judged from what the runtime
   actually prints on screen. Not a command you remember to run — `st go` consults it and refuses
   rather than interrupt a working agent.
-- 🧭 **`st prime` is a pure read.** Who you are, the one item on your plate, and whether the agent
+- 🧭 **`st anchor` is a pure read.** Who you are, the one item on your plate, and whether the agent
   your stop events route to is actually up. It never writes, and a test asserts that against the
   filesystem rather than trusting the docstring.
 - 👥 **`st crew` reports work, not just liveness.** `up` is a launch fact; an agent three hours into
@@ -212,10 +212,10 @@ plus every script on one fleet. Full write-up in [`docs/vision.md`](docs/vision.
 
 ## 📮 Routing: there is nothing in the middle
 
-**`st mail` *is* `tmux send-keys`.** That's not an implementation detail — it's the product.
+**`st inbox` *is* `tmux send-keys`.** That's not an implementation detail — it's the product.
 
 ```
-st mail ada "go read st-1"
+st inbox ada "go read st-1"
    │
    ├─ registry.get("ada")        → identity: role, reports_to, pane
    ├─ pane = "crew-ada"          → the address IS the pane
@@ -234,7 +234,7 @@ is either there or it isn't, and you're told which.
 
 For the messages that must survive a dead recipient — a handoff, a protocol step — `--durable`
 persists to the tracker **first** and only then attempts the live send, so the recipient picks it up
-on their next prime.
+on their next anchor.
 
 **Identity resolves through the registry, not through a config file you hand-edit.** The graph is the
 truth; the agent card is a projection of it. Writes go to the graph, reads may come from the card,
@@ -244,9 +244,9 @@ never the reverse — so an agent's address can't quietly drift from reality.
 
 ```
 st task <title>                   create work, get an id back
-st mail <agent> <message>         a message into a pane. send-keys, nothing more.
+st inbox <agent> <message>         a message into a pane. send-keys, nothing more.
 st go <item> [agent]              dispatch. the one that matters.
-st prime                          who am I, what's on my plate      ← the primer
+st anchor                          who am I, what's on my plate      ← the anchor
 st crew                           who exists, what state, what role
 st roles [--check]                the hierarchy, and whether it's real
 st role set <agent> <role>        generative: rewrites cards, emits hooks
@@ -277,7 +277,7 @@ either updates the list or fails CI.
 ```bash
 git clone https://github.com/scbrown/shantytown && cd shantytown
 pip install -e .
-st prime
+st anchor
 ```
 
 Python 3.11+ and `tmux`. No third-party dependencies. A tracker backend (Beads) is optional — the
@@ -294,7 +294,7 @@ set to run the harness on the files tracker.
 
 | variable | what it points at | default |
 |---|---|---|
-| `SHANTY_AGENT` | who you are, so `st prime` needs no argument | — |
+| `SHANTY_AGENT` | who you are, so `st anchor` needs no argument | — |
 | `SHANTY_TMUX_SOCKET` | the named tmux server your agents live on | bare tmux |
 | `QUIPU_SERVER` | quipu, when using `--registry quipu` or `st project` | `http://localhost:3030` |
 | `SHANTY_ONTO_NS` | the ontology IRI base your graph is keyed under | `http://shantytown.example/ontology/` |
@@ -312,7 +312,7 @@ error, it just stops new facts from joining the old ones.
 |---|---|
 | [`docs/vision.md`](docs/vision.md) | what this replaces, and how we'll know it failed |
 | [`docs/design.md`](docs/design.md) | the shape: dispatch, triage, trackers, panes |
-| [`docs/cli.md`](docs/cli.md) | the thirteen commands, and the primer |
+| [`docs/cli.md`](docs/cli.md) | the thirteen commands, and the anchor |
 | [`docs/agent-card.md`](docs/agent-card.md) | identity — the graph is the truth, the card is a projection |
 | [`docs/roles.md`](docs/roles.md) | worker / lead / administrator, and why a lead absorbs |
 | [`docs/adapters.md`](docs/adapters.md) | first-class defaults, pluggable everything |

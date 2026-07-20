@@ -207,7 +207,7 @@ def test_shantytown_does_not_import_reactor_on_any_working_path():
     from pathlib import Path
 
     root = Path(__file__).resolve().parents[1] / "shantytown"
-    for mod in ("cli.py", "dispatch.py", "prime.py", "files.py", "protocols.py"):
+    for mod in ("cli.py", "dispatch.py", "anchor.py", "files.py", "protocols.py"):
         src = (root / mod).read_text()
         tree = ast.parse(src)
         for node in ast.walk(tree):

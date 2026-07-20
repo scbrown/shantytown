@@ -10,11 +10,13 @@
 ## The whole surface
 
 ```
-st prime                      who am I, what's on my plate         <- the primer
+st anchor [--short|--events|--harness]
+                              who am I, what's on my plate         <- the anchor
 st go <item> [agent]          dispatch. this is the one that matters.
-st mail <agent> <message>     send a message to an agent (tmux send-keys)
+st inbox <agent> <message>    put a message in an agent's inbox (send-keys; -d persists)
+st inbox [--count|--read]     read your own inbox
 st task <title>               create a work item
-st crew                       who exists, what state, what role, WHO IS FREE
+st crew [--count]             who exists, what state, what role, WHO IS FREE
 st roles [--check]            the hierarchy, and whether it's real
 st role set <agent> <role>    generative: rewrites cards, emits hooks
 st new <agent>                create an agent from a card
@@ -26,7 +28,7 @@ st project                    materialize the crew cards FROM the graph
 ```
 
 Thirteen. `--dry-run` is on every command that writes, from commit one. The surface grew past the
-original eight by five, each on a specific ask — not drift: **mail**/**task** (the dispatch/tracker
+original eight by five, each on a specific ask — not drift: **inbox**/**task** (the dispatch/tracker
 pair, owner-directed), **context** (the bobbin Context protocol), **doctor**
 (out-of-box detect/install, Stiwi's direct ask), and **project** (the quipu-registry
 projection). Each is named on purpose: this doc once
@@ -38,18 +40,26 @@ on PATH. This doc said `shanty` in all 29 of its examples long after the entry p
 every command a reader copied out of here was uninvokable — the same defect as a wrong count, in the
 worse place (GitHub #8).
 
+Two of the thirteen were RENAMED on 2026-07-19, and the count did not move — a rename is not a
+new command, and the test that pins the number is what proves it:
+
+- **`prime` -> `anchor`.** An agent's anchor is what holds it to its work; the word is the noun and
+  the verb. `prime` named the *harness's* act of loading a session, and we had inherited it from the
+  tool we left.
+- **`mail` -> `inbox`**, because it is now a real inbox rather than a verb — see below.
+
 If it grows a `st convoy`, a `st rig`, or a `st formula`, we've rebuilt the thing we left —
 but the guard against that is now the test, not this sentence.
 
-## `st prime` — the primer
+## `st anchor` — the anchor
 
-The primer answers **"who am I and what do I do next"** in one call, at session start, with no
+The anchor answers **"who am I and what do I do next"** in one call, at session start, with no
 arguments. It is the single most-used thing in any agent harness — Gas Town's equivalent ran 21 times
 in our measurement window — and it is the highest-leverage surface in this CLI, because *every session
 starts here.*
 
 ```
-$ st prime
+$ st anchor
 
   You are ellie — worker, reports to malcolm.
   You own e2e test coverage.
@@ -70,16 +80,16 @@ $ st prime
 Four things, and each one has to earn its line:
 
 1. **Identity from the card.** Not from an env var, not from a file in the workspace. One source.
-2. **The work.** One item, or none. A primer that prints a backlog is a dashboard.
-3. **Where your stop events go**, and **whether that agent is up**. If your lead is down, prime says
+2. **The work.** One item, or none. A surface that prints a backlog is a dashboard.
+3. **Where your stop events go**, and **whether that agent is up**. If your lead is down, anchor says
    so *here* — not when you stall and discover it.
 4. **Context and knowledge** — bobbin and quipu, first-class, and both optional. With the `none`
-   adapters, those two sections vanish and prime still works.
+   adapters, those two sections vanish and anchor still works.
 
-### prime is a read. It must never write.
+### anchor is a read. It must never write.
 
 Gas Town's primer has a `--hook` mode that fires at SessionStart and mutates state. That coupling is
-why "did I get primed?" became unanswerable when the hook silently didn't register. `st prime` is
+why "did I get primed?" became unanswerable when the hook silently didn't register. `st anchor` is
 a pure read, safe to run twice, and if you want it at session start you wire it there yourself.
 
 ## `st go` — dispatch
@@ -122,7 +132,7 @@ $ st go aegis-9h2 ellie --note "a design doc is landing; pull YOUR OWN workspace
 Dispatch used to be item-and-agent and nothing else, so a qualifier had nowhere to go. Both
 workarounds were wrong in a specific way:
 
-* **`st mail` after the go** — `send-keys` into a pane that has *just started work*. That is exactly
+* **`st inbox` after the go** — `send-keys` into a pane that has *just started work*. That is exactly
   the mid-flight garble `go`'s triage refuses; sending it by hand routes **around** the safety.
 * **a bead comment** — durable, but out-of-band and permanent. The note was about *this dispatch at
   this moment*; it lands on the **item**, for every future reader. Measured (sattler, 2026-07-19):
@@ -264,12 +274,121 @@ is not "missing", it's "installed and nobody knows what's there"), and detect **
 (beads), and **refuses loudly when the toolchain is missing** rather than half-installing. Never
 `--break-system-packages` — this host is PEP-668, which is why `st` itself ships via pipx.
 
+## `st inbox` — a message, and somewhere for it to land
+
+```
+st inbox ian "go read st-1"          send: straight into ian's pane (send-keys)
+st inbox -d ian "HANDOFF: qdal.2"    durable: into ian's INBOX, then a live send
+st inbox                             read: what is unread, for me. Marks nothing.
+st inbox --count                     one integer, for a status bar. Marks nothing.
+st inbox --read                      ACK: mark my unread messages read
+```
+
+The default send is unchanged and is still one line of `tmux send-keys`. What is new is the **type**.
+
+The old `mail -d` persisted a message as an ordinary tracker item assigned to the recipient, and then
+**nothing ever read it back** — the sender was told "they'll pick it up on their next prime", which
+was not true, and the item landed on the recipient's **plate**, which holds exactly one thing. So a
+message did not merely fail to arrive; it *evicted the agent's actual work*. Both halves are the same
+mistake: a message is not a work item, and it needs its own read side.
+
+So there is an `Inbox` protocol (`shantytown/inbox.py`) with three methods and two implementations:
+
+| | |
+|---|---|
+| `deliver(to, body, frm)` | the write. On the store before it is read, so a recipient who is down still gets it. |
+| `unread(me)` | the **pure read**. Marks nothing. `--count` is `len()` of this. |
+| `mark_read(me, ids)` | the ack, separate and explicit. `--read` is the only thing that calls it. |
+
+Selected by the **same `--backend` switch as the tracker** — one switch, or you send on one backend
+and read on another. `files` gives a store beside `events/` (structurally off the plate: no plate
+reader globs that directory). `beads` maps a message onto a real bead — `inbox: <body>`, assigned to
+the recipient, labelled `inbox`, closed when read — which is Stiwi's ask verbatim: *"an inbox concept
+we can map to beads or other ticket modules."* On that backend the exclusion cannot be structural, so
+`inbox.is_message()` is the one predicate both plate readers use, and it excludes the legacy `mail:`
+prefix too — those items are open and assigned on the live store right now.
+
+There is still no bus: no queue, no threads, no routing, no retry, no daemon. Three methods.
+
+## The harness — Claude Code is *a* harness, not the shape of the world
+
+A card can name the agent program it runs:
+
+```json
+{ "role": "worker", "harness": "claude", "workspace": "/home/w" }
+```
+
+No field means `claude`, which is every card today, and `st anchor --harness` prints it either way.
+The point of the field is what it forced: the launcher hardcoded Claude Code in **two** places that
+had to agree and had no way to — the argv in `ClaudeRuntime.compose`, and the `settings.json` *format*
+in `settings_for_role`. Those are one decision (if you launch a different program, `--settings` is not
+its flag and its hook schema is not this one), so a `Harness` now owns both halves.
+
+Claude is the only implementation, and adding a second one is not something to do speculatively: a
+guess about another CLI's flags is exactly the kind of code that looks shipped and has never run.
+What this buys today is that the second one would touch `harness.py` and a card, and nothing in the
+tier. The refactor is pinned byte-for-byte against the pre-split launch strings (`tests/test_harness.py`).
+
+## Machine-readable output — five flags, not five commands
+
+An external status bar needs a handful of values out of shantytown. It gets them as **flags on the
+commands that already answer those questions**, never as new subcommands: the count is the thesis,
+and "something wants to poll this" does not earn a slot.
+
+```
+$ st anchor --short
+aegis-1o3g
+
+$ st anchor --short            # empty plate
+                              # (nothing on stdout, exit 0)
+
+$ st anchor --events
+2
+
+$ st crew --count
+3/9
+
+$ st anchor --harness
+claude
+
+$ st inbox --count
+2
+```
+
+The contract, because a program depends on it:
+
+- **One value on stdout, and nothing else** — no banner, no label, no colour, no trailing prose.
+  Empty output means *nothing to show*; every human affordance is suppressed when the flag is passed.
+- **Exit 0 even when the answer is nothing.** Errors keep the usual codes and go to **stderr**, so
+  stdout stays parseable: an empty stdout with exit 0 is "nothing", with exit 2 it is "I could not
+  look". Same distinction as everywhere else here.
+- **`--short`, `--events` and `--harness` read exactly what `st anchor` reads** — same `$SHANTY_AGENT` resolution,
+  same `--backend`/`--repo`. A status bar showing a different plate than the primer would be worse
+  than no status bar.
+- **`--events` never drains.** The count comes from `events.pending()`, a read that marks nothing.
+  `drain()` answers the same question by *consuming* — it marks each event delivered (the BLOCK-ONCE
+  rail) — so a bar polling `drain()` every few seconds would deliver the tier's stop events to a
+  status bar and the administrator would never be told it had them. A read that destroys the
+  delivery guarantee is the worst kind of read, and it would have looked fine.
+- **`--harness` names the agent program the card runs** (harness.py). A card with no `harness`
+  field prints `claude`, because that *is* the answer — an empty segment would read as "no harness".
+- **`inbox --count` never marks anything read.** Same rule as `--events`, one type over: listing and
+  counting are reads, and `st inbox --read` is the separate, explicit ack.
+- **`--count` is `busy/total`, and total is not the roster size.** It is the number of agents whose
+  busy/idle state we can actually answer; an agent that is down, has no pane, or shows a pane with no
+  runtime UI is in **neither** number. Counting the unknowns into the denominator would print a
+  capacity figure that was never measured, in the same font as one that was.
+
 ## What's deliberately absent
 
-- **`st mail` is thin, not a bus.** It exists (owner-directed), but it is one line — a tmux
-  send-keys to an agent's pane, not a message store. The discipline held: a harness that grows a
-  message *bus* is on its way to being a town, so mail carries no queue, no threads, no persistence.
-  Agents that need durable work have a tracker (`task`/`go`).
+- **`st inbox` is thin, not a bus.** The default send is still one line — a tmux send-keys to an
+  agent's pane. `-d/--durable` adds a *store*, and only a store: the inbox is three methods
+  (deliver / unread / mark_read), with no queue, no threads, no routing, no retry, and no delivery
+  daemon. A harness that grows a message *bus* is on its way to being a town. What it is NOT is
+  optional plumbing: the old `mail -d` used to persist a message that nothing ever read back, onto the
+  recipient's **plate**, where it evicted their actual work. The inbox is the read side and the type
+  that keeps a message off the plate (`shantytown/inbox.py`), and it is pluggable — files by default,
+  a real bead with `--backend beads`, and any other ticket system behind the same protocol.
 - **No orchestration tier.** No mayor, deacon, witness, refinery, polecat. That tier is switched off
   on our host by directive and nothing broke — the strongest evidence we have that it isn't needed.
 - **No convoys.** `gt sling` auto-creates one per dispatch. It's a write on the hot path for

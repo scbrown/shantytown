@@ -1,7 +1,21 @@
 """st — the CLI. Thirteen commands, and the count is load-bearing: each earns its slot.
 
-    prime · go · mail · task · crew · roles [--check] · role set · new · stop · log
-    · context · doctor [--install] · project
+    anchor [--short|--events|--harness] · go · inbox [--count] · task
+    · crew [--count] · roles [--check] · role set · new · stop · log · context
+    · doctor [--install] · project
+
+Five of those flags are MACHINE-READABLE modes, added for an external status bar
+(anchor --short/--events/--harness, crew --count, inbox --count). They are flags
+and not commands on purpose: the surface is the thesis, and "a status bar wants
+this" does not earn a slot. Each prints ONE value and nothing else — docs/cli.md.
+
+TWO COMMANDS WERE RENAMED, and the count did not move (Stiwi, 2026-07-19):
+  · prime -> anchor — an agent's anchor is what holds it to its work. `prime`
+    named the HARNESS's act, and we inherited the word from the tool we left.
+  · mail  -> inbox  — because it is now a REAL inbox: a pluggable protocol with a
+    files and a tracker/beads implementation (shantytown/inbox.py), selected by
+    the same --backend switch as the tracker, with a read side. `st mail -d`
+    persisted a message nothing ever read back, onto the recipient's PLATE.
 
 The binary is `st`, not `shanty`: `shanty` is Stiwi's tmux command and ours would
 shadow it on PATH. A harness that steals the operator's own command name has
@@ -26,14 +40,17 @@ import time
 from pathlib import Path
 
 from . import beads as beads_mod
+from . import harness as harness_mod
 from . import roles as roles_mod
 from . import triage as triage_mod
 from .dispatch import Dispatcher, TriageRefused, SendUnverified, AlreadyAssigned
+from .events import FilesEvents
+from .inbox import FilesInbox, TrackerInbox
 from .triage import Action
 from .files import FilesRegistry, FilesTracker, plate as files_plate
 from .launched import FilesLaunches, CURRENT, STALE, UNKNOWN
 from .quipu import QuipuRegistry
-from .prime import Unreachable, prime as do_prime
+from .anchor import Unreachable, anchor as do_anchor
 from .runtime import (ClaudeRuntime, CapabilityError, SettingsError,
                       emitted_stop_directions, live_stop_directions, live_wiring,
                       settings_for_role)
@@ -97,6 +114,36 @@ def _plate(a):
     return lambda who: files_plate(trk, who)
 
 
+def _inbox(a):
+    """The inbox for this invocation, selected by the SAME --backend switch as the
+    tracker (Stiwi: "an inbox concept we can map to beads or other ticket
+    modules"). No second selection mechanism — one switch, or an operator ends up
+    sending on one backend and reading on another.
+
+        files  -> FilesInbox under the .shanty root, beside events/. Structurally
+                  off the plate, and the leak detector for the other one.
+        beads  -> TrackerInbox over the SELECTED tracker, so a durable message is
+                  a real bead on the aegis store (dearing's qdal.2 parity ruling).
+
+    The beads side needs a LISTER, which the three-function Tracker protocol does
+    not have and must not grow (aegis-gqr8). It is injected per-backend, exactly
+    like the plate reader two functions up.
+    """
+    if getattr(a, "backend", "files") == "beads":
+        trk = _tracker(a)
+        return TrackerInbox(trk, lambda: beads_mod.items(trk))
+    return FilesInbox(Path(a.root) / "inbox")
+
+
+def _me(a) -> str | None:
+    """Who am I, for the commands that default to the caller. One resolution —
+    the positional if the command has one, else $SHANTY_AGENT (which the launcher
+    exports, harness.py). Used by anchor and by the inbox read modes; a status bar
+    calls both, and they must agree about whose plate and whose inbox."""
+    import os
+    return getattr(a, "me", None) or os.environ.get("SHANTY_AGENT")
+
+
 def _wire(a) -> Dispatcher:
     return Dispatcher(_registry(a), _tracker(a), Tmux())
 
@@ -119,8 +166,19 @@ def build_parser() -> argparse.ArgumentParser:
                          "(the graph, the source of truth).")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    pr = sub.add_parser("prime", help="who am I, what's on my plate")
-    pr.add_argument("me", nargs="?", help="defaults to $SHANTY_AGENT")
+    an = sub.add_parser("anchor", help="who am I, what's on my plate")
+    an.add_argument("me", nargs="?", help="defaults to $SHANTY_AGENT")
+    # MACHINE-READABLE (aegis status bar). Each prints ONE value and nothing else
+    # — no banner, no label, no prose — because the consumer is a Go program
+    # rendering a segment, and "empty" has to mean "nothing to show".
+    mr = an.add_mutually_exclusive_group()
+    mr.add_argument("--short", action="store_true",
+                    help="print ONLY the plate item's id (empty if the plate is empty)")
+    mr.add_argument("--events", action="store_true",
+                    help="print ONLY the number of UNDELIVERED stop events for me. "
+                         "A READ: it never marks anything delivered (see events.py)")
+    mr.add_argument("--harness", action="store_true",
+                    help="print ONLY this agent's harness name (e.g. claude)")
 
     go = sub.add_parser("go", help="dispatch an item to an agent")
     go.add_argument("item")
@@ -143,7 +201,11 @@ def build_parser() -> argparse.ArgumentParser:
                          "dispatching an assigned item REFUSES rather than silently "
                          "stealing it (aegis-uvw5)")
 
-    sub.add_parser("crew", help="who exists, what state, what role")
+    cr = sub.add_parser("crew", help="who exists, what state, what role")
+    cr.add_argument("--count", action="store_true",
+                    help="print ONLY `busy/total` — the same verdict the table "
+                         "renders, for a status bar. Agents whose busy/idle state "
+                         "is unknown are in NEITHER number")
 
     rl = sub.add_parser("roles", help="the hierarchy, and whether it's real")
     rl.add_argument("--check", action="store_true")
@@ -166,14 +228,24 @@ def build_parser() -> argparse.ArgumentParser:
     lg = sub.add_parser("log", help="what happened")
     lg.add_argument("agent", nargs="?")
 
-    ml = sub.add_parser("mail", help="send a message to an agent (tmux send-keys; -d persists)")
-    ml.add_argument("agent")
-    ml.add_argument("message", nargs="+")
-    ml.add_argument("-d", "--durable", action="store_true",
-                    help="must-survive: persist to the tracker (beads-parity on "
-                         "the shared store with --backend beads), then best-effort "
-                         "live send. Default is ephemeral send-keys.")
-    ml.add_argument("-n", "--dry-run", action="store_true")
+    ib = sub.add_parser("inbox",
+                        help="put a message in an agent's inbox (send-keys; -d persists), "
+                             "or read your own")
+    ib.add_argument("agent", nargs="?",
+                    help="the recipient when sending; whose inbox when reading "
+                         "(defaults to $SHANTY_AGENT)")
+    ib.add_argument("message", nargs="*")
+    ib.add_argument("-d", "--durable", action="store_true",
+                    help="must-survive: deliver to the recipient's INBOX (a bead "
+                         "on the aegis store with --backend beads), then "
+                         "best-effort live send. Default is ephemeral send-keys.")
+    ib.add_argument("--count", action="store_true",
+                    help="print ONLY the number of unread messages. A READ: it "
+                         "marks nothing read")
+    ib.add_argument("--read", action="store_true",
+                    help="ACK: mark my unread messages read. The explicit act — "
+                         "listing and counting never do this")
+    ib.add_argument("-n", "--dry-run", action="store_true")
 
     tk = sub.add_parser("task", help="create a work item")
     tk.add_argument("title", nargs="+")
@@ -209,16 +281,16 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     a = build_parser().parse_args(argv)
 
-    if a.cmd == "prime":
-        return _cmd_prime(a)
+    if a.cmd == "anchor":
+        return _cmd_anchor(a)
     if a.cmd == "go":
         return _cmd_go(a)
     if a.cmd == "crew":
         return _cmd_crew(a)
     if a.cmd == "roles":
         return _cmd_roles(a)
-    if a.cmd == "mail":
-        return _cmd_mail(a)
+    if a.cmd == "inbox":
+        return _cmd_inbox(a)
     if a.cmd == "task":
         return _cmd_task(a)
     if a.cmd == "context":
@@ -638,10 +710,22 @@ def _cmd_context(a) -> int:
     return 0
 
 
-def _cmd_mail(a) -> int:
-    """mail is send-keys by default; -d/--durable persists first (#7).
+def _cmd_inbox(a) -> int:
+    """inbox — put a message in an agent's inbox, or read your own. THREE modes,
+    and the positional shape tells them apart:
 
-    ROUTINE (default) — Stiwi, 2026-07-16: "st mail should just be tmux send keys."
+        st inbox <agent> <message...>   SEND (send-keys; -d persists first)
+        st inbox [agent]                READ — list the unread. Marks nothing.
+        st inbox --count [agent]        the machine-readable count (one integer)
+        st inbox --read [agent]         ACK — mark my unread messages read
+
+    Reading and acking are SEPARATE (inbox.py). `st inbox` shows you what is
+    there and changes nothing; `--read` is the act. That split is the same one
+    events.py makes between pending() and drain(), and it exists for the same
+    reason: `--count` is polled by a status bar every few seconds, and a read
+    that consumed what it reported would destroy the delivery it was reporting on.
+
+    ROUTINE SEND (default) — Stiwi, 2026-07-16: "st mail should just be tmux send keys."
     There is no bus, no queue, no store — nothing between the sender and the pane.
     We measured what wrapping it costs: 47 nudges sat queued for a mayor that does
     not exist, oldest 25 days, across FIVE spellings of the recipient — a queue
@@ -649,27 +733,50 @@ def _cmd_mail(a) -> int:
     pane is there or it is not, and you are told which. Failure modes stay the two
     honest ones — REFUSED (no agent / no pane), CANNOT_TELL (pane named but gone).
 
-    DURABLE (-d) — the gap #7 closes. Routine send-keys VANISHES if the recipient
-    is down, which is wrong for a must-survive message (a handoff, a protocol
-    step). gt mail's durability is a bead+Dolt commit; parity here is: PERSIST to
-    the tracker FIRST (the survival guarantee), THEN best-effort live send for
-    immediacy. Persist-first is deliberate — the store is the source of truth, the
-    live send is a bonus; if we persisted but the pane is gone, the message still
-    survives and the recipient picks it up on their next `st prime`.
+    DURABLE (-d) — the gap #7 closes, and the inbox is what CLOSED it. Routine
+    send-keys VANISHES if the recipient is down, which is wrong for a must-survive
+    message (a handoff, a protocol step). gt mail's durability is a bead+Dolt
+    commit; parity here is: PERSIST to the INBOX first (the survival guarantee),
+    THEN best-effort live send for immediacy. Persist-first is deliberate — the
+    store is the source of truth, the live send is a bonus.
 
-    dearing's ruling: beads-parity on the SHARED store, NOT a dedicated
-    store. So durable reuses the SELECTED tracker — run `--backend beads --repo
-    <repo>` for a real bead (survives cross-session, cross-host); the portable
-    files backend gives a lesser-but-real local durability. We PRINT where it
-    landed so the durability is never ambiguous.
+    Until the inbox existed, durable mail persisted a tracker item and NOTHING
+    EVER READ IT BACK: the recipient was told "you'll pick it up on your next
+    prime", and prime showed it on the PLATE, where it evicted their actual work
+    (the plate holds one item). Both halves of that are fixed here — the message
+    goes to the inbox, `st inbox` is the read side, and inbox.is_message keeps it
+    off the plate.
+
+    The ruling: beads-parity on the SHARED store, NOT a dedicated store.
+    Honoured by the BACKEND SWITCH, not by a hardcoded store: `--backend beads
+    --repo <repo>` gives TrackerInbox (a real bead, surviving cross-session and
+    cross-host); the portable files default gives FilesInbox, a lesser-but-real
+    local durability. We PRINT where it landed so the durability is never ambiguous.
 
     Durable exit codes:
       REFUSED (1)      no such agent
-      CANNOT_TELL (2)  could NOT persist (tracker unreachable) — the survival
+      CANNOT_TELL (2)  could NOT persist (store unreachable) — the survival
                        guarantee failed, so we do NOT downgrade to a silent
                        routine send and report success
       OK (0)           persisted (+ delivered live if the pane was there)
     """
+    # A send flag with nothing to send is a typo, not a request to read somebody's
+    # inbox. Say so rather than quietly doing the other thing.
+    if not a.message and (getattr(a, "durable", False) or a.dry_run) \
+            and not (getattr(a, "count", False) or getattr(a, "read", False)):
+        print("  refused: nothing to send. `st inbox <agent> <message...>`.",
+              file=sys.stderr)
+        return REFUSED
+    # READ MODES: they take no message, and the agent defaults to ME.
+    if getattr(a, "count", False) or getattr(a, "read", False) or not a.message:
+        import os
+        me = a.agent or os.environ.get("SHANTY_AGENT")
+        if not me:
+            print("  refused: no agent. `st inbox <you>` or set $SHANTY_AGENT.",
+                  file=sys.stderr)
+            return REFUSED
+        return _inbox_read(a, me)
+
     msg = " ".join(a.message)
     try:
         agent = _registry(a).get(a.agent)
@@ -679,7 +786,7 @@ def _cmd_mail(a) -> int:
     panes = Tmux()
 
     if getattr(a, "durable", False):
-        return _mail_durable(a, agent, msg, panes)
+        return _inbox_durable(a, agent, msg, panes)
 
     # ROUTINE — unchanged. send-keys only, ephemeral.
     if agent.pane is None:
@@ -701,8 +808,8 @@ def _cmd_mail(a) -> int:
     return OK
 
 
-def _mail_durable(a, agent, msg: str, panes) -> int:
-    """Persist-then-deliver. The tracker write is the guarantee; the send is speed."""
+def _inbox_durable(a, agent, msg: str, panes) -> int:
+    """Persist-then-deliver. The inbox write is the guarantee; the send is speed."""
     # BEADS BY DEFAULT for -d (dearing, qdal.2 follow-up). `-d` is the flag you
     # reach for when the message MUST survive your session dying. A local files
     # store survives the session but NOT the host, not a clone being cleaned, and
@@ -716,15 +823,14 @@ def _mail_durable(a, agent, msg: str, panes) -> int:
     backend = _backend(a, default="beads")
     live = agent.pane is not None and panes.exists(agent.pane)
     if a.dry_run:
-        print(f"  would: persist a durable message for {agent.name} via {backend}")
-        print(f"  would: {'+ live send-keys -> ' + agent.pane if live else 'no live send (recipient down); survives for prime'}")
+        print(f"  would: deliver a durable message to {agent.name}'s inbox via {backend}")
+        print(f"  would: {'+ live send-keys -> ' + agent.pane if live else 'no live send (recipient down); survives in the inbox'}")
         print("\n  1 durable write." + (" 1 send-keys." if live else " 0 send-keys."))
         return OK
     # PERSIST FIRST — the survival guarantee. If this cannot be done, the durable
     # promise cannot be kept; say so (2) rather than silently downgrade to routine.
-    tracker = _tracker(a, default="beads")
     try:
-        item = tracker.create(f"mail: {msg}", assignee=a.agent)
+        item = _inbox(a).deliver(a.agent, msg, frm=_me(a))
     except Exception as e:                       # bd/store unreachable, etc.
         print(f"  could not tell: durable persist FAILED for {agent.name} "
               f"({type(e).__name__}: {str(e)[:100]}). Nothing guaranteed to "
@@ -733,10 +839,48 @@ def _mail_durable(a, agent, msg: str, panes) -> int:
     # Persisted. Now best-effort immediacy — never fatal to the durable result.
     if live:
         panes.send(agent.pane, msg)
-        print(f"  -> {agent.name}    persisted as {item.id} ({backend}) + delivered live to {agent.pane}")
+        print(f"  -> {agent.name}    delivered to inbox as {item.id} ({backend}) + live to {agent.pane}")
     else:
-        print(f"  -> {agent.name}    persisted as {item.id} ({backend}); "
-              f"recipient not live — will pick it up on `st prime`.")
+        print(f"  -> {agent.name}    delivered to inbox as {item.id} ({backend}); "
+              f"recipient not live — they read it with `st inbox`.")
+    return OK
+
+
+def _inbox_read(a, me: str) -> int:
+    """The READ side of the inbox: list, count, or ack. Whose inbox = `me`.
+
+    --count is the machine-readable one and prints ONE integer, nothing else. The
+    plain list prints a human table and MARKS NOTHING; --read is the separate,
+    explicit ack. An inbox that emptied itself because a status bar looked at it
+    would be worse than no inbox: the recipient would never learn what was said.
+    """
+    try:
+        box = _inbox(a)
+        unread = box.unread(me)
+    except Exception as e:
+        # Could-not-look is never "you have no mail" (the whole reason exit 2
+        # exists here). --count stays silent on stdout so a parser sees nothing.
+        print(f"  could not tell: inbox unreadable: {e}", file=sys.stderr)
+        return CANNOT_TELL
+
+    if getattr(a, "count", False):
+        print(len(unread))
+        return OK
+
+    if getattr(a, "read", False):
+        marked = box.mark_read(me)
+        print(f"  marked {len(marked)} message(s) read for {me}.")
+        return OK
+
+    print()
+    if not unread:
+        print(f"  {me}: no unread messages.")
+    else:
+        for m in unread:
+            src = f" from {m.frm}" if m.frm else ""
+            print(f"  {m.id}{src}  {m.body}")
+        print(f"\n  {len(unread)} unread. `st inbox --read` to ack them.")
+    print()
     return OK
 
 
@@ -760,17 +904,28 @@ def _cmd_task(a) -> int:
     return OK
 
 
-def _cmd_prime(a) -> int:
-    """prime is a PURE READ. Note what is NOT here: no _wire(), because the
-    Dispatcher exists to write. prime resolves its own reads and nothing else."""
-    import os
-    me = a.me or os.environ.get("SHANTY_AGENT")
+def _cmd_anchor(a) -> int:
+    """anchor is a PURE READ. Note what is NOT here: no _wire(), because the
+    Dispatcher exists to write. anchor resolves its own reads and nothing else.
+
+    --short / --events / --harness are the machine-readable modes (the status
+    bar). They take the SAME agent resolution and the SAME backends as the human
+    render — a status bar reading a different plate than the anchor would be worse
+    than no status bar — and they print the value ALONE. Errors still go to stderr
+    with the usual exit codes: an empty stdout means "nothing to show", and a
+    caller that cannot distinguish that from "I could not look" has the exit code.
+    """
+    me = _me(a)
     if not me:
-        print("  refused: no agent. `shanty prime <you>` or set $SHANTY_AGENT.",
+        print("  refused: no agent. `st anchor <you>` or set $SHANTY_AGENT.",
               file=sys.stderr)
         return REFUSED
+    if getattr(a, "events", False):
+        return _anchor_events(a, me)
+    if getattr(a, "harness", False):
+        return _anchor_harness(a, me)
     try:
-        p = do_prime(me, _registry(a), Tmux(), plate=_plate(a))
+        p = do_anchor(me, _registry(a), Tmux(), plate=_plate(a))
     except LookupError as e:
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED
@@ -778,6 +933,13 @@ def _cmd_prime(a) -> int:
         # NOT success, NOT failure. "I could not look" must never say "fine".
         print(f"  could not tell: {e}", file=sys.stderr)
         return CANNOT_TELL
+    if getattr(a, "short", False):
+        # The id, or nothing. An empty plate prints an empty line's worth of
+        # NOTHING — not "nothing.", not a dash: the consumer renders the segment
+        # empty, which is what an empty plate looks like.
+        if p.item:
+            print(p.item.id)
+        return OK
     print()
     print(p.render())
     print()
@@ -797,6 +959,34 @@ def _read_note(a) -> str | None:
             return sys.stdin.read()
         return a.note_file.read_text()
     return getattr(a, "note", None)
+
+def _anchor_harness(a, me: str) -> int:
+    """`st anchor --harness` — which agent program is this card's?
+
+    Answers "claude" for a card with no harness field, because that IS the answer
+    (harness.name_for) — not blank. A status-bar segment that went empty for every
+    existing card would read as "no harness", which is a different and false claim.
+    """
+    try:
+        card = _registry(a).get(me)
+    except LookupError as e:
+        print(f"  refused: {e}", file=sys.stderr)
+        return REFUSED
+    print(harness_mod.name_for(card))
+    return OK
+
+
+def _anchor_events(a, me: str) -> int:
+    """`st anchor --events` — how many stop events am I holding, undelivered?
+
+    THIS MUST NOT DRAIN. drain() answers the same question by CONSUMING (it marks
+    each event delivered so the destination can idle — the BLOCK-ONCE rail at the
+    top of events.py), so a status bar polling drain() every few seconds would
+    deliver the tier's events to a status bar and the administrator would never be
+    told it had them. Counting is events.pending(): a read that marks nothing.
+    """
+    print(len(FilesEvents(Path(a.root) / "events").pending(me)))
+    return OK
 
 
 def _cmd_go(a) -> int:
@@ -897,6 +1087,11 @@ def _cmd_crew(a) -> int:
     except Exception as e:
         print(f"  could not tell: {e}", file=sys.stderr)
         return CANNOT_TELL
+    runtime = _runtime(a, panes)
+    # --count answers BEFORE the empty-roster line: an empty roster is `0/0`, not
+    # a sentence telling a status bar to run `shanty new`.
+    if getattr(a, "count", False):
+        return _crew_count(agents, panes, runtime)
     if not agents:
         print("  no agents. `shanty new <agent>`.")
         return OK
@@ -904,39 +1099,15 @@ def _cmd_crew(a) -> int:
     runtime = _runtime(a, panes)
     stale, unknown, free, busy, queued, shelled = [], [], [], [], [], []
     print()
-    for ag in sorted(agents, key=lambda x: x.name):
-        if ag.pane:
-            state = "up" if panes.exists(ag.pane) else "down"
-        else:
-            state = "no pane"          # not "down" — we did not look
-        # WORK: only a live pane has one. A down agent is not idle-and-available,
-        # it is not there — printing `idle` for it would put it on the free list
-        # and send work into a session that does not exist.
-        if state == "up":
-            # attrs=True: work_state needs dim to tell a placeholder suggestion
-            # from queued-unsubmitted text (aegis-x6xh). shows_ready_ui matches
-            # PLAIN substrings and its markers arrive colour-split word by word,
-            # so it gets the stripped view of the very same capture.
-            screen = panes.capture(ag.pane, attrs=True)
-            work = triage_mod.work_state(
-                screen, runtime.shows_ready_ui(triage_mod.strip_attrs(screen)))
-            # Background shells outlive the turn (aegis-q73g). An agent whose turn
-            # ended with a build/test/`gh run watch` still live is NOT finished,
-            # and every surface the administrator has was silent about it. Shown
-            # ON the work verdict, because "idle" is exactly the word that would
-            # otherwise mislead — `idle+1sh` is idle AND carrying live work.
-            shells = triage_mod.running_shells(screen)
-            if shells:
-                work = f"{work}+{shells}sh"
-                shelled.append(f"{ag.name}({shells})")
-            if work.startswith(triage_mod.IDLE):
-                free.append(ag.name)
-            elif work.startswith(triage_mod.BUSY):
-                busy.append(ag.name)
-            elif work.startswith(triage_mod.QUEUED):
-                queued.append(ag.name)
-        else:
-            work = "—"
+    for ag, state, work in _crew_states(agents, panes, runtime):
+        if work.endswith("sh"):
+            shelled.append(f"{ag.name}({work.rsplit('+', 1)[1][:-2]})")
+        if work.startswith(triage_mod.IDLE):
+            free.append(ag.name)
+        elif work.startswith(triage_mod.BUSY):
+            busy.append(ag.name)
+        elif work.startswith(triage_mod.QUEUED):
+            queued.append(ag.name)
         # Only a LIVE agent can be running stale settings. A down agent has no
         # loaded settings to be stale, and will read the current file when it
         # next starts, so reporting on it would be noise that hides the real hits.
@@ -1001,6 +1172,63 @@ def _cmd_crew(a) -> int:
               f"`st new`. UNKNOWN, not fine.")
     if stale or unknown:
         print()
+    return OK
+
+
+def _crew_states(agents, panes, runtime):
+    """(agent, pane state, work verdict) per agent, by name. THE code path for the
+    busy/idle judgment — the table renders it and `--count` counts it, so the
+    number a status bar shows can never disagree with the roster a human just
+    read. Reimplementing the verdict for the counter is how the two drift.
+
+    WORK: only a live pane has one. A down agent is not idle-and-available, it is
+    not there — printing `idle` for it would put it on the free list and send work
+    into a session that does not exist. So its verdict is `—`: not looked at.
+    """
+    for ag in sorted(agents, key=lambda x: x.name):
+        if ag.pane:
+            state = "up" if panes.exists(ag.pane) else "down"
+        else:
+            state = "no pane"          # not "down" — we did not look
+        if state == "up":
+            # attrs=True: work_state needs dim to tell a placeholder suggestion
+            # from queued-unsubmitted text. shows_ready_ui matches PLAIN
+            # substrings and its markers arrive colour-split word by word, so it
+            # gets the stripped view of the very same capture.
+            screen = panes.capture(ag.pane, attrs=True)
+            work = triage_mod.work_state(
+                screen, runtime.shows_ready_ui(triage_mod.strip_attrs(screen)))
+            # Background shells outlive the turn. An agent whose turn ended with a
+            # build/test/`gh run watch` still live is NOT finished, and every
+            # surface the administrator has was silent about it. Shown ON the work
+            # verdict, because "idle" is exactly the word that would otherwise
+            # mislead — `idle+1sh` is idle AND carrying live work.
+            shells = triage_mod.running_shells(screen)
+            if shells:
+                work = f"{work}+{shells}sh"
+        else:
+            work = "—"
+        yield ag, state, work
+
+
+def _crew_count(agents, panes, runtime) -> int:
+    """`st crew --count` — print `busy/total`, nothing else.
+
+    TOTAL IS NOT THE ROSTER SIZE. It is the number of agents we can actually
+    answer busy-or-idle for; an agent whose verdict is unknown (down, no pane,
+    a pane with no runtime UI, a wedge) is in NEITHER number. Counting the
+    unknowns into the denominator would render `3/9` when four of the nine were
+    never asked — a made-up capacity figure that reads exactly like a measured
+    one, which is the failure this repo keeps naming (`up` for a deaf agent,
+    CLEAR for a check that could not reach its target).
+    """
+    busy = idle = 0
+    for _ag, _state, work in _crew_states(agents, panes, runtime):
+        if work == triage_mod.BUSY:
+            busy += 1
+        elif work == triage_mod.IDLE:
+            idle += 1
+    print(f"{busy}/{busy + idle}")
     return OK
 
 

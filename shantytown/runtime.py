@@ -195,12 +195,25 @@ def _guard_hook() -> dict:
     }
 
 
-def settings_for_role(role: str, root=None) -> dict:
-    """The Claude Code settings.json a role needs — the CONTENT `role set` emits
-    and `st new`'s launch reads via --settings (#6, arnold gt-wisp-w4j2af).
+def settings_for_role(role: str, root=None, harness_name: str | None = None) -> dict:
+    """The settings file a role needs, IN ITS HARNESS'S FORMAT — the CONTENT
+    `role set` emits and `st new`'s launch reads via --settings (#6, arnold
+    gt-wisp-w4j2af).
 
-    This is Claude-Code-SPECIFIC (its hooks schema), so it lives with the runtime,
-    not in the runtime-agnostic tier — a second runtime emits its own format.
+    This is now a THIN DISPATCH to harness.get(harness_name).settings(); the Claude
+    Code schema below it is claude_settings_for_role, which is what ClaudeHarness
+    returns. The indirection is the point of the harness split: the file format and
+    the argv that reads it are one decision, and they now live in one class. The
+    default is unchanged and is Claude Code, so every existing caller gets exactly
+    what it got before.
+    """
+    from . import harness as harness_mod
+    return harness_mod.get(harness_name).settings(role, root=root)
+
+
+def claude_settings_for_role(role: str, root=None) -> dict:
+    """The Claude Code settings.json a role needs. CLAUDE-CODE-SPECIFIC (its hooks
+    schema) — owned by ClaudeHarness, which is the only thing that should call it.
 
     Every non-root role SENDs its own stop up (route_stop -> persist). Every
     DESTINATION (lead, admin) also DRAINs received events into its model. A Stop
@@ -433,67 +446,19 @@ class ClaudeRuntime:
                 f"could not materialize settings for {card.name} "
                 f"(role {card.role!r}); refusing to launch a settings-less agent."
             )
-        # --no-chrome: crew agents do not use the Chrome integration, and WITHOUT
-        # this a first-run claude stops at a "Claude in Chrome extension detected"
-        # consent prompt that BLOCKS the ready UI — so st new's verify never sees
-        # live and returns could-not-tell (2) for an agent that would be fine.
-        # Live-fire confirmed: `claude --no-chrome` goes straight to
-        # the ready UI, is_live True. This is the prod 0-path fix.
-        # Remote Control ON BY DEFAULT (Stiwi 2026-07-19). A fleet you cannot reach
-        # is a fleet you cannot run: this session sat unreachable for a day with an
-        # unsubmitted prompt in its input line and no way to drive it from outside
-        # (the gastown weaver stall). Naming the session after the agent is what
-        # makes a 6-agent fleet addressable rather than a wall of anonymous panes.
-        # Default, not opt-in — an agent you forgot to enable it on is exactly the
-        # one you will need to reach.
-        flags = f"--no-chrome --remote-control {card.name}"
-        # --dangerously-skip-permissions is OPT-IN per agent (card.dangerous), never
-        # global — a crew worker that must act without prompts sets it on its own
-        # card; nobody else inherits it (the pilot).
-        if card.dangerous:
-            flags += " --dangerously-skip-permissions"
-        # BOBBIN_ROLE is how hank's policy guard resolves WHICH scope applies
-        # (hank#20: tenant is resolved --tenant, then BOBBIN_ROLE; scopes live in
-        # .bobbin/config.toml under [hank.policy.scopes.<role>]). Exporting it per
-        # agent is what lets ONE hook registration serve every role — without it
-        # the guard has no scope to enforce and every agent is ungoverned.
-        # SHANTY_ROOT is the BELT to --settings' braces, and it exists because of a
-        # measured incident (sattler 2026-07-19). --settings is read ONCE,
-        # at launch: when the Stop hook was later corrected on disk to carry an
-        # absolute --root (c3fb472), every ALREADY-RUNNING agent kept the old unrooted
-        # command forever. kelly's own pane showed it —
-        #     stop_event send: no such agent: kelly (looked in
-        #     <agent-workspace>/.shanty/crew/<agent>.json)
-        # — the cwd/.shanty default, resolved against the agent's OWN workspace, which
-        # has no .shanty. The agent still looked "up" in `st crew`, still worked, still
-        # committed; only its stop events vanished, so the administrator at the root of
-        # the tier was silently deaf to it. Reproduced by mechanism from another
-        # worker's cwd (rooted -> "persisted ev-2 to sattler", exit 0; unrooted ->
-        # the same LookupError, exit 1).
-        #
-        # stop_event resolves root as `--root`, else $SHANTY_ROOT, else cwd/.shanty. A
-        # hook that has lost its --root therefore lands in the RIGHT store anyway once
-        # the env carries it, because the env is read at hook-run time, not baked into
-        # a settings snapshot. That is the whole point: this makes the NEXT settings
-        # change survivable for agents launched before it. It does not make a stale
-        # settings file detectable — items 1-2 (a doctor check, and role-set
-        # naming the live agents it did NOT reach) are still open, and this must not be
-        # mistaken for them.
-        root_env = f"SHANTY_ROOT={Path(self._root).resolve()} " if self._root else ""
-        launch = (
-            f"{root_env}SHANTY_AGENT={card.name} BOBBIN_ROLE={card.role} "
-            f"claude {flags} --settings {settings_path}"
-        )
-        # Launch IN the agent's workspace so Claude Code auto-loads its .mcp.json +
-        # CLAUDE.md from there — the launcher wires the agent's servers + charter
-        # WITHOUT ever reading their (secret-bearing) contents. cd prefix, so the
-        # single send-keys still delivers one line.
-        if card.workspace:
-            launch = f"cd {card.workspace} && {launch}"
+        # THE ARGV IS THE HARNESS'S (harness.py). This method keeps what is the
+        # RUNTIME's — the capability gate, the settings-or-nothing invariant, and
+        # the assert below — and delegates the program-specific string to the
+        # harness the CARD names. A card that names one we cannot host raises
+        # UnknownHarness, which is a refusal, not a fallback.
+        from . import harness as harness_mod
+        launch = harness_mod.for_card(card).launch(card, settings_path,
+                                                   root=self._root)
         # The invariant, asserted where it is made. If this ever fails, the bug is
         # here, not downstream — a settings-less string must be UNREACHABLE.
         assert "--settings" in launch, "compose produced a settings-less launch"
         return launch
+
 
     def start(self, card: Agent, pane: str) -> None:
         """The seam: compose (may refuse) THEN deliver via Panes. Panes stays

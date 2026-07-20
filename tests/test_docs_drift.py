@@ -51,7 +51,7 @@ def _commands_in_block(text: str, fence_contains: str) -> set[str]:
 # --- the surface listing in each document must BE the surface ----------------
 
 def test_readme_whole_surface_block_lists_exactly_the_wired_commands():
-    listed = _commands_in_block(README.read_text(), "← the primer")
+    listed = _commands_in_block(README.read_text(), "← the anchor")
     assert listed == _subcommands(), (
         f"README's 'whole surface' block drifted: it lists {sorted(listed)}, the "
         f"parser wires {sorted(_subcommands())}."
@@ -59,7 +59,7 @@ def test_readme_whole_surface_block_lists_exactly_the_wired_commands():
 
 
 def test_cli_md_whole_surface_block_lists_exactly_the_wired_commands():
-    listed = _commands_in_block(CLI_MD.read_text(), "st prime")
+    listed = _commands_in_block(CLI_MD.read_text(), "st anchor")
     assert listed == _subcommands(), (
         f"docs/cli.md's surface block drifted: it lists {sorted(listed)}, the "
         f"parser wires {sorted(_subcommands())}."
