@@ -373,21 +373,36 @@ def _verify_live_hooks(a, card, runtime, panes, session: str) -> int:
     # an adapter that cannot show a process cmdline genuinely cannot answer the
     # question, and that is a cannot-tell, not a pass.
     reader = getattr(panes, "cmdline", None)
-    directions = live_stop_directions(session, reader) if reader else None
-    if directions is None:
+    wiring = live_wiring(session, reader) if reader else None
+    if wiring is None:
         print(f"  could not tell: {a.agent} ({session}) is live, but its stop "
               f"hooks could NOT be read from the running process, so it is "
               f"UNVERIFIED — not confirmed hooked. Check `st roles --check`.",
               file=sys.stderr)
         return CANNOT_TELL
-    missing = need - directions
+    missing = need - wiring.directions
     if missing:
-        carries = sorted(directions) if directions else "NO stop hooks at all"
-        print(f"  FAILED: {a.agent} ({session}) came up HOOKLESS. The live "
-              f"process carries {carries}, but this agent needs "
-              f"{sorted(need)} — missing {sorted(missing)}. It is running and it "
-              f"is broken: remove it with `st stop {a.agent}`, fix the settings "
-              f"it launches with, and start it again.", file=sys.stderr)
+        # SAY WHAT IT HAS, NOT ONLY WHAT IT LACKS — dearing's aegis-0v97
+        # correction (205e492), which landed on roles.py while this was in
+        # flight and applies verbatim here. "NO stop hooks at all" is false as
+        # English and false in the expensive direction: a process launched by a
+        # foreign launcher DOES carry hooks, just not a `stop_event` direction.
+        # Read literally, that string is aegis-05up — "respawn dropped
+        # --settings, the rm -rf and force-push guards are gone" — a real
+        # emergency that is NOT what we measured. Naming the settings path makes
+        # the foreign launcher self-evident instead of alarming.
+        carries = (f"stop directions {sorted(wiring.directions)}"
+                   if wiring.directions else "no `stop_event` hook")
+        whence = (f", its --settings is {wiring.settings_path}"
+                  if wiring.settings_path
+                  else ", and its launch line carries NO --settings at all "
+                       "(this one IS the hookless-zombie case, cf. aegis-05up)")
+        print(f"  FAILED: {a.agent} ({session}) came up WITHOUT the stop hooks "
+              f"its position requires. The live process carries {carries}"
+              f"{whence}, but this agent needs {sorted(need)} — missing "
+              f"{sorted(missing)}. It is running and it is broken: remove it "
+              f"with `st stop {a.agent}`, fix the settings it launches with, "
+              f"and start it again.", file=sys.stderr)
         return REFUSED
     verified = sorted(need) if need else "none required by the graph"
     print(f"  started {a.agent} ({session}) — runtime live, stop hooks VERIFIED "

@@ -206,9 +206,11 @@ def test_new_FAILS_when_the_live_process_came_up_hookless(tmp_path, monkeypatch,
 
     err = capsys.readouterr().err
     assert rc == cli.REFUSED, "a hookless launch reported success"
-    assert "HOOKLESS" in err
-    assert "'send'" in err or "send" in err, "did not name the missing direction"
-    assert "NO stop hooks at all" in err
+    assert "WITHOUT the stop hooks" in err
+    assert "send" in err, "did not name the missing direction"
+    # dearing's 0v97 correction: never claim "no hooks at all" — say what it HAS.
+    assert "no `stop_event` hook" in err
+    assert "NO stop hooks at all" not in err
 
 
 def test_new_FAILS_naming_only_the_direction_that_is_MISSING(tmp_path, monkeypatch, capsys):
@@ -259,7 +261,7 @@ def test_new_is_CANNOT_TELL_when_the_hooks_cannot_be_READ(tmp_path, monkeypatch,
     err = capsys.readouterr().err
     assert rc == cli.CANNOT_TELL
     assert "UNVERIFIED" in err
-    assert "HOOKLESS" not in err, "reported a cannot-tell as a definite failure"
+    assert "WITHOUT the stop hooks" not in err, "reported a cannot-tell as a definite failure"
 
 
 def test_a_FAILED_verification_still_leaves_the_pane_for_inspection(tmp_path, monkeypatch, capsys):
