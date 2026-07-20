@@ -33,7 +33,8 @@ from .files import FilesRegistry, FilesTracker, plate as files_plate
 from .launched import FilesLaunches, CURRENT, STALE, UNKNOWN
 from .quipu import QuipuRegistry
 from .prime import Unreachable, prime as do_prime
-from .runtime import ClaudeRuntime, CapabilityError, SettingsError, settings_for_role
+from .runtime import (ClaudeRuntime, CapabilityError, SettingsError,
+                      emitted_stop_directions, settings_for_role)
 from .tmux import Tmux
 from .workspace import WorkspaceError, ensure_workspace
 
@@ -805,7 +806,10 @@ def _cmd_roles(a) -> int:
         print()
         return OK
 
-    rep = roles_mod.check(_registry(a))
+    # #6.4: hand check the hook READER, so `hooks: ok` reports the settings file
+    # `role set` actually emitted instead of naming a column.
+    rep = roles_mod.check(_registry(a),
+                          emitted=lambda role: emitted_stop_directions(a.root, role))
     print()
     print(rep.render())
     print()
