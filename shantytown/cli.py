@@ -35,7 +35,8 @@ from .launched import FilesLaunches, CURRENT, STALE, UNKNOWN
 from .quipu import QuipuRegistry
 from .prime import Unreachable, prime as do_prime
 from .runtime import (ClaudeRuntime, CapabilityError, SettingsError,
-                      emitted_stop_directions, settings_for_role)
+                      emitted_stop_directions, live_stop_directions,
+                      settings_for_role)
 from .tmux import Tmux
 from .workspace import WorkspaceError, ensure_workspace
 
@@ -912,8 +913,13 @@ def _cmd_roles(a) -> int:
 
     # #6.4: hand check the hook READER, so `hooks: ok` reports the settings file
     # `role set` actually emitted instead of naming a column.
+    # aegis-0v97: and hand it the LIVE reader too, so the check measures the
+    # running process, not only the artifact its role would have emitted. The
+    # artifact was green for a lead whose live process had no stop hooks at all.
+    panes = Tmux()
     rep = roles_mod.check(_registry(a),
-                          emitted=lambda role: emitted_stop_directions(a.root, role))
+                          emitted=lambda role: emitted_stop_directions(a.root, role),
+                          live=lambda pane: live_stop_directions(pane, panes.cmdline))
     print()
     print(rep.render())
     print()

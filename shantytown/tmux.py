@@ -62,6 +62,66 @@ class Tmux:
             return False
         return any(pane in line.split() for line in r.stdout.splitlines())
 
+    def cmdline(self, pane: str) -> str | None:
+        """The launch command line of the AGENT PROCESS running in `pane`.
+
+        Used to ask what a live agent is ACTUALLY wired with, rather than what
+        its role's artifact says it should be (runtime.live_stop_directions).
+        None if the pane is gone or nothing can be read.
+
+        TWO TREE SHAPES, both live on this host, and a reader that handles only
+        one silently mis-answers for the other:
+            gt-launched   pane_pid IS the runtime  (`claude --settings ...`)
+            st-launched   pane_pid is `-bash`, the runtime is a CHILD
+        So look at the pane process AND its descendants.
+
+        Among candidates carrying --settings, take the EARLIEST-STARTED. A
+        transient `bash -c` from a tool call can mention --settings in an eval
+        string; the real runtime has been there since the session began, so
+        oldest-wins keeps a passing shell command from impersonating the
+        agent's wiring.
+        """
+        r = subprocess.run(
+            self._cmd("list-panes", "-a", "-F", "#{pane_pid} #{session_name}"),
+            capture_output=True, text=True,
+        )
+        if r.returncode != 0:
+            return None
+        pids = [ln.split()[0] for ln in r.stdout.splitlines()
+                if len(ln.split()) > 1 and ln.split()[1] == pane]
+        if not pids:
+            return None
+        root = pids[0]
+        # etimes (seconds elapsed) is monotone in age and trivially sortable —
+        # unlike lstart, which is a fixed-width 24-char date field.
+        ps = subprocess.run(
+            ["ps", "-o", "etimes=,args=", "-p", root, "--ppid", root],
+            capture_output=True, text=True,
+        )
+        if ps.returncode != 0:
+            return None
+        best, best_age, fallback = None, -1, None
+        for ln in ps.stdout.splitlines():
+            ln = ln.strip()
+            if not ln:
+                continue
+            age_s, _, args = ln.partition(" ")
+            try:
+                age = int(age_s)
+            except ValueError:
+                continue
+            args = args.strip()
+            toks = args.split()
+            if fallback is None and args != "-bash":
+                fallback = args
+            if "--settings" in toks or any(t.startswith("--settings=") for t in toks):
+                if age > best_age:
+                    best, best_age = args, age
+        # No --settings anywhere is a REAL answer (the hookless zombie), so
+        # return the process we found rather than None, which means "could not
+        # look". That distinction is the whole contract of the callers.
+        return best or fallback
+
     def capture(self, pane: str, history: int = 0, attrs: bool = False) -> str:
         # -S -N extends the capture back N lines into scrollback. Default 0 keeps
         # the VISIBLE-only behaviour triage depends on (see the Panes protocol).

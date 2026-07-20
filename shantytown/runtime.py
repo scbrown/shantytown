@@ -260,9 +260,19 @@ def emitted_stop_directions(root, role: str) -> set[str] | None:
     and the caller must not render that as a pass — a role whose hooks we failed
     to read is not a role with no hooks.
     """
-    p = Path(root) / "settings" / f"{role}.settings.json"
+    return stop_directions_in(Path(root) / "settings" / f"{role}.settings.json")
+
+
+def stop_directions_in(path) -> set[str] | None:
+    """Parse ONE settings file -> the stop directions it carries, or None.
+
+    Factored out of emitted_stop_directions so the artifact reader and the LIVE
+    reader (live_stop_directions) apply the identical parse. If they diverged,
+    a mismatch between them would be unattributable: you could not tell a real
+    runtime drift from two parsers disagreeing.
+    """
     try:
-        data = json.loads(p.read_text())
+        data = json.loads(Path(path).read_text())
     except (OSError, ValueError):
         return None
     found: set[str] = set()
@@ -282,6 +292,56 @@ def emitted_stop_directions(root, role: str) -> set[str] | None:
         # cannot-tell, not "no hooks" — see above.
         return None
     return found
+
+
+def settings_path_in_cmdline(cmdline: str) -> str | None:
+    """Pull the `--settings <path>` argument out of a launch command line."""
+    if not cmdline:
+        return None
+    toks = cmdline.split()
+    for i, t in enumerate(toks):
+        if t == "--settings" and i + 1 < len(toks):
+            return toks[i + 1]
+        if t.startswith("--settings="):
+            return t.split("=", 1)[1]
+    return None
+
+
+def live_stop_directions(pane: str, cmdline_reader) -> set[str] | None:
+    """What stop directions is the process ACTUALLY RUNNING in `pane` carrying?
+
+    THE GAP THIS CLOSES (aegis-0v97). emitted_stop_directions answers "does the
+    ROLE's artifact carry drain?". That is not the question the tier needs. The
+    tier needs "will this lead drain?", and the artifact cannot answer it,
+    because nothing guarantees the live process was launched from that artifact.
+
+    Measured on the live store, 2026-07-20: dearing is role=lead, lead.settings
+    .json emits [send, drain], and `st roles --check` said `hooks: ok` — while
+    the process in its pane had been launched by a FOREIGN launcher (gt-crew-up)
+    with gastown settings carrying no stop_event hook at all. Seven workers
+    routed to it; every one of their stop events was write-only, and the checker
+    was green throughout.
+
+    tmux.py already states this rule for the kill path: a pane NAME match must
+    never be sufficient permission to reap. Same rule, liveness edition: a pane
+    name match must never be sufficient evidence of DRAIN. `st` does not own
+    every process that answers to a name it knows.
+
+    None = CANNOT TELL (no such pane, unreadable cmdline, no --settings on it,
+    unparseable settings). Never rendered as a pass — same contract as
+    emitted_stop_directions.
+    """
+    cmdline = cmdline_reader(pane)
+    if not cmdline:
+        return None
+    p = settings_path_in_cmdline(cmdline)
+    if p is None:
+        # A live process with no --settings at all is the hookless zombie this
+        # repo refuses to compose. It is not "cannot tell" that it lacks hooks
+        # — there is no settings file, so it carries no stop directions. That
+        # is an EMPTY SET (a measurement), not None (a failure to measure).
+        return set()
+    return stop_directions_in(p)
 
 
 class ClaudeRuntime:

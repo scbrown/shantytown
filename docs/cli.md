@@ -214,9 +214,9 @@ tier reads a **fact instead of a rendering** — the Stop event is the natural c
 ```
 $ st roles --check
 
-  arnold      administrator  reports: malcolm         hooks: ok
-  malcolm     lead           reports: ellie, ian      hooks: ok
-  ellie       worker         reports_to: malcolm      hooks: ok
+  arnold      administrator  reports: malcolm         hooks: ok live: ok
+  malcolm     lead           reports: ellie, ian      hooks: ok live: ok
+  ellie       worker         reports_to: malcolm      hooks: ok live: ok
   dearing     worker         reports_to: —            *** ORPHAN ***
 
   BLOCKED: 1 agent's stop events go nowhere.
@@ -224,6 +224,27 @@ $ st roles --check
 
 Three outcomes: **ok**, **broken**, **cannot tell**. If it can't read a card it says so and exits
 non-zero. A checker that can only report health is not a checker.
+
+**Three legs**, each a strictly stronger question than the last:
+
+| leg | question | column |
+|-----|----------|--------|
+| lines | does every agent report *somewhere*? | the verdict |
+| hooks | does the **role's emitted artifact** carry the stop hooks the graph requires? | `hooks:` |
+| live  | does the **process actually running in the pane** carry them? | `live:` |
+
+The third leg exists because the second is not evidence (aegis-0v97). An artifact states
+*intent*; `st` does not own every process that answers to a name in its registry. Measured on
+the real store: `dearing` was `role=lead`, `lead.settings.json` emitted `[send, drain]`, and the
+check was **green** — while the process in its pane had been launched by a foreign launcher with
+settings carrying no stop hook at all. Seven workers routed to it and every one of their stop
+events was write-only. `tmux.py` already states this rule for the kill path — *a pane NAME match
+is never sufficient permission to reap*. The `live:` leg is that same rule for liveness: a name
+match is never sufficient evidence of **drain**.
+
+A **down** pane is not a fault: `route_stop` already rises to the administrator when a lead is
+unreachable, loudly and with a reason. The `live:` leg catches what that path cannot see — pane
+**up**, wiring **wrong**, so nothing rises and nothing drains.
 
 ## `st doctor` — the out-of-box feature
 

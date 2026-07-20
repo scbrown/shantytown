@@ -37,6 +37,7 @@ class Row:
     verdict: str
     note: str = ""
     hooks: str = UNVERIFIED   # the second leg; see check(emitted=...)
+    live: str = UNVERIFIED    # the third leg; see check(live=...)
 
 
 @dataclass
@@ -60,6 +61,12 @@ class Report:
             rel = (f"reports_to: {r.reports_to}" if r.reports_to
                    else "reports_to: —")
             hooks = {OK: "hooks: ok", UNVERIFIED: "hooks: ?"}.get(r.hooks, "hooks: ok")
+            # `live: ?` is common and legitimate (a DOWN pane cannot be read,
+            # and route_stop already handles a down lead), so it is shown only
+            # when it was actually measured — an unreadable pane must not read
+            # as a finding.
+            if r.live == OK:
+                hooks += " live: ok"
             tail = {OK: hooks,
                     BROKEN: f"*** {r.note or 'BROKEN'} ***",
                     CANNOT_TELL: f"*** CANNOT TELL: {r.note} ***"}[r.verdict]
@@ -81,6 +88,63 @@ class Report:
         return "\n".join(L)
 
 
+def _needs(a: Agent, agents: list[Agent]) -> set[str]:
+    """What stop directions THIS agent's position in the graph requires."""
+    need = set()
+    if a.reports_to is not None:
+        need.add("send")
+    if any(o.reports_to == a.name for o in agents):
+        need.add("drain")
+    return need
+
+
+def _live_verdict(a: Agent, agents: list[Agent], live) -> tuple[str, str]:
+    """The THIRD leg (aegis-0v97): does the RUNNING PROCESS match the graph?
+
+    Leg two asks whether the ROLE'S ARTIFACT carries the right hooks. That is a
+    strictly weaker question, and the gap between them is not theoretical — it
+    was live on this store for the whole time leg two existed:
+
+        dearing   role=lead   lead.settings.json emits [send, drain]   hooks: ok
+                  ...launched by gt-crew-up with gastown settings carrying no
+                  stop_event hook at all. Seven workers routed to it. Every one
+                  of their stop events was write-only, and --check was GREEN.
+
+    An artifact is a statement of intent. `st` does not own every process that
+    answers to a name in its registry, so intent is not evidence. tmux.py states
+    the same rule for the kill path — a pane NAME match is never sufficient
+    permission to reap. This is that rule for liveness.
+
+    A DOWN pane is NOT a fault here: route_stop already rises to the
+    administrator when a lead is unreachable, loudly and with a reason. The
+    fault this leg exists to catch is the one that path cannot see — pane UP,
+    wiring WRONG, so nothing rises and nothing drains.
+    """
+    directions = live(a.pane) if a.pane else None
+    if directions is None:
+        # Pane down, or nothing readable. Not a pass and not a failure: say so.
+        return UNVERIFIED, ""
+    need = _needs(a, agents)
+    missing = need - directions
+    if missing:
+        carries = sorted(directions) if directions else "NO stop hooks at all"
+        # Name EVERY consequence, not the first one. A lead missing both legs
+        # strands its reports as well as itself, and reporting only "its own
+        # stop dies here" would understate it by seven agents.
+        because = []
+        if "send" in missing:
+            because.append("its own stop dies here")
+        if "drain" in missing:
+            n = sum(1 for o in agents if o.reports_to == a.name)
+            because.append(f"the stops of its {n} report(s) land in a store "
+                           "nothing reads")
+        why = " AND ".join(because)
+        return BROKEN, ("LIVE PROCESS DOES NOT MATCH THE GRAPH: the process in "
+                        f"pane {a.pane!r} carries {carries}, but this agent "
+                        f"needs {sorted(need)} — so {why}")
+    return OK, ""
+
+
 def _hooks_verdict(a: Agent, agents: list[Agent], emitted) -> tuple[str, str]:
     """The SECOND leg (GitHub #6.4): do the emitted stop hooks match the graph?
 
@@ -96,11 +160,7 @@ def _hooks_verdict(a: Agent, agents: list[Agent], emitted) -> tuple[str, str]:
     directions = emitted(a.role)
     if directions is None:
         return CANNOT_TELL, f"no readable stop hooks emitted for role {a.role!r}"
-    need = set()
-    if a.reports_to is not None:
-        need.add("send")
-    if any(o.reports_to == a.name for o in agents):
-        need.add("drain")
+    need = _needs(a, agents)
     missing = need - directions
     if missing:
         return BROKEN, ("HOOKS DO NOT MATCH THE GRAPH: role "
@@ -109,7 +169,7 @@ def _hooks_verdict(a: Agent, agents: list[Agent], emitted) -> tuple[str, str]:
     return OK, ""
 
 
-def check(registry: Registry, emitted=None) -> Report:
+def check(registry: Registry, emitted=None, live=None) -> Report:
     """Verify the hierarchy. Never raises for a bad card — that is a verdict.
 
     `emitted` is an optional reader `role -> set[str] | None` giving the stop
@@ -117,6 +177,13 @@ def check(registry: Registry, emitted=None) -> Report:
     runtime.emitted_stop_directions). Pass it and `hooks: ok` becomes an
     observation; omit it and the hooks column is reported as UNVERIFIED rather
     than ok — this checker does not get to print a word it did not measure.
+
+    `live` is an optional reader `pane -> set[str] | None` giving the stop
+    directions the RUNNING PROCESS in that pane actually carries (see
+    runtime.live_stop_directions). Same contract, strictly stronger question:
+    `emitted` verifies the role's INTENT, `live` verifies the running REALITY.
+    They can disagree, and when they do the tier is broken while the artifact
+    looks perfect — see _live_verdict for the measured case that motivated it.
     """
     try:
         agents: list[Agent] = registry.all()
@@ -141,22 +208,32 @@ def check(registry: Registry, emitted=None) -> Report:
         else:
             rows.append(Row(a.name, a.role, a.reports_to, OK))
 
+        # Both extra legs run even for a row the line-check already failed: an
+        # ORPHAN with broken hooks has two problems and should say so.
         if emitted is None:
             rows[-1].hooks = UNVERIFIED
-            continue
-        # The hooks leg runs even for a row the line-check already failed: an
-        # ORPHAN with broken hooks has two problems and should say so. A worse
-        # hooks verdict wins the row.
-        hv, note = _hooks_verdict(a, agents, emitted)
-        rows[-1].hooks = hv
-        if hv == OK:
-            continue
-        if rows[-1].verdict == OK:
-            rows[-1].verdict, rows[-1].note = hv, note
         else:
-            # Already failing the line check. Do NOT let the first problem hide
-            # the second — both go in the note, and the worse verdict wins.
-            rows[-1].note = f"{rows[-1].note}; also {note}"
-            if hv == CANNOT_TELL:
-                rows[-1].verdict = CANNOT_TELL
+            hv, note = _hooks_verdict(a, agents, emitted)
+            rows[-1].hooks = hv
+            _fold(rows[-1], hv, note)
+
+        if live is None:
+            rows[-1].live = UNVERIFIED
+        else:
+            lv, note = _live_verdict(a, agents, live)
+            rows[-1].live = lv
+            _fold(rows[-1], lv, note)
     return Report(rows)
+
+
+def _fold(row: Row, verdict: str, note: str) -> None:
+    """Merge one leg's verdict into the row. A worse verdict wins, and a second
+    problem NEVER hides behind the first — both notes are kept."""
+    if verdict in (OK, UNVERIFIED):
+        return
+    if row.verdict == OK:
+        row.verdict, row.note = verdict, note
+        return
+    row.note = f"{row.note}; also {note}"
+    if verdict == CANNOT_TELL:
+        row.verdict = CANNOT_TELL
