@@ -428,7 +428,9 @@ def _emit_role_settings(root: Path, roles: set[str]) -> list[Path]:
     written = []
     for role in sorted(roles):
         p = sdir / f"{role}.settings.json"
-        p.write_text(json.dumps(settings_for_role(role), indent=2, sort_keys=True))
+        # Pass the root: the hook must reach THIS store, not cwd/.shanty (the
+        # agent's own workspace, which has none) — see _stop_cmd.
+        p.write_text(json.dumps(settings_for_role(role, root=root), indent=2, sort_keys=True))
         written.append(p)
     return written
 

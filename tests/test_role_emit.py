@@ -93,7 +93,28 @@ def test_role_set_emits_the_settings_file(tmp_path):
     assert rc == OK
     p = root / "settings" / "worker.settings.json"
     assert p.is_file(), "role set did not emit the role's settings.json"
-    assert _stop_commands(json.loads(p.read_text())) == [f"{_PY} -m shantytown.stop_event send"]
+    assert _stop_commands(json.loads(p.read_text())) == [
+        f"{_PY} -m shantytown.stop_event send --root {root.resolve()}"
+    ]
+
+
+def test_emitted_hook_carries_an_absolute_root(tmp_path):
+    """The hook must reach THIS store, not cwd/.shanty.
+
+    stop_event resolves root as --root, else $SHANTY_ROOT, else CWD/.shanty — and
+    the launcher runs the agent in its OWN workspace, which has no .shanty. So an
+    unrooted hook looked for the registry under e.g.
+    ~/gt/beads_aegis/crew/<agent>/.shanty, found nothing, and every stop event died
+    unpersisted: four live workers produced zero events and `events/` was never
+    created. Without an absolute root, send/drain silently route nowhere.
+    """
+    root = _world(tmp_path)
+    assert main(["--root", str(root), "role", "set", "ellie", "worker"]) == OK
+    cmd = _stop_commands(json.loads((root / "settings" / "worker.settings.json").read_text()))[0]
+    assert "--root " in cmd, "hook has no --root; it will resolve against the agent's cwd"
+    given = cmd.split("--root ", 1)[1].strip()
+    assert Path(given).is_absolute(), f"hook root {given!r} is not absolute"
+    assert Path(given) == root.resolve()
 
 
 def test_role_set_dry_run_emits_nothing(tmp_path):

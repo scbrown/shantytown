@@ -32,6 +32,7 @@ HONEST BOUNDARY (say it so nobody over-claims):
 from __future__ import annotations
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable, Protocol, runtime_checkable
 
 from .protocols import Agent
@@ -120,11 +121,26 @@ SettingsResolver = Callable[[Agent], "str | None"]
 # feature looked shipped and had never once run. sys.executable is by
 # construction an interpreter that exists and can import shantytown.
 _PY = sys.executable or "python3"
-_STOP_SEND = {"type": "command", "command": f"{_PY} -m shantytown.stop_event send"}
-_STOP_DRAIN = {"type": "command", "command": f"{_PY} -m shantytown.stop_event drain"}
 
 
-def settings_for_role(role: str) -> dict:
+def _stop_cmd(mode: str, root=None) -> dict:
+    """One Stop-hook command, with the store's location BAKED IN.
+
+    stop_event resolves its root as `--root`, else $SHANTY_ROOT, else CWD/.shanty
+    — and the launcher runs the agent in ITS OWN WORKSPACE, which has no .shanty.
+    So an unrooted hook looked for the registry in e.g.
+    ~/gt/beads_aegis/crew/gennaro/.shanty, found nothing, and every stop event
+    died unpersisted: `events/` was never even created (measured — four live
+    workers, zero events). Baking the absolute root is what makes send/drain
+    reach the real store no matter where the agent is launched.
+    """
+    cmd = f"{_PY} -m shantytown.stop_event {mode}"
+    if root is not None:
+        cmd += f" --root {Path(root).resolve()}"
+    return {"type": "command", "command": cmd}
+
+
+def settings_for_role(role: str, root=None) -> dict:
     """The Claude Code settings.json a role needs — the CONTENT `role set` emits
     and `st new`'s launch reads via --settings (#6, arnold gt-wisp-w4j2af).
 
@@ -142,11 +158,11 @@ def settings_for_role(role: str) -> dict:
         administrator -> [drain]         (root: receives only; its stop terminates)
     """
     if role == "worker":
-        stop = [_STOP_SEND]
+        stop = [_stop_cmd("send", root)]
     elif role == "lead":
-        stop = [_STOP_SEND, _STOP_DRAIN]
+        stop = [_stop_cmd("send", root), _stop_cmd("drain", root)]
     elif role == "administrator":
-        stop = [_STOP_DRAIN]
+        stop = [_stop_cmd("drain", root)]
     else:
         raise ValueError(f"unknown role {role!r}; expected worker/lead/administrator")
     return {
