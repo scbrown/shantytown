@@ -739,7 +739,7 @@ def _cmd_crew(a) -> int:
         return OK
     launches = _launches(a)
     runtime = _runtime(a, panes)
-    stale, unknown, free, busy = [], [], [], []
+    stale, unknown, free, busy, shelled = [], [], [], [], []
     print()
     for ag in sorted(agents, key=lambda x: x.name):
         if ag.pane:
@@ -752,9 +752,18 @@ def _cmd_crew(a) -> int:
         if state == "up":
             screen = panes.capture(ag.pane)
             work = triage_mod.work_state(screen, runtime.shows_ready_ui(screen))
-            if work == triage_mod.IDLE:
+            # Background shells outlive the turn (aegis-q73g). An agent whose turn
+            # ended with a build/test/`gh run watch` still live is NOT finished,
+            # and every surface the administrator has was silent about it. Shown
+            # ON the work verdict, because "idle" is exactly the word that would
+            # otherwise mislead — `idle+1sh` is idle AND carrying live work.
+            shells = triage_mod.running_shells(screen)
+            if shells:
+                work = f"{work}+{shells}sh"
+                shelled.append(f"{ag.name}({shells})")
+            if work.startswith(triage_mod.IDLE):
                 free.append(ag.name)
-            elif work == triage_mod.BUSY:
+            elif work.startswith(triage_mod.BUSY):
                 busy.append(ag.name)
         else:
             work = "—"
@@ -770,7 +779,7 @@ def _cmd_crew(a) -> int:
         else:
             verdict = "—"
         print(f"  {ag.name:<11} {ag.role:<14} {state:<8} {verdict:<8} "
-              f"{work:<7} {ag.pane or '—'}")
+              f"{work:<9} {ag.pane or '—'}")
     print()
     # The dispatcher's answer, said out loud. A column still makes the operator
     # scan 14 rows; the question is "who can take this", so print the list.
@@ -781,6 +790,16 @@ def _cmd_crew(a) -> int:
               "interrupts work.")
     if busy:
         print(f"  {len(busy)} busy: {', '.join(busy)}")
+    # Say the consequence, not just the count (aegis-q73g). The reader who needs
+    # this line is the administrator about to book the previous item as done.
+    if shelled:
+        print(f"  ⚠ {len(shelled)} agent(s) still own live background shells: "
+              f"{', '.join(shelled)}")
+        print("    A turn that ended is not a task that finished. Whether that "
+              "should block a dispatch is")
+        print("    unruled — but a build, a test run or a `gh run watch` is "
+              "unfinished work, and the next")
+        print("    item's output will land on top of it.")
     if free or busy:
         print()
     # Say the consequence, not just the state. The operator who needs this line is

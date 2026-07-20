@@ -45,6 +45,13 @@ class StopEvent:
     reason: str | None = None
     rose: bool = False           # did it rise past a down lead to the admin?
     delivered: bool = False      # BLOCK-ONCE marker: has the drain handed it over?
+    shells: int | None = None    # background shells the sender still owned AT STOP
+                                 # (aegis-q73g). "weaver stopped" and "weaver
+                                 # stopped, 1 shell still running" are different
+                                 # facts and only the second is actionable — a
+                                 # stop event carrying only the first invites the
+                                 # destination to book turn-end as task-end.
+                                 # None = NOT REPORTED, never "zero".
 
 
 @runtime_checkable
@@ -53,9 +60,14 @@ class Events(Protocol):
     is deliberately NOT the Tracker (whose three-method surface is pinned, aegis-
     gqr8). Sharing the Tracker's SUBSTRATE (the aegis store) does not mean sharing
     its protocol; a stop event and a work item are different types on one store."""
-    def persist(self, to: str, frm: str, reason: str | None, rose: bool) -> StopEvent:
+    def persist(self, to: str, frm: str, reason: str | None, rose: bool,
+                shells: int | None = None) -> StopEvent:
         """SEND: durably record an event addressed to `to`. Survival guarantee —
-        it is on the store before it is read, so it cannot vanish if `to` is down."""
+        it is on the store before it is read, so it cannot vanish if `to` is down.
+
+        `shells` is optional so an Events impl written before q73g still satisfies
+        this protocol — the field is additive, and a caller that cannot measure it
+        passes nothing and gets None (not reported), which is the truth."""
         ...
     def drain(self, me: str) -> list[StopEvent]:
         """RECEIVE: return MY undelivered events and MARK them delivered (block-
@@ -81,19 +93,24 @@ class FilesEvents:
         )
         return f"ev-{n}"
 
-    def persist(self, to: str, frm: str, reason: str | None, rose: bool) -> StopEvent:
+    def persist(self, to: str, frm: str, reason: str | None, rose: bool,
+                shells: int | None = None) -> StopEvent:
         self.root.mkdir(parents=True, exist_ok=True)
-        ev = StopEvent(id=self._next_id(), to=to, frm=frm, reason=reason, rose=rose)
+        ev = StopEvent(id=self._next_id(), to=to, frm=frm, reason=reason, rose=rose,
+                       shells=shells)
         (self.root / f"{ev.id}.json").write_text(json.dumps({
             "to": ev.to, "frm": ev.frm, "reason": ev.reason,
-            "rose": ev.rose, "delivered": ev.delivered,
+            "rose": ev.rose, "delivered": ev.delivered, "shells": ev.shells,
         }, indent=2, sort_keys=True))
         return ev
 
     def _read(self, p: Path) -> StopEvent:
         d = json.loads(p.read_text())
+        # shells defaults to None for events written before q73g — an old event
+        # genuinely did not report one, so the default IS the correct reading.
         return StopEvent(id=p.stem, to=d["to"], frm=d["frm"], reason=d.get("reason"),
-                         rose=d.get("rose", False), delivered=d.get("delivered", False))
+                         rose=d.get("rose", False), delivered=d.get("delivered", False),
+                         shells=d.get("shells"))
 
     def drain(self, me: str) -> list[StopEvent]:
         if not self.root.is_dir():
@@ -119,9 +136,11 @@ class NullEvents:
         self._events: list[StopEvent] = []
         self._n = 0
 
-    def persist(self, to: str, frm: str, reason: str | None, rose: bool) -> StopEvent:
+    def persist(self, to: str, frm: str, reason: str | None, rose: bool,
+                shells: int | None = None) -> StopEvent:
         self._n += 1
-        ev = StopEvent(id=f"ev-{self._n}", to=to, frm=frm, reason=reason, rose=rose)
+        ev = StopEvent(id=f"ev-{self._n}", to=to, frm=frm, reason=reason, rose=rose,
+                       shells=shells)
         self._events.append(ev)
         return ev
 
@@ -130,5 +149,6 @@ class NullEvents:
         # replace with delivered=True copies (frozen dataclass) — block-once.
         for e in mine:
             self._events[self._events.index(e)] = StopEvent(
-                id=e.id, to=e.to, frm=e.frm, reason=e.reason, rose=e.rose, delivered=True)
+                id=e.id, to=e.to, frm=e.frm, reason=e.reason, rose=e.rose,
+                delivered=True, shells=e.shells)
         return mine

@@ -29,6 +29,7 @@ from pathlib import Path
 from .events import FilesEvents
 from .files import FilesRegistry
 from .tier import route_stop
+from .triage import running_shells
 from .tmux import Tmux
 
 
@@ -53,6 +54,23 @@ def _lead_is_up(reg: FilesRegistry, panes) -> "callable":
     return up
 
 
+def _my_shells(reg: FilesRegistry, panes, me: str) -> int | None:
+    """Background shells I still own AT MY OWN STOP (aegis-q73g).
+
+    Read off MY pane, whose address comes from MY card — the same route
+    _lead_is_up uses, so the hook needs no new coupling and no new env var. Any
+    failure to look returns None, which the event records as NOT REPORTED. It
+    must never fall back to 0: a fabricated "no shells running" is precisely the
+    claim this bead exists to stop the tier from making, and it would be made at
+    the one moment the destination is deciding whether the work is done.
+    """
+    try:
+        pane = reg.get(me).pane
+        return running_shells(panes.capture(pane)) if pane else None
+    except Exception:
+        return None
+
+
 def _send(reg: FilesRegistry, events: FilesEvents, panes, me: str) -> int:
     try:
         routing = route_stop(reg, me, lead_is_up=_lead_is_up(reg, panes))
@@ -62,11 +80,14 @@ def _send(reg: FilesRegistry, events: FilesEvents, panes, me: str) -> int:
         print(f"stop_event send: {e}", file=sys.stderr)
         return 1
     reason = routing.reason.value if routing.reason else None
-    ev = events.persist(to=routing.to, frm=me, reason=reason, rose=routing.rose)
+    shells = _my_shells(reg, panes, me)
+    ev = events.persist(to=routing.to, frm=me, reason=reason, rose=routing.rose,
+                        shells=shells)
     # Silent on stdout (a non-blocking Stop hook's stdout is discarded anyway);
     # a terse stderr line is useful when a human runs it by hand.
     print(f"stop_event: {me} stopped -> persisted {ev.id} to {routing.to}"
-          + (f" (ROSE: {reason})" if routing.rose else ""), file=sys.stderr)
+          + (f" (ROSE: {reason})" if routing.rose else "")
+          + (f" [{shells} shell(s) still running]" if shells else ""), file=sys.stderr)
     return 0
 
 
@@ -75,6 +96,12 @@ def _compose_reason(events) -> str:
              f"delegate / escalate); they will NOT be redelivered:"]
     for e in events:
         tag = f" (ROSE: {e.reason})" if e.rose else (f" [{e.reason}]" if e.reason else "")
+        # The shell count is the difference between "its turn ended" and "it is
+        # finished" (aegis-q73g). Said in the destination's own words, because
+        # the destination is the one about to book the item as done.
+        if e.shells:
+            tag += (f" — STILL RUNNING {e.shells} background shell(s): its TURN "
+                    f"ended, its WORK may not have")
         lines.append(f"  - {e.frm} stopped{tag}")
     return "\n".join(lines)
 

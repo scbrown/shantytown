@@ -70,6 +70,44 @@ def mid_flight(screen: str) -> bool:
     return any(m in _tail(screen) for m in INFLIGHT_MARKERS)
 
 
+# --- background shells: work that outlives the turn (aegis-q73g) -------------
+
+# Claude Code reports background shells in TWO places, and both were read off
+# live crew panes on 2026-07-20 (not quoted from a doc — swept with capture-pane
+# across every session on this host):
+#   turn-end summary:  "✻ Crunched for 7m 56s · 1 shell still running"  (goldblum,
+#                      maldoon, weaver — three agents, four occurrences)
+#   in-turn status:    "⏵⏵ bypass permissions on · 1 shell · esc to interrupt"
+#                      (weaver, mid-flight)
+# The first is the one that matters: it is printed exactly when the turn has
+# ENDED, which is the moment the whole tier currently books as "finished".
+_SHELLS_DONE = re.compile(r"(\d+)\s+shells?\s+still running")
+_SHELLS_LIVE = re.compile(r"·\s*(\d+)\s+shells?\s*·")
+
+
+def running_shells(screen: str) -> int | None:
+    """How many background shells does this agent still own? None = NOT REPORTED.
+
+    None IS NOT ZERO, and callers must not print it as "none running". A pane
+    that is not showing the runtime's chrome (a bare shell, a scrolled view, a
+    second runtime that has no such indicator) reports nothing, and "I could not
+    see" is a different fact from "there are none". Collapsing those two is the
+    exact defect this bead names one level up — turn-end silently booked as
+    task-end — so it is not repeated inside the reader for it.
+
+    Tail-only, for the reason every predicate in this file is: sattler's own pane
+    contained the sentence "The pane shows 1 shell still running and a com…"
+    while sattler ran no background shell at all. That is an agent TALKING about
+    the state, and a whole-screen search would have read it as being in it.
+    """
+    tail = _tail(screen)
+    for pat in (_SHELLS_DONE, _SHELLS_LIVE):
+        m = pat.search(tail)
+        if m:
+            return int(m.group(1))
+    return None
+
+
 # --- the dispatcher's question: who is FREE? (aegis-o8we) --------------------
 
 # The four answers, as printed. `?` is a first-class value, not a rounding of
@@ -170,18 +208,25 @@ def triage(panes, target: str, new_work: str) -> Decision:
 
     screen = panes.capture(target)
     lines = len(screen.splitlines())
+    # Recorded on EVERY screen-based verdict, including the ones it does not
+    # change (aegis-q73g ask 1). Whether a live background shell should block a
+    # dispatch is a judgement nobody has ruled; that it must be VISIBLE is not.
+    # A NUDGE that silently declined to look at a running build is the same class
+    # of answer as a check that cannot fail — it reads clean either way, so the
+    # operator cannot tell which happened. `shells=None` says "not reported".
+    shells = running_shells(screen)
 
     # Report the marker from the TAIL — the same text the predicate judged on.
     # Searching the whole screen here would let the Decision name a marker that
     # is not the one that fired, which is an inspectable decision that lies.
     if looks_wedged(screen):
         return Decision(Action.RESTART, "wedged",
-                        {"pane": target,
+                        {"pane": target, "shells": shells,
                          "marker": next(m for m in WEDGED_MARKERS if m in _tail(screen))})
 
     if mid_flight(screen):
         return Decision(Action.REFUSE, "in-flight work",
-                        {"pane": target,
+                        {"pane": target, "shells": shells,
                          "marker": next(m for m in INFLIGHT_MARKERS if m in _tail(screen))})
 
     # context_k is the number the operator needs to audit a CLEAR. Record it
@@ -191,10 +236,10 @@ def triage(panes, target: str, new_work: str) -> Decision:
     hi = context_high(screen)
     if hi and unrelated(screen, new_work):
         return Decision(Action.CLEAR, "high context, unrelated",
-                        {"pane": target, "context_k": tokens,
+                        {"pane": target, "context_k": tokens, "shells": shells,
                          "limit_k": CONTEXT_HIGH_TOKENS_K,
                          "screen_lines": lines, "overlap": "below threshold"})
 
     return Decision(Action.NUDGE, "healthy",
-                    {"pane": target, "context_k": tokens,
+                    {"pane": target, "context_k": tokens, "shells": shells,
                      "screen_lines": lines, "context_high": hi})
