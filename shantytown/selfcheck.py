@@ -135,6 +135,39 @@ def check_self(*, run=_default_run, canonical: str = CANONICAL_SOURCE,
 
     head = _head(canonical_path, run)
 
+    # IS THE CANONICAL CHECKOUT ITSELF CLEAN? Checked BEFORE staleness, because a
+    # dirty checkout makes the staleness answer actively dangerous.
+    #
+    # `/home/braino/gt/shantytown` is a SHARED working copy — any crew member can
+    # leave uncommitted work in it, and one had five modified files there while I
+    # was writing this. So "always deploy from the canonical checkout" — the rule
+    # dearing and I converged on after the private-worktree incident — does NOT by
+    # itself stop you shipping someone's half-finished work. It only guarantees
+    # the PATH is right, not that the TREE is.
+    #
+    # Worse, without this the module's own advice becomes the hazard: a dirty tree
+    # reads as "stale install", and the fix it prints (`pipx install --force`)
+    # would deploy that WIP to every agent. A check must not recommend the
+    # incident it exists to prevent.
+    dirty = _dirty_files(canonical_path, run)
+    if dirty is None:
+        return SelfHealth(CANNOT_TELL,
+                          "could not determine whether the canonical checkout is "
+                          "clean — cannot tell whether it is safe to deploy from",
+                          recorded_source=recorded, installed_head=head,
+                          canonical_head=head)
+    if dirty:
+        shown = ", ".join(sorted(dirty)[:3])
+        more = f" (+{len(dirty) - 3} more)" if len(dirty) > 3 else ""
+        return SelfHealth(
+            BROKEN,
+            f"the canonical checkout {canonical_path} has UNCOMMITTED changes in "
+            f"{len(dirty)} file(s): {shown}{more}. It is a SHARED working copy, so "
+            f"this is probably another agent's work in progress. Do NOT deploy "
+            f"from it — `pipx install --force` would ship that WIP to every agent. "
+            f"Deploy after it is committed and pushed.",
+            recorded_source=recorded, installed_head=head, canonical_head=head)
+
     # COMPARE THE INSTALLED BYTES TO THE CHECKOUT, not one HEAD to another.
     #
     # The first version of this compared _head(recorded) with _head(canonical) —
@@ -168,6 +201,31 @@ def check_self(*, run=_default_run, canonical: str = CANONICAL_SOURCE,
 
     return SelfHealth(OK, "", recorded_source=recorded,
                       installed_head=head, canonical_head=head)
+
+
+def _dirty_files(canonical: str, run) -> set[str] | None:
+    """Tracked files under the package dir with uncommitted modifications.
+
+    Scoped to `shantytown/` deliberately: a modified README or a stray note in
+    docs/ does not change what gets installed, and a check that fires on those
+    would be noise — and noise is how a check gets ignored. Untracked files are
+    excluded for the same reason: `build/` and `*.egg-info/` are produced BY
+    installing and would otherwise make every post-deploy run red.
+
+    None = could not look (caller renders cannot-tell, never a pass).
+    """
+    rc, out = run(("git", "-C", canonical, "status", "--porcelain", "--", "shantytown"))
+    if rc != 0:
+        return None
+    dirty: set[str] = set()
+    for line in out.splitlines():
+        if len(line) < 4:
+            continue
+        status, name = line[:2], line[3:].strip()
+        if status.startswith("??"):
+            continue
+        dirty.add(name.split("/")[-1])
+    return dirty
 
 
 def _installed_package_dir(venvs_root: str | None = None) -> Path | None:

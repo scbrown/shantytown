@@ -41,7 +41,8 @@ def _unreadable(_canonical):
 
 
 def _run_for(source: str | None, heads: dict | None = None, *,
-             pipx_rc: int = 0, pipx_out: str | None = None):
+             pipx_rc: int = 0, pipx_out: str | None = None,
+             dirty_out: str | None = None):
     """A fake `run` covering both commands check_self issues."""
     heads = heads or {}
 
@@ -52,6 +53,8 @@ def _run_for(source: str | None, heads: dict | None = None, *,
             return pipx_rc, _meta(source) if source else "{}"
         if argv[0] == "git":
             path = argv[2]
+            if "status" in argv:
+                return (0, dirty_out) if dirty_out is not None else (0, "")
             if path in heads:
                 return 0, heads[path] + "\n"
             return 1, "fatal: not a git repository"
@@ -221,3 +224,51 @@ def test_positive_control_exit_code_is_not_constant():
     got = {cli._doctor_exit(doc, [], s)
            for s in (None, _mk(sc.OK), _mk(sc.BROKEN), _mk(sc.CANNOT_TELL))}
     assert got == {0, 1, 2}
+
+
+# --- the canonical checkout is SHARED, so "canonical" is not "safe" ------
+
+def test_a_DIRTY_canonical_checkout_BLOCKS_the_deploy():
+    """`/home/braino/gt/shantytown` is a SHARED working copy — any crew member can
+    leave uncommitted work in it, and one had five modified files there while this
+    was being written.
+
+    So "always deploy from the canonical checkout", the rule adopted after the
+    private-worktree incident, guarantees the PATH is right and says nothing about
+    the TREE. Without this branch the module's own advice becomes the hazard: a
+    dirty tree reads as a stale install and the printed fix (`pipx install
+    --force`) would ship that WIP to every agent. A check must not recommend the
+    incident it exists to prevent.
+    """
+    h = sc.check_self(
+        run=_run_for(CANON, {CANON: "c" * 40},
+                     dirty_out=" M shantytown/cli.py\n M shantytown/tend.py\n"),
+        canonical=CANON, stale_files=_fresh)
+    assert h.verdict == sc.BROKEN
+    assert "UNCOMMITTED" in h.note
+    assert "cli.py" in h.note and "tend.py" in h.note
+    assert "Do NOT deploy" in h.note
+    # and it must NOT print the reinstall command as the remedy here
+    assert "pipx install --force" not in h.note.split("Do NOT deploy")[0]
+
+
+def test_untracked_build_artifacts_do_not_count_as_dirty():
+    """`build/` and `*.egg-info/` are produced BY installing. Counting them would
+    make every run red immediately after a successful deploy — noise, and noise is
+    how a check gets switched off."""
+    h = sc.check_self(
+        run=_run_for(CANON, {CANON: "c" * 40},
+                     dirty_out="?? build/\n?? shantytown.egg-info/\n"),
+        canonical=CANON, stale_files=_fresh)
+    assert h.verdict == sc.OK
+
+
+def test_an_unreadable_status_is_CANNOT_TELL():
+    def run(argv):
+        if argv[0] == "pipx":
+            return 0, _meta(CANON)
+        if "status" in argv:
+            return 1, "fatal: not a git repository"
+        return 0, "c" * 40 + "\n"
+    h = sc.check_self(run=run, canonical=CANON, stale_files=_fresh)
+    assert h.verdict == sc.CANNOT_TELL
