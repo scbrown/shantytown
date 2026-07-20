@@ -1,8 +1,8 @@
-"""st — the CLI. Fourteen commands, and the count is load-bearing: each earns its slot.
+"""st — the CLI. Fifteen commands, and the count is load-bearing: each earns its slot.
 
     anchor [--short|--events|--harness] · go · inbox [--count] · task
     · crew [--count] · roles [--check] · role set · new · stop · log · context
-    · doctor [--install] · project · tend [--install|--status]
+    · doctor [--install] · project · tend [--install|--status] · attach [-r]
 
 Five of those flags are MACHINE-READABLE modes, added for an external status bar
 (anchor --short/--events/--harness, crew --count, inbox --count). They are flags
@@ -23,7 +23,7 @@ already made itself the centre of the world.
 
 Gas Town ships ~110. This is not a smaller version of that list; it is the short
 set we measurably use, and the discipline is the point (docs/cli.md). The surface
-grew past the original ten by four, each on a specific ask — not drift:
+grew past the original ten by five, each on a specific ask — not drift:
   · context — the bobbin Context protocol
   · doctor  — out-of-box tool detect/install, Stiwi's direct ask
   · project — materialize the crew cards from the graph
@@ -32,6 +32,10 @@ grew past the original ten by four, each on a specific ask — not drift:
               is the only surface that can create a session and launch an agent.
               A consequence behind a flag on a read is a consequence somebody
               triggers by running the safe-looking thing.
+  · attach  — attach to a crew member by name; st resolves the socket + pane so
+              the operator never types `tmux -L <sock> attach -t <pane>`. Goes
+              THROUGH shanty (themed) when present, bare tmux otherwise — this is
+              where "use shanty, not raw tmux" becomes the default view.
 The count is PINNED by a test (tests/test_command_count.py): the next command
 either updates this number or fails CI. This docstring used to say "ten" while the
 code had eleven (context landed unannounced) — a count nobody enforces is a
@@ -347,6 +351,13 @@ def build_parser() -> argparse.ArgumentParser:
     td.add_argument("-n", "--dry-run", action="store_true",
                     help="say what would be respawned; touch NOTHING")
 
+    at = sub.add_parser("attach", help="attach to a crew member by name "
+                                       "(socket + pane resolved for you)")
+    at.add_argument("agent", nargs="?",
+                    help="whose pane; defaults to $SHANTY_AGENT, or lists choices")
+    at.add_argument("-r", "--read-only", action="store_true",
+                    help="observe only — no keystroke can land in their work")
+
     return ap
 
 
@@ -381,6 +392,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_project(a)
     if a.cmd == "tend":
         return _cmd_tend(a)
+    if a.cmd == "attach":
+        return _cmd_attach(a)
     return _not_yet(a.cmd)
 
 
@@ -1822,6 +1835,92 @@ def _systemctl_user_active(unit: str) -> bool:
 def _run_cmd(argv) -> None:
     import subprocess
     subprocess.run(argv, capture_output=True, text=True, timeout=60)
+
+
+def _attach_argv(pane: str, socket, read_only: bool, has_shanty: bool):
+    """Build (argv, env-overlay) for the attach — the pure, testable core.
+
+    THROUGH SHANTY when it is on PATH (the themed bar + segments Stiwi wants the
+    attach to be), falling back to bare tmux only when it is absent — the same
+    self-hiding discipline the segments already use. Either way the operator never
+    types the socket or the `shanty-`/`aegis-crew-` pane prefix: st resolved both.
+
+    The socket is passed to shanty via SHANTY_TMUX_SOCKET (shanty honours it as of
+    the companion change), so shanty views the FLEET's real sessions on their
+    existing socket — no agent is migrated onto shanty's own server (aegis-f5z4's
+    ruling holds; shanty is the VIEW). tmux takes it as `-L`.
+    """
+    if has_shanty:
+        env = {"SHANTY_TMUX_SOCKET": socket} if socket else {}
+        argv = ["shanty", "attach"]
+        if read_only:
+            argv.append("-r")
+        argv.append(pane)
+        return argv, env
+    argv = ["tmux"]
+    if socket:
+        argv += ["-L", socket]
+    argv += ["attach-session", "-t", pane]
+    if read_only:
+        argv.append("-r")
+    return argv, {}
+
+
+def _exec_attach(argv, env_overlay) -> int:
+    """Hand the terminal to the attach. os.execvpe REPLACES this process, so on
+    success it never returns; only a failed exec (the binary vanished between the
+    PATH check and here) falls through to a could-not-tell."""
+    import os as _os
+    try:
+        _os.execvpe(argv[0], argv, {**_os.environ, **env_overlay})
+    except OSError as e:
+        print(f"  could not exec {argv[0]}: {e}", file=sys.stderr)
+        return CANNOT_TELL
+    return OK  # unreachable on success; keeps the type checker happy
+
+
+def _cmd_attach(a, *, execer=_exec_attach, which=None) -> int:
+    """attach [agent] [-r] — attach to a crew member by name.
+
+    st already knows the socket (declared_socket) and the pane (the registry), so
+    the operator never types `tmux -L gt-ae5f35 attach -t shanty-weaver`. Refuses
+    cleanly on an unknown or down agent — never a raw tmux error — the same
+    discipline as go/stop.
+    """
+    import shutil
+    which = which or shutil.which
+    reg = _registry(a)
+    panes = _panes(a)
+    socket = declared_socket(getattr(a, "root", None) or ".")
+
+    name = a.agent or os.environ.get("SHANTY_AGENT")
+    if not name:
+        # No agent named and no identity to fall back to — LIST, don't error.
+        try:
+            agents = reg.all()
+        except Exception as e:
+            print(f"  could not tell: {e}", file=sys.stderr)
+            return CANNOT_TELL
+        print("  attach to which? name one:")
+        for ag in sorted(agents, key=lambda x: x.name):
+            print(f"    {ag.name}")
+        return OK
+
+    try:
+        card = reg.get(name)
+    except LookupError as e:
+        print(f"  refused: {e}", file=sys.stderr)
+        return REFUSED
+    if not card.pane or not panes.exists(card.pane):
+        where = f"socket {socket!r}" if socket else "the default tmux server"
+        print(f"  refused: {name} is down — no live pane "
+              f"{card.pane or '(none on card)'} on {where}. `st crew` to see who "
+              f"is up.", file=sys.stderr)
+        return REFUSED
+
+    argv, env = _attach_argv(card.pane, socket, a.read_only,
+                             which("shanty") is not None)
+    return execer(argv, env)
 
 
 def _cmd_tend(a) -> int:

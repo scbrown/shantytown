@@ -55,7 +55,7 @@ def test_docstring_and_code_agree_on_the_command_set():
     )
 
 
-def test_the_surface_is_fourteen():
+def test_the_surface_is_fifteen():
     """A bare number check too, so 'the docs claim N' is itself pinned.
 
     Grew to 13 with `project` — materialize the crew cards from the graph (the
@@ -70,8 +70,19 @@ def test_the_surface_is_fourteen():
     triggers by running the safe-looking thing. The verb gets its own slot so the
     mutation shows up in shell history, in `--help`, and here.
 
+    Grew to 15 with `attach` — attach to a crew member by name. A tool that
+    manages the crew but cannot attach to one is missing its most basic verb, and
+    the manual path (`tmux -L gt-ae5f35 attach -t shanty-weaver`) leaks the two
+    internal details — the socket name and the pane prefix — that st already hides
+    in crew/go/tend. It is not a flag on `crew` for the same reason `tend` is not:
+    `crew` is a read, and `attach` hands the terminal to a live agent's pane. It
+    earns the slot the way go/stop do — a core, frequent operator action with its
+    own refusal discipline (unknown or down agent refused by name), and it is
+    where "use shanty, not bare tmux" becomes the default: attach goes THROUGH
+    shanty (themed) when present, bare tmux only when absent.
+
     Each command still earns its slot."""
-    assert len(_actual_subcommands()) == 14, (
+    assert len(_actual_subcommands()) == 15, (
         "the command count changed. If that's intended, update the number here and "
         "the cli.py docstring together — and say why the surface grew in docs/cli.md."
     )
