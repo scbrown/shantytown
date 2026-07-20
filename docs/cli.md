@@ -109,6 +109,43 @@ $ st go aegis-9h2 ellie --dry-run
 during this design and hooked an agent with work nobody meant to assign. *Make the question askable
 without the consequence.*
 
+### `--note` / `--note-file` — a caveat that rides WITH the work
+
+```
+$ st go aegis-9h2 ellie --note "a design doc is landing; pull YOUR OWN workspace, do NOT blind-pull"
+
+  aegis-9h2 -> ellie          in progress
+  sent to pane %5
+  note: a design doc is landing; pull YOUR OWN workspace, do NOT blind-pull
+```
+
+Dispatch used to be item-and-agent and nothing else, so a qualifier had nowhere to go. Both
+workarounds were wrong in a specific way:
+
+* **`st mail` after the go** — `send-keys` into a pane that has *just started work*. That is exactly
+  the mid-flight garble `go`'s triage refuses; sending it by hand routes **around** the safety.
+* **a bead comment** — durable, but out-of-band and permanent. The note was about *this dispatch at
+  this moment*; it lands on the **item**, for every future reader. Measured (sattler, 2026-07-19):
+  four beads left carrying a pull warning that was stale inside a week.
+
+`--note` is composed into the **same payload**, so it passes the same triage gate and the same
+verify. The work and its caveat are delivered together or refused together — and that atomicity is
+the point: **a caveat that arrives separately from the work it qualifies can arrive after the worker
+has already acted.**
+
+Two properties worth knowing:
+
+* **The note is flattened to one line.** The transport is `send-keys -l <text>` plus a separate
+  Enter, so a literal newline in the payload is a *submit*. An unflattened three-line note would
+  dispatch line one and type the rest into a pane already working. `--dry-run` previews the note
+  **as it will be sent**, and a successful dispatch echoes it back.
+* **`--note-file <path>` (or `-` for stdin) for anything long or quoted.** Prose in a shell string
+  gets `` `...` `` and `$(...)` expanded before `st` ever sees it — the note either runs or is
+  silently deleted while the command reports success. A file is inert.
+
+An unreadable `--note-file` is a **refusal** (exit 1, nothing sent, nothing written), never a
+note-less dispatch: sending the work without its caveat is the failure this flag exists to close.
+
 ### The performance budget is a test, not an aspiration
 
 `st go` must be **under one second**, and the test asserts the *mechanism*, not the stopwatch:

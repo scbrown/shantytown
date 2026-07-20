@@ -27,6 +27,24 @@ _VERIFY_ATTEMPTS = 5
 _VERIFY_DELAY = 0.3
 
 
+def flatten_note(note: str) -> str:
+    """Collapse a note to ONE line, because the transport submits on newline.
+
+    Panes.send is `send-keys -l <text>` followed by a separate Enter. A literal
+    newline INSIDE the text is not decoration — the runtime treats it as a
+    submit, so a three-line note dispatches the first line and leaves the rest
+    typed into a pane that has already started work. That is precisely the
+    mid-flight garble triage exists to prevent, arriving through the gate rather
+    than around it (aegis-8013).
+
+    So the note is flattened here, once, on the way in: every run of whitespace
+    (newlines included) becomes a single space. A caller who wants structure gets
+    ' — ' separators, not line breaks. Empty/whitespace-only notes collapse to ""
+    and are treated as no note at all rather than a dangling marker.
+    """
+    return " ".join(note.split())
+
+
 class TriageRefused(Exception):
     """`st go` declined to send because the target pane is not ready to receive.
 
@@ -64,15 +82,22 @@ class Plan:
     pane: str
     updates: dict = field(default_factory=dict)
     text: str = ""
+    note: str = ""
 
     def render(self) -> str:
-        return "\n".join([
+        lines = [
             f"  would: tracker.update({self.item_id}, "
             + ", ".join(f"{k}={v}" for k, v in self.updates.items())
             + ")",
             f"  would: send-keys -> pane {self.pane}",
-            "  would NOT: create a convoy, spawn a session, wait for ack",
-        ])
+        ]
+        if self.note:
+            # Show the note as it will actually be sent (flattened), not as it
+            # was typed — a --dry-run that hides the transformation is not a
+            # preview of the dispatch.
+            lines.append(f"  would: carry note -> {self.note!r}")
+        lines.append("  would NOT: create a convoy, spawn a session, wait for ack")
+        return "\n".join(lines)
 
 
 class Dispatcher:
@@ -81,11 +106,17 @@ class Dispatcher:
         self.tracker = tracker
         self.panes = panes
 
-    def plan(self, item_id: str, agent_name: str) -> Plan:
+    def plan(self, item_id: str, agent_name: str, note: str | None = None) -> Plan:
         """Resolve only. No writes. This is what --dry-run shows.
 
         Every refusal here is a precondition failure -> exit 1, and it happens
         BEFORE anything is written. Refusing loudly beats a half-dispatch.
+
+        `note` is a caveat that must ride WITH the work (aegis-8013): it is
+        composed into the same payload, so it goes through the same triage gate
+        and the same verify. The dispatch and its qualifier are delivered
+        together or refused together — a caveat that arrives separately can
+        arrive after the worker has already acted on the uncaveated work.
         """
         agent = self.registry.get(agent_name)          # 1 registry read
         if agent.pane is None:
@@ -93,15 +124,23 @@ class Dispatcher:
         if not self.panes.exists(agent.pane):
             raise LookupError(f"pane {agent.pane} for {agent_name} does not exist")
         item = self.tracker.get(item_id)               # 1 tracker read
+        text = f"Work is on your hook: {item_id} — {item.title}"
+        flat = flatten_note(note) if note else ""
+        if flat:
+            # The note goes AFTER the id and title on purpose: verify() looks for
+            # the item id in the pane, and a long note must not push it out of
+            # what we can read back.
+            text += f" — NOTE: {flat}"
         return Plan(
             item_id=item_id,
             agent=agent_name,
             pane=agent.pane,
             updates={"status": "in_progress", "assignee": agent_name},
-            text=f"Work is on your hook: {item_id} — {item.title}",
+            text=text,
+            note=flat,
         )
 
-    def triage(self, item_id: str, agent_name: str) -> Decision:
+    def triage(self, item_id: str, agent_name: str, note: str | None = None) -> Decision:
         """What st go WOULD do to that pane, without touching it. Read-only.
 
         Closes shantytown #1: st go sent into mid-flight panes. It went straight
@@ -110,11 +149,12 @@ class Dispatcher:
         NUDGE proceeds. This method exposes that judgement for --dry-run and for
         `st go` to print before it refuses.
         """
-        p = self.plan(item_id, agent_name)       # resolve + precondition-check
+        p = self.plan(item_id, agent_name, note)  # resolve + precondition-check
         return triage(self.panes, p.pane, p.text)
 
-    def go(self, item_id: str, agent_name: str, dry_run: bool = False) -> Plan:
-        p = self.plan(item_id, agent_name)
+    def go(self, item_id: str, agent_name: str, dry_run: bool = False,
+           note: str | None = None) -> Plan:
+        p = self.plan(item_id, agent_name, note)
         if dry_run:
             return p
         # #1: consult triage BEFORE any write. A REFUSE/CLEAR/RESTART here means

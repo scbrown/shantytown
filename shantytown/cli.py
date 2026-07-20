@@ -109,6 +109,18 @@ def build_parser() -> argparse.ArgumentParser:
     go = sub.add_parser("go", help="dispatch an item to an agent")
     go.add_argument("item")
     go.add_argument("agent")
+    note = go.add_mutually_exclusive_group()
+    note.add_argument("--note", default=None,
+                      help="a caveat delivered IN the same payload as the "
+                           "dispatch — it rides the triage gate with the work, "
+                           "so it cannot arrive after the worker has acted. "
+                           "Flattened to one line (the transport submits on "
+                           "newline). aegis-8013")
+    note.add_argument("--note-file", type=Path, default=None,
+                      help="read the note from a file (or - for stdin). Use this "
+                           "for anything long or containing quotes/backticks — "
+                           "shell expansion in a --note string is the aegis-0214 "
+                           "footgun.")
     go.add_argument("-n", "--dry-run", action="store_true")
 
     sub.add_parser("crew", help="who exists, what state, what role")
@@ -656,12 +668,35 @@ def _cmd_prime(a) -> int:
     return OK
 
 
+def _read_note(a) -> str | None:
+    """--note / --note-file -> the note text, or None. Raises OSError on a bad file.
+
+    --note-file exists because a note is prose, and prose typed into a shell as
+    `--note "..."` gets `$(...)` and backticks EXPANDED before st ever sees it —
+    the aegis-0214 footgun, where the message either runs or is silently deleted
+    while the tool reports success. A file (or stdin) is inert.
+    """
+    if getattr(a, "note_file", None) is not None:
+        if str(a.note_file) == "-":
+            return sys.stdin.read()
+        return a.note_file.read_text()
+    return getattr(a, "note", None)
+
+
 def _cmd_go(a) -> int:
     d = _wire(a)
+    try:
+        note = _read_note(a)
+    except OSError as e:
+        # A note that cannot be read must NOT degrade to a note-less dispatch:
+        # the caveat is the reason the caller used the flag, and sending the work
+        # without it is the exact failure aegis-8013 is about.
+        print(f"  refused: could not read --note-file: {e}", file=sys.stderr)
+        return REFUSED
     if a.dry_run:
         try:
-            decision = d.triage(a.item, a.agent)
-            p = d.go(a.item, a.agent, dry_run=True)
+            decision = d.triage(a.item, a.agent, note)
+            p = d.go(a.item, a.agent, dry_run=True, note=note)
         except LookupError as e:
             print(f"  refused: {e}", file=sys.stderr)
             return REFUSED
@@ -669,7 +704,7 @@ def _cmd_go(a) -> int:
         print("  0 writes. 1 tracker call, 1 send-keys.")
         return OK
     try:
-        p = d.go(a.item, a.agent)
+        p = d.go(a.item, a.agent, note=note)
     except TriageRefused as e:
         # #1: pane not ready (in-flight/wedged/high-context). No write, no send.
         print(f"  refused: pane not ready — {e.decision.render()}", file=sys.stderr)
@@ -698,6 +733,10 @@ def _cmd_go(a) -> int:
         return REFUSED
     print(f"  {p.item_id} -> {p.agent}          in progress")
     print(f"  sent to pane {p.pane}")
+    if p.note:
+        # Echo the note AS SENT. If flattening changed it, the sender finds out
+        # here rather than from a confused worker.
+        print(f"  note: {p.note}")
     return OK
 
 
