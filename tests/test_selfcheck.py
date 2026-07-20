@@ -27,6 +27,19 @@ def _meta(source: str) -> str:
         "main_package": {"package_or_url": source}}}}})
 
 
+def _fresh(_canonical):
+    """Default fake: installed bytes match the checkout."""
+    return set()
+
+
+def _stale(*names):
+    return lambda _canonical: set(names)
+
+
+def _unreadable(_canonical):
+    return None
+
+
 def _run_for(source: str | None, heads: dict | None = None, *,
              pipx_rc: int = 0, pipx_out: str | None = None):
     """A fake `run` covering both commands check_self issues."""
@@ -55,7 +68,7 @@ def test_a_private_worktree_source_is_BROKEN():
     faithfully rebuilt THAT — not the shared checkout somebody had just pulled.
 
     dearing's requirement 1: this is an ERROR, not a note."""
-    h = sc.check_self(run=_run_for(PRIVATE), canonical=CANON)
+    h = sc.check_self(run=_run_for(PRIVATE), canonical=CANON, stale_files=_fresh)
     assert h.verdict == sc.BROKEN
     assert PRIVATE in h.note
     assert CANON in h.note                      # the note must carry the FIX
@@ -65,55 +78,87 @@ def test_a_private_worktree_source_is_BROKEN():
 def test_the_broken_note_says_why_it_matters_not_just_that_it_differs():
     """A path mismatch reads as pedantry unless the consequence is stated: the
     whole fleet is running whatever is in that directory, uncommitted included."""
-    h = sc.check_self(run=_run_for(PRIVATE), canonical=CANON)
+    h = sc.check_self(run=_run_for(PRIVATE), canonical=CANON, stale_files=_fresh)
     assert "fleet" in h.note
     assert "uncommitted" in h.note
 
 
-def test_head_divergence_is_BROKEN_named_by_sha():
-    """Right path, wrong commit — the source moved and nobody reinstalled."""
-    calls = {"n": 0}
+def test_a_STALE_INSTALL_is_BROKEN():
+    """THE EVERYDAY FAILURE, and the one an earlier version of this module could
+    not detect. `git pull` does NOT deploy `st` — it is installed non-editable —
+    so the checkout moves forward and the running code silently does not.
 
-    def run(argv):
-        if argv[0] == "pipx":
-            return 0, _meta(CANON)
-        calls["n"] += 1
-        # first git call = the installed source, second = canonical
-        return (0, ("a" * 40 if calls["n"] == 1 else "b" * 40) + "\n")
+    The first implementation compared _head(recorded) with _head(canonical). Once
+    the path check passes those are THE SAME DIRECTORY, so they were always equal
+    and that branch was UNREACHABLE in production; its test passed only because
+    the fake returned two different values for one path. Caught by running the
+    real thing and noticing it could not fail.
 
-    h = sc.check_self(run=run, canonical=CANON)
+    Measured when the replacement first ran for real: the deployed `st` differed
+    from the checkout in 5 files while every path-and-HEAD check said green.
+    """
+    h = sc.check_self(run=_run_for(CANON, {CANON: "c" * 40}), canonical=CANON,
+                      stale_files=_stale("cli.py", "runtime.py"))
     assert h.verdict == sc.BROKEN
-    assert "aaaaaaaa" in h.note and "bbbbbbbb" in h.note
+    assert "cli.py" in h.note and "runtime.py" in h.note
+    assert "pipx install --force" in h.note          # carries the fix
+    assert "does NOT deploy" in h.note               # and the reason
+
+
+def test_the_stale_note_does_not_dump_every_filename():
+    """A note that lists 40 files is a wall nobody reads. Three, then a count."""
+    many = _stale(*[f"m{i}.py" for i in range(9)])
+    h = sc.check_self(run=_run_for(CANON, {CANON: "c" * 40}), canonical=CANON,
+                      stale_files=many)
+    assert "+6 more" in h.note
+    assert "9 file(s)" in h.note
+
+
+def test_an_unreadable_comparison_is_CANNOT_TELL_not_ok():
+    """Requirement 2 at the new seam: if we cannot compare the installed files,
+    that is not health."""
+    h = sc.check_self(run=_run_for(CANON, {CANON: "c" * 40}), canonical=CANON,
+                      stale_files=_unreadable)
+    assert h.verdict == sc.CANNOT_TELL
 
 
 # --- requirement 2: failing to LOOK is never a pass ----------------------
 
 def test_unreadable_pipx_is_CANNOT_TELL_not_ok():
-    h = sc.check_self(run=_run_for(None, pipx_rc=1), canonical=CANON)
+    h = sc.check_self(run=_run_for(None, pipx_rc=1), canonical=CANON, stale_files=_fresh)
     assert h.verdict == sc.CANNOT_TELL
 
 
 def test_unparseable_pipx_json_is_CANNOT_TELL():
-    h = sc.check_self(run=_run_for(None, pipx_out="not json at all"), canonical=CANON)
+    h = sc.check_self(run=_run_for(None, pipx_out="not json at all"), canonical=CANON, stale_files=_fresh)
     assert h.verdict == sc.CANNOT_TELL
 
 
 def test_no_recorded_source_is_CANNOT_TELL():
-    h = sc.check_self(run=_run_for(None), canonical=CANON)
+    h = sc.check_self(run=_run_for(None), canonical=CANON, stale_files=_fresh)
     assert h.verdict == sc.CANNOT_TELL
     assert "cannot tell" in h.note.lower() or "no recorded source" in h.note
 
 
-def test_unreadable_git_head_is_CANNOT_TELL_not_ok():
-    """Path is right, but we could not read HEAD. That is not health."""
-    h = sc.check_self(run=_run_for(CANON, heads={}), canonical=CANON)
-    assert h.verdict == sc.CANNOT_TELL
+def test_an_unreadable_HEAD_alone_does_not_condemn_a_matching_install():
+    """The sha is DISPLAY. The claim is "the installed files equal the checkout",
+    and that is answered by the byte comparison, not by git.
+
+    Deliberately not cannot-tell: an install whose files provably match should not
+    be reported as suspect because `git rev-parse` failed. Over-firing is how a
+    check gets switched off — the note just shows `?` for the sha.
+    """
+    h = sc.check_self(run=_run_for(CANON, heads={}), canonical=CANON,
+                      stale_files=_fresh)
+    assert h.verdict == sc.OK
+    assert h.installed_head is None
+    assert "?" in sc.render(h)          # renders the gap rather than inventing one
 
 
 # --- the ok path, and the controls that make it mean something -----------
 
 def test_canonical_source_at_matching_head_is_OK():
-    h = sc.check_self(run=_run_for(CANON, {CANON: "c" * 40}), canonical=CANON)
+    h = sc.check_self(run=_run_for(CANON, {CANON: "c" * 40}), canonical=CANON, stale_files=_fresh)
     assert h.verdict == sc.OK
     assert h.recorded_source == CANON
 
@@ -121,19 +166,19 @@ def test_canonical_source_at_matching_head_is_OK():
 def test_positive_control_the_check_is_not_a_constant():
     """Three inputs, three distinct verdicts. A checker that returns one word is
     a column header — which is exactly what `hooks: ok` was before today."""
-    ok = sc.check_self(run=_run_for(CANON, {CANON: "c" * 40}), canonical=CANON)
-    broken = sc.check_self(run=_run_for(PRIVATE), canonical=CANON)
-    unknown = sc.check_self(run=_run_for(None, pipx_rc=1), canonical=CANON)
+    ok = sc.check_self(run=_run_for(CANON, {CANON: "c" * 40}), canonical=CANON, stale_files=_fresh)
+    broken = sc.check_self(run=_run_for(PRIVATE), canonical=CANON, stale_files=_fresh)
+    unknown = sc.check_self(run=_run_for(None, pipx_rc=1), canonical=CANON, stale_files=_fresh)
     assert {ok.verdict, broken.verdict, unknown.verdict} == {
         sc.OK, sc.BROKEN, sc.CANNOT_TELL}
 
 
 def test_render_marks_a_failure_visibly():
-    broken = sc.check_self(run=_run_for(PRIVATE), canonical=CANON)
+    broken = sc.check_self(run=_run_for(PRIVATE), canonical=CANON, stale_files=_fresh)
     assert sc.render(broken).lstrip().startswith("✗")
-    unknown = sc.check_self(run=_run_for(None, pipx_rc=1), canonical=CANON)
+    unknown = sc.check_self(run=_run_for(None, pipx_rc=1), canonical=CANON, stale_files=_fresh)
     assert sc.render(unknown).lstrip().startswith("?")
-    ok = sc.check_self(run=_run_for(CANON, {CANON: "c" * 40}), canonical=CANON)
+    ok = sc.check_self(run=_run_for(CANON, {CANON: "c" * 40}), canonical=CANON, stale_files=_fresh)
     assert sc.render(ok).lstrip().startswith("•")
 
 
@@ -141,7 +186,7 @@ def test_a_trailing_slash_is_not_a_divergence():
     """Path comparison must be normalised — `/x/` and `/x` are the same install,
     and a checker that cried wolf on a slash would be turned off within a day."""
     h = sc.check_self(run=_run_for(CANON + "/", {CANON: "c" * 40, CANON + "/": "c" * 40}),
-                      canonical=CANON)
+                      canonical=CANON, stale_files=_fresh)
     assert h.verdict == sc.OK
 
 

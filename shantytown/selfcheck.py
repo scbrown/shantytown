@@ -31,9 +31,15 @@ anywhere. Hence this module, and dearing's two requirements, which are the contr
      read its own metadata, that is not a pass.
 
 Deliberately NOT a version comparison: the version string cannot move, so a check
-built on it could never fail. This compares the two things that DO move — the
-recorded source PATH, and the git HEAD of that source against the canonical
-checkout's HEAD.
+built on it could never fail. Two things are compared, and the second replaced a
+first attempt that was itself dead code (see check_self):
+
+  1. the pipx-RECORDED SOURCE PATH vs the canonical checkout, and
+  2. the INSTALLED BYTES vs that checkout's files.
+
+(2) is the one that catches the everyday failure: `git pull` does not deploy `st`,
+because it is installed non-editable, so the checkout moves forward and the running
+code silently does not.
 """
 from __future__ import annotations
 
@@ -93,7 +99,8 @@ def _default_run(argv: tuple[str, ...]) -> tuple[int, str]:
     return p.returncode, (p.stdout or "") + (p.stderr or "")
 
 
-def check_self(*, run=_default_run, canonical: str = CANONICAL_SOURCE) -> SelfHealth:
+def check_self(*, run=_default_run, canonical: str = CANONICAL_SOURCE,
+               stale_files=None) -> SelfHealth:
     """Is the `st` you are running built from the canonical checkout, at its HEAD?
 
     Every failure to LOOK is CANNOT_TELL, never OK — requirement 2. The one thing
@@ -126,40 +133,108 @@ def check_self(*, run=_default_run, canonical: str = CANONICAL_SOURCE) -> SelfHe
             f"Fix: pipx install --force {canonical_path}",
             recorded_source=recorded)
 
-    installed_head = _head(recorded, run)
-    canonical_head = _head(canonical_path, run)
-    if installed_head is None or canonical_head is None:
-        return SelfHealth(CANNOT_TELL,
-                          "could not read git HEAD for the source checkout — "
-                          "cannot tell whether this `st` is current",
-                          recorded_source=recorded,
-                          installed_head=installed_head,
-                          canonical_head=canonical_head)
+    head = _head(canonical_path, run)
 
-    # NOTE the honest boundary, stated so nobody over-reads a green row: this
-    # compares the checkout's HEAD to itself once the path matches, which catches
-    # a source pointing at a different tree. It does NOT prove the installed
-    # BYTES match that HEAD — pipx copied them at install time, and the checkout
-    # can be pulled forward afterwards without reinstalling. Detecting that needs
-    # a build stamp; until then this is a floor, not a guarantee, and calling it
-    # a guarantee would be the same over-claim this module exists to stop.
-    if installed_head != canonical_head:
+    # COMPARE THE INSTALLED BYTES TO THE CHECKOUT, not one HEAD to another.
+    #
+    # The first version of this compared _head(recorded) with _head(canonical) —
+    # and once the path check above has passed, those are THE SAME DIRECTORY, so
+    # they were always equal and the mismatch branch was UNREACHABLE in
+    # production. It passed its test only because the fake returned two different
+    # values for one path. A branch that cannot fire is exactly the defect this
+    # module exists to catch, shipped inside the module that catches it.
+    #
+    # The failure that actually happens is: someone pulls the checkout forward
+    # and does not reinstall. The recorded path is still canonical and HEAD is
+    # whatever you just pulled, so every path-and-HEAD check says green while the
+    # RUNNING code is old. Only the installed files can answer it.
+    stale = (stale_files or _stale_files)(canonical_path)
+    if stale is None:
+        return SelfHealth(CANNOT_TELL,
+                          "could not compare the installed files against the "
+                          "checkout — cannot tell whether this `st` is current",
+                          recorded_source=recorded, installed_head=head,
+                          canonical_head=head)
+    if stale:
+        shown = ", ".join(sorted(stale)[:3])
+        more = f" (+{len(stale) - 3} more)" if len(stale) > 3 else ""
         return SelfHealth(
             BROKEN,
-            f"the source `st` was installed from is at {installed_head[:8]} but "
-            f"the canonical checkout is at {canonical_head[:8]}",
-            recorded_source=recorded,
-            installed_head=installed_head,
-            canonical_head=canonical_head)
+            f"the INSTALLED `st` differs from the checkout in {len(stale)} "
+            f"file(s): {shown}{more}. The checkout is at {(head or '?')[:8]}; the "
+            f"running code is older. A `git pull` does NOT deploy `st` — it is "
+            f"installed non-editable. Fix: pipx install --force {canonical_path}",
+            recorded_source=recorded, installed_head=head, canonical_head=head)
 
     return SelfHealth(OK, "", recorded_source=recorded,
-                      installed_head=installed_head,
-                      canonical_head=canonical_head)
+                      installed_head=head, canonical_head=head)
+
+
+def _installed_package_dir(venvs_root: str | None = None) -> Path | None:
+    """The PIPX-INSTALLED package dir — deliberately NOT the running module.
+
+    The first version asked the running module where it lived, which made the
+    answer depend on HOW doctor was invoked: run it from a worktree during
+    development and it compared that worktree against the canonical checkout and
+    reported the fleet's install BROKEN, which is both wrong and the kind of
+    false alarm that gets a check switched off in a day.
+
+    doctor's question is about the DEPLOYED `st`, so resolve pipx's own layout
+    and audit that, whatever is currently executing. Unresolvable = None =
+    cannot-tell, never a pass.
+    """
+    root = Path(venvs_root) if venvs_root else \
+        Path.home() / ".local/share/pipx/venvs"
+    try:
+        hits = sorted(root.glob("shantytown/lib/python*/site-packages/shantytown"))
+    except OSError:
+        return None
+    for h in hits:
+        if h.is_dir():
+            return h
+    return None
+
+
+def _stale_files(canonical: str, venvs_root: str | None = None) -> set[str] | None:
+    """Names of .py files whose INSTALLED bytes differ from the checkout's.
+
+    Empty set = the running code matches the source tree. None = could not look
+    (and per requirement 2 the caller renders that as cannot-tell, never a pass).
+
+    Compares only the package's own .py files: that is what pipx copied and what
+    actually executes. A file present in the checkout but missing from the
+    install counts as stale — that is a module added since the last deploy.
+    """
+    installed = _installed_package_dir(venvs_root)
+    src = Path(canonical) / "shantytown"
+    if installed is None or not src.is_dir():
+        return None
+    # If we are RUNNING from the checkout itself (a dev invocation, or an
+    # editable install), there is nothing to compare and nothing to be stale.
+    try:
+        if installed.samefile(src):
+            return set()
+    except OSError:
+        return None
+    stale: set[str] = set()
+    try:
+        for f in src.glob("*.py"):
+            other = installed / f.name
+            if not other.is_file() or other.read_bytes() != f.read_bytes():
+                stale.add(f.name)
+    except OSError:
+        return None
+    return stale
 
 
 def render(h: SelfHealth) -> str:
     """One row, in doctor's voice."""
     if h.verdict == OK:
-        return f"  • st       installed from {h.recorded_source} @ {h.installed_head[:8]}"
+        # "matches" not "installed @": the sha is the CHECKOUT's HEAD, and the
+        # claim being made is that the installed files equal that tree — not
+        # that the install recorded a commit, which nothing here can know.
+        head = (h.installed_head or "?")[:8]
+        return (f"  • st       {h.recorded_source} @ {head} "
+                f"— installed files match")
     mark = "✗" if h.verdict == BROKEN else "?"
     return f"  {mark} st       {h.note}"
