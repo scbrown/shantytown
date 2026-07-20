@@ -38,7 +38,12 @@ def _run(argv, tmp_path, monkeypatch, panes=None):
     just as attributes a test set by hand."""
     if panes is not None:
         monkeypatch.setattr(cli, "Tmux", lambda: panes)
-    return cli.main(["--root", str(tmp_path), *argv])
+    # --backend files is EXPLICIT and load-bearing (dearing's ruling, qdal.2):
+    # the inbox now defaults to BEADS on both the write and read sides, so a
+    # test that relies on --root alone would shell out to `bd` against whatever
+    # store the CWD resolves to. --root does not scope the beads backend; only
+    # --repo does. tests/conftest.py enforces this, loudly.
+    return cli.main(["--root", str(tmp_path), "--backend", "files", *argv])
 
 
 def _card(root: Path, name: str, **fields) -> None:

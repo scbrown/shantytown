@@ -51,7 +51,7 @@ def test_durable_persists_when_recipient_is_down(tmp_path, monkeypatch):
     """The gap #7 closes: a routine send would VANISH; durable survives as a
     tracker item the recipient reads on next prime. No live send happens."""
     box = _RecordingInbox()
-    monkeypatch.setattr(cli, "_inbox", lambda a: box)
+    monkeypatch.setattr(cli, "_inbox", lambda a, **kw: box)
     class DownTmux:
         def exists(self, pane): return False
         def send(self, pane, text): raise AssertionError("recipient down — no send")
@@ -68,7 +68,7 @@ def test_durable_persists_AND_sends_when_recipient_is_live(tmp_path, monkeypatch
     """Persist for survival + send-keys for immediacy — gt mail(bead)+nudge parity."""
     box = _RecordingInbox()
     sent = []
-    monkeypatch.setattr(cli, "_inbox", lambda a: box)
+    monkeypatch.setattr(cli, "_inbox", lambda a, **kw: box)
     class LiveTmux:
         def exists(self, pane): return True
         def send(self, pane, text): sent.append((pane, text))
@@ -86,7 +86,7 @@ def test_durable_returns_2_when_persist_fails(tmp_path, monkeypatch, capsys):
     guaranteed. That is CANNOT_TELL — never a cheerful 0, and never a silent
     downgrade to an ephemeral send that vanishes."""
     sent = []
-    monkeypatch.setattr(cli, "_inbox", lambda a: _DeadInbox())
+    monkeypatch.setattr(cli, "_inbox", lambda a, **kw: _DeadInbox())
     class LiveTmux:
         def exists(self, pane): return True
         def send(self, pane, text): sent.append((pane, text))
@@ -101,7 +101,7 @@ def test_durable_returns_2_when_persist_fails(tmp_path, monkeypatch, capsys):
 
 def test_durable_refuses_unknown_agent(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "_inbox",
-                        lambda a: (_ for _ in ()).throw(AssertionError("no persist on refuse")))
+                        lambda a, **kw: (_ for _ in ()).throw(AssertionError("no persist on refuse")))
     assert main(["--root", str(_root(tmp_path)), "inbox", "-d", "nobody", "hi"]) == REFUSED
 
 
@@ -109,7 +109,7 @@ def test_durable_can_persist_to_a_recipient_with_no_pane(tmp_path, monkeypatch):
     """Durable does NOT require a pane — an agent with no live session is exactly
     who durable mail is for (routine would REFUSE 'no pane'; durable persists)."""
     box = _RecordingInbox()
-    monkeypatch.setattr(cli, "_inbox", lambda a: box)
+    monkeypatch.setattr(cli, "_inbox", lambda a, **kw: box)
     class DownTmux:
         def exists(self, pane): return False
         def send(self, pane, text): raise AssertionError("no pane — no send")
@@ -121,7 +121,7 @@ def test_durable_can_persist_to_a_recipient_with_no_pane(tmp_path, monkeypatch):
 
 def test_durable_dry_run_persists_nothing(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "_inbox",
-                        lambda a: (_ for _ in ()).throw(AssertionError("dry-run must not persist")))
+                        lambda a, **kw: (_ for _ in ()).throw(AssertionError("dry-run must not persist")))
     class Boom:
         def exists(self, pane): return False
         def send(self, pane, text): raise AssertionError("dry-run must not send")

@@ -114,7 +114,7 @@ def _plate(a):
     return lambda who: files_plate(trk, who)
 
 
-def _inbox(a):
+def _inbox(a, default="files"):
     """The inbox for this invocation, selected by the SAME --backend switch as the
     tracker (Stiwi: "an inbox concept we can map to beads or other ticket
     modules"). No second selection mechanism — one switch, or an operator ends up
@@ -129,8 +129,15 @@ def _inbox(a):
     not have and must not grow (aegis-gqr8). It is injected per-backend, exactly
     like the plate reader two functions up.
     """
-    if getattr(a, "backend", "files") == "beads":
-        trk = _tracker(a)
+    # Resolve through _backend, NOT getattr(a,"backend","files"). `--backend`
+    # defaults to None now (the sentinel that lets -d default differently), so
+    # the old getattr read None and fell to files ALWAYS — including on the
+    # durable path, which was printing "(beads)" while writing to files. A
+    # command that reports a different store than it wrote to is the exact lie
+    # this repo exists to refuse, and it is worse than the missing default:
+    # you would go looking in beads for a message that is not there.
+    if _backend(a, default) == "beads":
+        trk = _tracker(a, default)
         return TrackerInbox(trk, lambda: beads_mod.items(trk))
     return FilesInbox(Path(a.root) / "inbox")
 
@@ -830,7 +837,7 @@ def _inbox_durable(a, agent, msg: str, panes) -> int:
     # PERSIST FIRST — the survival guarantee. If this cannot be done, the durable
     # promise cannot be kept; say so (2) rather than silently downgrade to routine.
     try:
-        item = _inbox(a).deliver(a.agent, msg, frm=_me(a))
+        item = _inbox(a, default="beads").deliver(a.agent, msg, frm=_me(a))
     except Exception as e:                       # bd/store unreachable, etc.
         print(f"  could not tell: durable persist FAILED for {agent.name} "
               f"({type(e).__name__}: {str(e)[:100]}). Nothing guaranteed to "
@@ -855,7 +862,15 @@ def _inbox_read(a, me: str) -> int:
     would be worse than no inbox: the recipient would never learn what was said.
     """
     try:
-        box = _inbox(a)
+        # SAME DEFAULT AS THE DURABLE WRITE. The write side defaults to beads
+        # (dearing, qdal.2); if the read side defaulted to files, a bare
+        # `st inbox -d` would deliver to beads and a bare `st inbox` would show
+        # an empty files inbox — the sender is told it persisted, the recipient
+        # is told they have nothing, and BOTH are reading a real answer from the
+        # wrong store. That is the send-on-one/read-on-another split this
+        # module's own docstring exists to forbid. An inbox you cannot read is
+        # not an inbox, so the two defaults move together or not at all.
+        box = _inbox(a, default="beads")
         unread = box.unread(me)
     except Exception as e:
         # Could-not-look is never "you have no mail" (the whole reason exit 2
