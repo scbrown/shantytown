@@ -155,10 +155,16 @@ def test_the_ratchet_catches_each_class():
     """Positive control, one per pattern. A ratchet that has never been seen
     catching anything is a function that returns an empty list — and it would
     look exactly like a clean repo. Each class is planted and must be caught."""
+    # Every planted value is SYNTHETIC. db.lan, thing.svc, jsmith and aegis-1234
+    # already were; the address was not — it was a real host on the real subnet,
+    # which leaked the /24 in the one file guaranteed to be read by anyone
+    # studying how we prevent leaks. RFC 5737's documentation ranges are not
+    # RFC1918 and so would not match this pattern, hence the canonical textbook
+    # private address instead: it exercises the class and names no real host.
     planted = (
         'x = "connect to db.lan now"\n'
         'y = "http://thing.svc/mcp"\n'
-        'z = "addr 192.168.7.212"\n'
+        'z = "addr 192.168.0.1"\n'
         'w = "/home/jsmith/src/x"\n'
         'v = "see aegis-1234"\n'
     )
