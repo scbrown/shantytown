@@ -125,7 +125,20 @@ class QuipuRegistry:
     def set(self, agent: Agent) -> None:
         """Write the identity to the graph — the source of truth. Refuses an
         ORPHAN (no lead, not an administrator) and a self-cycle AT WRITE TIME, so
-        the invalid state never enters the graph a projection would then copy."""
+        the invalid state never enters the graph a projection would then copy.
+
+        RE-PARENTING IS A RETRACT, THEN AN ASSERT (aegis-0v97). `_knot` only ADDS
+        turtle, and `reports_to` is not functional in the store, so asserting a
+        new lead without retracting the old one leaves BOTH edges in the graph.
+        The agent then has two supervisors, and `derive_agents` sees a shape that
+        cannot occur in a real org.
+
+        This is not a hypothetical: it is almost certainly why the graph and the
+        cards diverged in the first place. Every role change had to be made on the
+        card, because making it in the graph would have corrupted the graph — so
+        the "source of truth" became the one place nobody could safely write, and
+        drifted for it. A source of truth you cannot update is a document.
+        """
         if agent.reports_to == agent.name:
             raise ValueError(f"refused: {agent.name} would report to itself (cycle)")
         if agent.reports_to is None and agent.role != "administrator":
@@ -134,6 +147,17 @@ class QuipuRegistry:
             )
         # reports_to is a graph edge; role is derived, so we assert the edge, not
         # a role literal. Administrators (root) carry no reports_to edge.
+        # Retract any EXISTING reports_to edge first, so a re-parent replaces the
+        # supervisor instead of adding a second one. Done before the cycle check
+        # below reads the graph, so the check sees the shape we are actually
+        # heading for rather than the stale one.
+        try:
+            current = self.get(agent.name)
+        except LookupError:
+            current = None
+        if current is not None and current.reports_to not in (None, agent.reports_to):
+            self._retract(agent.name, "reports_to", current.reports_to)
+
         triples = [f"a:{agent.name} a a:CrewMember ."]
         if agent.reports_to is not None:
             # cycle guard beyond the trivial self-edge: refuse if the new lead
@@ -145,6 +169,26 @@ class QuipuRegistry:
             triples.append(f"a:{agent.name} a:reports_to a:{agent.reports_to} .")
         turtle = f"@prefix a: <{ONTO}> .\n" + "\n".join(triples) + "\n"
         self._knot(turtle)
+
+    def _retract(self, subject: str, predicate: str, obj: str) -> None:
+        """Retract exactly one triple (quipu /retract, entity+predicate+value =
+        triple-level). Anything coarser would take unrelated facts with it."""
+        req = urllib.request.Request(
+            self.server + "/retract",
+            data=json.dumps({
+                "entity": ONTO + subject,
+                "predicate": ONTO + predicate,
+                "value": ONTO + obj,
+            }).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                body = json.loads(resp.read())
+        except (urllib.error.URLError, OSError, ValueError) as e:
+            raise QuipuUnreachable(f"quipu at {self.server} unreachable: {e}") from e
+        if isinstance(body, dict) and body.get("error"):
+            raise QuipuUnreachable(f"quipu retract error: {body['error']}")
 
     def _reaches(self, start: str, target: str) -> bool:
         """Does `start` reach `target` by following reports_to (cycle check)?"""
