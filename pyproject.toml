@@ -20,3 +20,14 @@ st = "shantytown.cli:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+# Declared so an EDITABLE install (pip install -e / pipx install -e) can build.
+# Without a build-system table, PEP 660 editable builds fail — which silently
+# converted this install into a frozen copy and stopped `git pull` from
+# deploying anything to the running fleet.
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["shantytown"]
