@@ -351,7 +351,7 @@ def test_cmd_tend_retire_then_a_pass_leaves_it_alone(tmp_path, monkeypatch, caps
     rather than bringing it back."""
     root = _roster(tmp_path, {"ellie": {"role": "worker", "pane": "p-ellie"}})
     panes = _Panes(live=set())
-    monkeypatch.setattr(cli, "Tmux", lambda: panes)
+    monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: panes)
 
     assert cli._cmd_tend(_Args(root, retire="ellie")) == cli.OK
     assert json.loads((root / "crew" / "ellie.json").read_text())["retired"] is True
@@ -366,7 +366,7 @@ def test_cmd_tend_retire_then_a_pass_leaves_it_alone(tmp_path, monkeypatch, caps
 def test_cmd_tend_writes_the_pass_log_and_status_reads_it(tmp_path, monkeypatch, capsys):
     root = _roster(tmp_path, {"ellie": {"role": "worker", "pane": "p-ellie",
                                         "retired": True}})
-    monkeypatch.setattr(cli, "Tmux", lambda: _Panes(live=set()))
+    monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: _Panes(live=set()))
     assert cli._cmd_tend(_Args(root)) == cli.OK
     assert supervisor.PassLog(root).last() is not None
     capsys.readouterr()
@@ -379,6 +379,6 @@ def test_cmd_tend_writes_the_pass_log_and_status_reads_it(tmp_path, monkeypatch,
 def test_cmd_tend_dry_run_writes_no_pass_log(tmp_path, monkeypatch, capsys):
     """A dry run must not leave a record claiming a supervision pass happened."""
     root = _roster(tmp_path, {"ellie": {"role": "worker", "pane": "p-ellie"}})
-    monkeypatch.setattr(cli, "Tmux", lambda: _Panes(live=set()))
+    monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: _Panes(live=set()))
     cli._cmd_tend(_Args(root, dry_run=True))
     assert supervisor.PassLog(root).last() is None

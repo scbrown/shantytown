@@ -56,7 +56,7 @@ def _fast_poll(monkeypatch):
 def test_new_starts_and_verifies_live(tmp_path, monkeypatch, capsys):
     root = _world(tmp_path)
     panes = NullPanes(screen=READY, live=set())   # banner already up -> live
-    monkeypatch.setattr(cli, "Tmux", lambda: panes)
+    monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: panes)
     rc = cli._cmd_new(_Args(root=root))
     assert rc == cli.OK
     out = capsys.readouterr().out
@@ -75,7 +75,7 @@ def test_new_returns_2_when_runtime_never_comes_up(tmp_path, monkeypatch, capsys
     NullPanes with no banner: send lands, but the ready marker never appears."""
     root = _world(tmp_path)
     panes = NullPanes(screen="user@host:~$", live=set())   # bare shell, no banner
-    monkeypatch.setattr(cli, "Tmux", lambda: panes)
+    monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: panes)
     rc = cli._cmd_new(_Args(root=root))
     assert rc == cli.CANNOT_TELL
     assert "could not tell" in capsys.readouterr().err
@@ -87,7 +87,7 @@ def test_new_returns_2_when_runtime_never_comes_up(tmp_path, monkeypatch, capsys
 
 def test_new_refuses_unknown_agent(tmp_path, monkeypatch, capsys):
     root = _world(tmp_path)
-    monkeypatch.setattr(cli, "Tmux", lambda: NullPanes(live=set()))
+    monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: NullPanes(live=set()))
     rc = cli._cmd_new(_Args(root=root, agent="nobody"))
     assert rc == cli.REFUSED
     assert "refused" in capsys.readouterr().err
@@ -98,7 +98,7 @@ def test_new_refuses_when_settings_cannot_be_materialized(tmp_path, monkeypatch,
     The invariant: no --settings, no launch."""
     root = _world(tmp_path, settings=False)
     panes = NullPanes(live=set())
-    monkeypatch.setattr(cli, "Tmux", lambda: panes)
+    monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: panes)
     rc = cli._cmd_new(_Args(root=root))
     assert rc == cli.REFUSED
     assert "refused" in capsys.readouterr().err
@@ -110,7 +110,7 @@ def test_new_refuses_to_clobber_a_live_session(tmp_path, monkeypatch, capsys):
     """The clobber guard — never replace a running agent."""
     root = _world(tmp_path)
     panes = NullPanes(screen=READY, live={"crew-ellie"})   # already live
-    monkeypatch.setattr(cli, "Tmux", lambda: panes)
+    monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: panes)
     rc = cli._cmd_new(_Args(root=root))
     assert rc == cli.REFUSED
     assert "already exists" in capsys.readouterr().err
@@ -126,7 +126,7 @@ def test_new_refuses_when_the_workspace_does_not_exist(tmp_path, monkeypatch, ca
     noise inside a session that had already been created."""
     root = _world(tmp_path, workspace=str(tmp_path / "gone"))
     panes = NullPanes(screen=READY, live=set())
-    monkeypatch.setattr(cli, "Tmux", lambda: panes)
+    monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: panes)
     rc = cli._cmd_new(_Args(root=root))
     assert rc == cli.REFUSED
     assert "does not exist" in capsys.readouterr().err
@@ -138,7 +138,7 @@ def test_new_clones_an_absent_workspace_then_launches(tmp_path, monkeypatch, cap
     ws = tmp_path / "ws" / "ellie"
     root = _world(tmp_path, workspace=str(ws), workspace_source="src")
     panes = NullPanes(screen=READY, live=set())
-    monkeypatch.setattr(cli, "Tmux", lambda: panes)
+    monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: panes)
     monkeypatch.setattr(cli, "ensure_workspace",
                         lambda card: (ws.mkdir(parents=True), str(ws))[1])
     rc = cli._cmd_new(_Args(root=root))
@@ -151,7 +151,7 @@ def test_new_dry_run_does_not_ensure_the_workspace(tmp_path, monkeypatch, capsys
     """Dry-run composes and prints; it must not clone. A dry-run that touches the
     disk is the thing design.md says must never happen."""
     root = _world(tmp_path, workspace=str(tmp_path / "gone"), workspace_source="src")
-    monkeypatch.setattr(cli, "Tmux", lambda: NullPanes(live=set()))
+    monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: NullPanes(live=set()))
     called = []
     monkeypatch.setattr(cli, "ensure_workspace", lambda card: called.append(card))
     rc = cli._cmd_new(_Args(root=root, dry_run=True))
@@ -162,7 +162,7 @@ def test_new_dry_run_does_not_ensure_the_workspace(tmp_path, monkeypatch, capsys
 def test_new_dry_run_prints_and_creates_nothing(tmp_path, monkeypatch, capsys):
     root = _world(tmp_path)
     panes = NullPanes(live=set())
-    monkeypatch.setattr(cli, "Tmux", lambda: panes)
+    monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: panes)
     rc = cli._cmd_new(_Args(root=root, dry_run=True))
     assert rc == cli.OK
     out = capsys.readouterr().out
@@ -200,7 +200,7 @@ def test_new_FAILS_when_the_live_process_came_up_hookless(tmp_path, monkeypatch,
     'started'."""
     root = _hooked_world(tmp_path, directions=())        # settings emit NOTHING
     panes = NullPanes(screen=READY, live=set())
-    monkeypatch.setattr(cli, "Tmux", lambda: panes)
+    monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: panes)
 
     rc = cli._cmd_new(_Args(root=root))
 
@@ -225,7 +225,7 @@ def test_new_FAILS_naming_only_the_direction_that_is_MISSING(tmp_path, monkeypat
     (sdir / "lead.settings.json").write_text(json.dumps(
         {"hooks": {"Stop": [{"hooks": [{"command": "python -m shantytown.stop_event send"}]}]}}))
     panes = NullPanes(screen=READY, live=set())
-    monkeypatch.setattr(cli, "Tmux", lambda: panes)
+    monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: panes)
 
     rc = cli._cmd_new(_Args(root=tmp_path))
 
@@ -240,7 +240,7 @@ def test_new_is_OK_when_the_live_process_carries_what_the_graph_needs(tmp_path, 
     difference is that the process really is hooked."""
     root = _hooked_world(tmp_path, directions=("send",))
     panes = NullPanes(screen=READY, live=set())
-    monkeypatch.setattr(cli, "Tmux", lambda: panes)
+    monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: panes)
 
     rc = cli._cmd_new(_Args(root=root))
 
@@ -253,7 +253,7 @@ def test_new_is_CANNOT_TELL_when_the_hooks_cannot_be_READ(tmp_path, monkeypatch,
     or a failure — the same contract live_stop_directions already holds."""
     root = _hooked_world(tmp_path)
     panes = NullPanes(screen=READY, live=set())
-    monkeypatch.setattr(cli, "Tmux", lambda: panes)
+    monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: panes)
     monkeypatch.setattr(panes, "cmdline", lambda pane: None)   # cannot look
 
     rc = cli._cmd_new(_Args(root=root))
@@ -271,7 +271,7 @@ def test_a_FAILED_verification_still_leaves_the_pane_for_inspection(tmp_path, mo
     The operator is told to run `st stop`."""
     root = _hooked_world(tmp_path, directions=())
     panes = NullPanes(screen=READY, live=set())
-    monkeypatch.setattr(cli, "Tmux", lambda: panes)
+    monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: panes)
 
     assert cli._cmd_new(_Args(root=root)) == cli.REFUSED
     assert panes.exists("crew-ellie"), "reaped the evidence"
@@ -289,7 +289,7 @@ def test_new_falls_back_to_an_st_prefixed_session_when_the_card_names_no_pane(
     """
     root = _world(tmp_path, pane=None)
     panes = NullPanes(live=set())
-    monkeypatch.setattr(cli, "Tmux", lambda: panes)
+    monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: panes)
     rc = cli._cmd_new(_Args(root=root, dry_run=True))
     assert rc == cli.OK
     assert "st-ellie" in capsys.readouterr().out

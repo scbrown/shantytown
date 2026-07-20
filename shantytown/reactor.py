@@ -32,7 +32,7 @@ this repo exists to refuse, so the protocol stays unimplemented and the gap is
 reported rather than papered over.
 
 The actual integration is the other direction and needs no code from us:
-reactor's own action config shells out to `shanty go <item> <agent>`. A shell
+reactor's own action config shells out to `st go <item> <agent>`. A shell
 out to our CLI, not an import (scope item 3). The CLI is the API.
 """
 from __future__ import annotations

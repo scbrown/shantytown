@@ -37,7 +37,7 @@ def _run(argv, tmp_path, monkeypatch, panes=None):
     """Drive the REAL parser — the flags have to exist on the real surface, not
     just as attributes a test set by hand."""
     if panes is not None:
-        monkeypatch.setattr(cli, "Tmux", lambda: panes)
+        monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: panes)
     # --backend files is EXPLICIT and load-bearing (dearing's ruling, qdal.2):
     # the inbox now defaults to BEADS on both the write and read sides, so a
     # test that relies on --root alone would shell out to `bd` against whatever

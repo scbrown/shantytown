@@ -61,7 +61,7 @@ class Anchoring:
                      + f"        ({self.item.status})")
         else:
             # Say it plainly. An empty plate is an answer, not a blank section.
-            L.append("    nothing. `shanty go <item> <you>` or ask your lead.")
+            L.append("    nothing. `st go <item> <you>` or ask your lead.")
         L.append("")
 
         L.append("  YOUR LEAD")

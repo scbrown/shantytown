@@ -1,4 +1,4 @@
-"""dispatch — `shanty go <item> [agent]`.
+"""dispatch — `st go <item> [agent]`.
 
 The command this repo exists for. gt sling takes >120s; its --dry-run alone
 takes 51s and writes nothing, because the cost is 63 sequential Dolt

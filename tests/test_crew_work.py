@@ -83,7 +83,7 @@ def test_crew_prints_a_work_verdict_and_the_free_list(tmp_path, monkeypatch, cap
     root = _roster(tmp_path, {"ellie": "p-ellie", "ian": "p-ian", "malcolm": "p-mal"})
     panes = _Panes({"p-ellie": IDLE_SCREEN, "p-ian": BUSY_SCREEN,
                     "p-mal": IDLE_SCREEN})
-    monkeypatch.setattr(cli, "Tmux", lambda: panes)
+    monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: panes)
 
     assert cli._cmd_crew(_Args(root)) == cli.OK
     out = capsys.readouterr().out
@@ -102,7 +102,8 @@ def test_crew_says_zero_free_when_everyone_is_mid_flight(tmp_path, monkeypatch, 
     dispatcher does next."""
     root = _roster(tmp_path, {"ellie": "p-ellie", "ian": "p-ian"})
     monkeypatch.setattr(cli, "Tmux",
-                        lambda: _Panes({"p-ellie": BUSY_SCREEN, "p-ian": BUSY_SCREEN}))
+                        lambda *_a, **_k: _Panes({"p-ellie": BUSY_SCREEN,
+                                                  "p-ian": BUSY_SCREEN}))
     assert cli._cmd_crew(_Args(root)) == cli.OK
     out = capsys.readouterr().out
     assert "0 free" in out and "interrupts work" in out
@@ -114,7 +115,7 @@ def test_a_down_agent_is_never_free(tmp_path, monkeypatch, capsys):
     session that does not exist."""
     root = _roster(tmp_path, {"ellie": "p-ellie", "ian": "p-gone"})
     # only p-ellie is live; p-gone exists on the card but not in tmux
-    monkeypatch.setattr(cli, "Tmux", lambda: _Panes({"p-ellie": IDLE_SCREEN}))
+    monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: _Panes({"p-ellie": IDLE_SCREEN}))
     assert cli._cmd_crew(_Args(root)) == cli.OK
     out = capsys.readouterr().out
     assert "1 free: ellie" in out
@@ -127,7 +128,7 @@ def test_work_is_answered_for_agents_with_no_launch_stamp(tmp_path, monkeypatch,
     is derived from the PANE, so it is answerable anyway — and the stamp is NOT
     backfilled to make the other column look answered."""
     root = _roster(tmp_path, {"ellie": "p-ellie"})
-    monkeypatch.setattr(cli, "Tmux", lambda: _Panes({"p-ellie": IDLE_SCREEN}))
+    monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: _Panes({"p-ellie": IDLE_SCREEN}))
     assert cli._cmd_crew(_Args(root)) == cli.OK
     out = capsys.readouterr().out
     assert "no launch stamp" in out, "the settings column stopped being honest"

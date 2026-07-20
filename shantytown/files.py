@@ -97,7 +97,7 @@ class FilesTracker:
 
     def __init__(self, root: Path):
         # NO mkdir here. Constructing a tracker must not touch the disk.
-        # `shanty prime` wires one, and cli.md is explicit: "prime is a read. It
+        # `st anchor` wires one, and cli.md is explicit: "prime is a read. It
         # must never write." A mkdir in __init__ meant merely ASKING who you are
         # created a directory — a write nobody requested and nobody could see.
         # The mkdir belongs in update(), the only method that writes.
@@ -154,7 +154,7 @@ _PLATE_RANK = {"hooked": 0, "in_progress": 1}
 def plate(tracker: FilesTracker, agent: str) -> WorkItem | None:
     """The ONE thing on an agent's plate, or None. A module function, not a method.
 
-    WHY IT LIVES HERE AND NOT ON THE PROTOCOL: `shanty prime` must
+    WHY IT LIVES HERE AND NOT ON THE PROTOCOL: `st anchor` must
     answer "what's on my plate" and Tracker cannot — get() needs an id you do not
     have yet. I first solved that by adding a third method, mine(), to Tracker.
     That broke test_swap's two-function assertion AND the BeadsTracker isinstance

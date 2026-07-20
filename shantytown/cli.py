@@ -40,6 +40,7 @@ comment, and in a repo whose whole thesis is the exact count, that is the bug.
 from __future__ import annotations
 import argparse
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -63,7 +64,7 @@ from .anchor import Unreachable, anchor as do_anchor
 from .runtime import (asks_a_question, ClaudeRuntime, CapabilityError, SettingsError,
                       emitted_stop_directions, live_stop_directions, live_wiring,
                       settings_for_role)
-from .tmux import Tmux
+from .tmux import Tmux, declared_socket
 from .workspace import WorkspaceError, ensure_workspace
 from .provision import ProvisionError, provision as provision_ws
 
@@ -75,6 +76,17 @@ _LIVE_DELAY = 0.25
 
 # 0 did it | 1 refused (precondition) | 2 could not tell (backend unreachable)
 OK, REFUSED, CANNOT_TELL = 0, 1, 2
+
+
+def _panes(a):
+    """The pane adapter for this invocation, on the FLEET's declared socket.
+
+    Never a bare Tmux(): bare tmux sees only the default server, so from inside
+    any pane on a named socket — including the status-bar wrapper's — it reports
+    EVERY LIVE AGENT AS DOWN, confidently and with exit 0. tmux.py has warned
+    about exactly this since it was written; the CLI just never asked.
+    """
+    return Tmux(socket=declared_socket(getattr(a, "root", None) or "."))
 
 
 def _registry(a):
@@ -162,14 +174,34 @@ def _me(a) -> str | None:
 
 
 def _wire(a) -> Dispatcher:
-    return Dispatcher(_registry(a), _tracker(a), Tmux())
+    return Dispatcher(_registry(a), _tracker(a), _panes(a))
+
+
+def _default_root() -> Path:
+    """Where the store is when nobody said. $SHANTY_ROOT wins over the cwd.
+
+    Resolved at CALL time, not at import: a test (and a shell) that sets the env
+    after this module is imported must still be honoured, and a module-level
+    default would freeze whatever the environment happened to be at import.
+    """
+    env = os.environ.get("SHANTY_ROOT")
+    return Path(env) if env else Path.cwd() / ".shanty"
 
 
 def build_parser() -> argparse.ArgumentParser:
     """The full `st` parser. Exposed so tests/test_command_count.py can introspect
     the command surface and pin it to the docstring — the count is the thesis."""
     ap = argparse.ArgumentParser(prog="st")
-    ap.add_argument("--root", type=Path, default=Path.cwd() / ".shanty")
+    # --root, else $SHANTY_ROOT, else cwd/.shanty — the SAME precedence the Stop
+    # hook uses, because the two must agree about where the store is. They did
+    # NOT: the CLI resolved the root from the CURRENT WORKING DIRECTORY only,
+    # while stop_event honoured the env AND its comment claimed "same default as
+    # the CLI". An agent's cwd is its own workspace, which has no .shanty, so
+    # every `st` call from an agent pane looked in a directory that does not
+    # exist — and anything shelling out to `st` without --root (the status bar
+    # segments) rendered EMPTY rather than erroring. Measured: the segments
+    # produced nothing from any cwd except the checkout itself.
+    ap.add_argument("--root", type=Path, default=_default_root())
     ap.add_argument("--backend", choices=["files", "beads"], default=None,
                     help="tracker backend (identity is always files). #3. "
                          "Unset means per-command default: files everywhere, "
@@ -462,7 +494,7 @@ def _cmd_new(a) -> int:
     REFUSE (unknown agent, capability, settings) runs BEFORE any tmux mutation, so
     a refusal creates nothing (arnold: 'write nothing, launch nothing').
     """
-    panes = Tmux()
+    panes = _panes(a)
     try:
         card = _registry(a).get(a.agent)
     except LookupError as e:
@@ -632,7 +664,7 @@ def _cmd_stop(a) -> int:
     if it is somehow still there after the kill, exit 2 — never a cheerful "done"
     over a session that is still alive.
     """
-    panes = Tmux()
+    panes = _panes(a)
     try:
         agent = _registry(a).get(a.agent)
     except LookupError as e:
@@ -672,7 +704,7 @@ def _cmd_stop(a) -> int:
 def _cmd_log(a) -> int:
     """log [agent] — what happened, = capture() on the session pane (arnold's #5
     ruling: log needs NOTHING new, it rides capture). Read-only."""
-    panes = Tmux()
+    panes = _panes(a)
     if not a.agent:
         print("  refused: log <agent> — whose log?", file=sys.stderr)
         return REFUSED
@@ -715,11 +747,14 @@ def _cmd_doctor(a) -> int:
     # rendered for a full run: `st doctor bobbin` asked about bobbin.
     self_h = selfcheck.check_self() if len(specs) == len(doc.SPECS) else None
 
+    sock_v, sock_why = _socket_check(a)
+
     if not a.install:
         print(doc.report(healths))
         if self_h is not None:
             print(selfcheck.render(self_h))
-        return _doctor_exit(doc, healths, self_h)
+        print(_render_socket(sock_v, sock_why))
+        return _fold_socket(_doctor_exit(doc, healths, self_h), sock_v, doc)
 
     plans = [doc.plan_install(h) for h in healths]
     print(doc.report(healths, plans=plans))
@@ -746,6 +781,67 @@ def _cmd_doctor(a) -> int:
     if self_after is not None:
         print(selfcheck.render(self_after))
     return _doctor_exit(doc, observed, self_after)
+
+
+def _socket_check(a):
+    """Ask tmux TWICE: on the declared socket, and on every socket present.
+
+    Two questions, because one cannot separate "the fleet is down" from "we are
+    looking at the wrong server", and those need different actions from a human.
+    """
+    from . import doctor as doc
+    try:
+        agents = _registry(a).all()
+    except Exception:
+        return doc.SOCKET_UNKNOWN, "could not read the registry"
+    panes = [ag.pane for ag in agents if ag.pane]
+    if not panes:
+        return doc.socket_health(0, 0, 0, declared_socket(a.root))
+
+    declared = declared_socket(a.root)
+    here = Tmux(socket=declared)
+    on_declared = sum(1 for p in panes if here.exists(p))
+
+    anywhere = 0
+    if not on_declared:
+        for sock in _sockets_present():
+            other = Tmux(socket=sock)
+            anywhere = max(anywhere, sum(1 for p in panes if other.exists(p)))
+            if anywhere:
+                break
+    return doc.socket_health(len(panes), on_declared, anywhere, declared)
+
+
+def _sockets_present() -> list[str]:
+    """Every tmux server socket this user has. Used only to answer "is the fleet
+    somewhere ELSE?" — never to pick one silently. Choosing for the operator is
+    how the ambiguity that caused this becomes permanent."""
+    d = Path(f"/tmp/tmux-{os.getuid()}")
+    try:
+        return sorted(p.name for p in d.iterdir() if p.is_socket())
+    except OSError:
+        return []
+
+
+def _render_socket(verdict, why) -> str:
+    from . import doctor as doc
+    mark = {doc.SOCKET_OK: "  socket     ok",
+            doc.SOCKET_WRONG: "  socket     WRONG",
+            doc.SOCKET_UNKNOWN: "  socket     unknown"}[verdict]
+    return f"\n{mark}   {why}\n"
+
+
+def _fold_socket(code: int, verdict, doc) -> int:
+    """A WRONG socket is ACTIONABLE (1), and it outranks a clean tool report: with
+    it, every other answer st gives about the fleet is wrong in the confident
+    direction. UNKNOWN forces could-not-tell (2) for the same reason the
+    self-check does — a report you cannot trust is worse than one that says fix
+    this."""
+    if verdict == doc.SOCKET_WRONG:
+        return REFUSED
+    if verdict == doc.SOCKET_UNKNOWN and code == OK:
+        return CANNOT_TELL
+    return code
 
 
 def _doctor_exit(doc, healths, self_h) -> int:
@@ -831,7 +927,7 @@ def _report_who_the_rewrite_did_not_reach(a, roles: set[str]) -> None:
     # failed when it had in fact succeeded — the opposite of the reassurance this
     # function exists to give.
     try:
-        panes = Tmux()
+        panes = _panes(a)
         agents = _registry(a).all()
         agents = [ag for ag in agents if ag.role in roles]
         stale, unknown = _settings_reach(a, panes, agents)
@@ -1004,7 +1100,7 @@ def _cmd_inbox(a) -> int:
     except LookupError as e:
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED
-    panes = Tmux()
+    panes = _panes(a)
 
     if getattr(a, "durable", False):
         return _inbox_durable(a, agent, msg, panes)
@@ -1154,7 +1250,7 @@ def _cmd_anchor(a) -> int:
     if getattr(a, "harness", False):
         return _anchor_harness(a, me)
     try:
-        p = do_anchor(me, _registry(a), Tmux(), plate=_plate(a))
+        p = do_anchor(me, _registry(a), _panes(a), plate=_plate(a))
     except LookupError as e:
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED
@@ -1310,7 +1406,7 @@ def _cmd_crew(a) -> int:
     answered: a stamp records WHICH BYTES an agent launched with, and one we did
     not observe would be a fabricated measurement, which is worse than a blank.
     """
-    panes = Tmux()
+    panes = _panes(a)
     try:
         agents = _registry(a).all()
     except Exception as e:
@@ -1318,11 +1414,11 @@ def _cmd_crew(a) -> int:
         return CANNOT_TELL
     runtime = _runtime(a, panes)
     # --count answers BEFORE the empty-roster line: an empty roster is `0/0`, not
-    # a sentence telling a status bar to run `shanty new`.
+    # a sentence telling a status bar to run `st new`.
     if getattr(a, "count", False):
         return _crew_count(agents, panes, runtime)
     if not agents:
-        print("  no agents. `shanty new <agent>`.")
+        print("  no agents. `st new <agent>`.")
         return OK
     launches = _launches(a)
     runtime = _runtime(a, panes)
@@ -1508,7 +1604,7 @@ def _cmd_roles(a) -> int:
     # aegis-0v97: and hand it the LIVE reader too, so the check measures the
     # running process, not only the artifact its role would have emitted. The
     # artifact was green for a lead whose live process had no stop hooks at all.
-    panes = Tmux()
+    panes = _panes(a)
     rep = roles_mod.check(_registry(a),
                           emitted=lambda role: emitted_stop_directions(a.root, role),
                           live=lambda pane: live_wiring(pane, panes.cmdline))
@@ -1554,7 +1650,7 @@ def _cmd_project(a) -> int:
         return CANNOT_TELL
 
     files = FilesRegistry(a.root / "crew")
-    panes = Tmux()
+    panes = _panes(a)
     dry = getattr(a, "dry_run", False)
     force = getattr(a, "force", False)
 
@@ -1712,7 +1808,7 @@ def _cmd_tend(a) -> int:
     if a.status:
         return _tend_status(a)
 
-    panes = Tmux()
+    panes = _panes(a)
     try:
         agents = _registry(a).all()
     except Exception as e:

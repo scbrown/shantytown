@@ -8,7 +8,7 @@ with its own sessions, and a bare `tmux` cannot see them — it does not error, 
 reports an empty list. So on a host whose agents live on a named socket, bare
 tmux reports EVERY LIVE AGENT AS DOWN, confidently and with exit 0.
 
-That is not hypothetical: standing shantytown up on its own host, `shanty crew`
+That is not hypothetical: standing shantytown up on its own host, `st crew`
 printed `down` for all 8 crew while every one of them was running on a named
 socket. A false negative about liveness is the worst answer this adapter can
 give — `crew` says everyone is dead, and `go` would refuse to dispatch to a pane
@@ -35,6 +35,43 @@ import subprocess
 # somebody else already started under the same name, so a name match must never
 # be sufficient permission to kill.
 _OWNED_ENV = "SHANTY_OWNED"
+
+# The socket the FLEET lives on, declared by the store rather than inferred from
+# whatever pane happens to be running st. RULED 2026-07-20 (the shanty cutover):
+# agents STAY on the fleet's existing socket and shanty is a VIEWER; they do not
+# migrate onto shanty's own socket. Three reasons, in order of weight:
+#   1. The crew is MIXED — some agents were launched by the other launcher onto
+#      the fleet socket, and st cannot move those. Migrating only the st agents
+#      SPLITS the fleet across two sockets, and a split fleet makes `st crew`
+#      structurally incapable of reporting everyone. That is the same false
+#      negative as the bug we are fixing, made permanent.
+#   2. Moving a session between sockets is not a move: it is a kill and a
+#      relaunch, and it costs every agent its in-flight context.
+#   3. This repo deliberately owns the pane layer least (design.md: "the part
+#      most likely to be replaced"). Binding fleet identity to one multiplexer's
+#      socket is coupling in the direction we avoid.
+# So the socket is DECLARED, in the store, and read from there — never inferred
+# from the ambient $TMUX, which is exactly what made every agent report DOWN from
+# inside a shanty pane.
+SOCKET_FILE = "tmux-socket"
+
+
+def declared_socket(root) -> str | None:
+    """The fleet's socket, per the store. None = the default server.
+
+    Precedence: the store's file, then $SHANTY_TMUX_SOCKET, then None. The FILE
+    wins on purpose — an ambient env var is what an operator's shell happens to
+    hold, and this must not change meaning depending on which pane you ran it
+    from. That ambiguity IS the bug.
+    """
+    from pathlib import Path as _P
+    try:
+        v = (_P(root) / "settings" / SOCKET_FILE).read_text().strip()
+        if v:
+            return v
+    except OSError:
+        pass
+    return os.environ.get("SHANTY_TMUX_SOCKET") or None
 
 
 class OwnershipError(RuntimeError):

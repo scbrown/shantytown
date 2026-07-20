@@ -153,7 +153,7 @@ def test_st_new_REFUSES_when_the_kit_cannot_be_completed(tmp_path, monkeypatch, 
     (d / P.MCP_TEMPLATE).write_text(json.dumps(TEMPLATE))     # secret ABSENT
 
     panes = NullPanes(live=set())
-    monkeypatch.setattr(cli, "Tmux", lambda: panes)
+    monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: panes)
     monkeypatch.delenv("HOMELAB_MCP_TOKEN", raising=False)
 
     class _A:

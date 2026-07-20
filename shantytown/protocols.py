@@ -91,7 +91,7 @@ class Registry(Protocol):
 class Tracker(Protocol):
     """Two functions. Anything more and the tracker is driving the harness.
 
-    UNRESOLVED, and deliberately not resolved here: `shanty prime`
+    UNRESOLVED, and deliberately not resolved here: `st anchor`
     must answer "what's on my plate", and it CANNOT through this protocol —
     get() needs an id you do not have yet. I briefly added a third method,
     mine(), and it broke test_swap's two-function assertion, which exists to

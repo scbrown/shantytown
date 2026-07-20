@@ -27,6 +27,16 @@ SOCK = "st-teardown-test"
 def _cleanup():
     subprocess.run(["tmux", "-L", SOCK, "kill-server"],
                    capture_output=True)
+    # kill-server ends the server; the socket FILE stays behind. Reap it — a
+    # suite that leaves hundreds of sockets in /tmp makes identifying the fleet's
+    # real socket harder, and that identification is what a wrong-socket check
+    # depends on.
+    import os
+    from pathlib import Path
+    try:
+        (Path(f"/tmp/tmux-{os.getuid()}") / SOCK).unlink()
+    except OSError:
+        pass
 
 
 def _child_pid_in(session: str) -> int | None:

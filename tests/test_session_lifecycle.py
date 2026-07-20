@@ -83,7 +83,7 @@ class _Args:
 
 def test_stop_reports_not_running_when_absent(tmp_path, monkeypatch, capsys):
     root = _world(tmp_path)
-    monkeypatch.setattr(cli, "Tmux", lambda: NullPanes(live=set()))   # nothing live
+    monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: NullPanes(live=set()))   # nothing live
     rc = cli._cmd_stop(_Args(root=root))
     assert rc == cli.OK
     assert "was not running" in capsys.readouterr().out
@@ -93,7 +93,7 @@ def test_stop_kills_and_verifies_when_present(tmp_path, monkeypatch, capsys):
     root = _world(tmp_path)
     # owned: a session st launched — the only kind st stop acts on.
     panes = NullPanes(live={"crew-ellie"}, owned={"crew-ellie"})
-    monkeypatch.setattr(cli, "Tmux", lambda: panes)
+    monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: panes)
     rc = cli._cmd_stop(_Args(root=root))
     assert rc == cli.OK
     assert "stopped ellie" in capsys.readouterr().out
@@ -109,7 +109,7 @@ def test_stop_returns_2_if_the_kill_did_not_take(tmp_path, monkeypatch, capsys):
             pass
     panes = _StubbornPanes(live={"crew-ellie"}, owned={"crew-ellie"})
     root = _world(tmp_path)
-    monkeypatch.setattr(cli, "Tmux", lambda: panes)
+    monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: panes)
     rc = cli._cmd_stop(_Args(root=root))
     assert rc == cli.CANNOT_TELL
     assert "still there" in capsys.readouterr().err
@@ -120,7 +120,7 @@ def test_stop_returns_2_if_the_kill_did_not_take(tmp_path, monkeypatch, capsys):
 def test_log_reads_the_session_pane(tmp_path, monkeypatch, capsys):
     root = _world(tmp_path)
     panes = NullPanes(screen="… agent is working on st-x", live={"crew-ellie"})
-    monkeypatch.setattr(cli, "Tmux", lambda: panes)
+    monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: panes)
     rc = cli._cmd_log(_Args(root=root))
     assert rc == cli.OK
     assert "agent is working" in capsys.readouterr().out
@@ -128,7 +128,7 @@ def test_log_reads_the_session_pane(tmp_path, monkeypatch, capsys):
 
 def test_log_says_not_running_when_no_session(tmp_path, monkeypatch, capsys):
     root = _world(tmp_path)
-    monkeypatch.setattr(cli, "Tmux", lambda: NullPanes(live=set()))
+    monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: NullPanes(live=set()))
     rc = cli._cmd_log(_Args(root=root))
     assert rc == cli.OK
     assert "not running" in capsys.readouterr().out
@@ -160,7 +160,7 @@ def test_stop_REFUSES_a_live_session_st_did_not_launch(tmp_path, monkeypatch, ca
     member behind the colliding name) must be REFUSED, not reaped."""
     root = _world(tmp_path)
     panes = NullPanes(live={"crew-ellie"})   # live, NOT owned
-    monkeypatch.setattr(cli, "Tmux", lambda: panes)
+    monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: panes)
     rc = cli._cmd_stop(_Args(root=root))
     assert rc == cli.REFUSED
     assert "not launched by st" in capsys.readouterr().err
@@ -169,7 +169,7 @@ def test_stop_REFUSES_a_live_session_st_did_not_launch(tmp_path, monkeypatch, ca
 
 def test_stop_dry_run_also_refuses_an_unowned_session(tmp_path, monkeypatch, capsys):
     root = _world(tmp_path)
-    monkeypatch.setattr(cli, "Tmux", lambda: NullPanes(live={"crew-ellie"}))
+    monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: NullPanes(live={"crew-ellie"}))
     rc = cli._cmd_stop(_Args(root=root, dry_run=True))
     assert rc == cli.REFUSED                        # the guard runs before dry-run
 
@@ -179,11 +179,27 @@ def test_stop_dry_run_also_refuses_an_unowned_session(tmp_path, monkeypatch, cap
 pytestmark_tmux = pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux not installed")
 
 
+def _reap_socket(name: str) -> None:
+    """Remove the socket file after the server is gone. See the fixture."""
+    import os
+    pathlib_Path = __import__("pathlib").Path
+    try:
+        (pathlib_Path(f"/tmp/tmux-{os.getuid()}") / name).unlink()
+    except OSError:
+        pass
+
+
 @pytest.fixture()
 def sock():
     name = "st-test-" + uuid.uuid4().hex[:8]
     yield name
     subprocess.run(["tmux", "-L", name, "kill-server"], capture_output=True, text=True)
+    # kill-server ends the SERVER; the socket FILE stays. Hundreds of these had
+    # accumulated in /tmp — harmless individually, but they make identifying the
+    # fleet's real socket harder, and identifying the right socket is exactly the
+    # reasoning a wrong-socket fault depends on. A suite that leaves litter will
+    # eventually leave a collision.
+    _reap_socket(name)
 
 
 @pytestmark_tmux

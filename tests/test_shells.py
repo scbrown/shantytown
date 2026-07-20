@@ -108,7 +108,7 @@ def _roster(tmp_path: Path, cards: dict) -> Path:
 
 def test_crew_marks_an_idle_agent_that_still_owns_a_shell(tmp_path, monkeypatch, capsys):
     root = _roster(tmp_path, {"ellie": "p-ellie", "ian": "p-ian"})
-    monkeypatch.setattr(cli, "Tmux", lambda: _Panes({"p-ellie": TURN_END,
+    monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: _Panes({"p-ellie": TURN_END,
                                                      "p-ian": IDLE_NO_SHELL}))
     assert cli._cmd_crew(_Args(root)) == cli.OK
     out = capsys.readouterr().out
@@ -123,7 +123,7 @@ def test_crew_marks_an_idle_agent_that_still_owns_a_shell(tmp_path, monkeypatch,
 def test_crew_is_quiet_when_no_shells_are_running(tmp_path, monkeypatch, capsys):
     """The negative control — a warning that always prints is decoration."""
     root = _roster(tmp_path, {"ian": "p-ian"})
-    monkeypatch.setattr(cli, "Tmux", lambda: _Panes({"p-ian": IDLE_NO_SHELL}))
+    monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: _Panes({"p-ian": IDLE_NO_SHELL}))
     assert cli._cmd_crew(_Args(root)) == cli.OK
     out = capsys.readouterr().out
     assert "background shells" not in out

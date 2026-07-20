@@ -233,7 +233,7 @@ def test_role_set_then_new_no_longer_refuses_for_missing_settings(tmp_path, monk
     # st new: a live pane with the ready banner -> verify 0. If settings were still
     # missing, compose would REFUSE (exit 1) before ever creating a session.
     panes = NullPanes(screen="… Welcome to Claude Code …\n? for shortcuts", live=set())
-    monkeypatch.setattr(cli, "Tmux", lambda: panes)
+    monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: panes)
     monkeypatch.setattr(cli, "_LIVE_ATTEMPTS", 1)
     monkeypatch.setattr(cli, "_LIVE_DELAY", 0)
     rc = main(["--root", str(root), "new", "ellie"])

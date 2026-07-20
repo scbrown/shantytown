@@ -57,7 +57,10 @@ from .tmux import Tmux
 
 
 def _root(argv: list[str]) -> Path:
-    # --root <dir>, else $SHANTY_ROOT, else cwd/.shanty (same default as the CLI).
+    # --root <dir>, else $SHANTY_ROOT, else cwd/.shanty. The CLI now resolves it
+    # the same way (cli._default_root); it did not when this comment was
+    # written, and the comment asserting agreement is what kept the
+    # disagreement invisible.
     if "--root" in argv:
         return Path(argv[argv.index("--root") + 1])
     env = os.environ.get("SHANTY_ROOT")

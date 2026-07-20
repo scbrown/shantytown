@@ -314,3 +314,43 @@ def report(healths: list[Health], *, plans: list[InstallPlan] | None = None) -> 
             lines.append("run `st doctor --install` to install/upgrade: "
                          + ", ".join(h.spec.name for h in actionable))
     return "\n".join(lines)
+
+
+# --- the socket check: a dead-looking fleet must FAIL, not report -------------
+
+SOCKET_OK, SOCKET_WRONG, SOCKET_UNKNOWN = "ok", "WRONG", "unknown"
+
+
+def socket_health(registry_panes, seen_on_declared, seen_anywhere, declared):
+    """Is `st` looking at the socket the fleet is actually on?
+
+    THE FAILURE THIS REPLACES: bare tmux on a host whose agents live on a named
+    socket reports EVERY AGENT DOWN — confidently, and with exit 0. From inside a
+    status-bar wrapper's own pane that is guaranteed, because $TMUX then points at
+    the wrapper's socket. `st crew` says the fleet is dead, `st go` refuses to
+    dispatch to a pane that is right there, and nothing anywhere errors.
+
+    So the rule, stated as a check: if the registry names panes and we can see
+    NONE of them on the declared socket while some ARE visible elsewhere, that is
+    a WRONG SOCKET — a configuration fault, reported as one. Seeing none anywhere
+    is UNKNOWN (the fleet may genuinely be down, and this check must not claim a
+    fault it cannot distinguish); seeing some is ok.
+    """
+    if not registry_panes:
+        return SOCKET_UNKNOWN, "no panes in the registry — nothing to look for"
+    if seen_on_declared:
+        where = f"socket {declared!r}" if declared else "the default tmux server"
+        return SOCKET_OK, (f"{seen_on_declared}/{registry_panes} registry panes "
+                           f"visible on {where}")
+    if seen_anywhere:
+        return SOCKET_WRONG, (
+            f"0/{registry_panes} registry panes are visible on "
+            f"{'socket ' + repr(declared) if declared else 'the default tmux server'}, "
+            f"but {seen_anywhere} of them exist on another socket. Every `st` "
+            f"command here will report the fleet DEAD — silently, with exit 0. "
+            f"Declare the right one in <root>/settings/tmux-socket.")
+    return SOCKET_UNKNOWN, (
+        f"0/{registry_panes} registry panes visible anywhere — the fleet may "
+        f"really be down. NOT claiming a socket fault: this check cannot tell "
+        f"those two apart, and guessing is how a dead fleet gets reported as a "
+        f"config error and vice versa.")
