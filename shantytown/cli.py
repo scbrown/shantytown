@@ -29,6 +29,7 @@ from . import beads as beads_mod
 from . import roles as roles_mod
 from .dispatch import Dispatcher, TriageRefused, SendUnverified
 from .files import FilesRegistry, FilesTracker, plate as files_plate
+from .launched import FilesLaunches, CURRENT, STALE, UNKNOWN
 from .quipu import QuipuRegistry
 from .prime import Unreachable, prime as do_prime
 from .runtime import ClaudeRuntime, CapabilityError, SettingsError, settings_for_role
@@ -211,6 +212,11 @@ def _default_settings(root: Path):
     return resolve
 
 
+def _launches(a) -> FilesLaunches:
+    """The launch-stamp store for this invocation (aegis-nipg). Beside events/."""
+    return FilesLaunches(Path(a.root) / "launched")
+
+
 def _runtime(a, panes):
     """The runtime for this invocation. Claude Code is first-class; a second
     runtime (codex/opencode) would be selected here and its capability gate
@@ -266,6 +272,13 @@ def _cmd_new(a) -> int:
         return REFUSED
     # Deliver through the seam. Panes stays runtime-blind — sees a finished string.
     runtime.start(card, session)
+    # STAMP WHAT IT LAUNCHED ON (aegis-nipg), before we report anything. The
+    # agent has now read its --settings and will never read them again; this
+    # records which bytes that was, so a later rewrite of the file is DETECTABLE
+    # rather than silently unapplied. Best-effort on purpose: a stamp that cannot
+    # be written leaves the agent reporting `unknown`, which is the truth. It must
+    # never turn a successful launch into a failure.
+    _launches(a).record(card.name, _default_settings(a.root)(card))
     if _observe_live(runtime, panes, session):
         print(f"  started {a.agent} ({session}) — --settings composed, runtime live.")
         return OK
@@ -322,6 +335,10 @@ def _cmd_stop(a) -> int:
         print(f"  could not tell: killed {session} but it is still there",
               file=sys.stderr)
         return CANNOT_TELL
+    # The stamp described a LIVE launch; that launch is now gone. Leaving it would
+    # let `st crew` report `current` for the settings of a process that no longer
+    # exists — a clean bill of health for nobody (aegis-nipg).
+    _launches(a).forget(a.agent)
     print(f"  stopped {a.agent} ({session}).")
     return OK
 
@@ -663,6 +680,16 @@ def _cmd_go(a) -> int:
 
 
 def _cmd_crew(a) -> int:
+    """crew — who exists, what state, what role, and WHAT SETTINGS THEY ARE ON.
+
+    The settings column is aegis-nipg. `up` was the only health this ever
+    reported, and `up` is exactly what a deaf agent looks like: kelly and gennaro
+    both sat here reading `up` while their stop hooks resolved against the wrong
+    store and every stop event they emitted was discarded. The column answers the
+    question `up` cannot — is this agent running the settings we currently
+    believe are deployed? — and answers it in three values, because `unknown` is a
+    real state and rounding it to `current` would recreate the bug.
+    """
     panes = Tmux()
     try:
         agents = _registry(a).all()
@@ -672,14 +699,44 @@ def _cmd_crew(a) -> int:
     if not agents:
         print("  no agents. `shanty new <agent>`.")
         return OK
+    launches = _launches(a)
+    stale, unknown = [], []
     print()
     for ag in sorted(agents, key=lambda x: x.name):
         if ag.pane:
             state = "up" if panes.exists(ag.pane) else "down"
         else:
             state = "no pane"          # not "down" — we did not look
-        print(f"  {ag.name:<11} {ag.role:<14} {state:<8} {ag.pane or '—'}")
+        # Only a LIVE agent can be running stale settings. A down agent has no
+        # loaded settings to be stale, and will read the current file when it
+        # next starts, so reporting on it would be noise that hides the real hits.
+        if state == "up":
+            verdict = launches.verdict(ag.name)
+            if verdict == STALE:
+                stale.append(ag.name)
+            elif verdict == UNKNOWN:
+                unknown.append(ag.name)
+        else:
+            verdict = "—"
+        print(f"  {ag.name:<11} {ag.role:<14} {state:<8} {verdict:<8} "
+              f"{ag.pane or '—'}")
     print()
+    # Say the consequence, not just the state. The operator who needs this line is
+    # the one who just rewrote a settings file and has no reason to suspect it did
+    # not go anywhere.
+    if stale:
+        print(f"  ⚠ {len(stale)} agent(s) are running settings OLDER than the file "
+              f"on disk: {', '.join(stale)}")
+        print(f"    Their hooks are whatever the file said AT LAUNCH. Rewriting a "
+              f"settings file is not deploying it — only a relaunch")
+        print(f"    (`st stop <agent> && st new <agent>`) re-reads it.")
+    if unknown:
+        print(f"  ? {len(unknown)} agent(s) have no launch stamp, so this cannot "
+              f"be answered for them: {', '.join(unknown)}")
+        print(f"    Launched before stamping existed, or by something other than "
+              f"`st new`. UNKNOWN, not fine.")
+    if stale or unknown:
+        print()
     return OK
 
 
