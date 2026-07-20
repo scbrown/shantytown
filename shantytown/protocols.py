@@ -52,6 +52,15 @@ class Agent:
                                   # between them (Stiwi: the harness should be
                                   # mappable, "like claude code" — i.e. Claude Code
                                   # is one harness, not the shape of the world).
+    retired: bool = False         # DELIBERATELY stopped. `st tend` must never
+                                  # respawn it, and finding it ALIVE is an
+                                  # escalation, not a line in a log. It lives on
+                                  # the CARD because a retirement held in a
+                                  # process ends when that process does — which
+                                  # is exactly when a supervisor wakes up and
+                                  # undoes it. A watchdog that could not express
+                                  # this reverted a considered shutdown of eight
+                                  # agents in about a minute, silently.
     dangerous: bool = False       # opt-in --dangerously-skip-permissions for THIS
                                   # agent. Per-agent, never global — a crew worker
                                   # that must act without permission prompts sets

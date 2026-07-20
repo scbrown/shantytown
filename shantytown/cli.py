@@ -1,8 +1,8 @@
-"""st — the CLI. Thirteen commands, and the count is load-bearing: each earns its slot.
+"""st — the CLI. Fourteen commands, and the count is load-bearing: each earns its slot.
 
     anchor [--short|--events|--harness] · go · inbox [--count] · task
     · crew [--count] · roles [--check] · role set · new · stop · log · context
-    · doctor [--install] · project
+    · doctor [--install] · project · tend [--install|--status]
 
 Five of those flags are MACHINE-READABLE modes, added for an external status bar
 (anchor --short/--events/--harness, crew --count, inbox --count). They are flags
@@ -23,10 +23,15 @@ already made itself the centre of the world.
 
 Gas Town ships ~110. This is not a smaller version of that list; it is the short
 set we measurably use, and the discipline is the point (docs/cli.md). The surface
-grew past the original ten by two, each on a specific ask — not drift:
+grew past the original ten by four, each on a specific ask — not drift:
   · context — the bobbin Context protocol
   · doctor  — out-of-box tool detect/install, Stiwi's direct ask
   · project — materialize the crew cards from the graph
+  · tend    — crew supervision, native. Owner-directed, and it is a COMMAND and
+              not a flag on `st crew` for one reason: `crew` is a read, and this
+              is the only surface that can create a session and launch an agent.
+              A consequence behind a flag on a read is a consequence somebody
+              triggers by running the safe-looking thing.
 The count is PINNED by a test (tests/test_command_count.py): the next command
 either updates this number or fails CI. This docstring used to say "ten" while the
 code had eleven (context landed unannounced) — a count nobody enforces is a
@@ -47,6 +52,8 @@ from .dispatch import Dispatcher, TriageRefused, SendUnverified, AlreadyAssigned
 from .events import FilesEvents
 from .inbox import FilesInbox, TrackerInbox
 from .triage import Action
+from . import supervisor as sup_mod
+from . import tend as tend_mod
 from .files import FilesRegistry, FilesTracker, plate as files_plate
 from .launched import FilesLaunches, CURRENT, STALE, UNKNOWN
 from .quipu import QuipuRegistry
@@ -282,6 +289,24 @@ def build_parser() -> argparse.ArgumentParser:
     pj.add_argument("--force", action="store_true",
                     help="project even if it restructures LIVE agents")
 
+    td = sub.add_parser("tend", help="supervise the crew: respawn what DIED, "
+                                     "never what was RETIRED")
+    td.add_argument("--install", action="store_true",
+                    help="install the systemd --user timer that runs a pass")
+    td.add_argument("--uninstall", action="store_true",
+                    help="remove the timer (only if st tend wrote it)")
+    td.add_argument("--status", action="store_true",
+                    help="is it installed, and when did a pass last run?")
+    td.add_argument("--retire", metavar="AGENT",
+                    help="mark an agent DELIBERATELY stopped — tend will never "
+                         "respawn it (durable: it lives on the card)")
+    td.add_argument("--unretire", metavar="AGENT",
+                    help="undo --retire; the agent is tended again")
+    td.add_argument("--interval", default="5min",
+                    help="with --install: how often a pass runs (default 5min)")
+    td.add_argument("-n", "--dry-run", action="store_true",
+                    help="say what would be respawned; touch NOTHING")
+
     return ap
 
 
@@ -314,6 +339,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_new(a)
     if a.cmd == "project":
         return _cmd_project(a)
+    if a.cmd == "tend":
+        return _cmd_tend(a)
     return _not_yet(a.cmd)
 
 
@@ -1407,6 +1434,152 @@ def _not_yet(cmd: str) -> int:
     print(f"  refused: `st {cmd}` is in the parser but has no handler wired in "
           f"main(). It is not a stub and will not pretend to work.", file=sys.stderr)
     return REFUSED
+
+
+# --- tend: the only command that RESTARTS things ----------------------------
+
+def _refresh_clone(path) -> str | None:
+    """ff-only pull at the ONE moment it is safe: the agent is down, nothing
+    holds the checkout, and no live session can be racing it. Returns an error
+    string (loud) or None. NEVER raises — a failure here must not stop a
+    respawn, because trading an outage for a stale checkout is the worse deal."""
+    import subprocess
+    try:
+        r = subprocess.run(["git", "-C", str(path), "pull", "--ff-only"],
+                           capture_output=True, text=True, timeout=60)
+        return None if r.returncode == 0 else (r.stderr or r.stdout).strip()
+    except Exception as e:                       # not a repo, git absent, timeout
+        return str(e)
+
+
+def _systemctl_user_active(unit: str) -> bool:
+    import subprocess
+    try:
+        r = subprocess.run(["systemctl", "--user", "is-active", "--quiet", unit],
+                           capture_output=True, text=True, timeout=10)
+        if r.returncode == 0:
+            return True
+        r = subprocess.run(["systemctl", "is-active", "--quiet", unit],
+                           capture_output=True, text=True, timeout=10)
+        return r.returncode == 0
+    except Exception:
+        return False                             # cannot tell -> do not claim one
+
+
+def _run_cmd(argv) -> None:
+    import subprocess
+    subprocess.run(argv, capture_output=True, text=True, timeout=60)
+
+
+def _cmd_tend(a) -> int:
+    """tend — one supervision pass, or manage the timer that runs them.
+
+    Exit codes carry the finding, not just the run: 0 = looked, nothing wrong
+    (respawning something is not "wrong" — it is the job); 1 = REFUSED (an
+    install collision, an unknown agent); 2 = the pass found a FAULT it could not
+    fix (a retired agent alive, an agent that cannot report, a launch it refused).
+    A supervisor that always exits 0 is a supervisor nobody can alert on.
+    """
+    if a.retire or a.unretire:
+        return _tend_retire(a)
+    if a.install:
+        st_bin = "st"
+        changed, msg = sup_mod.install(st_bin, Path(a.root), interval=a.interval,
+                                       run=None if a.dry_run else _run_cmd,
+                                       is_active=_systemctl_user_active,
+                                       dry_run=a.dry_run)
+        print(f"  {msg}")
+        return OK if changed or "already installed" in msg or a.dry_run else REFUSED
+    if a.uninstall:
+        changed, msg = sup_mod.uninstall(run=None if a.dry_run else _run_cmd)
+        print(f"  {msg}")
+        return OK if changed or "not installed" in msg else REFUSED
+    if a.status:
+        return _tend_status(a)
+
+    panes = Tmux()
+    try:
+        agents = _registry(a).all()
+    except Exception as e:
+        print(f"  could not tell: {e}", file=sys.stderr)
+        return CANNOT_TELL
+    runtime = _runtime(a, panes)
+    tender = tend_mod.Tender(
+        panes, runtime, _launches(a),
+        spawn=None if a.dry_run else (lambda card, session: runtime.start(card, session)),
+        refresh=None if a.dry_run else _refresh_clone,
+        log=lambda msg: print(f"  {msg}", file=sys.stderr),
+    )
+    rep = tender.pass_over(agents, dry_run=a.dry_run)
+    print()
+    print(rep.render())
+    print()
+    # The health signal, written even on a dry run — "a pass ran" is the fact
+    # somebody needs when the supervisor itself has stopped. Recorded AFTER the
+    # pass so it can never claim work that did not happen.
+    if not a.dry_run:
+        sup_mod.PassLog(Path(a.root)).record(rep)
+    return OK if rep.healthy() else CANNOT_TELL
+
+
+def _tend_retire(a) -> int:
+    """Retirement is a WRITE to the card, because it has to survive everything
+    that could undo it: the supervisor restarting, the host rebooting, this
+    process dying. That is the whole lesson of the watchdog that reverted a
+    considered shutdown in under a minute."""
+    name = a.retire or a.unretire
+    reg = _registry(a)
+    try:
+        card = reg.get(name)
+    except LookupError as e:
+        print(f"  refused: {e}", file=sys.stderr)
+        return REFUSED
+    if not hasattr(reg, "set"):
+        print("  refused: this registry is read-only; retirement must be "
+              "durable and it cannot be written here.", file=sys.stderr)
+        return REFUSED
+    want = bool(a.retire)
+    if a.dry_run:
+        print(f"  would mark {name} retired={want}")
+        return OK
+    from dataclasses import replace
+    reg.set(replace(card, retired=want))
+    if want:
+        print(f"  {name} is RETIRED. `st tend` will not respawn it, and will "
+              f"ESCALATE if it finds it alive.")
+    else:
+        print(f"  {name} is tended again.")
+    return OK
+
+
+def _tend_status(a) -> int:
+    """Installed? Active? And WHEN did a pass last run?
+
+    The age is the point. A supervisor that has stopped does not fail — it just
+    stops making things better, and that is invisible from the inside. Printing
+    "last pass: 4 days ago" is what makes its absence as loud as a failure.
+    """
+    d = sup_mod.unit_dir()
+    svc, tmr = d / sup_mod.SERVICE, d / sup_mod.TIMER
+    print()
+    print(f"  units       {'installed' if tmr.exists() else 'NOT installed'}"
+          f"{'' if not tmr.exists() else (' (ours)' if sup_mod.ours(tmr) else ' (NOT ours)')}")
+    print(f"  timer       {'active' if _systemctl_user_active(sup_mod.TIMER) else 'inactive'}")
+    other = sup_mod.foreign_supervisor(_systemctl_user_active)
+    if other:
+        print(f"  ⚠ conflict  {other} is ALSO supervising this crew")
+    log = sup_mod.PassLog(Path(a.root))
+    age = log.age_seconds()
+    if age is None:
+        print("  last pass   NEVER (or unreadable) — this is not 'fine'")
+    else:
+        rec = log.last() or {}
+        print(f"  last pass   {int(age)}s ago · acted on {len(rec.get('acted') or [])}"
+              f" · {len(rec.get('faults') or [])} fault(s)")
+    print()
+    return OK if tmr.exists() and age is not None else CANNOT_TELL
+
+
 
 
 if __name__ == "__main__":

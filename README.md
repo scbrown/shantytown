@@ -24,8 +24,8 @@
 *Create a work item. Tell an agent to go get it. That's the whole idea.*
 
 [![dispatch 3.4s](https://img.shields.io/badge/dispatch-3.4s-brightgreen)](#-measured-against-gas-town)
-[![13 commands](https://img.shields.io/badge/commands-13-blue)](#-the-whole-surface)
-[![tests](https://img.shields.io/badge/tests-484%20passing-blue)](#-principles)
+[![14 commands](https://img.shields.io/badge/commands-14-blue)](#-the-whole-surface)
+[![tests](https://img.shields.io/badge/tests-506%20passing-blue)](#-principles)
 [![python](https://img.shields.io/badge/python-3.11%2B-blue)](#-install)
 [![dependencies none](https://img.shields.io/badge/dependencies-none-blue)](#-install)
 [![license MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
@@ -170,7 +170,7 @@ stop.* Here is what the gate measured.
 
 | | `gt sling` | `st go` | |
 |---|---:|---:|---|
-| Commands | ~110 | **13** | *8% of the surface, by measured use* |
+| Commands | ~110 | **14** | *8% of the surface, by measured use* |
 | dispatch (dry-run) | 51.54 s | **0.15 s** | **~344× faster** |
 | dispatch (real) | > 120 s ⏱️ | **3.40 s** | **≥35× faster** |
 | Dolt connections | 63 | **3** | **21× fewer** |
@@ -256,6 +256,7 @@ st log [agent]                    what happened
 st context <query>                what code should I be looking at?
 st doctor [--install]             what's installed, what's stale, what's missing
 st project                        materialize the crew cards FROM the graph
+st tend                           supervise the crew: respawn what DIED, never what was RETIRED
 ```
 
 Thirteen, and the count is load-bearing: a test pins this block to the parser, so the next command
@@ -312,7 +313,7 @@ error, it just stops new facts from joining the old ones.
 |---|---|
 | [`docs/vision.md`](docs/vision.md) | what this replaces, and how we'll know it failed |
 | [`docs/design.md`](docs/design.md) | the shape: dispatch, triage, trackers, panes |
-| [`docs/cli.md`](docs/cli.md) | the thirteen commands, and the anchor |
+| [`docs/cli.md`](docs/cli.md) | the fourteen commands, and the anchor |
 | [`docs/agent-card.md`](docs/agent-card.md) | identity — the graph is the truth, the card is a projection |
 | [`docs/roles.md`](docs/roles.md) | worker / lead / administrator, and why a lead absorbs |
 | [`docs/adapters.md`](docs/adapters.md) | first-class defaults, pluggable everything |

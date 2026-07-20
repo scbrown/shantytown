@@ -55,12 +55,23 @@ def test_docstring_and_code_agree_on_the_command_set():
     )
 
 
-def test_the_surface_is_thirteen():
+def test_the_surface_is_fourteen():
     """A bare number check too, so 'the docs claim N' is itself pinned.
 
     Grew to 13 with `project` — materialize the crew cards from the graph (the
-    quipu-registry projection). Each command still earns its slot."""
-    assert len(_actual_subcommands()) == 13, (
+    quipu-registry projection).
+
+    Grew to 14 with `tend` — crew supervision, moved off the Gas Town watchdog
+    and made native. This one was argued the other way first and lost on a
+    specific ground worth keeping: it could have been a flag on `st crew`, and
+    that is exactly the objection. `crew` is a READ, and `tend` is the only
+    surface in this repo that can create a session and launch an agent. A
+    consequence hidden behind a flag on a read command is a consequence someone
+    triggers by running the safe-looking thing. The verb gets its own slot so the
+    mutation shows up in shell history, in `--help`, and here.
+
+    Each command still earns its slot."""
+    assert len(_actual_subcommands()) == 14, (
         "the command count changed. If that's intended, update the number here and "
         "the cli.py docstring together — and say why the surface grew in docs/cli.md."
     )

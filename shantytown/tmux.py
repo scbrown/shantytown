@@ -282,15 +282,6 @@ class NullPanes:
         # answer UNKNOWN for, not idle).
         return self.screen
 
-    def cmdline(self, pane: str) -> str | None:
-        # None when unseeded: "could not read", never a fabricated launch line.
-        # A double that invented a plausible cmdline would let a test prove a
-        # lead drains when nothing was measured — the exact lie this whole leg
-        # exists to stop.
-        if self._cmdlines is None:
-            return None
-        return self._cmdlines.get(pane)
-
     def send(self, pane: str, text: str) -> None:
         self.sent.append((pane, text))
         # A real pane shows what was just typed into it, so capture() must
@@ -300,7 +291,17 @@ class NullPanes:
             self.screen += ("\n" if self.screen else "") + text
 
     def cmdline(self, pane: str) -> str | None:
-        """The launch line of the "process" in `pane` — i.e. what was SENT to it.
+        """The launch line of the "process" in `pane`: the SEED if one was given,
+        else what was last sent to it.
+
+        THERE WERE TWO OF THESE (found 2026-07-20). Two crew members landed the
+        same seam a day apart — one seeding a pane->cmdline dict, one deriving it
+        from the last send — and Python kept the second, silently. So
+        `NullPanes(cmdlines=...)` set an attribute nothing read, and every test
+        that seeded a foreign launch line was measuring "could not read" while
+        its name said it was measuring "alive but deaf". Both are honest verdicts,
+        which is exactly why nobody noticed: the suite stayed green. One method
+        now, and the seed wins because a test that states a launch line means it.
 
         The second impl of Tmux.cmdline, and faithful for the reason that matters
         to aegis-8p0j: a real pane's process cmdline IS the string the launcher
@@ -309,10 +310,13 @@ class NullPanes:
         cmdline would make `st new`'s verification unfalsifiable, which is the
         one thing this check must not be.
 
-        None when nothing was ever sent to that pane: an empty pane has no
+        None when unseeded AND nothing was ever sent: an empty pane has no
         process, so there is nothing to read. That is a cannot-tell, and the
-        caller must not render it as a pass.
+        caller must not render it as a pass — never a fabricated launch line,
+        which would let a test prove a lead drains when nothing was measured.
         """
+        if self._cmdlines is not None and pane in self._cmdlines:
+            return self._cmdlines[pane]
         for p, text in reversed(self.sent):
             if p == pane:
                 return text

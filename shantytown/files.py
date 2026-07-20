@@ -33,6 +33,7 @@ class FilesRegistry:
             workspace_source=d.get("workspace_source"),
             harness=d.get("harness"),
             dangerous=d.get("dangerous", False),
+            retired=d.get("retired", False),
         )
 
     def set(self, agent: Agent) -> None:
@@ -68,6 +69,9 @@ class FilesRegistry:
             existing["harness"] = agent.harness
         if agent.dangerous:
             existing["dangerous"] = agent.dangerous
+        # retired is written even when False: un-retiring must be expressible,
+        # and a field that can only ever be set is a one-way door.
+        existing["retired"] = agent.retired
         p.write_text(json.dumps(existing, indent=2, sort_keys=True))
 
     def all(self) -> list[Agent]:
