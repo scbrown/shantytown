@@ -265,7 +265,7 @@ $ st doctor
   • bobbin   0.3.1 installed — 0.6.0 available (STALE)
   ? quipu    present, but cannot report version (known upstream bug: --version opens a store)
   ✗ reactor  not installed
-  • st       installed from /home/braino/gt/shantytown @ 41d9fc2d
+  • st       installed from ~/src/shantytown @ 41d9fc2d
 ```
 
 ### …and it asks the question about ITSELF
@@ -279,10 +279,10 @@ fail. It compares the two things that DO move — the **recorded source path** p
 and that checkout's **git HEAD** against the canonical checkout.
 
 ```
-  ✗ st       `st` was installed from '/home/braino/gt/shantytown-wt/dearing', NOT the canonical
-             checkout '/home/braino/gt/shantytown'. Whatever is in that directory — including
+  ✗ st       `st` was installed from '~/src/shantytown-wt/alice', NOT the canonical
+             checkout '~/src/shantytown'. Whatever is in that directory — including
              uncommitted work — is what the whole fleet is running, and a `pipx reinstall` will
-             faithfully rebuild it. Fix: pipx install --force /home/braino/gt/shantytown
+             faithfully rebuild it. Fix: pipx install --force ~/src/shantytown
 ```
 
 That is a real condition that occurred on 2026-07-20 (aegis-daoh): a deploy run as
@@ -303,8 +303,8 @@ forward afterwards. That needs a build stamp; until then this is a floor, not a 
 whatever path was last recorded, which is exactly how the above happened).
 
 ```
-cd /home/braino/gt/shantytown && git pull
-pipx install --force /home/braino/gt/shantytown
+cd ~/src/shantytown && git pull
+pipx install --force ~/src/shantytown
 ```
 
 Detect is the product; `--install` is a flag. Three states exist to stop three lies: **absent** vs

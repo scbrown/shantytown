@@ -107,7 +107,7 @@ class ClaudeHarness:
         # absolute --root (c3fb472), every ALREADY-RUNNING agent kept the old unrooted
         # command forever. kelly's own pane showed it —
         #     stop_event send: no such agent: kelly (looked in
-        #     /home/braino/gt/beads_aegis/crew/kelly/.shanty/crew/kelly.json)
+        #     <workspace>/crew/<agent>/.shanty/crew/<agent>.json)
         # — the cwd/.shanty default, resolved against the agent's OWN workspace, which
         # has no .shanty. The agent still looked "up" in `st crew`, still worked, still
         # committed; only its stop events vanished, so the administrator at the root of

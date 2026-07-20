@@ -154,7 +154,7 @@ def _live_verdict(a: Agent, agents: list[Agent], live) -> tuple[str, str]:
         whence = (f", its --settings is {wiring.settings_path}"
                   if wiring.settings_path
                   else ", and its launch line carries NO --settings at all "
-                       "(this one IS the hookless-zombie case, cf. aegis-05up)")
+                       "(this one IS the hookless-zombie case)")
         # Name EVERY consequence, not the first one. A lead missing both legs
         # strands its reports as well as itself, and reporting only "its own
         # stop dies here" would understate it by seven agents.

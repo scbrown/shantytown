@@ -42,7 +42,7 @@ _FAKE = pathlib.Path(tempfile.mkdtemp(prefix="st-stopev-"))
 # stop_event hook. This is the gastown shape that made dearing look available.
 _FOREIGN = _FAKE / "foreign.settings.json"
 _FOREIGN.write_text(json.dumps({"hooks": {"Stop": [
-    {"hooks": [{"command": "/home/braino/.local/bin/gt costs record &"}]}]}}))
+    {"hooks": [{"command": "/home/user/.local/bin/gt costs record &"}]}]}}))
 
 DRAIN_CMDLINE = f"claude --settings {_FAKE / 'settings' / 'lead.settings.json'}"
 FOREIGN_CMDLINE = f"claude --settings {_FOREIGN}"

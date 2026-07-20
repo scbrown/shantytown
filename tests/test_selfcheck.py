@@ -18,8 +18,8 @@ import json
 
 from shantytown import selfcheck as sc
 
-CANON = "/home/braino/gt/shantytown"
-PRIVATE = "/home/braino/gt/shantytown-wt/dearing"
+CANON = "/home/user/src/shantytown"
+PRIVATE = "/home/user/src/shantytown-wt/private"
 
 
 def _meta(source: str) -> str:
@@ -229,7 +229,7 @@ def test_positive_control_exit_code_is_not_constant():
 # --- the canonical checkout is SHARED, so "canonical" is not "safe" ------
 
 def test_a_DIRTY_canonical_checkout_BLOCKS_the_deploy():
-    """`/home/braino/gt/shantytown` is a SHARED working copy — any crew member can
+    """The canonical checkout is a SHARED working copy — any crew member can
     leave uncommitted work in it, and one had five modified files there while this
     was being written.
 
@@ -272,3 +272,42 @@ def test_an_unreadable_status_is_CANNOT_TELL():
         return 0, "c" * 40 + "\n"
     h = sc.check_self(run=run, canonical=CANON, stale_files=_fresh)
     assert h.verdict == sc.CANNOT_TELL
+
+
+# --- canonical source resolution (aegis-mqnl) --------------------------------
+#
+# The canonical path used to be a module constant naming one operator's home
+# directory. That was a leak in a public repo AND a portability bug: the check
+# could only pass on one machine, so everyone else got a permanent false
+# "broken" for a correct install.
+
+def test_canonical_source_prefers_the_environment(monkeypatch):
+    monkeypatch.setenv("SHANTY_CANONICAL_SOURCE", "/srv/shantytown/")
+    assert sc.canonical_source() == "/srv/shantytown"
+
+
+def test_canonical_source_falls_back_to_the_git_checkout(monkeypatch):
+    monkeypatch.delenv("SHANTY_CANONICAL_SOURCE", raising=False)
+    assert sc.canonical_source(
+        run=lambda cmd: (0, "/somewhere/shantytown\n")) == "/somewhere/shantytown"
+
+
+def test_unknown_canonical_is_CANNOT_TELL_never_ok(monkeypatch):
+    """The module's own doctrine, applied to its own configuration: every
+    failure to LOOK is cannot-tell. "I do not know where canonical is" must
+    never round to "you are fine" — that would be a checker that passes by
+    being unconfigured, which is worse than no checker."""
+    monkeypatch.delenv("SHANTY_CANONICAL_SOURCE", raising=False)
+    h = sc.check_self(run=lambda cmd: (1, ""))
+    assert h.verdict == sc.CANNOT_TELL
+    assert "SHANTY_CANONICAL_SOURCE" in h.note
+
+
+def test_no_operator_home_path_is_baked_into_the_module():
+    """The regression guard for the leak itself. A generic pattern, so this test
+    does not reintroduce the very string it forbids."""
+    import re
+    from pathlib import Path
+    src = Path(sc.__file__).read_text()
+    assert not re.search(r"/home/[a-z][a-z0-9_-]*/", src), (
+        "an absolute operator home path is back in sc.py")

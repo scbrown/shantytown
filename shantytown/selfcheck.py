@@ -9,7 +9,7 @@ world with total confidence.
 THE INCIDENT (2026-07-20). `st` is pipx-installed NON-EDITABLE, so the venv holds a
 COPY and the recorded source path decides what a rebuild rebuilds:
 
-  * dearing deployed with `pipx install --force /home/braino/gt/shantytown-wt/dearing`
+  * dearing deployed with `pipx install --force <their-own-worktree>`
     — their own worktree. That silently RE-POINTED the fleet's recorded source at a
     private directory carrying untracked build/ and egg-info, on a commit that was
     not main.
@@ -50,7 +50,33 @@ from pathlib import Path
 
 # The one true source for a fleet deploy. A recorded source anywhere else means
 # somebody deployed from a directory only they can see.
-CANONICAL_SOURCE = "/home/braino/gt/shantytown"
+#
+# NOT hardcoded to one operator's home. It was — and that was two bugs wearing one
+# coat: it published the operator's account name and private tree layout from a
+# PUBLIC repo, and it meant this check could only ever pass on one machine, so
+# anybody else installing `st` got a permanent false "broken" verdict for their
+# correct install. A deployment checker that is wrong everywhere except one laptop
+# is not a checker.
+#
+# Resolution order, first hit wins:
+#   1. $SHANTY_CANONICAL_SOURCE  — explicit, and how a fleet pins it
+#   2. the git top-level of the running package, if it is in a checkout
+#   3. None — which makes the verdict CANNOT_TELL, never OK. "I do not know where
+#      canonical is" is not "you are fine"; that is the whole doctrine of this
+#      module applied to its own configuration.
+_CANONICAL_ENV = "SHANTY_CANONICAL_SOURCE"
+
+
+def canonical_source(run=None) -> str | None:
+    """Where a fleet deploy is supposed to be built FROM. None = unknown."""
+    import os
+    env = os.environ.get(_CANONICAL_ENV)
+    if env:
+        return env.rstrip("/")
+    runner = run or _default_run
+    rc, out = runner(("git", "-C", str(Path(__file__).resolve().parent),
+                      "rev-parse", "--show-toplevel"))
+    return out.strip().rstrip("/") if rc == 0 and out.strip() else None
 
 # Verdicts. Same three-outcome vocabulary as roles.check, on purpose: ok / broken /
 # cannot tell. A checker that can only report health is not a checker.
@@ -99,7 +125,7 @@ def _default_run(argv: tuple[str, ...]) -> tuple[int, str]:
     return p.returncode, (p.stdout or "") + (p.stderr or "")
 
 
-def check_self(*, run=_default_run, canonical: str = CANONICAL_SOURCE,
+def check_self(*, run=_default_run, canonical: str | None = None,
                stale_files=None) -> SelfHealth:
     """Is the `st` you are running built from the canonical checkout, at its HEAD?
 
@@ -108,6 +134,14 @@ def check_self(*, run=_default_run, canonical: str = CANONICAL_SOURCE,
     read a recorded source, confirmed it is the canonical path, read both HEADs,
     and found them equal.
     """
+    if canonical is None:
+        canonical = canonical_source(run)
+    if canonical is None:
+        return SelfHealth(CANNOT_TELL,
+                          f"no canonical source is configured and this package is "
+                          f"not in a git checkout — set ${_CANONICAL_ENV} to the "
+                          f"checkout a fleet deploy must be built from")
+
     meta = _pipx_metadata(run)
     if meta is None:
         return SelfHealth(CANNOT_TELL,
@@ -138,7 +172,7 @@ def check_self(*, run=_default_run, canonical: str = CANONICAL_SOURCE,
     # IS THE CANONICAL CHECKOUT ITSELF CLEAN? Checked BEFORE staleness, because a
     # dirty checkout makes the staleness answer actively dangerous.
     #
-    # `/home/braino/gt/shantytown` is a SHARED working copy — any crew member can
+    # The canonical checkout is a SHARED working copy — any crew member can
     # leave uncommitted work in it, and one had five modified files there while I
     # was writing this. So "always deploy from the canonical checkout" — the rule
     # dearing and I converged on after the private-worktree incident — does NOT by
