@@ -27,9 +27,10 @@ st doctor [--install]         what's installed, stale, missing (out-of-box)
 st project                    materialize the crew cards FROM the graph
 st tend                       supervise the crew: respawn what DIED, never what was RETIRED
 st attach <agent>             attach to a crew member by name (socket + pane resolved; via shanty)
+st dashboard [admin]          live, tier-scoped view: roster/state/work, self-refreshing
 ```
 
-Fifteen. `--dry-run` is on every command that writes, from commit one. The surface grew past the
+Sixteen. `--dry-run` is on every command that writes, from commit one. The surface grew past the
 original eight by five, each on a specific ask — not drift: **inbox**/**task** (the dispatch/tracker
 pair, owner-directed), **context** (the bobbin Context protocol), **doctor**
 (out-of-box detect/install, Stiwi's direct ask), and **project** (the quipu-registry
@@ -42,7 +43,7 @@ on PATH. This doc said `shanty` in all 29 of its examples long after the entry p
 every command a reader copied out of here was uninvokable — the same defect as a wrong count, in the
 worse place (GitHub #8).
 
-Two of the fifteen were RENAMED on 2026-07-19, and the count did not move — a rename is not a
+Two of the sixteen were RENAMED on 2026-07-19, and the count did not move — a rename is not a
 new command, and the test that pins the number is what proves it:
 
 - **`prime` -> `anchor`.** An agent's anchor is what holds it to its work; the word is the noun and

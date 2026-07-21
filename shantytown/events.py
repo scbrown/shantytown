@@ -204,6 +204,26 @@ class FilesEvents:
                 mine.append(ev)
         return mine
 
+    def latest_by_sender(self) -> dict:
+        """The most recent stop-event timestamp for each SENDER — the closest
+        proxy the store has to "when did this agent last do something" (aegis-h4qe
+        last-activity, until Part B captures per-tool-call events). A PURE READ
+        over the whole store, delivered or not: a stop is a stop regardless of
+        whether a coordinator drained it. Senders with only ts=0 events (written
+        before timestamps existed) are omitted rather than reported as "just now"
+        — a fabricated recency is the one wrong answer (the mt0r lesson)."""
+        latest: dict[str, float] = {}
+        if not self.root.is_dir():
+            return latest
+        for p in self.root.glob("ev-*.json"):
+            try:
+                ev = self._read(p)
+            except (OSError, ValueError, KeyError):
+                continue
+            if ev.ts and ev.ts > latest.get(ev.frm, 0.0):
+                latest[ev.frm] = ev.ts
+        return latest
+
     def drain(self, me: str, accept=None) -> list[StopEvent]:
         # `accept` DEFERS rather than drops: an event the caller will not take
         # right now is neither returned nor marked, so it stays pending for a

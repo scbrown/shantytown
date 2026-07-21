@@ -55,7 +55,7 @@ def test_docstring_and_code_agree_on_the_command_set():
     )
 
 
-def test_the_surface_is_fifteen():
+def test_the_surface_is_sixteen():
     """A bare number check too, so 'the docs claim N' is itself pinned.
 
     Grew to 13 with `project` — materialize the crew cards from the graph (the
@@ -81,8 +81,16 @@ def test_the_surface_is_fifteen():
     where "use shanty, not bare tmux" becomes the default: attach goes THROUGH
     shanty (themed) when present, bare tmux only when absent.
 
+    Grew to 16 with `dashboard` — a live, self-refreshing view of ONE admin's
+    tier: roster, current work, the REUSED state verdicts, last activity, tallies.
+    It is not `crew` with a flag: `crew` is a one-shot flat roster of the whole
+    fleet; `dashboard` is tier-scoped, composed (crew + anchor + the event
+    ledger), and always-on — the operator keeps it in a second pane. Different
+    lifetime, different scope, different composition; it earns its own verb the
+    way an observability panel is not a status line.
+
     Each command still earns its slot."""
-    assert len(_actual_subcommands()) == 15, (
+    assert len(_actual_subcommands()) == 16, (
         "the command count changed. If that's intended, update the number here and "
         "the cli.py docstring together — and say why the surface grew in docs/cli.md."
     )

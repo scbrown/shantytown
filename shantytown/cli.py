@@ -1,8 +1,9 @@
-"""st — the CLI. Fifteen commands, and the count is load-bearing: each earns its slot.
+"""st — the CLI. Sixteen commands, and the count is load-bearing: each earns its slot.
 
     anchor [--short|--events|--harness] · go · inbox [--count] · task
     · crew [--count] · roles [--check] · role set · new · stop · log · context
     · doctor [--install] · project · tend [--install|--status] · attach [-r]
+    · dashboard [admin]
 
 Five of those flags are MACHINE-READABLE modes, added for an external status bar
 (anchor --short/--events/--harness, crew --count, inbox --count). They are flags
@@ -23,7 +24,7 @@ already made itself the centre of the world.
 
 Gas Town ships ~110. This is not a smaller version of that list; it is the short
 set we measurably use, and the discipline is the point (docs/cli.md). The surface
-grew past the original ten by five, each on a specific ask — not drift:
+grew past the original ten by six, each on a specific ask — not drift:
   · context — the bobbin Context protocol
   · doctor  — out-of-box tool detect/install, Stiwi's direct ask
   · project — materialize the crew cards from the graph
@@ -36,6 +37,9 @@ grew past the original ten by five, each on a specific ask — not drift:
               the operator never types `tmux -L <sock> attach -t <pane>`. Goes
               THROUGH shanty (themed) when present, bare tmux otherwise — this is
               where "use shanty, not raw tmux" becomes the default view.
+  · dashboard — a live, tier-scoped observability panel: roster, current work, the
+              REUSED state verdicts, last activity. The always-on sibling of the
+              one-shot `crew`; refreshes on an interval in a second pane.
 The count is PINNED by a test (tests/test_command_count.py): the next command
 either updates this number or fails CI. This docstring used to say "ten" while the
 code had eleven (context landed unannounced) — a count nobody enforces is a
@@ -358,6 +362,15 @@ def build_parser() -> argparse.ArgumentParser:
     at.add_argument("-r", "--read-only", action="store_true",
                     help="observe only — no keystroke can land in their work")
 
+    db = sub.add_parser("dashboard", help="a live, self-refreshing view of an "
+                                          "admin's tier (roster/state/work)")
+    db.add_argument("admin", nargs="?",
+                    help="whose tier; defaults to the administrator")
+    db.add_argument("--interval", type=int, default=5, metavar="SECS",
+                    help="refresh every SECS (default 5)")
+    db.add_argument("--once", action="store_true",
+                    help="render one snapshot and exit (no refresh loop)")
+
     return ap
 
 
@@ -394,6 +407,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_tend(a)
     if a.cmd == "attach":
         return _cmd_attach(a)
+    if a.cmd == "dashboard":
+        return _cmd_dashboard(a)
     return _not_yet(a.cmd)
 
 
@@ -1877,6 +1892,74 @@ def _exec_attach(argv, env_overlay) -> int:
         print(f"  could not exec {argv[0]}: {e}", file=sys.stderr)
         return CANNOT_TELL
     return OK  # unreachable on success; keeps the type checker happy
+
+
+def _dashboard_snapshot(a, reg, panes, runtime, now):
+    """One dashboard snapshot for `a.admin`'s tier. Pure-ish: reads the registry,
+    the REUSED crew-state verdicts, the plate, and the event ledger — composes
+    them in dashboard.gather. Separated from the render loop so a test drives it
+    without a clock or a foreground loop."""
+    from . import dashboard as dash_mod
+    from .tier import _find_administrator
+    agents = reg.all()
+    admin = a.admin or _find_administrator(reg)
+    if not admin:
+        return None, "no administrator in the registry to show a tier for"
+    if admin not in {x.name for x in agents}:
+        return None, f"no such agent: {admin}"
+    crew_states = list(_crew_states(agents, panes, runtime))
+    plate = _plate(a)
+    last = FilesEvents(Path(a.root) / "events").latest_by_sender()
+    return dash_mod.gather(admin, agents, crew_states, plate, last, now), None
+
+
+def _cmd_dashboard(a) -> int:
+    """dashboard [admin] — a live, read-only view of one admin's tier.
+
+    The always-on sibling of `st crew`: scoped to an administrator and its crew,
+    it REUSES the same busy/idle/waiting/saturated verdicts (never a second
+    opinion) and refreshes on an interval so an operator keeps it in a pane while
+    talking to that admin. `--once` renders a single snapshot (for scripting);
+    the default loops until interrupted.
+    """
+    from . import dashboard as dash_mod
+
+    reg = _registry(a)
+    panes = _panes(a)
+    runtime = _runtime(a, panes)
+
+    def one() -> tuple[int, "Dashboard | None"]:
+        try:
+            data, err = _dashboard_snapshot(a, reg, panes, runtime, time.time())
+        except Exception as e:
+            print(f"  could not tell: {e}", file=sys.stderr)
+            return CANNOT_TELL, None
+        if data is None:
+            print(f"  refused: {err}", file=sys.stderr)
+            return REFUSED, None
+        return OK, data
+
+    if a.once:
+        rc, data = one()
+        if data is not None:
+            print(dash_mod.render(data, time.time()))
+        return rc
+
+    # The self-refreshing panel. Clear + redraw each interval; Ctrl-C exits clean.
+    print("  st dashboard — refreshing every "
+          f"{a.interval}s. Ctrl-C to stop.", file=sys.stderr)
+    try:
+        while True:
+            rc, data = one()
+            if data is None:
+                return rc                     # a refusal/could-not-tell is terminal
+            # \x1b[2J\x1b[H: clear screen + home, so the pane shows ONE live frame
+            # rather than an ever-growing scrollback of snapshots.
+            print("\x1b[2J\x1b[H", end="")
+            print(dash_mod.render(data, time.time()))
+            time.sleep(a.interval)
+    except KeyboardInterrupt:
+        return OK
 
 
 def _cmd_attach(a, *, execer=_exec_attach, which=None) -> int:
