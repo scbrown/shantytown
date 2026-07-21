@@ -296,13 +296,15 @@ set to run the harness on the files tracker.
 
 | variable | what it points at | default |
 |---|---|---|
+| `SHANTY_ROOT` | **which store `st` reads and writes** — the single most consequential setting. Precedence: `--root` > `$SHANTY_ROOT` > `cwd/.shanty`, and the CLI and the Stop hook resolve it identically. If it is unset and you run `st` from a directory with no `.shanty`, `st` operates on an empty store — not the fleet's. | `./.shanty` |
 | `SHANTY_AGENT` | who you are, so `st anchor` needs no argument | — |
-| `SHANTY_TMUX_SOCKET` | the named tmux server your agents live on | bare tmux |
+| `SHANTY_TMUX_SOCKET` | the named tmux server your agents live on. **The store's `settings/tmux-socket` file wins over this** — a socket declared in the store is read from there, not from your shell's ambient env, so the answer cannot change with which pane you ran `st` from. | bare tmux |
 | `QUIPU_SERVER` | quipu, when using `--registry quipu` or `st project` | `http://localhost:3030` |
 | `SHANTY_ONTO_NS` | the ontology IRI base your graph is keyed under | `http://shantytown.example/ontology/` |
 | `BOBBIN_SERVER` | bobbin, for `st context` | `http://localhost:8080` |
 | `SHANTY_FORGEJO_URL` | a self-hosted forge, for `st doctor`'s release checks | `http://localhost:3000` |
 | `SHANTY_REACTOR_URL` | reactor, if you use it as an event source | `http://localhost:8075` |
+| `SHANTY_CANONICAL_SOURCE` | the checkout a fleet deploy must be built from, for `st doctor`'s self-check. Unset and not in a git checkout → the check is `CANNOT_TELL`, never OK. | git top-level of the running package |
 
 ⚠️ **`SHANTY_ONTO_NS` is data identity, not cosmetics.** Every triple in a graph is keyed under it.
 Pick one per graph, set it before the first write, and never change it — repointing it does not
