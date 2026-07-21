@@ -25,7 +25,8 @@ from pathlib import Path
 import pytest
 
 from shantytown.files import FilesTracker, items as files_items, plate as files_plate
-from shantytown.inbox import FilesInbox, Inbox, TrackerInbox, is_message
+from shantytown.inbox import FilesInbox, Inbox, MessageTooLong, TrackerInbox, is_message
+from shantytown.protocols import WorkItem
 
 
 @pytest.fixture(params=["files", "tracker"])
@@ -182,3 +183,54 @@ def test_the_files_inbox_does_keep_the_sender(tmp_path: Path):
     box = FilesInbox(tmp_path / "inbox")
     box.deliver("ellie", "hi", frm="sattler")
     assert box.unread("ellie")[0].frm == "sattler"
+
+
+# --- the durable channel is thin, and refuses cleanly when a message won't fit
+# (aegis-csuo). The cap is the TRACKER's (bd = 500), not the inbox's — so only a
+# backend that declares one refuses; the files store carries any length.
+
+class _CappedTracker:
+    """A tracker with bd's 500-char title cap, and nothing else."""
+    _TITLE_MAX = 500
+
+    def __init__(self):
+        self.created = []
+
+    def create(self, title, **fields):
+        self.created.append(title)
+        return WorkItem(id="st-c1", title=title, status="open",
+                        assignee=fields.get("assignee"))
+
+
+def test_tracker_inbox_refuses_a_message_over_the_title_cap(tmp_path: Path):
+    """A body that would push the `inbox: <body>` title past the tracker's cap is
+    refused with MessageTooLong BEFORE any write — never a leaked bd error, never a
+    silent truncation. The message names the remedy (a bead + a pointer)."""
+    tracker = _CappedTracker()
+    box = TrackerInbox(tracker, lambda: [])
+    with pytest.raises(MessageTooLong) as ei:
+        box.deliver("ellie", "x" * 494)          # "inbox: " + 494 = 501 > 500
+    assert "bead" in str(ei.value)
+    assert tracker.created == [], "a refused message must not be written"
+
+
+def test_tracker_inbox_delivers_at_the_cap_boundary(tmp_path: Path):
+    tracker = _CappedTracker()
+    box = TrackerInbox(tracker, lambda: [])
+    box.deliver("ellie", "x" * 493)              # title == 500, exactly fits
+    assert len(tracker.created) == 1
+
+
+def test_a_backend_with_no_title_cap_carries_a_long_message(tmp_path: Path):
+    """The cap is the tracker's, not the inbox's: FilesInbox (no title, no cap) and
+    a TrackerInbox over an uncapped tracker both carry a 2000-char body. The refusal
+    is not a blanket inbox limit — it is honouring the concrete store's real one."""
+    long = "y" * 2000
+    fbox = FilesInbox(tmp_path / "inbox")
+    fbox.deliver("ellie", long)
+    assert fbox.unread("ellie")[0].body == long
+
+    trk = FilesTracker(tmp_path / "items")        # FilesTracker declares no TITLE_MAX
+    tbox = TrackerInbox(trk, lambda: files_items(trk))
+    tbox.deliver("maldoon", long)                 # must not raise
+    assert tbox.unread("maldoon")[0].body == long

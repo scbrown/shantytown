@@ -59,7 +59,7 @@ from . import roles as roles_mod
 from . import triage as triage_mod
 from .dispatch import Dispatcher, TriageRefused, SendUnverified, AlreadyAssigned
 from .events import FilesEvents
-from .inbox import FilesInbox, TrackerInbox
+from .inbox import FilesInbox, MessageTooLong, TrackerInbox
 from .triage import Action
 from . import supervisor as sup_mod
 from . import tend as tend_mod
@@ -1108,7 +1108,13 @@ def _cmd_inbox(a) -> int:
     local durability. We PRINT where it landed so the durability is never ambiguous.
 
     Durable exit codes:
-      REFUSED (1)      no such agent
+      REFUSED (1)      no such agent — OR the message is too long for the durable
+                       inbox. On the beads backend a message maps to a tracker
+                       item whose TITLE holds it, and bd caps a title at 500 chars
+                       (so ~493 of body). The inbox is a THIN POINTER CHANNEL, not
+                       a document store: a real escalation goes in a BEAD, and the
+                       inbox carries the pointer. The refusal names the remedy and
+                       is a REFUSED (permanent), never a CANNOT_TELL (aegis-csuo).
       CANNOT_TELL (2)  could NOT persist (store unreachable) — the survival
                        guarantee failed, so we do NOT downgrade to a silent
                        routine send and report success
@@ -1185,7 +1191,13 @@ def _inbox_durable(a, agent, msg: str, panes) -> int:
     # promise cannot be kept; say so (2) rather than silently downgrade to routine.
     try:
         item = _inbox(a, default="beads").deliver(a.agent, msg, frm=_me(a))
-    except Exception as e:                       # bd/store unreachable, etc.
+    except MessageTooLong as e:                  # PERMANENT: the message will never fit
+        # Not a "could not tell" (2) — the store is fine; the message is too long,
+        # and retrying it unchanged will fail identically. That is a REFUSED (1)
+        # the agent must act on, and the exception says exactly how (aegis-csuo).
+        print(f"  refused: {e}", file=sys.stderr)
+        return REFUSED
+    except Exception as e:                        # bd/store unreachable, etc. — TRANSIENT
         print(f"  could not tell: durable persist FAILED for {agent.name} "
               f"({type(e).__name__}: {str(e)[:100]}). Nothing guaranteed to "
               f"survive; not downgrading to an ephemeral send.", file=sys.stderr)
