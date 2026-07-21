@@ -285,3 +285,120 @@ class Notifier:
 
         self._save(ledger)
         return notified
+
+
+def push_to_admin(reg, panes, message: str) -> str | None:
+    """Deliver `message` into the ADMINISTRATOR's pane (aegis-nk0e). The idle-fleet
+    alert goes to the coordinator whose job is dispatch — the one person who is
+    part of the failure mode and would otherwise have to remember to sweep.
+    Returns the admin name on a delivered push, None when there is no admin or its
+    pane is unreachable (a failed push stays pending, never a silent success)."""
+    from .tier import _find_administrator
+    admin = _find_administrator(reg)
+    if not admin:
+        return None
+    try:
+        card = reg.get(admin)
+    except LookupError:
+        return None
+    if not card.pane or not panes.exists(card.pane):
+        return None
+    panes.send(card.pane, message)
+    return admin
+
+
+class IdleFleetAlerter:
+    """PUSH the coordinator when FREE feedable workers and DISPATCHABLE beads
+    coexist — the NEGLECTED state (aegis-nk0e), the soft sibling of hfta's hard
+    gate. The coordinator stalling — handling one question and stopping while nine
+    agents sat idle with a full ready queue — is the same class of bug as a blocked
+    worker being invisible, and the fix is the same: PUSH, do not rely on the
+    coordinator remembering to read a free-count nobody is obliged to look at.
+
+    It REUSES feed_check's free-feedable + dispatchable computation exactly, so the
+    soft push and the hard gate agree on who is free and what is ready — no second
+    opinion. And it reuses the blocked-worker push's dedup: alert once per idle
+    EPISODE per worker (re-armed when the worker stops being free), so a still-idle
+    fleet does not re-spam every interval but a NEWLY-idle agent does.
+
+    FAIL OPEN: any error (tmux, bd, registry) pushes nothing and returns []. A
+    broken detector must never block a stop or a dispatch — it just goes quiet.
+    """
+
+    def __init__(self, root, reg, panes, runtime, *, push=push_to_admin,
+                 bd_ready=None, log=None):
+        self.path = Path(root) / "notify" / "idle_fleet.json"
+        self._reg = reg
+        self._panes = panes
+        self._runtime = runtime
+        self._push = push
+        # Injected so a test drives it without bd; defaults to the real reader.
+        from . import feed_check
+        self._bd_ready = bd_ready or feed_check._bd_ready
+        self._log = log or (lambda msg: None)
+
+    def _load(self) -> list:
+        try:
+            return json.loads(self.path.read_text())
+        except (OSError, ValueError):
+            return []
+
+    def _save(self, alerted: list) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_text(json.dumps(sorted(alerted), indent=2))
+
+    def sweep(self, agents) -> list[str]:
+        """One pass. If any NEWLY-free-feedable worker exists AND there is
+        dispatchable work, PUSH the coordinator ONE idle-fleet alert and record the
+        free set. Returns the newly-idle names actually alerted about (empty in the
+        quiet, common case). Fully fail-open."""
+        from . import feed_check
+        try:
+            free = feed_check.free_feedable_workers(self._reg, self._panes, self._runtime)
+        except Exception:
+            return []                              # detector broke -> stay quiet
+        already = set(self._load())
+
+        # Re-arm: a worker no longer free is forgotten, so a LATER idle episode
+        # alerts again. Done first, so a fleet that emptied and re-filled is fresh.
+        already &= set(free)
+
+        newly = [w for w in free if w not in already]
+        if not newly:
+            self._save(already)                    # still-idle set -> no re-spam
+            return []
+
+        # There ARE newly-idle feedable workers. Is there work to give them? bd is
+        # the one external call; a hiccup FAILS OPEN (no push, no record — so it
+        # retries next pass), never a block.
+        try:
+            ready = feed_check.dispatchable(set(free), self._bd_ready())
+        except Exception:
+            return []
+        if not ready:
+            # Free, but nothing to dispatch — not neglect. Do NOT record the newly-
+            # idle set, so when work appears the alert fires. Keep the re-armed
+            # ledger of prior alerts.
+            self._save(already)
+            return []
+
+        admin = self._push(self._reg, self._panes,
+                           _idle_fleet_message(free, newly, ready))
+        if admin is None:
+            self._log("idle-fleet: free workers + ready work, but no reachable "
+                      "coordinator pane — NOT alerted, will retry")
+            return []
+        self._save(free)                           # every current free is now alerted
+        self._log(f"idle-fleet: alerted {admin} — {len(free)} idle, {len(ready)} ready")
+        return newly
+
+
+def _idle_fleet_message(free: list[str], newly: list[str], ready) -> str:
+    top = "; ".join(f"{bid} {title}"[:60] for bid, title in ready[:3])
+    fresh = f" (newly idle: {', '.join(newly)})" if newly != free else ""
+    return (
+        f"⚠ st tend — RULE ZERO: {len(free)} feedable worker(s) IDLE "
+        f"({', '.join(free)}){fresh} with {len(ready)} dispatchable bead(s) ready. "
+        f"DISPATCH — a free worker while work is ready is the coordinator's stall. "
+        f"`st go <bead> <worker>`. Top ready: {top}. "
+        f"(auto-alert from st tend; you were not asked to sweep.)")

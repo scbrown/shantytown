@@ -2126,6 +2126,16 @@ def _tend_once(a, quiet: bool = False) -> int:
         if cycled:
             print(f"  ⚠ prompted {len(cycled)} saturated agent(s) to checkpoint "
                   f"+ /clear: {', '.join(cycled)}", file=sys.stderr)
+        # ALERT THE IDLE FLEET (aegis-nk0e): the SOFT half of Rule Zero. If free
+        # feedable workers and dispatchable beads coexist, push the coordinator —
+        # a coordinator forgetting to dispatch is the same invisible failure w0kk
+        # fixed for blocked workers. Deduped per idle episode, fail-open, and it
+        # reuses the SAME free/dispatchable computation as hfta's hard gate.
+        idle = notify_mod.IdleFleetAlerter(
+            Path(a.root), _registry(a), panes, runtime, log=_log).sweep(agents)
+        if idle:
+            print(f"  ⚠ alerted the coordinator — {len(idle)} newly-idle feedable "
+                  f"worker(s) with work ready: {', '.join(idle)}", file=sys.stderr)
     if not quiet:
         print()
         print(rep.render())
