@@ -16,7 +16,7 @@ the edge is what it should be. They run against a real quipu and are therefore
 OPT-IN — the hermetic unit suite must not depend on a network service, so the
 whole module SKIPS unless QUIPU_CONTRACT_SERVER names a reachable quipu:
 
-    QUIPU_CONTRACT_SERVER=http://quipu.svc pytest tests/test_quipu_contract.py
+    QUIPU_CONTRACT_SERVER=http://quipu.example pytest tests/test_quipu_contract.py
 
 DISCRIMINATION (aegis-0as8 acceptance — a green integration test never shown to go
 red is the same trap one layer out): these were proven to go RED by making `_knot`
@@ -27,9 +27,9 @@ asserting "`_knot` was called with the right turtle" PASSES on that same mutatio
 which is the whole point. See the aegis-0as8 comment for the transcript.
 
 (Note: the label half of the original bug — /knot refusing a CrewMember with no
-rdfs:label — does NOT reproduce on quipu.svc, which accepts a label-less write as
-`conforms:true`; the CrewMember SHACL shape is evidently not enforced on this
-deployment. The retract no-op (aegis-vqy9) DOES reproduce here. So the discriminator
+rdfs:label — does NOT reproduce on the deployment tested, which accepts a
+label-less write as `conforms:true`; the CrewMember SHACL shape is evidently not
+enforced there. The retract no-op (aegis-vqy9) DOES reproduce here. So the discriminator
 is the write-actually-landed check, which is server-independent, not the label.)
 
 Writes land under the registry's default namespace `http://shantytown.example/…`,
