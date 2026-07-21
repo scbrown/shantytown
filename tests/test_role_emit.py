@@ -45,10 +45,17 @@ def test_lead_settings_send_and_drain():
                     f"{_PY} -m shantytown.stop_event drain"]
 
 
-def test_administrator_settings_drain_only():
-    """Root: receives only; its own stop terminates (no send)."""
+def test_administrator_settings_drain_and_feed_check():
+    """Root: receives only (no `send`), and its own stop is GATED. Beside the drain
+    that delivers received events sits the Rule Zero feed-check (aegis-hfta): it
+    blocks the admin's stop while free feedable workers and dispatchable beads
+    coexist, so the coordinator cannot go idle with the fleet idle. Fail-open lives
+    inside the module; here we only pin that the hook is EMITTED, in order."""
     cmds = _stop_commands(settings_for_role("administrator"))
-    assert cmds == [f"{_PY} -m shantytown.stop_event drain"]
+    assert cmds == [
+        f"{_PY} -m shantytown.stop_event drain",
+        f"{_PY} -m shantytown.feed_check",
+    ]
 
 
 def test_hook_interpreter_actually_exists():

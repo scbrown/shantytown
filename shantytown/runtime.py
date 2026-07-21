@@ -228,6 +228,16 @@ def _stop_cmd(mode: str, root=None) -> dict:
     return {"type": "command", "command": cmd}
 
 
+def _feed_check_cmd(root=None) -> dict:
+    """The administrator's Rule Zero feed-check Stop hook (aegis-hfta). Same shape
+    and same baked-in --root as _stop_cmd, so it resolves the real store from the
+    admin's own workspace. Fail-open lives inside the module, not here."""
+    cmd = f"{_hook_interpreter()} -m shantytown.feed_check"
+    if root is not None:
+        cmd += f" --root {Path(root).resolve()}"
+    return {"type": "command", "command": cmd}
+
+
 # --- hank policy guard (first-class, Stiwi 2026-07-19) --------------------------
 # Every shantytown-launched agent runs its edits past hank's guard: the agent's
 # edit tool call IS the change event (hank FR-30), so hank answers with a blast-
@@ -318,7 +328,11 @@ def claude_settings_for_role(role: str, root=None) -> dict:
     elif role == "lead":
         stop = [_stop_cmd("send", root), _stop_cmd("drain", root)]
     elif role == "administrator":
-        stop = [_stop_cmd("drain", root)]
+        # The drain delivers received stop events; the feed-check is the Rule Zero
+        # HARD GATE (aegis-hfta) — it BLOCKS the admin's own stop while free
+        # feedable workers AND dispatchable beads coexist, so the coordinator
+        # cannot go idle with the fleet idle. Fail-open, self-terminating when fed.
+        stop = [_stop_cmd("drain", root), _feed_check_cmd(root)]
     else:
         raise ValueError(f"unknown role {role!r}; expected worker/lead/administrator")
     return {
