@@ -153,6 +153,29 @@ class ContextUnavailable(Exception):
     """
 
 
+class RankUnavailable(Exception):
+    """A ranker could not compute weights. NOT "nothing to rank" — "I could not
+    look". Same shape as ContextUnavailable, and for the same reason: a down
+    ranker (Hank/Quipu unreachable) and a ranker that found nothing to weight
+    return along different paths. The drain CATCHES this and degrades to the
+    rule-based order (workflow.prioritize) — a wrong weight, or a wedged hook, is
+    worse than an unweighted one. A ranker must never silently return unweighted
+    while pretending it looked."""
+
+
+@runtime_checkable
+class Ranker(Protocol):
+    """Weight prioritization candidates by an external signal (structural blast
+    radius via Hank, governed policy via Quipu).
+
+    ONE method, like Context. It takes the candidates and returns them with
+    `weight`/`why` populated; it MUST raise RankUnavailable rather than return
+    them unweighted when it could not reach its backend. The default impl
+    (policy.NullRanker) needs no backend and returns them unchanged — the leak
+    detector that proves the whole feature runs without Hank/Quipu."""
+    def weigh(self, candidates: list) -> list: ...
+
+
 @runtime_checkable
 class Context(Protocol):
     """Given what an agent is doing, what code should it be looking at?

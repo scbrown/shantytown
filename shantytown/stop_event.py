@@ -26,8 +26,11 @@ import os
 import sys
 from pathlib import Path
 
+from . import workflow
 from .events import FilesEvents
-from .files import FilesRegistry
+from .files import FilesRegistry, FilesTracker, plate as files_plate
+from .policy import NullRanker, PolicyRanker
+from .protocols import RankUnavailable
 from .tier import route_stop
 from .tmux import Tmux
 
@@ -79,13 +82,47 @@ def _compose_reason(events) -> str:
     return "\n".join(lines)
 
 
-def _drain(events: FilesEvents, me: str) -> int:
+def _drain(events: FilesEvents, me: str, *, reg=None, panes=None,
+           plate=None, rank=None) -> int:
     got = events.drain(me)                        # BLOCK-ONCE happens in drain()
     if not got:
         return 0                                  # nothing pending -> idle, no block
+    reason = _compose_reason(got)
+    # ADMIN ENRICHMENT (opt-in via the reg/panes wiring main() passes; a bare
+    # _drain(events, me) — the shape the tests and any non-admin caller use — is
+    # byte-identical to before). It RIDES `got`: only when a stop event actually
+    # fired does the admin get the prioritized workflow, so a persistently-idle
+    # fleet can never re-block the admin every stop (the BLOCK-ONCE guarantee).
+    if reg is not None and panes is not None:
+        extra = _compose_workflow(reg, panes, plate, rank, got, me)
+        if extra:
+            reason = reason + "\n\n" + extra
     # Deliver to the MODEL via the block protocol. reason, never systemMessage.
-    print(json.dumps({"decision": "block", "reason": _compose_reason(got)}))
+    print(json.dumps({"decision": "block", "reason": reason}))
     return 0
+
+
+def _compose_workflow(reg, panes, plate, rank, events, me: str) -> str:
+    """Admin-only: a prioritized workflow over fleet state, appended to the drained
+    stop events. Returns '' for a non-admin, or when nothing is actionable. NEVER
+    raises — a down ranker degrades to the rule-based order; the hook must idle or
+    deliver, never wedge on a backend."""
+    try:
+        if reg.get(me).role != "administrator":
+            return ""
+    except LookupError:
+        return ""                                 # unknown identity -> no enrichment
+    try:
+        agents = [a for a in reg.all() if a.name != me]   # never prioritize itself
+    except OSError:
+        agents = []                               # no crew dir -> events-only workflow
+    candidates = workflow.classify(agents, panes, plate)
+    candidates = workflow.fold_events(candidates, events)
+    try:
+        candidates = (rank or NullRanker()).weigh(candidates)
+    except RankUnavailable:
+        pass                                      # degrade to the rule-based order
+    return workflow.prioritize(candidates).render()
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -105,7 +142,13 @@ def main(argv: list[str] | None = None) -> int:
     events = FilesEvents(root / "events")
     if mode == "send":
         return _send(reg, events, Tmux(), me)
-    return _drain(events, me)
+    # DRAIN. Wire the fleet-state readers + ranker so an administrator's drain is
+    # enriched with a prioritized workflow (a lead's/worker's is unaffected — the
+    # gate is inside _compose_workflow). Ranker is opt-in: NullRanker (no backend,
+    # the default) unless SHANTY_RANKER=policy asks for Hank/Quipu weighting.
+    plate = lambda who: files_plate(FilesTracker(root / "items"), who)  # noqa: E731
+    rank = PolicyRanker() if os.environ.get("SHANTY_RANKER") == "policy" else NullRanker()
+    return _drain(events, me, reg=reg, panes=Tmux(), plate=plate, rank=rank)
 
 
 if __name__ == "__main__":
