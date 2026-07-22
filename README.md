@@ -14,7 +14,7 @@
   ///////////////////////////////////////////////////////////////////////
 
                           s h a n t y t o w n
-                a crew of agents. no town hall required.
+              a crew of agents, and someone running the town.
 ```
 
 # shantytown
@@ -24,7 +24,7 @@
 *Create a work item. Tell an agent to go get it. That's the whole idea.*
 
 [![dispatch 3.4s](https://img.shields.io/badge/dispatch-3.4s-brightgreen)](#-measured-against-gas-town)
-[![14 commands](https://img.shields.io/badge/commands-14-blue)](#-the-whole-surface)
+[![15 commands](https://img.shields.io/badge/commands-15-blue)](#-the-whole-surface)
 [![tests](https://img.shields.io/badge/tests-506%20passing-blue)](#-principles)
 [![python](https://img.shields.io/badge/python-3.11%2B-blue)](#-install)
 [![dependencies none](https://img.shields.io/badge/dependencies-none-blue)](#-install)
@@ -38,7 +38,9 @@ st inbox ada "go read st-1"           # → straight into ada's pane
 st crew                              # → who's up, who's on what
 ```
 
-Three steps: **create → send → fetch.** No daemon. No mayor. No broker. No queue.
+Three steps: **create → send → fetch.** No daemon. No broker. No queue — just a
+thin harness plus an orchestration layer that prioritizes work and reacts to
+governed events (see [Workflows & events](#-workflows--events)).
 
 > **Where this came from.** Shantytown was written by someone who runs a
 > [Gas Town](https://github.com/gastownhall/gastown) fleet daily — it is not a rival pitch from
@@ -170,7 +172,7 @@ stop.* Here is what the gate measured.
 
 | | `gt sling` | `st go` | |
 |---|---:|---:|---|
-| Commands | ~110 | **14** | *8% of the surface, by measured use* |
+| Commands | ~110 | **15** | *a small, deliberate fraction of the surface* |
 | dispatch (dry-run) | 51.54 s | **0.15 s** | **~344× faster** |
 | dispatch (real) | > 120 s ⏱️ | **3.40 s** | **≥35× faster** |
 | Dolt connections | 63 | **3** | **21× fewer** |
@@ -257,10 +259,28 @@ st context <query>                what code should I be looking at?
 st doctor [--install]             what's installed, what's stale, what's missing
 st project                        materialize the crew cards FROM the graph
 st tend                           supervise the crew: respawn what DIED, never what was RETIRED
+st subscribe                      watch quipu entity events; route governed workflows to the admin
 ```
 
-Thirteen, and the count is load-bearing: a test pins this block to the parser, so the next command
+Fifteen, and the count is load-bearing: a test pins this block to the parser, so the next command
 either updates the list or fails CI.
+
+## 🔀 Workflows & events
+
+Shantytown doesn't just dispatch — it **prioritizes** and **reacts**.
+
+- **Prioritized workflows.** At the administrator's stop, the drain composes a
+  ranked workflow from fleet state — a stopped worker to re-dispatch, an idle
+  worker to give work, an escalation to decide — and injects it straight into the
+  admin's terminal. Blast-radius weighting (via Hank) is opt-in; it runs with no
+  backend at all.
+- **Governed events.** Shantytown subscribes to Quipu entity events — a governed
+  `aegis:Workflow` required by a code change, a policy effect, a doc gone stale —
+  and acts on them: creating and dispatching work, or routing it to the admin
+  (`st subscribe`).
+
+The administrator is a real coordinator: it may assign and dispatch autonomously,
+not just advise.
 
 ## 🧭 Where this fits
 
@@ -297,9 +317,10 @@ set to run the harness on the files tracker.
 |---|---|---|
 | `SHANTY_AGENT` | who you are, so `st anchor` needs no argument | — |
 | `SHANTY_TMUX_SOCKET` | the named tmux server your agents live on | bare tmux |
-| `QUIPU_SERVER` | quipu, when using `--registry quipu` or `st project` | `http://localhost:3030` |
+| `QUIPU_SERVER` | quipu, for `--registry quipu`, `st project`, or `st subscribe` | `http://localhost:3030` |
 | `SHANTY_ONTO_NS` | the ontology IRI base your graph is keyed under | `http://shantytown.example/ontology/` |
 | `BOBBIN_SERVER` | bobbin, for `st context` | `http://localhost:8080` |
+| `SHANTY_RANKER` | `policy` to weight the admin workflow by Hank blast radius; else rule-based | — |
 | `SHANTY_FORGEJO_URL` | a self-hosted forge, for `st doctor`'s release checks | `http://localhost:3000` |
 | `SHANTY_REACTOR_URL` | reactor, if you use it as an event source | `http://localhost:8075` |
 
@@ -321,7 +342,7 @@ error, it just stops new facts from joining the old ones.
 
 ## 🧭 Principles
 
-- **Smaller than what it replaces.** If it grows an orchestration tier, we got it wrong.
+- **Lean, not absent.** Orchestration is welcome — prioritization and event reactions — but it stays small: no convoys, no bus, no daemon zoo.
 - **Bring your own tracker.** Beads, GitHub issues, or a directory of markdown files. Two functions.
 - **Ship no dashboard.** A dashboard reads the tracker, not the harness.
 - **Bring your own panes.** [herdr](https://github.com/ogulcancelik/herdr), your own tmux wrapper, or
@@ -337,5 +358,5 @@ MIT — see [LICENSE](LICENSE).
 
 <div align="center"><sub>
 Every number here was measured on one host, not estimated.<br>
-<i>If it grows a mayor, delete it.</i>
+<i>A crew of agents, and someone running the town.</i>
 </sub></div>
