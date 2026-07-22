@@ -357,8 +357,37 @@ def build_parser() -> argparse.ArgumentParser:
     return ap
 
 
+def _parse_args(argv: list[str] | None):
+    """parse_args, but tolerant of a flag that appears BEFORE a variadic positional
+    in a subcommand — e.g. `inbox ian -n hi`. Plain argparse strands the trailing
+    positional (`unrecognized arguments: hi`): a `nargs="*"` positional, once
+    matched, does not reopen after an optional. argparse's parse_intermixed_args
+    handles exactly this, but it does NOT support subparsers — so detect the
+    stranded case (parse_known_args leaves extras) and re-run the CHOSEN subparser
+    with intermixed parsing. The fast path (no extras) is unchanged.
+    """
+    argv = list(sys.argv[1:] if argv is None else argv)
+    parser = build_parser()
+    ns, extra = parser.parse_known_args(argv)
+    if not extra:
+        return ns
+    subs = next((ac for ac in parser._actions
+                 if isinstance(ac, argparse._SubParsersAction)), None)
+    cmd = getattr(ns, "cmd", None)
+    if subs is None or cmd not in subs.choices:
+        return parser.parse_args(argv)          # not our case — let argparse report
+    sub_argv = argv[argv.index(cmd) + 1:]
+    # Re-parse the subcommand's args into a FRESH namespace (a populated one makes
+    # parse_intermixed_args warn), then copy the subcommand values onto `ns`, which
+    # already carries the globals + cmd from the top parse_known_args.
+    fresh = subs.choices[cmd].parse_intermixed_args(sub_argv)
+    for key, value in vars(fresh).items():
+        setattr(ns, key, value)
+    return ns
+
+
 def main(argv: list[str] | None = None) -> int:
-    a = build_parser().parse_args(argv)
+    a = _parse_args(argv)
 
     if a.cmd == "anchor":
         return _cmd_anchor(a)
