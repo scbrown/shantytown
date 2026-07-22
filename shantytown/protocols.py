@@ -5,7 +5,7 @@ impl is hard to write, the first one has leaked into the core.
 """
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Protocol, runtime_checkable
+from typing import Iterator, Protocol, runtime_checkable
 
 
 @dataclass(frozen=True)
@@ -174,6 +174,36 @@ class Ranker(Protocol):
     (policy.NullRanker) needs no backend and returns them unchanged — the leak
     detector that proves the whole feature runs without Hank/Quipu."""
     def weigh(self, candidates: list) -> list: ...
+
+
+@dataclass(frozen=True)
+class Event:
+    """One governed entity event — a Quipu transaction a subscriber cares about.
+    `id` is the transaction id (the watermark unit); actor/source/timestamp are the
+    provenance the transaction log records."""
+    id: int
+    actor: str | None = None
+    source: str | None = None
+    timestamp: str | None = None
+
+
+class EventsUnavailable(Exception):
+    """Could not reach the event source. NOT "no events" — "I could not look"
+    (the same discipline as ContextUnavailable). A subscriber must surface this as
+    could-not-tell and KEEP its watermark, never treat it as an empty poll and
+    advance past events it never saw."""
+
+
+@runtime_checkable
+class EventSource(Protocol):
+    """Subscribe to governed entity events. integrations.md sketched this row
+    (events) with reactor as the intended first-class impl; reactor has no honest
+    pull surface, so the first real impl is Quipu's cursored transaction log
+    (quipu_events.QuipuEvents), with a `none` second impl as the leak detector.
+
+    Honest pull: the watermark advancing is the liveness proof; an unreachable
+    source raises EventsUnavailable rather than returning an empty iterator."""
+    def subscribe(self, kinds: list[str] | None = None) -> Iterator[Event]: ...
 
 
 @runtime_checkable
