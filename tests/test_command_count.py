@@ -55,12 +55,14 @@ def test_docstring_and_code_agree_on_the_command_set():
     )
 
 
-def test_the_surface_is_thirteen():
+def test_the_surface_is_fourteen():
     """A bare number check too, so 'the docs claim N' is itself pinned.
 
-    Grew to 13 with `project` — materialize the crew cards from the graph (the
-    quipu-registry projection, aegis-gz57). Each command still earns its slot."""
-    assert len(_actual_subcommands()) == 13, (
+    Grew to 14 with `subscribe` — watch quipu entity events and route assigned
+    workflows to the admin (the events adapter integrations.md sketched, finally
+    built first-class on Quipu's cursored transaction log). Each command earns its
+    slot; the count is deliberate friction, not a ceiling."""
+    assert len(_actual_subcommands()) == 14, (
         "the command count changed. If that's intended, update the number here and "
         "the cli.py docstring together — and say why the surface grew in docs/cli.md."
     )
