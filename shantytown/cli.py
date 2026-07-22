@@ -1,7 +1,7 @@
-"""st — the CLI. Thirteen commands, and the count is load-bearing: each earns its slot.
+"""st — the CLI. Fourteen commands, and the count is load-bearing: each earns its slot.
 
     prime · go · mail · task · crew · roles [--check] · role set · new · stop · log
-    · context · doctor [--install] · project
+    · context · doctor [--install] · project · subscribe
 
 The binary is `st`, not `shanty`: `shanty` is Stiwi's tmux command and ours would
 shadow it on PATH. A harness that steals the operator's own command name has
@@ -162,6 +162,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("project", help="materialize the crew cards FROM the graph (gz57)")
 
+    sb = sub.add_parser("subscribe",
+                        help="watch quipu entity events; route assigned workflows to the admin")
+    sb.add_argument("--once", action="store_true",
+                    help="poll one batch and exit (default: loop)")
+    sb.add_argument("--interval", type=float, default=10.0,
+                    help="poll interval in seconds when looping")
+    sb.add_argument("--server", default=None,
+                    help="quipu server (default $QUIPU_SERVER)")
+
     return ap
 
 
@@ -194,6 +203,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_new(a)
     if a.cmd == "project":
         return _cmd_project(a)
+    if a.cmd == "subscribe":
+        return _cmd_subscribe(a)
     return _not_yet(a.cmd)
 
 
@@ -726,6 +737,74 @@ def _cmd_project(a) -> int:
         files.set(ag)
     print(f"\n  projected {len(agents)} cards from the graph -> {a.root / 'crew'}\n")
     return OK
+
+
+def _cmd_subscribe(a) -> int:
+    """subscribe — watch quipu entity events and route assigned workflows.
+
+    The events adapter integrations.md sketched (`subscribe(kinds)`), finally built
+    first-class on Quipu's cursored transaction log. A WATERMARKED POLL: on new
+    transactions it asks quipu which governed workflows the graph assigns
+    (`aegis:assignsWorkflow`) and routes each NEW one to the administrator — who
+    acts (a bead + a nudge). `--once` polls a single batch (exit 0 reachable / 2
+    could-not-tell); default loops every `--interval` seconds. State (watermark +
+    handled set) persists under `<root>/events`, so a restart resumes rather than
+    re-routing what it already handled.
+    """
+    import time
+
+    from . import quipu_events as qe
+    from . import tier
+
+    events = qe.QuipuEvents(server=a.server)
+    registry = _registry(a)
+    tracker = _tracker(a)
+    panes = Tmux()
+    try:
+        admin = tier._find_administrator(registry)
+    except Exception:                              # registry unreachable — route without a target
+        admin = None
+    state_path = a.root / "events" / "quipu-subscription.json"
+    state = qe.SubscriptionState.load(state_path)
+
+    def route(w) -> None:
+        # A governed workflow is assigned -> create the work and hand it to the
+        # coordinator. Autonomous is fine (owner directive): shantytown orchestrates.
+        title = f"workflow {w.iri}"
+        if w.label:
+            title += f" — {w.label}"
+        if w.target:
+            title += f" (targets {w.target})"
+        try:
+            item = tracker.create(title, assignee=admin)
+        except Exception as e:
+            print(f"  could not create a bead for {w.iri}: {e}", file=sys.stderr)
+            return
+        mailed = ""
+        if admin:
+            try:
+                card = registry.get(admin)
+                if card.pane and panes.exists(card.pane):
+                    panes.send(card.pane, f"governed workflow assigned: {item.id} — {title}")
+                    mailed = f", mailed {admin}"
+            except LookupError:
+                pass
+        print(f"  routed {w.iri} -> {item.id}{mailed}")
+
+    def one() -> int:
+        report = qe.poll_and_route(events, state, route)
+        state.save(state_path)
+        print(report.render())
+        return OK if report.reachable else CANNOT_TELL
+
+    if a.once:
+        return one()
+    try:
+        while True:                                # a long-running subscriber
+            one()
+            time.sleep(max(1.0, a.interval))
+    except KeyboardInterrupt:
+        return OK
 
 
 def _not_yet(cmd: str) -> int:
