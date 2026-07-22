@@ -12,7 +12,7 @@
   ///////////////////////////////////////////////////////////////////////
 
                           s h a n t y t o w n
-                a crew of agents. no town hall required.
+              a crew of agents, and someone running the town.
 ```
 
 # shantytown
@@ -36,7 +36,9 @@ st mail ian "go read st-1"           # → straight into ian's pane
 st crew                              # → who's up, who's on what
 ```
 
-Three steps: **create → send → fetch.** No daemon. No mayor. No broker. No queue.
+Three steps: **create → send → fetch.** No daemon. No broker. No queue — just a
+thin harness plus an orchestration layer that prioritizes work and reacts to
+governed events (see [Workflows & events](#-workflows--events)).
 
 ## 📮 Routing: there is nothing in the middle
 
@@ -100,9 +102,25 @@ st stop <agent>                   stop it
 st log [agent]                    what happened
 ```
 
+## 🔀 Workflows & events
+
+Shantytown doesn't just dispatch — it **prioritizes** and **reacts**.
+
+- **Prioritized workflows.** At the administrator's stop, the drain composes a
+  ranked workflow from fleet state — a stopped worker to re-dispatch, an idle
+  worker to give work, an escalation to decide — and injects it straight into the
+  admin's terminal. Blast-radius weighting (via Hank) is opt-in; it runs with no
+  backend at all.
+- **Governed events.** Shantytown subscribes to Quipu entity events — a governed
+  `aegis:Workflow` required by a code change, a policy effect, a doc gone stale —
+  and acts on them: creating and dispatching work, or routing it to the admin.
+
+The administrator is a real coordinator: it may assign and dispatch autonomously,
+not just advise.
+
 ## 🆚 Versus Gas Town
 
-Gas Town is the parent, and it earned its complexity honestly — it was built for a world with an orchestration tier. We don't live there any more. It ships **~110 commands; we measurably used nine.**
+Gas Town is the parent, and it earned its complexity honestly. Shantytown keeps an orchestration layer — it prioritizes work and reacts to governed events — but a **lean** one: no convoys, no deacon, no refinery, no bus. It ships **~110 commands; we run a small, deliberate set.**
 
 | | Gas Town | shantytown |
 |---|---|---|
@@ -111,7 +129,7 @@ Gas Town is the parent, and it earned its complexity honestly — it was built f
 | Dispatch cost | >120 s, 63 Dolt conns | **3.4 s, 3 conns** |
 | Messaging | `gt mail` → bus + queue + router | **`st mail` → send-keys** |
 | Undeliverable message | queued forever, reports ✓ | **exit 2, nothing sent** |
-| Orchestration tier | mayor · deacon · witness · refinery · polecat | **none** |
+| Orchestration tier | mayor · deacon · witness · refinery · polecat | **one lean layer** — prioritization + governed-event reactions |
 | Convoys | auto-created per dispatch, on the hot path | **none** |
 | Tracker | Beads, welded in | **pluggable protocol** |
 | Identity | 4 files | **the graph** (card is a projection) |
@@ -143,7 +161,7 @@ Python 3.11+ and `tmux`. A tracker backend (Beads) is optional — the files tra
 
 ## 🧭 Principles
 
-- **Smaller than what it replaces.** If it grows an orchestration tier, we got it wrong.
+- **Lean, not absent.** Orchestration is welcome — prioritization and event reactions — but it stays small: no convoys, no bus, no daemon zoo.
 - **Bring your own tracker.** Beads, GitHub issues, or a directory of markdown files. Two functions.
 - **Ship no dashboard.** It reads the tracker, not the harness.
 - **Bring your own panes.** [shanty](https://git.lan/stiwi/shanty), [herdr](https://github.com/ogulcancelik/herdr), or bare tmux.
@@ -156,5 +174,5 @@ MIT — see [LICENSE](LICENSE).
 
 <div align="center"><sub>
 Built by the aegis crew. Every number here was measured on the host, not estimated.<br>
-<i>If it grows a mayor, delete it.</i>
+<i>A crew of agents, and someone running the town.</i>
 </sub></div>
