@@ -126,6 +126,19 @@ duplicates, directive conflicts, known failure patterns, relitigated decisions. 
 knowledge base, and it is exactly `docs/design.md`'s triage layer — *which must be able to refuse, not
 just nudge.* Design it as a **consumer of events**, never as a thing reactor hardcodes.
 
+### The events source we DID build: quipu (`st subscribe`)
+
+The `events` row above sat empty for a reason: reactor, the intended source, has **no honest pull
+surface** (`/events`, `/subscribe` all 503), so a `subscribe()` on it would be an invented endpoint —
+the exact defect this repo refuses. **Quipu has one.** `GET /transactions?since=<tx>` is a real,
+cursored transaction log, so the first true `EventSource` (`shantytown/quipu_events.py`) is a
+**watermarked poll** over it: honest about being a pull, four-state liveness (the watermark advancing
+is the proof, "could not reach quipu" is never "no events"). `st subscribe` runs the loop — on new
+transactions it asks quipu which governed workflows the graph assigns (`aegis:assignsWorkflow`) and
+routes each new one to the administrator, who acts (a bead + a nudge). The watermark + handled set
+persist, so a restart resumes rather than re-routing. This is the bead-advisor's substrate: a consumer
+of events, sourced from the one tool that answers a pull honestly.
+
 ---
 
 ## desire-path (dp) — the one nobody is using
@@ -156,7 +169,7 @@ interface, with a second implementation as the proof.
 | tracker | `get` / `update` | beads | `files` (markdown dir) |
 | context | `relevant` | bobbin | `none` |
 | knowledge | `search` / `record` | quipu | `none` |
-| events | `subscribe` | reactor | `none` |
+| events | `subscribe` | **quipu** (cursored transaction log) | `none` |
 | telemetry | `record_miss` | dp | `none` |
 | runtime | `start` / `send` / `hooks` | Claude Code | opencode / codex |
 | panes | `open` / `send` | bare tmux | shanty / herdr |

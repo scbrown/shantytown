@@ -1,8 +1,8 @@
-"""st — the CLI. Fourteen commands, and the count is load-bearing: each earns its slot.
+"""st — the CLI. Fifteen commands, and the count is load-bearing: each earns its slot.
 
     anchor [--short|--events|--harness] · go · inbox [--count] · task
     · crew [--count] · roles [--check] · role set · new · stop · log · context
-    · doctor [--install] · project · tend [--install|--status]
+    · doctor [--install] · project · tend [--install|--status] · subscribe
 
 Five of those flags are MACHINE-READABLE modes, added for an external status bar
 (anchor --short/--events/--harness, crew --count, inbox --count). They are flags
@@ -23,7 +23,7 @@ already made itself the centre of the world.
 
 Gas Town ships ~110. This is not a smaller version of that list; it is the short
 set we measurably use, and the discipline is the point (docs/cli.md). The surface
-grew past the original ten by four, each on a specific ask — not drift:
+grew past the original ten by five, each on a specific ask — not drift:
   · context — the bobbin Context protocol
   · doctor  — out-of-box tool detect/install, Stiwi's direct ask
   · project — materialize the crew cards from the graph
@@ -32,6 +32,9 @@ grew past the original ten by four, each on a specific ask — not drift:
               is the only surface that can create a session and launch an agent.
               A consequence behind a flag on a read is a consequence somebody
               triggers by running the safe-looking thing.
+  · subscribe — watch quipu entity events and route governed workflows to the
+              admin (the events adapter integrations.md sketched, built first-
+              class on Quipu's cursored transaction log). Owner-directed.
 The count is PINNED by a test (tests/test_command_count.py): the next command
 either updates this number or fails CI. This docstring used to say "ten" while the
 code had eleven (context landed unannounced) — a count nobody enforces is a
@@ -342,6 +345,15 @@ def build_parser() -> argparse.ArgumentParser:
     td.add_argument("-n", "--dry-run", action="store_true",
                     help="say what would be respawned; touch NOTHING")
 
+    sb = sub.add_parser("subscribe",
+                        help="watch quipu entity events; route assigned workflows to the admin")
+    sb.add_argument("--once", action="store_true",
+                    help="poll one batch and exit (default: loop)")
+    sb.add_argument("--interval", type=float, default=10.0,
+                    help="poll interval in seconds when looping")
+    sb.add_argument("--server", default=None,
+                    help="quipu server (default $QUIPU_SERVER)")
+
     return ap
 
 
@@ -376,6 +388,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_project(a)
     if a.cmd == "tend":
         return _cmd_tend(a)
+    if a.cmd == "subscribe":
+        return _cmd_subscribe(a)
     return _not_yet(a.cmd)
 
 
@@ -1733,6 +1747,74 @@ def _cmd_project(a) -> int:
         files.set(ag)
     print(f"\n  projected {len(agents)} cards from the graph -> {a.root / 'crew'}\n")
     return OK
+
+
+def _cmd_subscribe(a) -> int:
+    """subscribe — watch quipu entity events and route assigned workflows.
+
+    The events adapter integrations.md sketched (`subscribe(kinds)`), finally built
+    first-class on Quipu's cursored transaction log. A WATERMARKED POLL: on new
+    transactions it asks quipu which governed workflows the graph assigns
+    (`aegis:assignsWorkflow`) and routes each NEW one to the administrator — who
+    acts (a bead + a nudge). `--once` polls a single batch (exit 0 reachable / 2
+    could-not-tell); default loops every `--interval` seconds. State (watermark +
+    handled set) persists under `<root>/events`, so a restart resumes rather than
+    re-routing what it already handled.
+    """
+    import time
+
+    from . import quipu_events as qe
+    from . import tier
+
+    events = qe.QuipuEvents(server=a.server)
+    registry = _registry(a)
+    tracker = _tracker(a)
+    panes = Tmux()
+    try:
+        admin = tier._find_administrator(registry)
+    except Exception:                              # registry unreachable — route without a target
+        admin = None
+    state_path = a.root / "events" / "quipu-subscription.json"
+    state = qe.SubscriptionState.load(state_path)
+
+    def route(w) -> None:
+        # A governed workflow is assigned -> create the work and hand it to the
+        # coordinator. Autonomous is fine (owner directive): shantytown orchestrates.
+        title = f"workflow {w.iri}"
+        if w.label:
+            title += f" — {w.label}"
+        if w.target:
+            title += f" (targets {w.target})"
+        try:
+            item = tracker.create(title, assignee=admin)
+        except Exception as e:
+            print(f"  could not create a bead for {w.iri}: {e}", file=sys.stderr)
+            return
+        mailed = ""
+        if admin:
+            try:
+                card = registry.get(admin)
+                if card.pane and panes.exists(card.pane):
+                    panes.send(card.pane, f"governed workflow assigned: {item.id} — {title}")
+                    mailed = f", mailed {admin}"
+            except LookupError:
+                pass
+        print(f"  routed {w.iri} -> {item.id}{mailed}")
+
+    def one() -> int:
+        report = qe.poll_and_route(events, state, route)
+        state.save(state_path)
+        print(report.render())
+        return OK if report.reachable else CANNOT_TELL
+
+    if a.once:
+        return one()
+    try:
+        while True:                                # a long-running subscriber
+            one()
+            time.sleep(max(1.0, a.interval))
+    except KeyboardInterrupt:
+        return OK
 
 
 def _not_yet(cmd: str) -> int:

@@ -48,8 +48,11 @@ import time
 from pathlib import Path
 
 from . import triage
+from . import workflow
 from .events import FilesEvents, StopEvent
 from .files import FilesRegistry, FilesTracker, plate as files_plate
+from .policy import NullRanker, PolicyRanker
+from .protocols import RankUnavailable
 from .runtime import ClaudeRuntime, live_wiring
 from .tier import route_stop
 from .triage import running_shells
@@ -268,13 +271,14 @@ def _compose_reason(events: list[StopEvent], verdicts: dict, now: float,
 
 
 def _drain(events: FilesEvents, me: str, reg=None, panes=None,
-           shows_ready_ui=None, awaiting_answer=None) -> int:
-    """Deliver MY events — minus the ones whose sender is still working.
+           shows_ready_ui=None, awaiting_answer=None, *, plate=None, rank=None) -> int:
+    """Deliver MY events — minus the ones whose sender is still working. For an
+    administrator, also append a prioritized workflow over fleet state.
 
     reg/panes/shows_ready_ui are optional so a caller with no pane backend still
     gets delivery (verdicts read `?`). Without them nothing is deferred: refusing
     to deliver on the strength of a check we did not run would be worse than the
-    bug being fixed.
+    bug being fixed. plate/rank feed the admin's prioritized workflow.
     """
     now = time.time()
     verdicts: dict[str, str] = {}
@@ -300,10 +304,40 @@ def _drain(events: FilesEvents, me: str, reg=None, panes=None,
             print(f"stop_event: {deferred} event(s) held back — sender(s) still "
                   f"mid-flight", file=sys.stderr)
         return 0
+    reason = _compose_reason(got, verdicts, now, deferred)
+    # ADMIN ENRICHMENT: only when a stop event actually fired (rides BLOCK-ONCE),
+    # so a persistently-idle fleet can never re-block the admin every stop. A bare
+    # _drain(events, me) is unaffected — the gate is inside _compose_workflow.
+    if reg is not None and panes is not None:
+        extra = _compose_workflow(reg, panes, plate, rank, got, me)
+        if extra:
+            reason = reason + "\n\n" + extra
     # Deliver to the MODEL via the block protocol. reason, never systemMessage.
-    print(json.dumps({"decision": "block",
-                      "reason": _compose_reason(got, verdicts, now, deferred)}))
+    print(json.dumps({"decision": "block", "reason": reason}))
     return 0
+
+
+def _compose_workflow(reg, panes, plate, rank, events, me: str) -> str:
+    """Admin-only: a prioritized workflow over fleet state, appended to the drained
+    stop events. Returns '' for a non-admin, or when nothing is actionable. NEVER
+    raises — a down ranker degrades to the rule-based order; the hook must idle or
+    deliver, never wedge on a backend."""
+    try:
+        if reg.get(me).role != "administrator":
+            return ""
+    except LookupError:
+        return ""                                 # unknown identity -> no enrichment
+    try:
+        agents = [a for a in reg.all() if a.name != me]   # never prioritize itself
+    except OSError:
+        agents = []                               # no crew dir -> events-only workflow
+    candidates = workflow.classify(agents, panes, plate)
+    candidates = workflow.fold_events(candidates, events)
+    try:
+        candidates = (rank or NullRanker()).weigh(candidates)
+    except RankUnavailable:
+        pass                                      # degrade to the rule-based order
+    return workflow.prioritize(candidates).render()
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -327,8 +361,14 @@ def main(argv: list[str] | None = None) -> int:
     # shows_ready_ui is the RUNTIME's marker check (triage stays runtime-blind).
     # It reads only the screen, so the settings resolver it never calls is None.
     runtime = ClaudeRuntime(panes, lambda card: None, root=root)
+    # Wire the fleet-state readers + ranker so an administrator's drain is enriched
+    # with a prioritized workflow (a lead's/worker's is unaffected — the gate is
+    # inside _compose_workflow). Ranker is opt-in: NullRanker (no backend, the
+    # default) unless SHANTY_RANKER=policy asks for Hank/Quipu weighting.
+    plate = lambda who: files_plate(FilesTracker(root / "items"), who)  # noqa: E731
+    rank = PolicyRanker() if os.environ.get("SHANTY_RANKER") == "policy" else NullRanker()
     return _drain(events, me, reg, panes, runtime.shows_ready_ui,
-                  runtime.awaiting_answer)
+                  runtime.awaiting_answer, plate=plate, rank=rank)
 
 
 if __name__ == "__main__":

@@ -26,13 +26,15 @@ st context <query>            what code should I be looking at? (bobbin)
 st doctor [--install]         what's installed, stale, missing (out-of-box)
 st project                    materialize the crew cards FROM the graph
 st tend                       supervise the crew: respawn what DIED, never what was RETIRED
+st subscribe                  watch quipu entity events; route governed workflows to the admin
 ```
 
-Fourteen. `--dry-run` is on every command that writes, from commit one. The surface grew past the
-original eight by five, each on a specific ask — not drift: **inbox**/**task** (the dispatch/tracker
+Fifteen. `--dry-run` is on every command that writes, from commit one. The surface grew past the
+original eight by six, each on a specific ask — not drift: **inbox**/**task** (the dispatch/tracker
 pair, owner-directed), **context** (the bobbin Context protocol), **doctor**
-(out-of-box detect/install, Stiwi's direct ask), and **project** (the quipu-registry
-projection). Each is named on purpose: this doc once
+(out-of-box detect/install, Stiwi's direct ask), **project** (the quipu-registry
+projection), and **subscribe** (the quipu events adapter, routing governed workflows to the
+admin). Each is named on purpose: this doc once
 said "eight" while the code had twelve, and a count nobody enforces is a comment — in the one repo
 whose whole pitch is the exact count, that was the bug.
 
@@ -41,7 +43,7 @@ on PATH. This doc said `shanty` in all 29 of its examples long after the entry p
 every command a reader copied out of here was uninvokable — the same defect as a wrong count, in the
 worse place (GitHub #8).
 
-Two of the fourteen were RENAMED on 2026-07-19, and the count did not move — a rename is not a
+Two of the fifteen were RENAMED on 2026-07-19, and the count did not move — a rename is not a
 new command, and the test that pins the number is what proves it:
 
 - **`prime` -> `anchor`.** An agent's anchor is what holds it to its work; the word is the noun and
