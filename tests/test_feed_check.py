@@ -155,7 +155,7 @@ def test_SHANTY_DARK_AGENTS_env_overrides_the_default_denylist(tmp_path, monkeyp
 # --- main(): block only when both hold; allow (fail-open) otherwise ---------
 
 def _wire_main(monkeypatch, free, ready_beads=None, bd_raises=False):
-    monkeypatch.setattr(feed_check, "free_feedable_workers", lambda *a: free)
+    monkeypatch.setattr(feed_check, "free_feedable_workers", lambda *a, **k: free)
     monkeypatch.setattr(feed_check, "bd_cwd", lambda reg: None)
     if bd_raises:
         def boom(cwd=None):
@@ -285,3 +285,50 @@ def test_a_threaded_worker_never_blocks_the_rule_zero_gate(monkeypatch, capsys):
                              "assignee": "billy"}])
     assert feed_check.main(["--root", "/x"]) == 0
     assert capsys.readouterr().out == "", "self-feeding fleet -> stop allowed, silence"
+
+
+# --- the launch-stamp ownership gate (aegis-2j2r) ---------------------------
+
+def _stamp(root, *names):
+    d = root / "launched"
+    d.mkdir(parents=True, exist_ok=True)
+    for n in names:
+        (d / f"{n}.json").write_text("{}")
+
+
+def test_an_unstamped_agent_is_not_fed_when_stamps_exist(tmp_path):
+    """The structural dark-crew fix: a pane st did not launch (no launch stamp)
+    carries full send wiring — the respawner re-primes it with this
+    deployment's worker settings — and must still not be counted free. Unlike
+    the name denylist this needs no name: ownership is the signal."""
+    settings = _send_settings(tmp_path)
+    reg = _Reg([Agent(name="notmine", role="worker", pane="other-crew-notmine"),
+                Agent(name="weaver", role="worker", pane="shanty-weaver")])
+    panes = _Panes({"other-crew-notmine": IDLE, "shanty-weaver": IDLE},
+                   {"other-crew-notmine": f"claude --settings {settings}",
+                    "shanty-weaver": f"claude --settings {settings}"})
+    _stamp(tmp_path, "weaver")
+    assert feed_check.free_feedable_workers(
+        reg, panes, _Runtime(), root=tmp_path) == ["weaver"]
+
+
+def test_an_empty_stamp_store_applies_no_gate(tmp_path):
+    """CANNOT TELL is honored: with no stamps at all (fresh deployment, or the
+    store unreadable) the gate must not starve the fleet — ownership is
+    unknowable, so the wiring gate alone decides, as before."""
+    settings = _send_settings(tmp_path)
+    reg = _Reg([Agent(name="weaver", role="worker", pane="shanty-weaver")])
+    panes = _Panes({"shanty-weaver": IDLE},
+                   {"shanty-weaver": f"claude --settings {settings}"})
+    assert feed_check.free_feedable_workers(
+        reg, panes, _Runtime(), root=tmp_path) == ["weaver"]
+
+
+def test_no_root_means_no_ownership_gate(tmp_path):
+    """Callers that cannot supply a root (legacy paths) keep the old
+    behaviour exactly."""
+    settings = _send_settings(tmp_path)
+    reg = _Reg([Agent(name="weaver", role="worker", pane="shanty-weaver")])
+    panes = _Panes({"shanty-weaver": IDLE},
+                   {"shanty-weaver": f"claude --settings {settings}"})
+    assert feed_check.free_feedable_workers(reg, panes, _Runtime()) == ["weaver"]
