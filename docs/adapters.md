@@ -70,10 +70,16 @@ must refuse a card whose role needs a capability its runtime doesn't have:
 
 ```
 $ st role set malcolm lead
-  ERROR: runtime 'codex' does not declare blocking stop hooks.
-         role 'lead' requires on_report_stop delivery to the model.
-         malcolm stays worker. Nothing written.
+  refused: harness 'codex' does not declare blocking stop hooks;
+           role 'lead' requires stop-event delivery to the model.
+           malcolm stays worker. Nothing written.
 ```
+
+The gate fires at **role-set time**, before the card or its settings are written
+(`tier.role_set`, aegis-w5l9) — so "Nothing written." is literally true, and a
+tier card the fleet could never start never lands in the registry. The same gate
+also guards the `st new` launch path as a backstop; there its message ends
+"Nothing launched." instead, because by then the card may already be on disk.
 
 **Which roles need it is not a fixed list — it is exactly the set of `route_stop` DESTINATIONS**
 (ruled against the tier in tier.py). A **worker** is only ever a stop *source*, so it

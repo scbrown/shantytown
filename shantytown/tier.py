@@ -147,10 +147,31 @@ def plan_role_set(registry: Registry, agent_name: str, role: str,
 def role_set(registry: MutableRegistry, agent_name: str, role: str,
              reports: list[str] | None = None, dry_run: bool = False) -> RolePlan:
     plan = plan_role_set(registry, agent_name, role, reports)
+    # Capability gate (aegis-w5l9). A lead/administrator RECEIVES stop events, so
+    # its harness must declare blocking stop hooks; refuse BEFORE any write, so
+    # the registry never holds a tier card the fleet can never start (and its
+    # settings.json is never emitted for it). This runs for dry_run too — the
+    # refusal is a property of the plan, not the write, so `--dry-run` surfaces
+    # it exactly as it does the hierarchy refusals. Gating here (the write path)
+    # rather than only in `_cmd_role` protects every caller of role_set, not one
+    # command; adapters.md documented the gate firing at role-set time and it
+    # never did — the check lived only on the `st new` launch path.
+    _require_writes_hostable(plan)
     if not dry_run:
         for a in plan.writes:
             registry.set(a)
     return plan
+
+
+def _require_writes_hostable(plan: RolePlan) -> None:
+    """Refuse the plan if any WRITTEN card's role needs a stop capability its
+    harness lacks. Local imports keep tier free of a load-time runtime/harness
+    dependency (neither imports tier, so no cycle — but the layer stays clean)."""
+    from . import harness, runtime
+    for card in plan.writes:
+        if card.role in runtime._ROLES_NEEDING_STOP:
+            runtime.require_capability(harness.for_card(card), card,
+                                       consequence="Nothing written.")
 
 
 # --- stop-hook routing: a worker's stop event reaches its lead. THE TIER. ---
