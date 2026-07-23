@@ -1997,6 +1997,19 @@ def _cmd_project(a) -> int:
         print(f"  could not project: quipu unreachable: {e}", file=sys.stderr)
         return CANNOT_TELL
 
+    # ZERO agents from a REACHABLE graph is almost never "no crew" — it is a
+    # wrong namespace (SHANTY_ONTO_NS unset -> the library's example default,
+    # which holds none of any real fleet's facts) answering "nobody exists"
+    # with a straight face. This used to fall through to "already projected:
+    # 0 cards match the graph. Nothing to do." — a false pass ellie documented
+    # and aegis-wxrm asked to close. Could-not-tell, not success.
+    if not agents:
+        print("  could not project: the graph answered but returned ZERO "
+              "CrewMembers — wrong namespace? (SHANTY_ONTO_NS is "
+              f"{'set' if os.environ.get('SHANTY_ONTO_NS') else 'UNSET — using the library example default'})",
+              file=sys.stderr)
+        return CANNOT_TELL
+
     files = FilesRegistry(a.root / "crew")
     panes = _panes(a)
     dry = getattr(a, "dry_run", False)
