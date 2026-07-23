@@ -197,3 +197,36 @@ def test_positive_control_ignoring_the_graph_hides_the_missing_drain(tmp_path: P
     # drain is not required and the identical settings pass.
     hv2, _ = roles._hooks_verdict(dearing, [dearing], reader)
     assert hv2 == roles.OK
+
+
+# --- the deployment Bash guard extension point (internal-ref) -----------------
+
+from shantytown import runtime
+
+
+def test_no_bash_guard_emitted_by_default(tmp_path):
+    """Shantytown ships no guard and hardcodes no path: absent the deployment
+    config, PreToolUse carries only the edit-policy hook."""
+    s = runtime.claude_settings_for_role("worker", root=tmp_path)
+    matchers = [h.get("matcher") for h in s["hooks"]["PreToolUse"]]
+    assert "Bash" not in matchers
+
+
+def test_env_json_bash_guard_is_emitted_for_every_role(tmp_path):
+    (tmp_path / "env.json").write_text(
+        '{"SHANTY_BASH_GUARD": "/usr/local/lib/guards/host-policy.sh"}')
+    for role in ("worker", "lead", "administrator"):
+        s = runtime.claude_settings_for_role(role, root=tmp_path)
+        bash = [h for h in s["hooks"]["PreToolUse"] if h.get("matcher") == "Bash"]
+        assert len(bash) == 1, role
+        assert bash[0]["hooks"] == [{"type": "command",
+                                     "command": "/usr/local/lib/guards/host-policy.sh"}]
+        # the edit-policy hook is untouched beside it
+        assert any(h.get("matcher") != "Bash" for h in s["hooks"]["PreToolUse"])
+
+
+def test_ambient_env_supplies_the_guard_when_env_json_lacks_it(tmp_path, monkeypatch):
+    monkeypatch.setenv("SHANTY_BASH_GUARD", "/usr/local/lib/guards/ambient.sh")
+    s = runtime.claude_settings_for_role("worker", root=tmp_path)
+    bash = [h for h in s["hooks"]["PreToolUse"] if h.get("matcher") == "Bash"]
+    assert bash and bash[0]["hooks"][0]["command"] == "/usr/local/lib/guards/ambient.sh"

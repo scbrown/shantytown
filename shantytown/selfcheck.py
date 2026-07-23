@@ -76,7 +76,18 @@ from pathlib import Path
 #
 # Resolution order, first hit wins:
 #   1. $SHANTY_CANONICAL_SOURCE  — explicit, and how a fleet pins it
-#   2. the git top-level of the running package, if it is in a checkout
+#   2. the MAIN working tree of the running package's checkout — NOT merely its
+#      git top-level. Asking the running module for its own toplevel is asking
+#      the suspect to vouch for itself: under an editable install re-pointed at
+#      a personal worktree (the internal-ref incident, replayed in the editable
+#      era), the toplevel IS that worktree, so recorded == canonical BY
+#      CONSTRUCTION and the requirement-1 check below could never fire — dead
+#      code, measured: the re-point rendered a green "editable — the checkout
+#      IS the install, current with origin/main". git itself records which
+#      working tree is primary (`git worktree list` names it first), and every
+#      crew worktree here is a LINKED worktree of the canonical checkout, so
+#      the linked case resolves to the right answer with no configuration. A
+#      fully independent clone still self-vouches — that is what (1) is for.
 #   3. None — which makes the verdict CANNOT_TELL, never OK. "I do not know where
 #      canonical is" is not "you are fine"; that is the whole doctrine of this
 #      module applied to its own configuration.
@@ -92,7 +103,21 @@ def canonical_source(run=None) -> str | None:
     runner = run or _default_run
     rc, out = runner(("git", "-C", str(Path(__file__).resolve().parent),
                       "rev-parse", "--show-toplevel"))
-    return out.strip().rstrip("/") if rc == 0 and out.strip() else None
+    if rc != 0 or not out.strip():
+        return None
+    toplevel = out.strip().rstrip("/")
+    # A LINKED worktree is never canonical — resolve the main working tree,
+    # which `git worktree list` always names first. A failed listing is a
+    # failure to LOOK and stays None: falling back to the toplevel here would
+    # quietly reinstate the self-reference this exists to break.
+    rc, out = runner(("git", "-C", toplevel, "worktree", "list", "--porcelain"))
+    if rc != 0 or not out.strip():
+        return None
+    first = out.strip().splitlines()[0]
+    if not first.startswith("worktree "):
+        return None
+    main = first[len("worktree "):].strip().rstrip("/")
+    return main or None
 
 # Verdicts. Same three-outcome vocabulary as roles.check, on purpose: ok / broken /
 # cannot tell. A checker that can only report health is not a checker.
@@ -184,26 +209,33 @@ def check_self(*, run=_default_run, canonical: str | None = None,
                           "pipx has no recorded source for 'shantytown' — cannot "
                           "tell what this `st` was built from")
 
+    # EDITABLE? Resolved once, BEFORE the path check, because three messages
+    # must tell the truth differently for it: a re-pointed install's remedy
+    # must recreate the fleet's install MODE (a plain `--force` would silently
+    # convert an editable install to a copied one, un-inverting the whole
+    # editable era); a dirty checkout is not "would deploy WIP", it is WIP
+    # already running; and "installed files match" is by construction, not by
+    # comparison.
+    target = (editable_target or _editable_target)()
+
     canonical_path = str(Path(canonical))
     if str(Path(recorded)) != canonical_path:
         # Requirement 1: an ERROR, not a note. This is the condition where the
-        # fleet's harness is a build of somebody's private tree.
+        # fleet's harness is a build of somebody's private tree. `target` not
+        # None means the install is editable-MODE (the finder exists), even
+        # though it points somewhere non-canonical — hence the -e in the fix.
+        flag = "-e " if target is not None else ""
         return SelfHealth(
             BROKEN,
             f"`st` was installed from {recorded!r}, NOT the canonical checkout "
             f"{canonical_path!r}. Whatever is in that directory — including "
             f"uncommitted work — is what the whole fleet is running, and a "
             f"`pipx reinstall` will faithfully rebuild it. "
-            f"Fix: pipx install --force {canonical_path}",
+            f"Fix: pipx install --force {flag}{canonical_path}",
             recorded_source=recorded)
 
     head = _head(canonical_path, run)
 
-    # EDITABLE? Resolved once, here, because two messages below must tell the
-    # truth differently for it: a dirty checkout is not "would deploy WIP", it
-    # is WIP already running; and "installed files match" is by construction,
-    # not by comparison.
-    target = (editable_target or _editable_target)()
     editable = False
     if target is not None:
         try:

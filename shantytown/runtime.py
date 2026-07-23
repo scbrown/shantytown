@@ -307,6 +307,30 @@ def _guard_hook() -> dict:
     }
 
 
+def bash_guard_command(root=None) -> str | None:
+    """The deployment's PreToolUse Bash guard command, or None for none.
+
+    SHANTY_BASH_GUARD names a command the harness runs before every Bash tool
+    call — the extension point for host-policy guards (the aegis deployment
+    wires its crew-only guard here: agents on that host must not be able to
+    start the OTHER orchestrator's machinery, internal-ref/bah2). Shantytown
+    itself ships NO guard and hardcodes NO path: which commands are dangerous
+    is a property of the DEPLOYMENT, not of the tool, so the value lives in
+    env.json (gitignored deployment config) or the ambient env — the same
+    source order as the carried env, and absent both the hook is simply not
+    emitted. The guard contract is Claude Code's: exit 2 blocks, anything
+    else allows — a guard that fails open is the deployment's job to write.
+    """
+    if root is not None:
+        try:
+            loaded = json.loads((Path(root) / "env.json").read_text())
+            if isinstance(loaded, dict) and loaded.get("SHANTY_BASH_GUARD"):
+                return str(loaded["SHANTY_BASH_GUARD"])
+        except (OSError, ValueError):
+            pass
+    return os.environ.get("SHANTY_BASH_GUARD") or None
+
+
 def settings_for_role(role: str, root=None, harness_name: str | None = None) -> dict:
     """The settings file a role needs, IN ITS HARNESS'S FORMAT — the CONTENT
     `role set` emits and `st new`'s launch reads via --settings (#6, arnold
@@ -352,11 +376,19 @@ def claude_settings_for_role(role: str, root=None) -> dict:
         stop = [_stop_cmd("drain", root), _feed_check_cmd(root)]
     else:
         raise ValueError(f"unknown role {role!r}; expected worker/lead/administrator")
+    pre_tool = [_guard_hook()]
+    # Deployment Bash guard (internal-ref): emitted ONLY when the deployment
+    # configures one — see bash_guard_command. Matcher Bash, so every shell
+    # command an agent runs passes the host's policy first.
+    guard_cmd = bash_guard_command(root)
+    if guard_cmd:
+        pre_tool.append({"matcher": "Bash",
+                         "hooks": [{"type": "command", "command": guard_cmd}]})
     return {
         "hooks": {
             "Stop": [{"hooks": stop}],
             # hank policy guard on every edit-shaped tool call. See _HANK_GUARD.
-            "PreToolUse": [_guard_hook()],
+            "PreToolUse": pre_tool,
         },
         # Pre-answer the project-MCP consent screen. A FRESH workspace makes Claude
         # Code ask "N new MCP servers found — enable?" and that prompt BLOCKS the
@@ -381,7 +413,12 @@ def claude_settings_for_role(role: str, root=None) -> dict:
 # Deployment-supplied environment for emitted settings. NOT a list of values —
 # a list of NAMES to carry through, so no internal hostname ever lives in this
 # repo (that is what the public scrub was for).
-_CARRIED_ENV = ("QUIPU_SERVER", "SHANTY_ONTO_NS")
+# SHANTY_CANONICAL_SOURCE rides along so every agent's `st doctor` self-check
+# audits the DEPLOYMENT's canonical checkout, pinned, rather than asking the
+# running module to vouch for itself (selfcheck.canonical_source resolution
+# order — the pin is the layer that still works for a re-point from a fully
+# independent clone, which the linked-worktree fallback cannot see through).
+_CARRIED_ENV = ("QUIPU_SERVER", "SHANTY_ONTO_NS", "SHANTY_CANONICAL_SOURCE")
 
 
 def _settings_env(role: str, root=None) -> dict:

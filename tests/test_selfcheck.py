@@ -288,8 +288,91 @@ def test_canonical_source_prefers_the_environment(monkeypatch):
 
 def test_canonical_source_falls_back_to_the_git_checkout(monkeypatch):
     monkeypatch.delenv("SHANTY_CANONICAL_SOURCE", raising=False)
-    assert sc.canonical_source(
-        run=lambda cmd: (0, "/somewhere/shantytown\n")) == "/somewhere/shantytown"
+
+    def run(cmd):
+        if "--show-toplevel" in cmd:
+            return 0, "/somewhere/shantytown\n"
+        assert cmd[-3:] == ("worktree", "list", "--porcelain")
+        return 0, ("worktree /somewhere/shantytown\nHEAD " + "0" * 40 +
+                   "\nbranch refs/heads/main\n")
+
+    assert sc.canonical_source(run=run) == "/somewhere/shantytown"
+
+
+def test_canonical_source_from_a_linked_worktree_names_the_MAIN_checkout(monkeypatch):
+    """THE HOLE THAT SURVIVED THE EDITABLE ERA (internal-ref, measured 2026-07-23).
+
+    Asking the running module for its own git toplevel is asking the suspect to
+    vouch for itself: after `pipx install --force -e <personal worktree>` — the
+    original incident's command, replayed under editable — the running package
+    LIVES in that worktree, so toplevel == recorded by construction, the
+    requirement-1 check can never fire, and the probe rendered a green
+    "editable — the checkout IS the install, current with origin/main" for a
+    fleet running one agent's private tree. Same root cause in the other
+    direction: a dev invocation from a worktree resolved canonical to ITSELF,
+    condemned the healthy install, and printed `pipx install --force <the
+    worktree>` as the fix — the check recommending the incident it exists to
+    prevent.
+
+    git itself records which working tree is primary: `git worktree list`
+    names the main one first. Resolve THAT."""
+    monkeypatch.delenv("SHANTY_CANONICAL_SOURCE", raising=False)
+
+    def run(cmd):
+        if "--show-toplevel" in cmd:
+            return 0, "/home/user/src/shantytown-wt/someone\n"
+        assert cmd[-3:] == ("worktree", "list", "--porcelain")
+        return 0, ("worktree /home/user/src/shantytown\nHEAD " + "0" * 40 +
+                   "\nbranch refs/heads/main\n\n"
+                   "worktree /home/user/src/shantytown-wt/someone\nHEAD " + "1" * 40 +
+                   "\nbranch refs/heads/wt/someone\n")
+
+    assert sc.canonical_source(run=run) == "/home/user/src/shantytown"
+
+
+def test_an_unlistable_worktree_is_None_not_self_vouched(monkeypatch):
+    """Failure to LOOK is never a pass — and falling back to the running tree's
+    own toplevel when the listing fails would quietly reinstate the
+    self-reference the listing exists to break."""
+    monkeypatch.delenv("SHANTY_CANONICAL_SOURCE", raising=False)
+
+    def run(cmd):
+        if "--show-toplevel" in cmd:
+            return 0, "/home/user/src/shantytown-wt/someone\n"
+        return 1, ""
+
+    assert sc.canonical_source(run=run) is None
+
+
+def test_a_repointed_EDITABLE_install_is_BROKEN_not_green(monkeypatch):
+    """End-to-end regression for the replayed incident: recorded source = the
+    worktree, PEP 660 finder = the worktree, worktree clean and current with
+    its upstream. Every arm the old check consulted said healthy — only
+    resolving canonical to the MAIN checkout catches it. And the printed fix
+    must carry `-e`: the remedy for a re-pointed editable install is a
+    re-point back, not a silent conversion to a copied install."""
+    monkeypatch.delenv("SHANTY_CANONICAL_SOURCE", raising=False)
+    wt = "/home/user/src/shantytown-wt/someone"
+
+    def run(cmd):
+        if "--show-toplevel" in cmd:
+            return 0, wt + "\n"
+        if cmd[-3:] == ("worktree", "list", "--porcelain"):
+            return 0, ("worktree /home/user/src/shantytown\nHEAD " + "0" * 40 +
+                       "\nbranch refs/heads/main\n\n"
+                       f"worktree {wt}\nHEAD " + "1" * 40 +
+                       "\nbranch refs/heads/wt/someone\n")
+        if cmd[:3] == ("pipx", "list", "--json"):
+            return 0, _meta(wt)
+        raise AssertionError(f"unexpected argv {cmd}")
+
+    from pathlib import Path
+    h = sc.check_self(run=run,
+                      editable_target=lambda: Path(wt) / "shantytown",
+                      stale_files=lambda c: set())
+    assert h.verdict == sc.BROKEN
+    assert wt in h.note
+    assert "pipx install --force -e /home/user/src/shantytown" in h.note
 
 
 def test_unknown_canonical_is_CANNOT_TELL_never_ok(monkeypatch):

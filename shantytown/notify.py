@@ -37,6 +37,8 @@ TWO INVARIANTS, both learned expensively in this repo:
 """
 from __future__ import annotations
 import json
+import os
+import time
 from pathlib import Path
 
 from . import triage as triage_mod
@@ -585,3 +587,128 @@ def _idle_fleet_message(free: list[str], newly: list[str], ready) -> str:
         f"DISPATCH — a free worker while work is ready is the coordinator's stall. "
         f"`st go <bead> <worker>`. Top ready: {top}. "
         f"(auto-alert from st tend; you were not asked to sweep.)")
+
+
+class StalledAlerter:
+    """STALLED (internal-ref): an agent parked idle while HOLDING an in_progress
+    item, with no pane change, no item change and no running shell for the
+    whole threshold window — the weaver case: hours at a prompt holding
+    internal-ref whose blocker had been resolved in a comment it never re-read.
+    Every liveness check read fine because nothing measured PROGRESS.
+
+    This is a PROGRESS-OVER-TIME reading, unlike NEGLECTED's point-in-time one:
+    each pass snapshots (pane-text hash + sorted held-item ids) per worker and
+    compares against the stored episode. ANY change — pane text, held set, a
+    live background shell, or the pane simply not being idle — resets the
+    episode. Only a snapshot UNCHANGED at every observation for >= threshold
+    minutes alerts, once per episode (re-armed by any progress).
+
+    THE DISCRIMINATOR (internal-ref, both directions): a 30-min re-index with a
+    live shell reads NOT STALLED — the runtime chrome's shell count (a live
+    "· N shells ·") resets the clock. running_shells() returning None is NOT
+    treated as a shell: on an idle pane the indicator's absence means no
+    shells survive the turn, and treating cannot-see as progress would blind
+    the detector exactly like the turn-end-booked-as-task-end defect it
+    guards. Chrome that ticks (clocks etc.) makes the hash under-fire — the
+    safe direction — stated rather than hidden.
+
+    THRESHOLD, and why the number: default 15 minutes = ~30 consecutive
+    unchanged 30s-pass observations. A working agent's pane changes on every
+    streamed token, so legitimate silence while idle-and-holding is bounded by
+    prompt-render lag (seconds); the measured failure ran HOURS. 15m is two
+    orders above the false-positive regime and an order below the harm one.
+    Override: SHANTY_STALL_MIN.
+
+    FAIL OPEN, same as every alerter here: any error pushes nothing.
+    """
+
+    def __init__(self, root, reg, panes, runtime, *, push=push_to_admin,
+                 bd_in_progress=None, threshold_min=None, now=None, log=None):
+        self.path = Path(root) / "notify" / "stalled.json"
+        self._reg = reg
+        self._panes = panes
+        self._runtime = runtime
+        self._push = push
+        from . import feed_check
+        self._bd_in_progress = bd_in_progress or (
+            lambda: feed_check.bd_in_progress(feed_check.bd_cwd(reg)))
+        env = os.environ.get("SHANTY_STALL_MIN")
+        self._threshold_s = (threshold_min if threshold_min is not None
+                             else float(env) if env else 15.0) * 60.0
+        self._now = now or time.time
+        self._log = log or (lambda msg: None)
+
+    def _load(self) -> dict:
+        try:
+            return json.loads(self.path.read_text())
+        except (OSError, ValueError):
+            return {}
+
+    def _save(self, store: dict) -> None:
+        from .files import write_json_atomic
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        write_json_atomic(self.path, store)
+
+    def sweep(self, agents) -> list[str]:
+        """Returns the workers newly flagged STALLED this pass."""
+        import hashlib
+        from .runtime import asks_a_question, auth_expired
+
+        try:
+            held: dict[str, list[str]] = {}
+            for b in self._bd_in_progress():
+                w = (b.get("assignee") or "").split("/")[-1]
+                if w:
+                    held.setdefault(w, []).append(b.get("id", "?"))
+        except Exception:
+            return []                          # bd hiccup -> fail open
+        store = self._load()
+        now = self._now()
+        stalled: list[tuple[str, list[str], float]] = []
+        try:
+            for ag in agents:
+                if ag.role != "worker" or not ag.pane:
+                    continue
+                items = sorted(held.get(ag.name, []))
+                if not items or not self._panes.exists(ag.pane):
+                    store.pop(ag.name, None)   # nothing held -> NEGLECTED's domain
+                    continue
+                screen = self._panes.capture(ag.pane, attrs=True)
+                plain = triage_mod.strip_attrs(screen)
+                state = triage_mod.work_state(
+                    screen, self._runtime.shows_ready_ui(plain),
+                    awaiting=asks_a_question(self._runtime, plain),
+                    auth_dead=auth_expired(self._runtime, plain))
+                shells = triage_mod.running_shells(plain)
+                if state != triage_mod.IDLE or (shells is not None and shells > 0):
+                    store.pop(ag.name, None)   # busy/waiting/auth-dead, or a live
+                    continue                   # shell: that is progress, re-arm
+                key = hashlib.sha256(
+                    (plain + "\n" + "|".join(items)).encode()).hexdigest()
+                ep = store.get(ag.name)
+                if not ep or ep.get("key") != key:
+                    store[ag.name] = {"key": key, "since": now, "alerted": False}
+                    continue
+                if not ep.get("alerted") and now - ep["since"] >= self._threshold_s:
+                    stalled.append((ag.name, items, (now - ep["since"]) / 60))
+                    ep["alerted"] = True       # once per episode
+        except Exception:
+            return []                          # tmux/registry hiccup -> fail open
+        if stalled:
+            lines = "; ".join(
+                f"{n} idle {m:.0f}m holding {', '.join(i)}" for n, i, m in stalled)
+            admin = self._push(self._reg, self._panes,
+                               f"⚠ st tend — STALLED: {lines}. No pane, item or "
+                               f"shell progress for the whole window: the agent is "
+                               f"parked on work it is not doing. Look (`st log "
+                               f"<agent>`), then nudge it or reclaim the item — a "
+                               f"held bead nobody is working is invisible starvation.")
+            if admin is None:
+                # Not delivered -> do not burn the episode's one alert.
+                for n, _i, _m in stalled:
+                    store[n]["alerted"] = False
+                self._log("stalled: coordinator pane unreachable — NOT alerted, "
+                          "will retry")
+                stalled = []
+        self._save(store)
+        return [n for n, _i, _m in stalled]
