@@ -423,10 +423,20 @@ class IdleFleetAlerter:
         write_json_atomic(self.path, sorted(alerted))
 
     def sweep(self, agents) -> list[str]:
-        """One pass. If any NEWLY-free-feedable worker exists AND there is
-        dispatchable work, PUSH the coordinator ONE idle-fleet alert and record the
-        free set. Returns the newly-idle names actually alerted about (empty in the
-        quiet, common case). Fully fail-open."""
+        """One pass. Idle workers split by WHO their next work belongs to
+        (aegis-wjgt groundwork):
+
+        - UNTHREADED idle + UNASSIGNED ready work -> ONE idle-fleet alert to the
+          coordinator (unchanged nk0e behavior, minus the workers below).
+        - THREADED idle (ready beads already ASSIGNED to them) -> the COORDINATOR
+          HEARS NOTHING; the WORKER gets a self-feed nudge instead, once per idle
+          episode. This is the thread design's core ask ("without notifying the
+          coordinator") and, until the stop-hook advance lands, the BELT that
+          keeps an excluded worker from stalling silently — no coordinator ping
+          may ever mean nobody-pings. It survives as the fallback layer under
+          the advance hook (tend catches what a missed stop event would drop).
+
+        Returns the newly-idle names alerted/nudged this pass. Fully fail-open."""
         from . import feed_check
         try:
             free = feed_check.free_feedable_workers(self._reg, self._panes, self._runtime)
@@ -443,29 +453,65 @@ class IdleFleetAlerter:
             self._save(already)                    # still-idle set -> no re-spam
             return []
 
-        # There ARE newly-idle feedable workers. Is there work to give them? bd is
-        # the one external call; a hiccup FAILS OPEN (no push, no record — so it
-        # retries next pass), never a block.
+        # bd is the one external call; a hiccup FAILS OPEN (no push, no record —
+        # so it retries next pass), never a block.
         try:
-            ready = feed_check.dispatchable(set(free), self._bd_ready())
+            ready_beads = self._bd_ready()
         except Exception:
             return []
-        if not ready:
-            # Free, but nothing to dispatch — not neglect. Do NOT record the newly-
-            # idle set, so when work appears the alert fires. Keep the re-armed
-            # ledger of prior alerts.
-            self._save(already)
-            return []
+        queues = feed_check.threaded(ready_beads)
+        threaded_newly = [w for w in newly if w in queues]
+        unthreaded_free = [w for w in free if w not in queues]
+        newly = [w for w in newly if w not in queues]
+
+        # The worker-side nudge: their queue is loaded; feed themselves.
+        nudged = []
+        for worker in threaded_newly:
+            beads = queues[worker]
+            target = push_to_own_pane(self._reg, self._panes, worker,
+                                      _self_feed_message(worker, beads))
+            if target is None:
+                self._log(f"thread: {worker} is idle with {len(beads)} assigned "
+                          f"ready bead(s) but its pane was unreachable — NOT "
+                          f"nudged, will retry")
+                continue
+            nudged.append(worker)
+            self._log(f"thread: nudged {worker} to self-feed ({len(beads)} "
+                      f"assigned ready: {', '.join(beads[:3])}) — coordinator "
+                      f"deliberately not pinged")
+
+        ready = feed_check.dispatchable(set(unthreaded_free), ready_beads)
+        if not newly or not ready:
+            # Nothing for the coordinator this pass. Record who was HANDLED
+            # (still-idle already + the nudged), so a still-idle threaded worker
+            # is not re-nudged every interval; an un-nudged one stays pending.
+            self._save(sorted(already | set(nudged)))
+            return nudged
 
         admin = self._push(self._reg, self._panes,
-                           _idle_fleet_message(free, newly, ready))
+                           _idle_fleet_message(unthreaded_free, newly, ready))
         if admin is None:
             self._log("idle-fleet: free workers + ready work, but no reachable "
                       "coordinator pane — NOT alerted, will retry")
-            return []
-        self._save(free)                           # every current free is now alerted
-        self._log(f"idle-fleet: alerted {admin} — {len(free)} idle, {len(ready)} ready")
-        return newly
+            self._save(sorted(already | set(nudged)))
+            return nudged
+        self._save(sorted(already | set(nudged) | set(unthreaded_free)))
+        self._log(f"idle-fleet: alerted {admin} — {len(unthreaded_free)} idle, "
+                  f"{len(ready)} ready")
+        return newly + nudged
+
+
+def _self_feed_message(worker: str, beads: list[str]) -> str:
+    # The design citation lives HERE, not in the emitted string (the ratchet's
+    # rule, which fired on the first draft of this very message): the thread
+    # design bead is aegis-wjgt.
+    top = ", ".join(beads[:3])
+    return (
+        f"⚠ st tend: you are IDLE with {len(beads)} ready item(s) already assigned "
+        f"to you ({top}). Your queue self-feeds — run `bd ready`, take the top "
+        f"assigned item, and continue. The coordinator was deliberately NOT "
+        f"pinged: assigned work is yours to advance, not theirs to re-dispatch. "
+        f"(auto-nudge from st tend, once per idle episode.)")
 
 
 def _idle_fleet_message(free: list[str], newly: list[str], ready) -> str:
