@@ -55,7 +55,7 @@ def test_docstring_and_code_agree_on_the_command_set():
     )
 
 
-def test_the_surface_is_sixteen():
+def test_the_surface_is_seventeen():
     """A bare number check too, so 'the docs claim N' is itself pinned.
 
     Grew to 13 with `project` — materialize the crew cards from the graph (the
@@ -89,8 +89,16 @@ def test_the_surface_is_sixteen():
     lifetime, different scope, different composition; it earns its own verb the
     way an observability panel is not a status line.
 
+    Grew to 17 with `subscribe` — watch quipu entity events and route assigned
+    workflows to the admin (the events adapter integrations.md sketched, finally
+    built first-class on Quipu's cursored transaction log). Owner-directed; the
+    count is deliberate friction, not a ceiling. (15-vs-16 note: attach/dashboard
+    and subscribe landed on DIVERGED remotes — origin and github each grew a
+    disjoint surface off 14, and both sides' "15" claims were true in their own
+    world. This merge is where the two worlds reconciled to 17.)
+
     Each command still earns its slot."""
-    assert len(_actual_subcommands()) == 16, (
+    assert len(_actual_subcommands()) == 17, (
         "the command count changed. If that's intended, update the number here and "
         "the cli.py docstring together — and say why the surface grew in docs/cli.md."
     )

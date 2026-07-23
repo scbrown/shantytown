@@ -1,9 +1,9 @@
-"""st — the CLI. Sixteen commands, and the count is load-bearing: each earns its slot.
+"""st — the CLI. Seventeen commands, and the count is load-bearing: each earns its slot.
 
     anchor [--short|--events|--harness] · go · inbox [--count] · task
     · crew [--count] · roles [--check] · role set · new · stop · log · context
     · doctor [--install] · project · tend [--install|--status|--reauth]
-    · attach [-r] · dashboard [admin]
+    · attach [-r] · dashboard [admin] · subscribe
 
 Five of those flags are MACHINE-READABLE modes, added for an external status bar
 (anchor --short/--events/--harness, crew --count, inbox --count). They are flags
@@ -24,7 +24,7 @@ already made itself the centre of the world.
 
 Gas Town ships ~110. This is not a smaller version of that list; it is the short
 set we measurably use, and the discipline is the point (docs/cli.md). The surface
-grew past the original ten by six, each on a specific ask — not drift:
+grew past the original ten by seven, each on a specific ask — not drift:
   · context — the bobbin Context protocol
   · doctor  — out-of-box tool detect/install, Stiwi's direct ask
   · project — materialize the crew cards from the graph
@@ -40,6 +40,9 @@ grew past the original ten by six, each on a specific ask — not drift:
   · dashboard — a live, tier-scoped observability panel: roster, current work, the
               REUSED state verdicts, last activity. The always-on sibling of the
               one-shot `crew`; refreshes on an interval in a second pane.
+  · subscribe — watch quipu entity events and route governed workflows to the
+              admin (the events adapter integrations.md sketched, built first-
+              class on Quipu's cursored transaction log). Owner-directed.
 The count is PINNED by a test (tests/test_command_count.py): the next command
 either updates this number or fails CI. This docstring used to say "ten" while the
 code had eleven (context landed unannounced) — a count nobody enforces is a
@@ -375,11 +378,49 @@ def build_parser() -> argparse.ArgumentParser:
     db.add_argument("--once", action="store_true",
                     help="render one snapshot and exit (no refresh loop)")
 
+    sb = sub.add_parser("subscribe",
+                        help="watch quipu entity events; route assigned workflows to the admin")
+    sb.add_argument("--once", action="store_true",
+                    help="poll one batch and exit (default: loop)")
+    sb.add_argument("--interval", type=float, default=10.0,
+                    help="poll interval in seconds when looping")
+    sb.add_argument("--server", default=None,
+                    help="quipu server (default $QUIPU_SERVER)")
+
     return ap
 
 
+def _parse_args(argv: list[str] | None):
+    """parse_args, but tolerant of a flag that appears BEFORE a variadic positional
+    in a subcommand — e.g. `inbox ian -n hi`. Plain argparse strands the trailing
+    positional (`unrecognized arguments: hi`): a `nargs="*"` positional, once
+    matched, does not reopen after an optional. argparse's parse_intermixed_args
+    handles exactly this, but it does NOT support subparsers — so detect the
+    stranded case (parse_known_args leaves extras) and re-run the CHOSEN subparser
+    with intermixed parsing. The fast path (no extras) is unchanged.
+    """
+    argv = list(sys.argv[1:] if argv is None else argv)
+    parser = build_parser()
+    ns, extra = parser.parse_known_args(argv)
+    if not extra:
+        return ns
+    subs = next((ac for ac in parser._actions
+                 if isinstance(ac, argparse._SubParsersAction)), None)
+    cmd = getattr(ns, "cmd", None)
+    if subs is None or cmd not in subs.choices:
+        return parser.parse_args(argv)          # not our case — let argparse report
+    sub_argv = argv[argv.index(cmd) + 1:]
+    # Re-parse the subcommand's args into a FRESH namespace (a populated one makes
+    # parse_intermixed_args warn), then copy the subcommand values onto `ns`, which
+    # already carries the globals + cmd from the top parse_known_args.
+    fresh = subs.choices[cmd].parse_intermixed_args(sub_argv)
+    for key, value in vars(fresh).items():
+        setattr(ns, key, value)
+    return ns
+
+
 def main(argv: list[str] | None = None) -> int:
-    a = build_parser().parse_args(argv)
+    a = _parse_args(argv)
 
     if a.cmd == "anchor":
         return _cmd_anchor(a)
@@ -413,6 +454,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_attach(a)
     if a.cmd == "dashboard":
         return _cmd_dashboard(a)
+    if a.cmd == "subscribe":
+        return _cmd_subscribe(a)
     return _not_yet(a.cmd)
 
 
@@ -1846,6 +1889,74 @@ def _cmd_project(a) -> int:
         files.set(ag)
     print(f"\n  projected {len(agents)} cards from the graph -> {a.root / 'crew'}\n")
     return OK
+
+
+def _cmd_subscribe(a) -> int:
+    """subscribe — watch quipu entity events and route assigned workflows.
+
+    The events adapter integrations.md sketched (`subscribe(kinds)`), finally built
+    first-class on Quipu's cursored transaction log. A WATERMARKED POLL: on new
+    transactions it asks quipu which governed workflows the graph assigns
+    (`aegis:assignsWorkflow`) and routes each NEW one to the administrator — who
+    acts (a bead + a nudge). `--once` polls a single batch (exit 0 reachable / 2
+    could-not-tell); default loops every `--interval` seconds. State (watermark +
+    handled set) persists under `<root>/events`, so a restart resumes rather than
+    re-routing what it already handled.
+    """
+    import time
+
+    from . import quipu_events as qe
+    from . import tier
+
+    events = qe.QuipuEvents(server=a.server)
+    registry = _registry(a)
+    tracker = _tracker(a)
+    panes = Tmux()
+    try:
+        admin = tier._find_administrator(registry)
+    except Exception:                              # registry unreachable — route without a target
+        admin = None
+    state_path = a.root / "events" / "quipu-subscription.json"
+    state = qe.SubscriptionState.load(state_path)
+
+    def route(w) -> None:
+        # A governed workflow is assigned -> create the work and hand it to the
+        # coordinator. Autonomous is fine (owner directive): shantytown orchestrates.
+        title = f"workflow {w.iri}"
+        if w.label:
+            title += f" — {w.label}"
+        if w.target:
+            title += f" (targets {w.target})"
+        try:
+            item = tracker.create(title, assignee=admin)
+        except Exception as e:
+            print(f"  could not create a bead for {w.iri}: {e}", file=sys.stderr)
+            return
+        mailed = ""
+        if admin:
+            try:
+                card = registry.get(admin)
+                if card.pane and panes.exists(card.pane):
+                    panes.send(card.pane, f"governed workflow assigned: {item.id} — {title}")
+                    mailed = f", mailed {admin}"
+            except LookupError:
+                pass
+        print(f"  routed {w.iri} -> {item.id}{mailed}")
+
+    def one() -> int:
+        report = qe.poll_and_route(events, state, route)
+        state.save(state_path)
+        print(report.render())
+        return OK if report.reachable else CANNOT_TELL
+
+    if a.once:
+        return one()
+    try:
+        while True:                                # a long-running subscriber
+            one()
+            time.sleep(max(1.0, a.interval))
+    except KeyboardInterrupt:
+        return OK
 
 
 def _not_yet(cmd: str) -> int:
