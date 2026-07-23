@@ -263,15 +263,11 @@ def _haul(reg: FilesRegistry, panes, me: str, root: Path) -> int:
         # to shed context, and feeding another bead here would spend the
         # remaining headroom on work that deserves a fresh session. None
         # (footer unreadable) is NOT over the line — unknown never blocks.
+        from .feed_check import haul_feed_message, haul_handoff_message
         ck = _my_context_k(reg, panes, me)
         if ck is not None and ck >= HAUL_HANDOFF_K:
-            print(json.dumps({"decision": "block", "reason": (
-                f"HAUL HANDOFF: your anchor is closed and your context is at "
-                f"{int(ck)}k — past the {int(HAUL_HANDOFF_K)}k handoff line "
-                f"(60% of the window). Do NOT start the next item. (1) "
-                f"CHECKPOINT anything unwritten to the bead trail now; (2) run "
-                f"/clear. Your haul resumes automatically on the fresh context "
-                f"— the next assigned item feeds itself at your next stop.")}))
+            print(json.dumps({"decision": "block",
+                              "reason": haul_handoff_message(ck, HAUL_HANDOFF_K)}))
             return 0
 
         nxt = mine[0]
@@ -280,18 +276,15 @@ def _haul(reg: FilesRegistry, panes, me: str, root: Path) -> int:
         rest = len(mine) - 1
         # Claim it the way a dispatch would, so the tracker shows the truth and
         # the next stop sees an active anchor. Best-effort: a failed claim
-        # still feeds — the agent claims by hand per the instruction.
+        # still feeds — the agent claims by hand per the instruction. The
+        # message is feed_check's — ONE voice for both advance triggers.
         try:
             _bd_json(["update", nid, "--status", "in_progress"], cwd)
         except Exception:
             pass
-        print(json.dumps({"decision": "block", "reason": (
-            f"HAUL: anchor closed ✓ — next on your haul: {nid} ({title}). "
-            f"Read it (`bd show {nid}`) and execute; close it when done and "
-            f"the haul advances itself ({rest} more after this). If your "
-            f"context is deep (past ~{int(HAUL_HANDOFF_K)}k), checkpoint + "
-            f"/clear FIRST — the haul survives it. The coordinator was not "
-            f"pinged: this queue is yours.")}))
+        print(json.dumps({"decision": "block",
+                          "reason": "anchor closed ✓ — "
+                          + haul_feed_message(nid, title, rest)}))
         return 0
     except Exception:
         return 0                     # fail-open: never trap a worker's stop
