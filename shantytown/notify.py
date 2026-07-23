@@ -185,11 +185,15 @@ class CycleDriver:
     is retried next sweep, never swallowed.
     """
 
-    def __init__(self, root, reg, panes, *, push=push_to_own_pane, log=None):
+    def __init__(self, root, reg, panes, *, push=push_to_own_pane, wiring=None,
+                 log=None):
         self.path = Path(root) / "notify" / "cycling.json"
         self._reg = reg
         self._panes = panes
         self._push = push
+        # agent -> LiveWiring | None. Injected so a test models wired/dark
+        # without composing launch lines; the default reads the LIVE process.
+        self._wiring_fn = wiring or self._wiring
         self._log = log or (lambda msg: None)
 
     def _load(self) -> dict:
@@ -219,6 +223,25 @@ class CycleDriver:
         for agent in sorted(saturated):
             if ledger.get(agent) == "saturated":
                 continue                       # already prompted this episode
+            # DARK AGENTS ARE NOT ST'S TO DRIVE (aegis-arma follow-up, measured:
+            # the live loop typed cycle prompts into foreign gastown-launched
+            # panes — sessions st did not launch, whose processes carry no
+            # stop_event wiring — over and over; one of them was also auth-dead,
+            # so the prompts piled onto a login banner). Same definition of dark
+            # as feed_check's free list: no readable shantytown wiring on the
+            # LIVE process. Unreadable counts as dark — the safe direction is
+            # not typing into a pane whose process you cannot read. Ledgered as
+            # "dark" so the skip is SAID once per episode, not every 30s — but
+            # re-CHECKED every sweep, so an agent relaunched into wiring while
+            # still saturated is prompted, not stuck behind an old verdict.
+            wiring = self._wiring_fn(agent)
+            if wiring is None or not wiring.directions:
+                if ledger.get(agent) != "dark":
+                    self._log(f"cycle: {agent} is saturated but DARK (no stop "
+                              f"wiring on its live process — a foreign "
+                              f"launcher's agent) — not st's to drive, skipping")
+                ledger[agent] = "dark"
+                continue
             target = self._push(self._reg, self._panes, agent, _cycle_message())
             if target is None:
                 self._log(f"cycle: {agent} is saturated but its pane was "
@@ -230,6 +253,21 @@ class CycleDriver:
 
         self._save(ledger)
         return prompted
+
+    def _wiring(self, agent: str):
+        """The live wiring of `agent`'s pane process, or None (= unreadable,
+        which the caller treats as dark — never as fine)."""
+        from .runtime import live_wiring
+        try:
+            card = self._reg.get(agent)
+        except LookupError:
+            return None
+        if not card.pane:
+            return None
+        reader = getattr(self._panes, "cmdline", None)
+        if reader is None:
+            return None
+        return live_wiring(card.pane, reader)
 
 
 class Notifier:
@@ -339,9 +377,14 @@ class IdleFleetAlerter:
         self._panes = panes
         self._runtime = runtime
         self._push = push
-        # Injected so a test drives it without bd; defaults to the real reader.
+        # Injected so a test drives it without bd; the default resolves bd's
+        # store from the ADMIN's workspace, never the ambient cwd — the live
+        # tend loop ran from a directory with no beads store, `bd ready` raised
+        # on every sweep, and this alerter's fail-open ate it: nk0e never fired
+        # once in two days (aegis-arma follow-up, measured).
         from . import feed_check
-        self._bd_ready = bd_ready or feed_check._bd_ready
+        self._bd_ready = bd_ready or (
+            lambda: feed_check._bd_ready(feed_check.bd_cwd(reg)))
         self._log = log or (lambda msg: None)
 
     def _load(self) -> list:

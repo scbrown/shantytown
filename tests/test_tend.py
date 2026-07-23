@@ -382,3 +382,40 @@ def test_cmd_tend_dry_run_writes_no_pass_log(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: _Panes(live=set()))
     cli._cmd_tend(_Args(root, dry_run=True))
     assert supervisor.PassLog(root).last() is None
+
+
+# --- the loop's own staleness (aegis-arma follow-up): re-exec on code change
+
+def test_code_fingerprint_moves_when_a_module_changes(tmp_path):
+    """MEASURED: the live `st tend --loop` ran a two-day-old memory image while
+    the editable install moved under it — every fix landed on disk and reached
+    nothing (the aegis-ttlr class, one level up: disk current, PROCESS stale).
+    The fingerprint is what the loop watches to re-exec itself."""
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    mod = pkg / "notify.py"
+    mod.write_text("old = 1\n")
+    before = cli._code_fingerprint(pkg)
+    assert before is not None
+    assert cli._code_fingerprint(pkg) == before      # stable when nothing moved
+    import os
+    mod.write_text("new = 2\n")
+    os.utime(mod, ns=(1, 1))                         # force a distinct mtime
+    assert cli._code_fingerprint(pkg) != before
+
+
+def test_a_new_module_changes_the_fingerprint(tmp_path):
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    (pkg / "a.py").write_text("x = 1\n")
+    before = cli._code_fingerprint(pkg)
+    (pkg / "b.py").write_text("y = 2\n")
+    assert cli._code_fingerprint(pkg) != before
+
+
+def test_an_empty_or_unreadable_package_is_None_never_reexec_fuel(tmp_path):
+    # None = could not look; the loop treats it as 'never re-exec' — a
+    # supervisor that exec-loops on a stat error is worse than a stale one.
+    empty = tmp_path / "nothing"
+    empty.mkdir()
+    assert cli._code_fingerprint(empty) is None
