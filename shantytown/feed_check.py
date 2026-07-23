@@ -78,13 +78,41 @@ def dark_agents() -> set[str]:
     return {n for n in raw.replace(",", " ").split() if n}
 
 
-def free_feedable_workers(reg, panes, runtime) -> list[str]:
+def st_launched_agents(root) -> set[str] | None:
+    """Agents with a launch stamp under <root>/launched — the ones `st new`
+    itself started. None = the store is missing, unreadable, or EMPTY: we
+    CANNOT TELL who is ours, so the caller must apply NO ownership gate (an
+    empty store proves nothing about ownership; a fresh deployment with no
+    stamps yet must not starve its whole fleet).
+
+    THE STRUCTURAL FIX FOR THE DARK-CREW TRAP (aegis-2j2r, measured
+    2026-07-23). The gastown crew-watchdog respawns its own fleet every 3
+    minutes, re-primed with this deployment's worker settings — so those panes
+    carry the `send` wiring the feedability gate keys on, while routing no
+    stop event to this coordinator and stranding every bead dispatched to
+    them. The name denylist (dark_agents above) shields the known eight; this
+    gate is the general form: st only feeds agents st launched, and the launch
+    stamp (launched.py, written by `st new` at launch) is precisely that
+    signal — the same ownership fact behind `st stop`'s refusal to kill panes
+    it does not own. Measured at introduction: all 10 live st workers
+    stamped, all 8 gastown-respawned panes unstamped — perfect separation."""
+    try:
+        d = Path(root) / "launched"
+        return {p.stem for p in d.glob("*.json")} or None
+    except OSError:
+        return None
+
+
+def free_feedable_workers(reg, panes, runtime, root=None) -> list[str]:
     """IDLE workers st can actually dispatch to — the same idle verdict `st crew`
-    shows, gated on the `send` wiring so a dark worker is never counted as free."""
+    shows, gated on the `send` wiring so a dark worker is never counted as free.
+    When `root` is given, additionally gated on the launch stamp: agents st did
+    not launch are not st's to feed (st_launched_agents)."""
     from . import triage as triage_mod
     from .runtime import asks_a_question, auth_expired, live_wiring
 
     dark = dark_agents()
+    stamped = st_launched_agents(root) if root is not None else None
     out = []
     for ag in reg.all():
         if ag.role != "worker" or not ag.pane or not panes.exists(ag.pane):
@@ -92,6 +120,9 @@ def free_feedable_workers(reg, panes, runtime) -> list[str]:
         if ag.name in dark:
             continue                     # gastown-dark: respawns + carries send
                                          # wiring, but routes no stop to us (dark_agents)
+        if stamped is not None and ag.name not in stamped:
+            continue                     # no launch stamp -> not launched by st
+                                         # -> not ours to feed (st_launched_agents)
         screen = panes.capture(ag.pane, attrs=True)
         plain = triage_mod.strip_attrs(screen)
         # auth_dead (aegis-arma): a login-expired pane renders idle, and counting
@@ -221,7 +252,7 @@ def main(argv: list[str] | None = None) -> int:
         panes = Tmux(socket=declared_socket(root))
         runtime = ClaudeRuntime(panes, lambda _c: None, root=root)
 
-        free = free_feedable_workers(reg, panes, runtime)
+        free = free_feedable_workers(reg, panes, runtime, root=root)
         if not free:
             return 0                     # nobody free -> allow the stop
         # bd_cwd, not the ambient cwd, even though the hook usually fires in the
