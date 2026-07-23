@@ -56,16 +56,42 @@ def _root(argv: list[str]) -> Path:
     return Path(env) if env else Path.cwd() / ".shanty"
 
 
+_DEFAULT_DARK = "arnold dearing ellie goldblum ian malcolm maldoon sentinel"
+
+
+def dark_agents() -> set[str]:
+    """The gastown-dark crew: agents that route NO stop event to this coordinator
+    and strand any bead dispatched to them. Override via SHANTY_DARK_AGENTS (space-
+    or comma-separated); the default mirrors the crew operating file.
+
+    WHY A NAME DENYLIST AND NOT THE `send`-WIRING GATE (measured 2026-07-23, sattler).
+    The wiring gate below excludes an agent that carries no `send` direction — but a
+    respawned gastown agent DOES carry it: aegis-b686's masked-daemon cron / gt
+    handoff-respawn brings these panes back within seconds of a kill, re-primed with
+    the shantytown worker settings (hence the send hook). So the wiring gate cannot
+    tell them apart, and killing them is whack-a-mole (st stop refuses them as
+    not-st-owned; a raw tmux kill is undone by the respawner one interval later).
+    They rendered `idle`, tripped Rule Zero on every coordinator stop, and a dispatch
+    to one stranded the bead in_progress on a pane with no live consumer (8 beads
+    stranded before this fix). A name denylist is the only respawn-proof exclusion."""
+    raw = os.environ.get("SHANTY_DARK_AGENTS", _DEFAULT_DARK)
+    return {n for n in raw.replace(",", " ").split() if n}
+
+
 def free_feedable_workers(reg, panes, runtime) -> list[str]:
     """IDLE workers st can actually dispatch to — the same idle verdict `st crew`
     shows, gated on the `send` wiring so a dark worker is never counted as free."""
     from . import triage as triage_mod
     from .runtime import asks_a_question, auth_expired, live_wiring
 
+    dark = dark_agents()
     out = []
     for ag in reg.all():
         if ag.role != "worker" or not ag.pane or not panes.exists(ag.pane):
             continue
+        if ag.name in dark:
+            continue                     # gastown-dark: respawns + carries send
+                                         # wiring, but routes no stop to us (dark_agents)
         screen = panes.capture(ag.pane, attrs=True)
         plain = triage_mod.strip_attrs(screen)
         # auth_dead (aegis-arma): a login-expired pane renders idle, and counting

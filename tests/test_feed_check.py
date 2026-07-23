@@ -127,6 +127,31 @@ def test_unreadable_wiring_excludes_the_worker(tmp_path):
     assert feed_check.free_feedable_workers(reg, panes, _Runtime()) == []
 
 
+def test_a_named_dark_agent_is_excluded_even_with_full_send_wiring(tmp_path):
+    # The respawn case (aegis-b686, measured 2026-07-23): a gastown agent comes back
+    # re-primed with the shantytown worker settings, so it CARRIES the send wiring the
+    # gate keys on — the wiring gate cannot catch it. maldoon is in the default
+    # denylist; it must be excluded despite valid send wiring, or Rule Zero traps the
+    # coordinator on every stop and dispatch strands beads on a pane it can't reach.
+    settings = _send_settings(tmp_path)
+    reg = _Reg([Agent(name="maldoon", role="worker", pane="aegis-crew-maldoon")])
+    panes = _Panes({"aegis-crew-maldoon": IDLE},
+                   {"aegis-crew-maldoon": f"claude --settings {settings}"})
+    assert feed_check.free_feedable_workers(reg, panes, _Runtime()) == []
+
+
+def test_SHANTY_DARK_AGENTS_env_overrides_the_default_denylist(tmp_path, monkeypatch):
+    # A normally-feedable worker becomes dark when named in the override, so a
+    # deployment can name its own dark set without a code change.
+    settings = _send_settings(tmp_path)
+    reg = _Reg([Agent(name="weaver", role="worker", pane="shanty-weaver")])
+    panes = _Panes({"shanty-weaver": IDLE},
+                   {"shanty-weaver": f"claude --settings {settings}"})
+    assert feed_check.free_feedable_workers(reg, panes, _Runtime()) == ["weaver"]
+    monkeypatch.setenv("SHANTY_DARK_AGENTS", "weaver, someone-else")
+    assert feed_check.free_feedable_workers(reg, panes, _Runtime()) == []
+
+
 # --- main(): block only when both hold; allow (fail-open) otherwise ---------
 
 def _wire_main(monkeypatch, free, ready_beads=None, bd_raises=False):
