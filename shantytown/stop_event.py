@@ -190,6 +190,113 @@ def _send(reg: FilesRegistry, events: FilesEvents, panes, me: str,
     return 0
 
 
+# --- the HAUL advance (the sequenced-worker self-feed) -----------------------
+
+# The mid-haul HANDOFF line, in k tokens: 60% OF THE ~1M WINDOW (Stiwi's call,
+# on the design bead). Deliberately NOT derived from triage's 400k
+# CYCLE_THRESHOLD_K — the two lines answer different questions. 400k is the
+# NEW-work dispatch wall: past it, an agent must cycle before TAKING work. A
+# hauling worker is different: between beads its context is disposable BY
+# CONSTRUCTION (the anchor just closed, the work is durable in the bead trail),
+# so the haul may grind past 400k — and at 600k the advance stops feeding and
+# instructs the handoff instead.
+HAUL_HANDOFF_K = 600.0
+
+
+def _bd_json(args: list[str], cwd: str | None) -> list[dict]:
+    """One bd read, JSON out, or raise — the caller's fail-open catches it."""
+    import subprocess
+    r = subprocess.run(["bd", *args, "--json"], capture_output=True, text=True,
+                       timeout=20, cwd=cwd)
+    if r.returncode != 0:
+        raise RuntimeError(f"bd {' '.join(args)} failed: {r.stderr.strip()}")
+    return json.loads(r.stdout)
+
+
+def _assigned_to(me: str, beads: list[dict]) -> list[dict]:
+    """The beads assigned to `me` — trailing-segment match, the same parse
+    feed_check.hauls uses (bd stores crew paths or bare names)."""
+    out = []
+    for b in beads:
+        assignee = b.get("assignee") or ""
+        if assignee.split("/")[-1] == me:
+            out.append(b)
+    return out
+
+
+def _haul(reg: FilesRegistry, panes, me: str, root: Path) -> int:
+    """The worker's own advance: anchor closed + assigned ready work -> BLOCK
+    the stop with the next bead as the reason — the same model-reaching
+    protocol drain and the Rule Zero gate already use. The coordinator is not
+    involved at any point; that is the feature.
+
+    A STOP IS A TURN BOUNDARY, NOT AN IDLE AGENT (aegis-w9z1), so the advance
+    fires only on evidence the anchor actually finished: nothing of mine
+    in_progress AND something of mine ready. Mid-work turn ends fall through
+    silently — halting there would halt every haul within minutes (the design
+    correction this module's own header taught).
+
+    SELF-TERMINATING like feed_check: each feed claims the bead in_progress,
+    so the next stop sees an active anchor and allows. The handoff branch
+    blocks until the agent /clears — it terminates on the RIGHT condition
+    (compliance), never a counter.
+
+    FAIL-OPEN ABSOLUTELY: any error allows the stop, and the worker degrades
+    to the tend self-feed nudge (the belt) and normal idle flow. A broken
+    advance must never trap a worker at its own stop."""
+    try:
+        if reg.get(me).role != "worker":
+            return 0
+        from .feed_check import bd_cwd
+        cwd = bd_cwd(reg)
+        # An active anchor = mid-work turn boundary. bd list is filtered
+        # client-side (same reason as feed_check: assignee formats vary).
+        active = _assigned_to(me, _bd_json(["list", "--status", "in_progress"], cwd))
+        if active:
+            return 0
+        mine = _assigned_to(me, _bd_json(["ready"], cwd))
+        if not mine:
+            return 0
+
+        # THE HANDOFF LINE: past 60% of the window, the advance stops feeding
+        # and instructs the reset — between beads is the uniquely safe moment
+        # to shed context, and feeding another bead here would spend the
+        # remaining headroom on work that deserves a fresh session. None
+        # (footer unreadable) is NOT over the line — unknown never blocks.
+        ck = _my_context_k(reg, panes, me)
+        if ck is not None and ck >= HAUL_HANDOFF_K:
+            print(json.dumps({"decision": "block", "reason": (
+                f"HAUL HANDOFF: your anchor is closed and your context is at "
+                f"{int(ck)}k — past the {int(HAUL_HANDOFF_K)}k handoff line "
+                f"(60% of the window). Do NOT start the next item. (1) "
+                f"CHECKPOINT anything unwritten to the bead trail now; (2) run "
+                f"/clear. Your haul resumes automatically on the fresh context "
+                f"— the next assigned item feeds itself at your next stop.")}))
+            return 0
+
+        nxt = mine[0]
+        nid = nxt.get("id", "?")
+        title = (nxt.get("title") or "")[:80]
+        rest = len(mine) - 1
+        # Claim it the way a dispatch would, so the tracker shows the truth and
+        # the next stop sees an active anchor. Best-effort: a failed claim
+        # still feeds — the agent claims by hand per the instruction.
+        try:
+            _bd_json(["update", nid, "--status", "in_progress"], cwd)
+        except Exception:
+            pass
+        print(json.dumps({"decision": "block", "reason": (
+            f"HAUL: anchor closed ✓ — next on your haul: {nid} ({title}). "
+            f"Read it (`bd show {nid}`) and execute; close it when done and "
+            f"the haul advances itself ({rest} more after this). If your "
+            f"context is deep (past ~{int(HAUL_HANDOFF_K)}k), checkpoint + "
+            f"/clear FIRST — the haul survives it. The coordinator was not "
+            f"pinged: this queue is yours.")}))
+        return 0
+    except Exception:
+        return 0                     # fail-open: never trap a worker's stop
+
+
 DOWN = "down"        # a fifth verdict triage cannot produce: there is no pane.
 
 
@@ -374,8 +481,8 @@ def _compose_workflow(reg, panes, plate, rank, events, me: str) -> str:
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     mode = argv[0] if argv else ""
-    if mode not in ("send", "drain"):
-        print("usage: python -m shantytown.stop_event send|drain [--root DIR]",
+    if mode not in ("send", "drain", "haul"):
+        print("usage: python -m shantytown.stop_event send|drain|haul [--root DIR]",
               file=sys.stderr)
         return 2
     me = os.environ.get("SHANTY_AGENT")
@@ -389,6 +496,8 @@ def main(argv: list[str] | None = None) -> int:
     panes = Tmux()
     if mode == "send":
         return _send(reg, events, panes, me, root)
+    if mode == "haul":
+        return _haul(reg, panes, me, root)
     # shows_ready_ui is the RUNTIME's marker check (triage stays runtime-blind).
     # It reads only the screen, so the settings resolver it never calls is None.
     runtime = ClaudeRuntime(panes, lambda card: None, root=root)

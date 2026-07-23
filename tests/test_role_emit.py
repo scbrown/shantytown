@@ -33,9 +33,13 @@ from shantytown.runtime import _hook_interpreter
 _PY = _hook_interpreter()
 
 
-def test_worker_settings_send_only():
+def test_worker_settings_send_then_haul():
+    """send FIRST (the event persists whatever happens), then the haul advance
+    (the sequenced-worker self-feed; fail-open, so a worker without a queue is
+    exactly as before)."""
     cmds = _stop_commands(settings_for_role("worker"))
-    assert cmds == [f"{_PY} -m shantytown.stop_event send"]
+    assert cmds == [f"{_PY} -m shantytown.stop_event send",
+                    f"{_PY} -m shantytown.stop_event haul"]
 
 
 def test_lead_settings_send_and_drain():
@@ -204,7 +208,8 @@ def test_role_set_emits_the_settings_file(tmp_path):
     p = root / "settings" / "worker.settings.json"
     assert p.is_file(), "role set did not emit the role's settings.json"
     assert _stop_commands(json.loads(p.read_text())) == [
-        f"{_PY} -m shantytown.stop_event send --root {root.resolve()}"
+        f"{_PY} -m shantytown.stop_event send --root {root.resolve()}",
+        f"{_PY} -m shantytown.stop_event haul --root {root.resolve()}",
     ]
 
 

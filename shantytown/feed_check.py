@@ -143,7 +143,7 @@ def dispatchable(free: set, ready_beads) -> list[tuple[str, str]]:
     This used to also count beads assigned to a free worker — which made the
     coordinator the delivery mechanism for work the worker already owned (N
     pings + N manual go's, measured by sattler doing exactly that by hand all
-    evening). Under thread semantics the worker's queue self-feeds; the
+    evening). Under haul semantics the worker's queue self-feeds; the
     coordinator's job is only the work NOBODY owns. `free` is still taken so
     the signature survives; unassigned beads are claimable by anyone free."""
     _ = free
@@ -154,9 +154,9 @@ def dispatchable(free: set, ready_beads) -> list[tuple[str, str]]:
     return out
 
 
-def threaded(ready_beads) -> dict[str, list[str]]:
+def hauls(ready_beads) -> dict[str, list[str]]:
     """worker name -> the READY beads already assigned to them: each worker's
-    own queue (the thread, in tracker-native terms — aegis-wjgt).
+    own queue (the HAUL, in tracker-native terms — aegis-wjgt).
 
     A worker with a non-empty queue is SELF-FEEDING: excluded from the feedable
     free list (its next work is already determined; dispatching into it or
@@ -202,12 +202,12 @@ def main(argv: list[str] | None = None) -> int:
         # admin's workspace: "usually" is how the tend caller silently never
         # fired (see bd_cwd). None still falls back to ambient — fail-open.
         ready_beads = _bd_ready(bd_cwd(reg))
-        # THREADED WORKERS ARE NOT THE COORDINATOR'S TO FEED (aegis-wjgt
+        # HAULING WORKERS ARE NOT THE COORDINATOR'S TO FEED (aegis-wjgt
         # groundwork): an idle worker whose queue is already assigned self-feeds
         # — holding the coordinator's stop hostage over one is the exact inverse
-        # of Rule Zero's purpose. The gate blocks only for (idle unthreaded
+        # of Rule Zero's purpose. The gate blocks only for (idle unhauled
         # workers) x (unassigned ready work).
-        free = [w for w in free if w not in threaded(ready_beads)]
+        free = [w for w in free if w not in hauls(ready_beads)]
         if not free:
             return 0                     # everyone idle is self-feeding -> allow
         ready = dispatchable(set(free), ready_beads)

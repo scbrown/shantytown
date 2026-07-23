@@ -338,7 +338,10 @@ def claude_settings_for_role(role: str, root=None) -> dict:
         administrator -> [drain]         (root: receives only; its stop terminates)
     """
     if role == "worker":
-        stop = [_stop_cmd("send", root)]
+        # send FIRST (the stop event persists whatever happens), then the HAUL
+        # advance — the self-feed for a worker whose queue is already assigned
+        # (anchor closed -> block-with-next; fail-open, self-terminating).
+        stop = [_stop_cmd("send", root), _stop_cmd("haul", root)]
     elif role == "lead":
         stop = [_stop_cmd("send", root), _stop_cmd("drain", root)]
     elif role == "administrator":
