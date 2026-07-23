@@ -1771,7 +1771,7 @@ def _cmd_crew(a) -> int:
         print(f"    someone else's pane to 'un-stall' it. Look with "
               f"`st log <agent>` and ask its owner.")
         print(f"    To resubmit once confirmed: a bare Enter does NOT submit "
-              f"(measured, aegis-ns56) — use C-u,")
+              f"(measured) — use C-u,")
         print(f"    re-send the text with `send-keys -l`, pause ~1s, then Enter.")
     # The whole point of the verdict (aegis-qxc2). A column still makes the reader
     # scan 18 rows, and these agents are in NEITHER the free list nor the busy one
