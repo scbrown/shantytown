@@ -186,9 +186,9 @@ def test_the_message_names_who_is_free_and_what_is_ready():
     assert "DISPATCH" in msg and "RULE ZERO" in msg
 
 
-# --- the thread groundwork (aegis-wjgt): assigned = self-feeding -------------
+# --- the haul groundwork (aegis-wjgt): assigned = self-feeding -------------
 
-def _threaded_world(tmp_path, monkeypatch):
+def _hauling_world(tmp_path, monkeypatch):
     """One idle worker with an ASSIGNED ready bead, one admin to (not) alert."""
     reg = _Reg([Agent(name="sattler", role="administrator", pane="p-admin"),
                 Agent(name="billy", role="worker", pane="p-billy")])
@@ -206,7 +206,7 @@ def test_a_threaded_idle_worker_nudges_the_WORKER_not_the_coordinator(tmp_path, 
     next work is already assigned — and 'no coordinator ping' must never mean
     'nobody pings': the worker gets the self-feed nudge (the belt under the
     future stop-hook advance)."""
-    alerter, panes = _threaded_world(tmp_path, monkeypatch)
+    alerter, panes = _hauling_world(tmp_path, monkeypatch)
     assert alerter.sweep([]) == ["billy"]
     targets = [p for p, _ in panes.sent]
     assert "p-billy" in targets, "the worker must be nudged"
@@ -216,7 +216,7 @@ def test_a_threaded_idle_worker_nudges_the_WORKER_not_the_coordinator(tmp_path, 
 
 
 def test_the_self_feed_nudge_is_once_per_idle_episode(tmp_path, monkeypatch):
-    alerter, panes = _threaded_world(tmp_path, monkeypatch)
+    alerter, panes = _hauling_world(tmp_path, monkeypatch)
     alerter.sweep([])
     alerter.sweep([])
     alerter.sweep([])
