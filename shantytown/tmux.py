@@ -22,6 +22,41 @@ into the harness.
 from __future__ import annotations
 import os
 import subprocess
+import sys
+import time
+
+
+def _journal_send(pane: str, text: str) -> None:
+    """Append one line per pane send to the send journal: who put what into
+    whose pane, when. The forensic record the fleet did not have when three
+    fabricated recovery instructions arrived from "an unattached process" —
+    the routine send channel was the one path that left nothing behind.
+
+    SENDER is best-effort attribution, honestly labelled: SHANTY_AGENT when the
+    sender is a crew session, else '-'; the pid is always recorded so even an
+    unnamed sender is correlatable against the process table. Text is capped —
+    this is a journal, not a transcript — and newlines are flattened so one
+    send is always one greppable line.
+
+    NEVER raises, never blocks a delivery: an audit failure prints a warning
+    and the message still goes. The inverse (refusing delivery on a full disk)
+    would turn the audit trail into a fleet-messaging outage.
+    """
+    try:
+        root = os.environ.get("SHANTY_ROOT")
+        if not root:
+            return                      # no store elected — nowhere to journal
+        logdir = os.path.join(root, "logs")
+        os.makedirs(logdir, exist_ok=True)
+        sender = os.environ.get("SHANTY_AGENT") or "-"
+        body = text.replace("\n", "\\n")[:500]
+        stamp = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+        with open(os.path.join(logdir, "sends.log"), "a", encoding="utf-8") as f:
+            f.write(f"{stamp} sender={sender} pid={os.getpid()} "
+                    f"pane={pane} text={body}\n")
+    except OSError as e:
+        print(f"  ⚠ send journal write failed ({e}) — message still delivered",
+              file=sys.stderr)
 
 
 # Provenance marker for the ownership guard. st new sets it in the
@@ -178,6 +213,19 @@ class Tmux:
         # -l sends the text literally; the separate Enter is the submit.
         # This is the entire dispatch mechanism. gt nudge's own help says so:
         # "Send directly via tmux send-keys."
+        #
+        # JOURNALED FIRST. During a live incident, three fabricated "recovered
+        # — proceed" instructions were injected into recovery-staged agents'
+        # panes by a sender no log could name: the routine send path was
+        # ephemeral BY DESIGN, so the forensics dead-ended at "an unattached
+        # process". Every keystroke st puts into a pane is an ACTION on the
+        # fleet, and actions leave records. Logged before the send so an
+        # interrupted delivery still leaves its attempt; never blocks or fails
+        # a delivery (a broken audit trail must not take messaging down with
+        # it) but says so on stderr rather than going quietly dark. Launch
+        # strings are safe to journal by existing invariant: provisioning
+        # forbids secrets in them (they live in 0600 files instead).
+        _journal_send(pane, text)
         subprocess.run(self._cmd("send-keys", "-t", pane, "-l", text), check=True)
         subprocess.run(self._cmd("send-keys", "-t", pane, "Enter"), check=True)
 
