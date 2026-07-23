@@ -786,7 +786,10 @@ def _cmd_doctor(a) -> int:
     # The tool that audits deployment drift was the only one exempt, and it is the
     # one whose staleness silently corrupts every other row it prints. Only
     # rendered for a full run: `st doctor bobbin` asked about bobbin.
-    self_h = selfcheck.check_self() if len(specs) == len(doc.SPECS) else None
+    # remote= rides --no-latest: both mean "no network lookups on this run". The
+    # behind-upstream fetch is the same class of question as "0.6.0 available".
+    self_h = (selfcheck.check_self(remote=not a.no_latest)
+              if len(specs) == len(doc.SPECS) else None)
 
     sock_v, sock_why = _socket_check(a)
 
