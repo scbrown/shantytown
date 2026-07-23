@@ -173,3 +173,39 @@ def test_wake_recipient_returns_None_when_there_is_nowhere_to_send(tmp_path):
     # no administrator exists -> route_stop raises -> None, never a false success
     assert wake_recipient(reg, panes, "lonely", "msg") is None
     assert panes.sent == []
+
+
+# --- the ENOSPC night (aegis-ey7n): torn ledgers and a dead supervisor -------
+
+def test_a_zero_byte_ledger_reads_as_empty_not_a_crash(tmp_path):
+    """The disk-full write left a 0-byte blocked.json. A later load must treat
+    it as 'no ledger', never die on it — the drain's ev-172 lesson, ledger
+    edition."""
+    from shantytown.notify import Notifier
+    path = tmp_path / "notify" / "blocked.json"
+    path.parent.mkdir(parents=True)
+    path.write_text("")
+    n = Notifier(tmp_path, None, None)
+    assert n._load() == {}
+
+
+def test_ledger_saves_are_atomic_no_torn_file_is_ever_final(tmp_path, monkeypatch):
+    """_save goes through tmp + os.replace: a writer killed mid-write can leave
+    only a .tmp corpse — the FINAL name always holds valid JSON. Proven by
+    failing the replace and checking the final file was never touched."""
+    import os as _os
+    import json as _json
+    from shantytown.notify import Notifier
+    n = Notifier(tmp_path, None, None)
+    n._save({"a": "blocked"})
+    assert _json.loads(n.path.read_text()) == {"a": "blocked"}
+
+    def boom(src, dst):
+        raise OSError(28, "No space left on device")
+    monkeypatch.setattr(_os, "replace", boom)
+    try:
+        n._save({"b": "torn"})
+    except OSError:
+        pass
+    # The final file still holds the PREVIOUS valid state — never 0 bytes.
+    assert _json.loads(n.path.read_text()) == {"a": "blocked"}
