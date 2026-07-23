@@ -50,6 +50,59 @@ def test_role_set_dry_run_writes_nothing(tmp_path):
     assert r.get("ellie").reports_to is None
 
 
+class _NonBlockingHarness:
+    """A harness that cannot deliver stop events — the codex-class program the
+    capability gate exists to refuse for a lead/administrator (aegis-w5l9)."""
+    name = "codex"
+
+    def hooks(self, card):
+        from shantytown.runtime import HookSpec
+        return HookSpec(blocking_stop=False)
+
+
+def test_role_set_refuses_a_lead_whose_harness_cannot_host_it(tmp_path, monkeypatch):
+    """aegis-w5l9: the capability gate fires at role-set time, BEFORE any write.
+    A lead whose harness lacks blocking stop hooks stays worker and NOTHING is
+    written — the refusal adapters.md documented, which previously only fired at
+    `st new` launch (after the card was already on disk)."""
+    from shantytown.runtime import CapabilityError
+    monkeypatch.setattr("shantytown.harness.for_card", lambda card: _NonBlockingHarness())
+    r = reg(tmp_path, malcolm={"role": "worker"})
+
+    with pytest.raises(CapabilityError, match="blocking stop hooks") as ei:
+        role_set(r, "malcolm", "lead")
+
+    # The refusal genuinely left nothing written — the card is still a worker.
+    assert r.get("malcolm").role == "worker", "gate did not fire before the write"
+    # And the message tells the truth for THIS site: nothing written, and it does
+    # NOT claim "nothing launched" (that is the launch site's true consequence).
+    assert "Nothing written." in str(ei.value)
+    assert "launched" not in str(ei.value).lower()
+
+
+def test_role_set_dry_run_surfaces_the_capability_refusal(tmp_path, monkeypatch):
+    """The gate is a property of the PLAN, not the write, so --dry-run shows it
+    too — uniform with the hierarchy refusals."""
+    from shantytown.runtime import CapabilityError
+    monkeypatch.setattr("shantytown.harness.for_card", lambda card: _NonBlockingHarness())
+    r = reg(tmp_path, malcolm={"role": "worker"})
+    with pytest.raises(CapabilityError, match="blocking stop hooks"):
+        role_set(r, "malcolm", "lead", dry_run=True)
+
+
+def test_role_set_worker_is_not_gated(tmp_path, monkeypatch):
+    """The gate keys on the NEW role needing stop delivery: demoting/keeping a
+    worker on a non-blocking harness is fine — only lead/administrator receive."""
+    from shantytown.protocols import Agent
+    monkeypatch.setattr("shantytown.harness.for_card", lambda card: _NonBlockingHarness())
+    r = reg(tmp_path, malcolm={"role": "lead", "reports_to": "arnold"},
+            arnold={"role": "administrator"})
+    # malcolm -> worker: a worker needs no stop capability, so the non-blocking
+    # harness must not block the demotion.
+    role_set(r, "malcolm", "worker")
+    assert r.get("malcolm").role == "worker"
+
+
 def test_Q1_lead_cannot_report_to_a_lead(tmp_path):
     """RULED depth 2. The refusal must name the rule, not just raise."""
     r = reg(tmp_path,

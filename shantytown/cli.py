@@ -1114,7 +1114,11 @@ def _cmd_role(a) -> int:
     try:
         plan = tier.role_set(_registry(a), a.agent, a.role,
                              reports=reports, dry_run=a.dry_run)
-    except (LookupError, ValueError) as e:
+    except (LookupError, ValueError, CapabilityError) as e:
+        # CapabilityError (aegis-w5l9): the new role needs a stop capability the
+        # card's harness lacks. role_set raised it BEFORE writing, so this refusal
+        # genuinely leaves the card and its settings untouched — same shape as the
+        # hierarchy refusals above.
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED
     print(("  would write:" if a.dry_run else "  wrote:"))
