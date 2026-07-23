@@ -123,3 +123,24 @@ def test_headers_carry_bearer_only_when_env_token_is_set(monkeypatch):
     # Set: every request carries the bearer.
     monkeypatch.setenv("QUIPU_AUTH_TOKEN", "sekrit")
     assert request_headers()["Authorization"] == "Bearer sekrit"
+
+
+def test_token_file_is_the_fallback_env_the_override(monkeypatch, tmp_path):
+    from shantytown.quipu import request_headers
+
+    tok = tmp_path / "token"
+    tok.write_text("file-tok\n")  # trailing newline must be stripped
+    monkeypatch.setenv("QUIPU_AUTH_TOKEN_FILE", str(tok))
+
+    # File alone: used (reaches sessions launched before the env existed).
+    monkeypatch.delenv("QUIPU_AUTH_TOKEN", raising=False)
+    assert request_headers()["Authorization"] == "Bearer file-tok"
+
+    # Env set: overrides the file.
+    monkeypatch.setenv("QUIPU_AUTH_TOKEN", "env-tok")
+    assert request_headers()["Authorization"] == "Bearer env-tok"
+
+    # Neither readable: no header, open-server behaviour.
+    monkeypatch.delenv("QUIPU_AUTH_TOKEN", raising=False)
+    monkeypatch.setenv("QUIPU_AUTH_TOKEN_FILE", str(tmp_path / "absent"))
+    assert "Authorization" not in request_headers()
