@@ -44,6 +44,26 @@ def request_headers() -> dict:
     return headers
 
 
+def _http_error_detail(e: urllib.error.HTTPError) -> str:
+    """The engine's own message out of a 4xx/5xx body (aegis-nbtr). Quipu
+    answers a bad query with a JSON `{"error": "..."}`; surface that exact text
+    ('unsupported FILTER expression: ...') so the operator's next move is
+    obvious. Falls back to the raw body, then the reason phrase — reading the
+    body must never itself raise (a broken error path hiding the real error is
+    the failure this whole fix is about)."""
+    try:
+        raw = e.read().decode("utf-8", "replace")
+    except Exception:
+        return getattr(e, "reason", "") or "(no body)"
+    try:
+        parsed = json.loads(raw)
+        if isinstance(parsed, dict) and parsed.get("error"):
+            return str(parsed["error"])
+    except ValueError:
+        pass
+    return raw.strip()[:500] or (getattr(e, "reason", "") or "(no body)")
+
+
 def _token_from_file() -> str:
     """The bearer token from its file, or "" — the file-first half of the
     distribution.
@@ -89,6 +109,22 @@ class QuipuWriteRejected(Exception):
     differs (retry/escalate vs fix the payload). Both used to be invisible: /knot
     reports a refusal as {"conforms": false} with NO "error" key, so the write
     path swallowed it and reported success."""
+
+
+class QuipuQueryRejected(Exception):
+    """quipu REACHED, understood, and REJECTED the QUERY — a 4xx / error body,
+    not a connection failure (aegis-nbtr).
+
+    The read-side twin of QuipuWriteRejected. It exists because the query path
+    conflated two facts the operator must act on differently: a real
+    connection failure means "check the network / restart the service", while a
+    400 'unsupported FILTER expression' means "rewrite the query". Both used to
+    raise QuipuUnreachable, so a SPARQL feature the engine does not support
+    (property paths under NOT EXISTS) surfaced to the operator as
+    QuipuUnreachable — sending them to the wrong remedy entirely. `urllib`
+    makes this a trap: HTTPError is a SUBCLASS of URLError, so a 4xx caught by
+    `except URLError` reads as unreachable without the body ever being looked
+    at."""
 
 
 def _local(iri: str) -> str:
@@ -166,8 +202,11 @@ class QuipuRegistry:
         self.timeout = timeout
 
     def _query(self, sparql: str) -> list[dict]:
-        """POST a SPARQL query; return its rows. Raises `QuipuUnreachable` on a
-        connection failure OR an error body — an errored query is NO result."""
+        """POST a SPARQL query; return its rows. Raises `QuipuQueryRejected` when
+        the server ANSWERED but refused the query (a 4xx / error body), and
+        `QuipuUnreachable` only when the server could not be reached (aegis-nbtr).
+        An errored query is NO result either way — but the caller's remedy
+        differs, so the two are different exceptions."""
         req = urllib.request.Request(
             self.server + "/query",
             data=json.dumps({"query": sparql}).encode(),
@@ -176,10 +215,22 @@ class QuipuRegistry:
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                 body = json.loads(resp.read())
+        except urllib.error.HTTPError as e:
+            # The server ANSWERED with a 4xx/5xx — it is reachable; the query (or
+            # server state) is the problem. Read the body for the engine's own
+            # message ('unsupported FILTER expression: ...') rather than reporting
+            # a reachable server as unreachable. MUST precede the URLError arm:
+            # HTTPError is a subclass of URLError, and catching the parent first
+            # is exactly the conflation this fix removes.
+            detail = _http_error_detail(e)
+            raise QuipuQueryRejected(
+                f"quipu rejected the query (HTTP {e.code}): {detail}") from e
         except (urllib.error.URLError, OSError, ValueError) as e:
             raise QuipuUnreachable(f"quipu at {self.server} unreachable: {e}") from e
         if isinstance(body, dict) and body.get("error"):
-            raise QuipuUnreachable(f"quipu query error: {body['error']}")
+            # A 200 carrying an error body is still a query rejection, not
+            # unreachability — the server plainly answered.
+            raise QuipuQueryRejected(f"quipu rejected the query: {body['error']}")
         return body.get("rows", []) if isinstance(body, dict) else []
 
     def all(self) -> list[Agent]:
