@@ -491,38 +491,52 @@ class IdleFleetAlerter:
         # claim, same handoff line as the stop-hook advance (one voice,
         # feed_check's) — never a generic "go look" nudge, and never a
         # coordinator ping. Guards, in order:
-        #   - an ACTIVE ANCHOR skips the feed (pane-idle + in_progress anchor
-        #     is the halt-shaped state, not a feed moment — and without this
-        #     guard a re-sweep would drain the whole queue into claims while
-        #     the worker acted on none of them);
+        #   - an UNREADABLE in_progress set feeds NOBODY (cannot tell -> do
+        #     not guess);
+        #   - an OPEN ANCHOR does NOT block the feed (aegis-u13t): the pane is
+        #     IDLE, so the anchor is not being worked NOW — it is a design
+        #     pending human review, parked on a HITL blocker, or a forgotten
+        #     close, and every one of those wedged the queue while tend logged
+        #     "not fed" forever and the coordinator got pinged (the exact toil
+        #     gez6 removes). The worker's open anchors are only excluded from
+        #     what gets FED — never re-feed a bead the worker already holds.
+        #     Drain safety is the newly-idle dedup below (`already`), which
+        #     bounds tend to ONE feed per idle episode with or without an
+        #     anchor guard;
         #   - past the HANDOFF LINE the feed becomes the checkpoint+/clear
         #     instruction (the same 60%-of-window line the stop hook applies).
         nudged = []
         if hauling_newly:
             try:
                 cwd = feed_check.bd_cwd(self._reg)
-                active_names = {
-                    (b.get("assignee") or "").split("/")[-1]
-                    for b in self._bd_in_progress(cwd)
-                }
+                open_anchors: dict[str, set[str]] | None = {}
+                for b in self._bd_in_progress(cwd):
+                    w = (b.get("assignee") or "").split("/")[-1]
+                    if w:
+                        open_anchors.setdefault(w, set()).add(b.get("id"))
             except Exception:
-                active_names = None            # could not tell -> feed nobody
+                open_anchors = None            # could not tell -> feed nobody
         for worker in hauling_newly:
             beads = queues[worker]
-            if active_names is None or worker in active_names:
+            if open_anchors is None:
                 self._log(f"haul: {worker} idle with {len(beads)} queued but "
-                          f"anchor state {'unreadable' if active_names is None else 'ACTIVE'}"
-                          f" — not fed this pass")
+                          f"anchor state unreadable — not fed this pass")
+                continue
+            feedable = [b for b in beads
+                        if b not in open_anchors.get(worker, ())]
+            if not feedable:
+                self._log(f"haul: {worker} idle but every queued bead is its "
+                          f"own open anchor — not fed this pass")
                 continue
             if (ck := self._context_k(worker)) is not None and ck >= self._handoff_k:
                 message = feed_check.haul_handoff_message(ck, self._handoff_k)
             else:
-                nid = beads[0]
+                nid = feedable[0]
                 try:
                     feed_check.bd_claim(cwd, nid)
                 except Exception:
                     pass                       # best-effort, same as the stop hook
-                message = feed_check.haul_feed_message(nid, "", len(beads) - 1)
+                message = feed_check.haul_feed_message(nid, "", len(feedable) - 1)
             target = push_to_own_pane(self._reg, self._panes, worker, message)
             if target is None:
                 self._log(f"haul: {worker} is idle with {len(beads)} assigned "
@@ -530,8 +544,8 @@ class IdleFleetAlerter:
                           f"fed, will retry")
                 continue
             nudged.append(worker)
-            self._log(f"haul: fed {worker} its next bead ({beads[0]}; "
-                      f"{len(beads) - 1} more queued) — coordinator "
+            self._log(f"haul: fed {worker} its next bead ({feedable[0]}; "
+                      f"{len(feedable) - 1} more queued) — coordinator "
                       f"deliberately not pinged")
 
         ready = feed_check.dispatchable(set(unhauled_free), ready_beads)
