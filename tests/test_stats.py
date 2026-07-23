@@ -129,7 +129,7 @@ def test_no_export_without_env(tmp_path, monkeypatch):
 
 def test_export_pushes_when_configured(tmp_path, monkeypatch):
     monkeypatch.setenv("SHANTY_AGENT", "zia")
-    monkeypatch.setenv("ST_STATS_PUSHGATEWAY", "http://user:pass@pushgateway.example")
+    monkeypatch.setenv("ST_STATS_PUSHGATEWAY", "http://u:p@pg.invalid")
     seen = {}
     def fake_urlopen(req, timeout=None):
         seen["url"] = req.full_url
@@ -144,7 +144,7 @@ def test_export_pushes_when_configured(tmp_path, monkeypatch):
 
 
 def test_export_failure_is_still_fail_open(tmp_path, monkeypatch):
-    monkeypatch.setenv("ST_STATS_PUSHGATEWAY", "http://pushgateway.example")
+    monkeypatch.setenv("ST_STATS_PUSHGATEWAY", "http://pg.invalid")
     def boom(*a, **k): raise OSError("gateway down")
     monkeypatch.setattr(stats.urllib.request, "urlopen", boom)
     assert _run_capture(tmp_path, _payload_tool(), monkeypatch) == 0

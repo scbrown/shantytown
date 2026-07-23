@@ -189,8 +189,11 @@ def test_the_message_names_who_is_free_and_what_is_ready():
 # --- the haul groundwork (aegis-wjgt): assigned = self-feeding -------------
 
 def _hauling_world(tmp_path, monkeypatch, in_progress=None, context_k=None,
-                   claims=None):
-    """One idle worker with an ASSIGNED ready bead, one admin to (not) alert."""
+                   claims=None, ready=None):
+    """One idle worker with an ASSIGNED ready bead, one admin to (not) alert.
+
+    in_progress may be a list (the bd answer) or an Exception instance (bd
+    unreadable — the feed-nobody fail-safe)."""
     reg = _Reg([Agent(name="sattler", role="administrator", pane="p-admin"),
                 Agent(name="billy", role="worker", pane="p-billy")])
     panes = _Panes({"p-admin", "p-billy"})
@@ -200,11 +203,18 @@ def _hauling_world(tmp_path, monkeypatch, in_progress=None, context_k=None,
     if claims is not None:
         monkeypatch.setattr("shantytown.feed_check.bd_claim",
                             lambda cwd, nid: claims.append(nid))
-    ready = [{"id": "aegis-9", "title": "queued work",
-              "assignee": "beads_aegis/crew/billy"}]
+    if ready is None:
+        ready = [{"id": "aegis-9", "title": "queued work",
+                  "assignee": "beads_aegis/crew/billy"}]
+
+    def bd_in_progress(cwd):
+        if isinstance(in_progress, Exception):
+            raise in_progress
+        return in_progress or []
+
     return IdleFleetAlerter(tmp_path, reg, panes, runtime=None,
                             bd_ready=lambda: ready,
-                            bd_in_progress=lambda cwd: in_progress or [],
+                            bd_in_progress=bd_in_progress,
                             context_k=(lambda w: context_k),
                             log=lambda m: None), panes
 
@@ -233,16 +243,78 @@ def test_the_feed_is_once_per_idle_episode(tmp_path, monkeypatch):
     assert len(panes.sent) == 1, "a 30s heartbeat must not re-spam the worker"
 
 
-def test_an_active_anchor_blocks_the_feed(tmp_path, monkeypatch):
-    """Pane-idle + in_progress anchor is the halt-shaped state, not a feed
-    moment — and without this guard a re-sweep would drain the queue into
-    claims the worker never acted on."""
+def test_an_open_anchor_does_NOT_block_the_feed(tmp_path, monkeypatch):
+    """The u13t wedge, closed (INVERTS the old active-anchor guard): the pane
+    is IDLE, so an in_progress anchor is not being worked NOW — it is pending
+    human review, parked on a HITL blocker, or a forgotten close. The old
+    blanket skip stranded the queue forever (worker never re-stops, tend logged
+    "not fed" every pass, coordinator got pinged — the dominant Rule-Zero toil
+    source, 3x in one session). Drain safety lives in the once-per-idle-episode
+    dedup, not in this guard."""
     claims = []
     alerter, panes = _hauling_world(
         tmp_path, monkeypatch, claims=claims,
         in_progress=[{"id": "aegis-1", "assignee": "billy"}])
+    assert alerter.sweep([]) == ["billy"], "idle + open anchor must still feed"
+    (_, msg), = [x for x in panes.sent if x[0] == "p-billy"]
+    assert "aegis-9" in msg and claims == ["aegis-9"]
+
+
+def test_the_fed_bead_is_never_the_open_anchor_itself(tmp_path, monkeypatch):
+    """If the open anchor somehow also appears in the ready queue (bd edge),
+    the feed picks the NEXT bead — never re-feeds what the worker already
+    holds. Exactly one claim."""
+    claims = []
+    ready = [{"id": "aegis-1", "title": "the open anchor",
+              "assignee": "beads_aegis/crew/billy"},
+             {"id": "aegis-9", "title": "queued work",
+              "assignee": "beads_aegis/crew/billy"},
+             {"id": "aegis-10", "title": "more queued work",
+              "assignee": "beads_aegis/crew/billy"}]
+    alerter, panes = _hauling_world(
+        tmp_path, monkeypatch, claims=claims, ready=ready,
+        in_progress=[{"id": "aegis-1", "assignee": "billy"}])
+    assert alerter.sweep([]) == ["billy"]
+    (_, msg), = [x for x in panes.sent if x[0] == "p-billy"]
+    assert "aegis-9" in msg, "feeds the first bead that is not the anchor"
+    assert claims == ["aegis-9"], "claims exactly one, and not the anchor"
+
+
+def test_a_queue_that_is_only_the_open_anchor_is_not_fed(tmp_path, monkeypatch):
+    """Nothing to feed that the worker does not already hold -> no feed, no
+    claim, no coordinator ping."""
+    claims = []
+    ready = [{"id": "aegis-1", "title": "the open anchor",
+              "assignee": "beads_aegis/crew/billy"}]
+    alerter, panes = _hauling_world(
+        tmp_path, monkeypatch, claims=claims, ready=ready,
+        in_progress=[{"id": "aegis-1", "assignee": "billy"}])
     assert alerter.sweep([]) == []
     assert panes.sent == [] and claims == []
+
+
+def test_an_unreadable_in_progress_set_feeds_nobody(tmp_path, monkeypatch):
+    """bd unreadable -> cannot tell which beads the worker holds -> the
+    fail-safe survives the u13t inversion: feed NOBODY rather than guess."""
+    claims = []
+    alerter, panes = _hauling_world(
+        tmp_path, monkeypatch, claims=claims,
+        in_progress=RuntimeError("bd down"))
+    assert alerter.sweep([]) == []
+    assert panes.sent == [] and claims == []
+
+
+def test_the_feed_with_open_anchor_is_still_once_per_idle_episode(tmp_path, monkeypatch):
+    """The drain-safety claim the inversion rests on, pinned: with the anchor
+    guard gone, the newly-idle dedup alone must bound tend to ONE feed per
+    idle episode."""
+    alerter, panes = _hauling_world(
+        tmp_path, monkeypatch, claims=[],
+        in_progress=[{"id": "aegis-1", "assignee": "billy"}])
+    alerter.sweep([])
+    alerter.sweep([])
+    alerter.sweep([])
+    assert len(panes.sent) == 1, "one feed per idle episode, anchor or not"
 
 
 def test_past_the_handoff_line_tend_instructs_the_reset_not_food(tmp_path, monkeypatch):
