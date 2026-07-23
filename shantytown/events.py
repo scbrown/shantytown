@@ -49,6 +49,8 @@ therefore computed at DRAIN time, by the reader, against a live pane
 """
 from __future__ import annotations
 import json
+import os
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -174,13 +176,24 @@ class FilesEvents:
         ev = StopEvent(id=self._next_id(), to=to, frm=frm, reason=reason, rose=rose,
                        shells=shells, ts=time.time(), item=item,
                        item_status=item_status, context_k=context_k)
-        (self.root / f"{ev.id}.json").write_text(json.dumps({
+        # ATOMIC: tmp + rename. write_text() straight to the final name is how
+        # the empty ev-172.json happened — a writer killed between open() and
+        # write left a 0-byte file that every pending() then choked on. rename
+        # within one directory is atomic on POSIX, so a reader sees the old
+        # world or the new file, never a torn one.
+        self._write_json(self.root / f"{ev.id}.json", {
             "to": ev.to, "frm": ev.frm, "reason": ev.reason,
             "rose": ev.rose, "delivered": ev.delivered, "shells": ev.shells,
             "ts": ev.ts, "item": ev.item, "item_status": ev.item_status,
             "context_k": ev.context_k,
-        }, indent=2, sort_keys=True))
+        })
         return ev
+
+    @staticmethod
+    def _write_json(path: Path, d: dict) -> None:
+        tmp = path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(d, indent=2, sort_keys=True))
+        os.replace(tmp, path)
 
     def _read(self, p: Path) -> StopEvent:
         d = json.loads(p.read_text())
@@ -194,12 +207,27 @@ class FilesEvents:
                          context_k=d.get("context_k"))
 
     def pending(self, me: str) -> list[StopEvent]:
-        """PURE READ — no mkdir, no rewrite, nothing marked."""
+        """PURE READ — no mkdir, no rewrite, nothing marked.
+
+        One corrupt file must not dam the store. An EMPTY ev-172.json (a writer
+        killed mid-write, before persist() became atomic) made this loop raise on
+        every drain for every destination: sattler's Stop hook died 47 events deep,
+        her picture of finished work froze, and she re-slung a CLOSED security bead
+        twice from the stale list (aegis-jk40, 2026-07-23). latest_by_sender()
+        already skipped corrupt files; this loop crashed on them — same store, two
+        answers. Skip LOUDLY: a warning names the file so the operator sees the
+        corruption, instead of the whole event system silently dying around it."""
         if not self.root.is_dir():
             return []
         mine = []
         for p in sorted(self.root.glob("ev-*.json"), key=lambda q: self._n(q.stem)):
-            ev = self._read(p)
+            try:
+                ev = self._read(p)
+            except (OSError, ValueError, KeyError) as e:
+                print(f"events: SKIPPING corrupt {p.name} ({type(e).__name__}: {e}) "
+                      f"— quarantine or delete it; it cannot be delivered",
+                      file=sys.stderr)
+                continue
             if ev.to == me and not ev.delivered:
                 mine.append(ev)
         return mine
@@ -237,7 +265,7 @@ class FilesEvents:
             p = self.root / f"{ev.id}.json"
             d = json.loads(p.read_text())
             d["delivered"] = True
-            p.write_text(json.dumps(d, indent=2, sort_keys=True))
+            self._write_json(p, d)   # atomic — see persist()
         return mine
 
 
