@@ -131,11 +131,32 @@ def derive_agents(rows: list[dict]) -> list[Agent]:
 
 
 class QuipuRegistry:
-    """Identity from the quipu graph. get / all / set over `aegis:CrewMember`."""
+    """Identity from the quipu graph. get / all / set over `aegis:CrewMember`.
+
+    NON-LIVE MEMBERS ARE EXCLUDED AT THE QUERY (aegis-wxrm): the graph keeps
+    retired / never-instantiated CrewMembers for history, marked with
+    `a:crewStatus` (SHACL-enforced value set; ABSENCE of the property = active —
+    the failure asymmetry is deliberate: forgetting to mark a retiree leaves a
+    harmless extra row, while forgetting to mark someone active would erase a
+    real agent). Without the filter, `st project` would mint cards for mayor /
+    strider / walker — and a mayor card recreates the black-hole dispatch
+    recipient this fleet retired (aegis-rvhn). One resolver: every consumer of
+    all()/get() inherits the exclusion.
+
+    THE FORM IS `OPTIONAL … FILTER(!bound(…))`, NOT `FILTER NOT EXISTS`,
+    because quipu's engine REJECTS the latter ("unsupported FILTER
+    expression") — and _query raises on an error body, so the modern form
+    would have turned every all() call into QuipuUnreachable fleet-wide.
+    Found only by running the query against the live engine; the injected
+    test backend was green throughout (aegis-wxrm). Verify any future edit
+    to this query against a real quipu before shipping it.
+    """
 
     _ALL = (
         f"PREFIX a: <{ONTO}> "
-        "SELECT ?s ?rt WHERE { ?s a a:CrewMember . OPTIONAL { ?s a:reports_to ?rt } }"
+        "SELECT ?s ?rt WHERE { ?s a a:CrewMember . "
+        "OPTIONAL { ?s a:crewStatus ?cs } FILTER(!bound(?cs)) "
+        "OPTIONAL { ?s a:reports_to ?rt } }"
     )
 
     def __init__(self, server: str | None = None, timeout: float = 5.0):
