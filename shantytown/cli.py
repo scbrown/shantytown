@@ -293,6 +293,14 @@ def build_parser() -> argparse.ArgumentParser:
                     help="take an item another agent already holds. Without this, "
                          "dispatching an assigned item REFUSES rather than silently "
                          "stealing it.")
+    go.add_argument("--worktree", metavar="REPO", default=None,
+                    help="the work touches a SHARED project repo (a path, or a "
+                         "bare name under $GT_ROOT): provision this agent an "
+                         "ISOLATED worktree off it and deliver its path in the "
+                         "dispatch, so two agents on the same repo never share an "
+                         "index/HEAD. Refuses if the worktree cannot be made — "
+                         "dispatching shared-repo work with no isolation is the "
+                         "clobber bug, not a fallback.")
 
     cr = sub.add_parser("crew", help="who exists, what state, what role")
     cr.add_argument("--count", action="store_true",
@@ -1490,6 +1498,11 @@ def _cmd_go(a) -> int:
             print(f"  refused: {e}", file=sys.stderr)
             return REFUSED
         print(p.render()); print("\n  triage: " + decision.render())
+        if a.worktree:
+            # Dry-run creates NOTHING (the pure-dry-run rule), so name what a real
+            # run would provision without touching disk.
+            print(f"  would provision worktree: "
+                  f"{worktree_for(_resolve_repo(a.worktree), a.agent)}")
         print("  0 writes. 1 tracker call, 1 send-keys.")
         return OK
     # KEEP CURRENT, MECHANIZED (aegis-4zld). Assignment is a SAFE pull moment —
@@ -1505,6 +1518,27 @@ def _cmd_go(a) -> int:
         print(f"  ⚠ {warn}", file=sys.stderr)
         tag = f"[st keep-current: {warn}]"
         note = f"{note} — {tag}" if note else tag
+    # ISOLATED WORKTREE for shared-repo work (aegis-h2rr), composed with the
+    # keep-current above: the workspace clone is pulled, and if this item touches a
+    # SHARED project repo, the agent gets its OWN worktree off it so its index/HEAD
+    # cannot be clobbered by another agent (aegis-repg). PROVISION FAILURE REFUSES:
+    # dispatching shared-repo work into the shared checkout with no isolation is the
+    # exact bug this removes, so a worktree we cannot make is a hard stop, not a
+    # degrade. A STALE worktree (rebase refused) is not — it rides into the note
+    # like keep-current's does, visible to both ends.
+    if a.worktree:
+        try:
+            wt_path = ensure_worktree(_resolve_repo(a.worktree), a.agent)
+        except WorkspaceError as e:
+            print(f"  refused: worktree — {e}", file=sys.stderr)
+            return REFUSED
+        print(f"  worktree: {wt_path}")
+        wtag = f"[st worktree: work in {wt_path}"
+        if wt_warn := _refresh_worktree(wt_path):
+            print(f"  ⚠ {wt_warn}", file=sys.stderr)
+            wtag += f" — {wt_warn}"
+        wtag += "]"
+        note = f"{note} — {wtag}" if note else wtag
     try:
         p = d.go(a.item, a.agent, note=note, reassign=a.reassign)
     except AlreadyAssigned as e:
@@ -2134,6 +2168,40 @@ def _keep_current(a, agent_name: str) -> str | None:
     return (f"workspace could not be brought current (ff-only pull refused: "
             f"{first}) — dispatching anyway on the EXISTING tree; it may be "
             f"stale. Clean or reconcile {card.workspace} to restore keep-current.")
+
+
+def _refresh_worktree(dest, base: str = "origin/main") -> str | None:
+    """Bring a project WORKTREE current — by REBASE onto <base>, not ff-pull.
+
+    The keep-current sibling _refresh_clone ff-pulls a clone on `main`. A worktree
+    is on `wt/<agent>`, so an ff-only pull of origin/main either no-ops (wrong
+    branch) or fails — the caveat flagged on aegis-h2rr. The right move is the
+    crew-worktree pattern: rebase wt/<agent> onto origin/main. But ONLY when the
+    tree is clean: rebasing over uncommitted work is the force/reset data-loss
+    (aegis-repg) this whole line removes. A dirty tree, or a rebase that conflicts,
+    is LEFT AS-IS and reported — a stale-but-intact worktree beats a mangled one.
+    Never raises; returns a one-line warning or None (current)."""
+    import subprocess
+    try:
+        subprocess.run(["git", "-C", str(dest), "fetch", "origin", "--quiet"],
+                       capture_output=True, text=True, timeout=60)
+        dirty = subprocess.run(["git", "-C", str(dest), "status", "--porcelain"],
+                               capture_output=True, text=True)
+        if dirty.returncode != 0 or dirty.stdout.strip():
+            return ("worktree has local changes — not rebased onto "
+                    f"{base}; working on it as-is (may be behind).")
+        r = subprocess.run(["git", "-C", str(dest), "rebase", base],
+                           capture_output=True, text=True, timeout=60)
+        if r.returncode != 0:
+            # Leave the worktree usable: abort the half-applied rebase.
+            subprocess.run(["git", "-C", str(dest), "rebase", "--abort"],
+                           capture_output=True, text=True)
+            first = (r.stderr or r.stdout).splitlines()
+            return (f"worktree rebase onto {base} refused "
+                    f"({first[0] if first else 'conflict'}) — on the existing tree.")
+        return None
+    except Exception as e:                       # not a repo, git absent, timeout
+        return str(e)
 
 
 def _systemctl_user_active(unit: str) -> bool:
