@@ -276,8 +276,9 @@ class Tender:
         except Exception:  # noqa: BLE001 — stubbed/legacy stores lack the API
             unstamped = False
         if unstamped:
+            # (Citation lives here, not in the emittable string: aegis-2j2r.)
             why = ("no launch stamp — never launched by st, so not st's "
-                   "to respawn (another orchestrator owns it; aegis-2j2r)")
+                   "to respawn (another orchestrator owns it)")
             self._log(f"REFUSED {card.name}: {why}")
             return Finding(card.name, "down", REFUSED, why)
         if dry_run:
