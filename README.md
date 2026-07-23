@@ -329,7 +329,8 @@ set to run the harness on the files tracker.
 | `SHANTY_ONTO_NS` | the ontology IRI base your graph is keyed under | `http://shantytown.example/ontology/` |
 | `BOBBIN_SERVER` | bobbin, for `st context` | `http://localhost:8080` |
 | `SHANTY_RANKER` | `policy` to weight the admin workflow by Hank blast radius; else rule-based | — |
-| `SHANTY_FORGEJO_URL` | a self-hosted forge, for `st doctor`'s release checks | `http://localhost:3000` |
+| `SHANTY_FORGEJO_URL` | a self-hosted forge: `st doctor`'s release checks, and the base URL for `--backend forgejo` (issues as work items; pair with `SHANTY_FORGEJO_TOKEN` and `--repo owner/name`) | `http://localhost:3000` |
+| `SHANTY_FORGEJO_TOKEN` | API token for `--backend forgejo` (issue read/write on the repo) | — |
 | `SHANTY_REACTOR_URL` | reactor, if you use it as an event source | `http://localhost:8075` |
 | `SHANTY_CANONICAL_SOURCE` | the checkout a fleet deploy must be built from, for `st doctor`'s self-check. Unset and not in a git checkout → the check is `CANNOT_TELL`, never OK. | git top-level of the running package |
 

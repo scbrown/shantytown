@@ -135,9 +135,17 @@ def _tracker(a, default="files"):
     bd's -C. Identity (registry) stays files — work lives in beads, identity does
     not.
     """
-    if _backend(a, default) == "beads":
+    b = _backend(a, default)
+    if b == "beads":
         return beads_mod.BeadsTracker(repo=getattr(a, "repo", None)
                                       or _default_bd_repo(a))
+    if b == "forgejo":
+        # --repo is owner/name here (the forge's coordinates), not a directory.
+        from .forgejo import ForgejoTracker
+        repo = getattr(a, "repo", None)
+        if not repo:
+            raise SystemExit("  refused: --backend forgejo needs --repo owner/name")
+        return ForgejoTracker(repo)
     return FilesTracker(a.root / "items")
 
 
@@ -246,7 +254,7 @@ def build_parser() -> argparse.ArgumentParser:
         version=f"st {__version__} ({deployed_sha()})",
     )
     ap.add_argument("--root", type=Path, default=_default_root())
-    ap.add_argument("--backend", choices=["files", "beads"], default=None,
+    ap.add_argument("--backend", choices=["files", "beads", "forgejo"], default=None,
                     help="tracker backend (identity is always files). #3. "
                          "Unset means per-command default: files everywhere, "
                          "EXCEPT `mail -d`, which defaults to beads because a "
