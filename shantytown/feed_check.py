@@ -60,7 +60,7 @@ def free_feedable_workers(reg, panes, runtime) -> list[str]:
     """IDLE workers st can actually dispatch to — the same idle verdict `st crew`
     shows, gated on the `send` wiring so a dark worker is never counted as free."""
     from . import triage as triage_mod
-    from .runtime import asks_a_question, live_wiring
+    from .runtime import asks_a_question, auth_expired, live_wiring
 
     out = []
     for ag in reg.all():
@@ -68,9 +68,15 @@ def free_feedable_workers(reg, panes, runtime) -> list[str]:
             continue
         screen = panes.capture(ag.pane, attrs=True)
         plain = triage_mod.strip_attrs(screen)
+        # auth_dead (aegis-arma): a login-expired pane renders idle, and counting
+        # it feedable is the measured failure — the coordinator was BLOCKED from
+        # stopping to go feed nine agents none of which could run a single call.
+        # An auth-dead worker's verdict is AUTH_DEAD, not IDLE, so it falls out
+        # of `free` here — dead panes must never hold the coordinator hostage.
         state = triage_mod.work_state(
             screen, runtime.shows_ready_ui(plain),
-            awaiting=asks_a_question(runtime, plain))
+            awaiting=asks_a_question(runtime, plain),
+            auth_dead=auth_expired(runtime, plain))
         if state != triage_mod.IDLE:
             continue
         wiring = live_wiring(ag.pane, panes.cmdline)

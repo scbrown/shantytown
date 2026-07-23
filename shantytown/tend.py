@@ -70,9 +70,13 @@ BUSY = "busy"                 # a session appeared and is mid-flight — hands o
 REFUSED = "refused"           # could not act, and said why (workspace, launch)
 UNTENDABLE = "no-pane"        # no pane on the card: nothing to supervise
 UNEQUIPPED = "unequipped"     # alive, but its workspace lacks the tool kit
+AUTH_DEAD = "auth-dead"       # alive, login expired: every API call fails
+                              # (aegis-arma). NOT auto-relaunched on a default
+                              # pass — see the rule in _live — `st tend --reauth`
+                              # is the explicit one-command recovery.
 
 
-_FAULTS = frozenset({RESURRECTED, DEAF, REFUSED, UNEQUIPPED})
+_FAULTS = frozenset({RESURRECTED, DEAF, REFUSED, UNEQUIPPED, AUTH_DEAD})
 
 
 @dataclass(frozen=True)
@@ -200,6 +204,25 @@ class Tender:
     def _live(self, card: Agent, agents: list[Agent]) -> Finding:
         """An agent that EXISTS. The question is never "is the pane there" — it
         is "can this agent still report", and those are different facts."""
+        # AUTH-DEAD FIRST (aegis-arma): login expired, so every API call this
+        # agent makes fails — the wiring and kit checks below are moot for a
+        # session nothing can run in. REPORTED, not auto-relaunched, same rule as
+        # STALE and for a sharper reason: the fix (a relaunch re-reading the
+        # shared credential) only works AFTER the operator re-logs in, and a
+        # default pass cannot know that happened. A supervisor that relaunches
+        # on every pass while the credential is still stale kill-loops the whole
+        # fleet, burning each agent's frozen context for nothing. The explicit
+        # command is `st tend --reauth` — one command, operator-timed.
+        from .runtime import auth_expired
+        plain = triage_mod.strip_attrs(self._panes.capture(card.pane, attrs=True))
+        if auth_expired(self._runtime, plain):
+            return Finding(card.name, "up", AUTH_DEAD,
+                           "alive and LOGIN-EXPIRED: every API call fails; the "
+                           "pane renders idle and nothing can run. Not respawned "
+                           "by this pass — re-login on the operator session "
+                           "FIRST (refreshing the shared credential), then "
+                           "`st tend --reauth` relaunches every auth-dead agent "
+                           "in one command")
         wiring = live_wiring(card.pane, self._panes.cmdline)
         if wiring is None:
             return Finding(card.name, "up", DEAF,

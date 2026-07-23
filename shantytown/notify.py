@@ -41,7 +41,7 @@ from pathlib import Path
 
 from . import triage as triage_mod
 from .protocols import Agent
-from .runtime import asks_a_question
+from .runtime import asks_a_question, auth_expired
 from .tier import route_stop
 
 
@@ -68,7 +68,8 @@ def blocked_workers(agents, panes, runtime):
         plain = triage_mod.strip_attrs(screen)
         state = triage_mod.work_state(
             screen, runtime.shows_ready_ui(plain),
-            awaiting=asks_a_question(runtime, plain))
+            awaiting=asks_a_question(runtime, plain),
+            auth_dead=auth_expired(runtime, plain))
         if state in ACTIONABLE:
             out.append((ag.name, state))
     return out
@@ -126,9 +127,15 @@ def saturated_agents(agents, panes, runtime):
             continue
         screen = panes.capture(ag.pane, attrs=True)
         plain = triage_mod.strip_attrs(screen)
+        # auth_dead (aegis-arma): a saturated pane whose login expired must NOT
+        # be prompted to cycle — measured: tend's cycle driver prompted one over
+        # and over, and every prompt died against the very banner it could not
+        # see, filling the dead pane's scrollback with instructions. AUTH_DEAD
+        # outranks SATURATED in work_state, so it falls out here.
         state = triage_mod.work_state(
             screen, runtime.shows_ready_ui(plain),
-            awaiting=asks_a_question(runtime, plain))
+            awaiting=asks_a_question(runtime, plain),
+            auth_dead=auth_expired(runtime, plain))
         if state == triage_mod.SATURATED:
             out.append(ag.name)
     return out

@@ -98,6 +98,20 @@ def asks_a_question(rt, screen: str) -> bool:
     return bool(ask(screen)) if callable(ask) else False
 
 
+def auth_expired(rt, screen: str) -> bool:
+    """Does `rt` say its LOGIN EXPIRED banner is on this screen? (aegis-arma)
+
+    The auth twin of asks_a_question, with the identical tolerance and the
+    identical safety argument: a runtime that reads no panes (codex) cannot
+    answer, and False-because-could-not-ask is safe ONLY because of where it
+    lands — the flag can only ever convert some other verdict INTO `auth-dead`,
+    so failing to ask leaves the verdict as it was. It can never manufacture
+    auth-death, and it can never hide a busy/wedged agent behind it.
+    """
+    ask = getattr(rt, "auth_dead", None)
+    return bool(ask(screen)) if callable(ask) else False
+
+
 @runtime_checkable
 class Runtime(Protocol):
     """An agent runtime does three things (adapters.md). start() is this ruling."""
@@ -584,6 +598,21 @@ class ClaudeRuntime:
     # An interactive picker BLOCKING the pane (aegis-qxc2). See awaiting_answer().
     # Read off live panes 2026-07-20, both the unanswered and the answered shape.
     QUESTION_MARKERS = ("Enter to select", "Ready to submit your answers?")
+    # AUTH EXPIRED (aegis-arma). MEASURED, not guessed: read verbatim off 8 live
+    # auth-dead crew panes, 2026-07-22 —
+    #     ● Login expired · Please run /login
+    # rendered at column 0 as the runtime's own response line, with the ready UI
+    # still up and the input box empty underneath. That combination is exactly why
+    # the state was invisible: every such pane read `idle`. The banner appears
+    # when an API call FAILS — an agent whose auth expired while idle shows
+    # nothing until something (a dispatch, a tend prompt) makes it try.
+    # Line-anchored via auth_dead(), never a bare substring: this repo's own
+    # source, the bead that asked for this, and any grep over a dead pane's
+    # scrollback all CONTAIN the string (a `grep -n` hit renders as
+    # "sess: 1484:● Login expired · …" — measured in the very session that wrote
+    # this), and a substring match on chrome an agent can quote is the trap every
+    # marker in this file documents.
+    AUTH_MARKERS = ("● Login expired",)
     # Matched in the tail only — see awaiting_answer(). 8 lines, same window every
     # text predicate in triage.py uses; the answered shape sits ~5 lines up.
     _QUESTION_TAIL_LINES = 8
@@ -741,6 +770,42 @@ class ClaudeRuntime:
             lines.pop()
         tail = "\n".join(lines[-self._QUESTION_TAIL_LINES:])
         return any(m in tail for m in self.QUESTION_MARKERS + self.TRUST_MARKERS)
+
+    def auth_dead(self, screen: str) -> bool:
+        """Is this pane showing the runtime's LOGIN EXPIRED banner? (aegis-arma)
+
+        The state this names: the operator's shared credential expired (or was
+        rotated by a re-login), so every API call this agent makes fails with
+        `● Login expired · Please run /login` — while the ready UI stays up and
+        the input box stays empty, which is `idle` to every other predicate.
+        Measured 2026-07-22: one operator re-login left all 9 crew exactly like
+        this; they were counted feedable, prompted, and dispatched into, and
+        every send died against the same banner.
+
+        Caller hands this the STRIPPED view, same contract as awaiting_answer:
+        the runtime colours its chrome, and a substring under a colour run stops
+        matching.
+
+        TAIL-ONLY with trailing blanks dropped first (kelly's blank-padding
+        lesson, awaiting_answer): the banner is the FAILED TURN's output, so on a
+        live auth-dead pane it sits a few lines above the input box — measured at
+        6 lines up with blanks dropped. The same words deeper in scrollback are
+        history (possibly from an expiry already healed), or an agent TALKING
+        about the banner — this predicate's own bead quotes it verbatim.
+
+        LINE-ANCHORED, not a substring: only a line that BEGINS with the marker
+        counts. The runtime renders the banner as its own response line at column
+        0; a quoted copy almost never lands there — a `grep -n` over a dead
+        pane's scrollback emits "sess: 1484:● Login expired · …", measured in the
+        session that wrote this, and a substring match would have called the
+        grepping agent auth-dead on the spot.
+        """
+        lines = screen.splitlines()
+        while lines and not lines[-1].strip():
+            lines.pop()
+        return any(ln.strip().startswith(m)
+                   for ln in lines[-self._QUESTION_TAIL_LINES:]
+                   for m in self.AUTH_MARKERS)
 
 
 class CodexRuntime:

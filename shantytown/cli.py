@@ -2,8 +2,8 @@
 
     anchor [--short|--events|--harness] · go · inbox [--count] · task
     · crew [--count] · roles [--check] · role set · new · stop · log · context
-    · doctor [--install] · project · tend [--install|--status] · attach [-r]
-    · dashboard [admin]
+    · doctor [--install] · project · tend [--install|--status|--reauth]
+    · attach [-r] · dashboard [admin]
 
 Five of those flags are MACHINE-READABLE modes, added for an external status bar
 (anchor --short/--events/--harness, crew --count, inbox --count). They are flags
@@ -70,9 +70,9 @@ from .launched import FilesLaunches, CURRENT, STALE, UNKNOWN
 from .quipu import QuipuRegistry
 from . import selfcheck
 from .anchor import Unreachable, anchor as do_anchor
-from .runtime import (asks_a_question, ClaudeRuntime, CapabilityError, SettingsError,
-                      emitted_stop_directions, live_stop_directions, live_wiring,
-                      settings_for_role)
+from .runtime import (asks_a_question, auth_expired, ClaudeRuntime, CapabilityError,
+                      SettingsError, emitted_stop_directions, live_stop_directions,
+                      live_wiring, settings_for_role)
 from .tmux import Tmux, declared_socket
 from .workspace import WorkspaceError, ensure_workspace
 from .provision import ProvisionError, provision as provision_ws
@@ -352,6 +352,10 @@ def build_parser() -> argparse.ArgumentParser:
                     help="run a pass every SECS forever — the blocked-worker "
                          "heartbeat. A blocked worker is pushed to "
                          "its coordinator within one interval, on its own.")
+    td.add_argument("--reauth", action="store_true",
+                    help="relaunch every AUTH-DEAD agent (login expired) in one "
+                         "command — run it AFTER the operator re-logs in; a "
+                         "relaunch re-reads the refreshed shared credential")
     td.add_argument("-n", "--dry-run", action="store_true",
                     help="say what would be respawned; touch NOTHING")
 
@@ -1475,6 +1479,7 @@ def _cmd_crew(a) -> int:
     verdicts = []
     waiting = []
     saturated = []
+    authdead = []
     print()
     for ag, state, work in _crew_states(agents, panes, runtime):
         if work.endswith("sh"):
@@ -1491,6 +1496,8 @@ def _cmd_crew(a) -> int:
             # A `context_k=NNN` rides in the work cell (see _crew_states), so the
             # coordinator sees HOW over-limit, not just that it is.
             saturated.append(ag.name)
+        elif work.startswith(triage_mod.AUTH_DEAD):
+            authdead.append(ag.name)
         # Only a LIVE agent can be running stale settings. A down agent has no
         # loaded settings to be stale, and will read the current file when it
         # next starts, so reporting on it would be noise that hides the real hits.
@@ -1573,7 +1580,24 @@ def _cmd_crew(a) -> int:
               f"loses whatever was not saved. The")
         print(f"    saturated agent is the LEAST able to notice it must cycle, so "
               f"this is the coordinator's to drive.")
-    if free or busy or queued or waiting or saturated or shelled:
+    # The bead this state was built for (aegis-arma). An operator re-login rotates
+    # the shared credential, and EVERY live agent's session goes login-expired at
+    # once — still rendering a ready UI over an empty box, i.e. `idle` to every
+    # earlier version of this command. All 9 crew sat that way: fed, prompted, and
+    # dispatched into, with every send dying against the banner. Not idle: DEAD.
+    if authdead:
+        print(f"  ⚠ {len(authdead)} agent(s) AUTH-DEAD — login expired, every API "
+              f"call fails: {', '.join(authdead)}")
+        print(f"    They render an idle-looking pane but nothing can run. /login "
+              f"in the pane is an interactive")
+        print(f"    browser OAuth flow — it cannot be driven for them. Recovery: "
+              f"the OPERATOR re-logs in on their")
+        print(f"    own session first (refreshing the shared credential), then "
+              f"`st tend --reauth` relaunches every")
+        print(f"    auth-dead agent in one command. Their frozen context is lost "
+              f"either way — it was already")
+        print(f"    unreachable the moment auth died.")
+    if free or busy or queued or waiting or saturated or authdead or shelled:
         print()
     # Say the consequence, not just the state. The operator who needs this line is
     # the one who just rewrote a settings file and has no reason to suspect it did
@@ -1622,9 +1646,13 @@ def _crew_states(agents, panes, runtime):
             # awaiting: a BLOCKING picker (aegis-qxc2). Without it these panes
             # print `?`, which is honest and unactionable — 7 of 10 workers read
             # that way at once while every one of them sat on a question.
+            # auth_dead: the login-expired banner (aegis-arma). Without it an
+            # auth-dead pane prints `idle` — all 9 crew did, through a whole
+            # expiry — and lands on the free list.
             work = triage_mod.work_state(
                 screen, runtime.shows_ready_ui(plain),
-                awaiting=asks_a_question(runtime, plain))
+                awaiting=asks_a_question(runtime, plain),
+                auth_dead=auth_expired(runtime, plain))
             # Background shells outlive the turn. An agent whose turn ended with a
             # build/test/`gh run watch` still live is NOT finished, and every
             # surface the administrator has was silent about it. Shown ON the work
@@ -2074,6 +2102,12 @@ def _cmd_tend(a) -> int:
               "look dead and be respawned onto the wrong server.", file=sys.stderr)
         return REFUSED
 
+    # --reauth AFTER the socket guard, deliberately: on a wrong socket every
+    # auth-dead agent would be invisible (or worse, a foreign fleet's panes would
+    # be judged), and this branch KILLS sessions.
+    if getattr(a, "reauth", False):
+        return _tend_reauth(a)
+
     # --loop <secs>: run passes on an interval, so blocked-worker delivery is
     # PROMPT ON ITS OWN (aegis-w0kk) rather than "on the coordinator's next stop".
     # This is the heartbeat the bead's option 2 names; without a running st tend
@@ -2146,6 +2180,132 @@ def _tend_once(a, quiet: bool = False) -> int:
     if not a.dry_run:
         sup_mod.PassLog(Path(a.root)).record(rep)
     return OK if rep.healthy() else CANNOT_TELL
+
+
+def _tend_reauth(a) -> int:
+    """tend --reauth — relaunch every AUTH-DEAD agent, in one command (aegis-arma).
+
+    THE INCIDENT THIS REPLACES: an operator re-login rotated the shared
+    credential and every live agent's session went login-expired at once — nine
+    agents, each needing a by-hand `st stop` + `st new`, while every roster
+    surface said `idle`. This is that recovery as ONE command, run at the moment
+    only the operator can know: AFTER they have re-logged in. /login inside a
+    pane is an interactive browser OAuth flow — it cannot be driven for the
+    agent, so relaunch (which re-reads the refreshed credential) is the whole
+    remedy.
+
+    Deliberately a flag on tend and not an auto-heal on the default pass: a pass
+    cannot know whether the operator has re-logged in yet, and relaunching
+    against a still-stale credential kill-loops the fleet — each agent comes up,
+    dies on its first call, and is killed again next pass, burning its frozen
+    context for nothing. Same shape as the --cycle-stale rule in tend.__doc__:
+    the supervisor REPORTS, the explicit flag ACTS.
+
+    The verdict is the SAME work_state `st crew` renders (via _crew_states) —
+    never a second opinion — and the respawn goes through the SAME Tender as a
+    normal pass, so retirement, workspace-ensure, clone-refresh and the
+    appeared-while-we-looked race guard all hold. What this adds around them:
+    the kill (tend never kills), the ownership guard on it (a name match is not
+    permission to kill — same rule as `st stop`), and a liveness verify after.
+
+    HONEST BOUNDARY: the verify proves the process CAME UP, not that it is
+    authed — the banner only appears on the first failed API call, so a launch
+    against a still-stale credential looks identical here. If the operator did
+    not re-log in first, the next `st crew` will say so.
+    """
+    panes = _panes(a)
+    try:
+        agents = _registry(a).all()
+    except Exception as e:
+        print(f"  could not tell: {e}", file=sys.stderr)
+        return CANNOT_TELL
+    runtime = _runtime(a, panes)
+    dead = [ag for ag, state, work in _crew_states(agents, panes, runtime)
+            if state == "up" and work.startswith(triage_mod.AUTH_DEAD)]
+    if not dead:
+        print("  no auth-dead agents — nothing to relaunch.")
+        return OK
+
+    relaunch, refused = [], 0
+    for card in dead:
+        if tend_mod.is_retired(card):
+            # Retired-and-alive is already tend's RESURRECTED alarm; reauth must
+            # not use auth-death as a side door to relaunching what was
+            # deliberately stopped.
+            print(f"  skip {card.name}: RETIRED — auth-dead, and deliberately "
+                  f"stopped; not relaunching.")
+            continue
+        if not panes.owns(card.pane):
+            print(f"  refused: {card.name} ({card.pane}) was not launched by st — "
+                  f"refusing to kill a session st does not own. A name match is "
+                  f"not permission to kill. Its own launcher recovers it, or: "
+                  f"kill it by hand, then `st new {card.name}` brings it back "
+                  f"st-owned.", file=sys.stderr)
+            refused += 1
+            continue
+        relaunch.append(card)
+    if a.dry_run:
+        for card in relaunch:
+            print(f"  would: kill {card.pane} and relaunch {card.name}")
+        return REFUSED if refused else OK
+    if not relaunch:
+        return REFUSED if refused else OK
+
+    print(f"  relaunching {len(relaunch)} auth-dead agent(s): "
+          f"{', '.join(c.name for c in relaunch)}")
+    stuck = 0
+    for card in relaunch:
+        panes.kill_session(card.pane)
+        if panes.exists(card.pane):
+            print(f"  could not tell: killed {card.pane} but it is still there — "
+                  f"not relaunching {card.name} over a live session.",
+                  file=sys.stderr)
+            stuck += 1
+            continue
+        # The stamp described the DEAD launch; forget it so the respawn's stamp
+        # (below) is the one `st crew` judges staleness against.
+        _launches(a).forget(card.name)
+    relaunch = [c for c in relaunch if not panes.exists(c.pane)]
+
+    # THE SAME respawn path as a normal tend pass — one launcher, not a second.
+    # The spawn also stamps what it launched with (same record `st new` writes),
+    # so the relaunched agent's settings verdict is measured, not `unknown`.
+    def _spawn(card, session):
+        runtime.start(card, session)
+        sp = _default_settings(a.root)(card)
+        if sp:
+            # Best-effort, same contract as `st new`: an unstamped agent reports
+            # `unknown`, which is the state it is in — never fail the launch.
+            _launches(a).record(card.name, sp)
+    tender = tend_mod.Tender(
+        panes, runtime, _launches(a),
+        spawn=_spawn,
+        refresh=_refresh_clone,
+        gaps=lambda card: prov_mod.missing_kit(card, Path(a.root)),
+        log=lambda msg: print(f"  {msg}", file=sys.stderr),
+    )
+    rep = tender.pass_over(relaunch, dry_run=False)
+    print()
+    print(rep.render())
+
+    unverified = []
+    for card in relaunch:
+        if not _observe_live(runtime, panes, card.pane):
+            unverified.append(card.name)
+    if unverified:
+        print(f"  could not tell: {len(unverified)} relaunched agent(s) not "
+              f"observed live within the timeout: {', '.join(unverified)} — "
+              f"check `st log <agent>`.", file=sys.stderr)
+    else:
+        print(f"  {len(relaunch)} agent(s) relaunched and observed live.")
+    print("  live is not authed: the login banner only shows on the first API "
+          "call. If the operator has not re-logged in, they will die again on "
+          "first use — `st crew` will name them auth-dead.")
+    if refused or stuck:
+        return REFUSED
+    if unverified or not rep.healthy():
+        return CANNOT_TELL
+    return OK
 
 
 def _tend_retire(a) -> int:

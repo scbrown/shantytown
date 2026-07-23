@@ -221,10 +221,19 @@ SATURATED = "saturated"       # PAST THE 400k CYCLE THRESHOLD — looks free, is
                               # checkpoint its state to its bead and /clear before
                               # taking a new task. Naming it "% of limit" was a lie
                               # (Stiwi's correction) — 400k is not the ceiling.
+AUTH_DEAD = "auth-dead"       # the runtime's LOGIN EXPIRED (aegis-arma). The UI is
+                              # up, the box is empty, and every API call fails —
+                              # measured 2026-07-22: an operator re-login left all
+                              # 9 crew like this, and every one printed `idle`, so
+                              # feed_check counted them feedable and tend prompted
+                              # into the dead panes. Not idle: BROKEN. The remedy
+                              # is a relaunch (`st tend --reauth`) after the
+                              # operator re-logs in — /login in the pane is an
+                              # interactive browser OAuth flow nothing can drive.
 
 
 def work_state(screen: str, ui_up: bool, awaiting: bool = False,
-               limit_k: float = None) -> str:
+               limit_k: float = None, auth_dead: bool = False) -> str:
     """Is this agent WORKING right now? The verdict `st crew` never asked for.
 
     The predicates already existed — dispatch.py has refused sends into busy
@@ -253,6 +262,19 @@ def work_state(screen: str, ui_up: bool, awaiting: bool = False,
         return WEDGED
     if mid_flight(screen):
         return BUSY
+    # AUTH-DEAD next (aegis-arma): `auth_dead` is the RUNTIME's answer, passed in
+    # exactly like `ui_up` and `awaiting` — the login banner is runtime chrome and
+    # this module knows no runtime's markers. After mid_flight on purpose (a pane
+    # genuinely computing is busy; an auth-dead one cannot compute, so a spinner
+    # means auth is fine), and BEFORE everything else: an auth-dead agent's picker,
+    # empty box or saturation footer are all facts about a session that cannot make
+    # an API call, and reporting any of them instead sends the coordinator to
+    # answer a question or drive a cycle in a pane where nothing can run. Measured:
+    # all 9 crew read `idle` through an entire login expiry, and tend's cycle
+    # driver prompted a saturated auth-dead pane over and over — every prompt
+    # failed with the same banner it could not see.
+    if auth_dead:
+        return AUTH_DEAD
     # AFTER mid_flight on purpose. A pane that is genuinely computing is BUSY even
     # if a picker's chrome is somewhere on it, and this ordering means the new
     # verdict can only ever convert a `?` — it cannot take an agent that used to

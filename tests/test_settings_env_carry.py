@@ -75,6 +75,10 @@ def test_unreadable_env_json_does_not_crash_the_emit(tmp_path, monkeypatch):
     """A corrupt deployment config must not take the launcher down with it — the
     settings still emit, just without the carry."""
     monkeypatch.delenv("QUIPU_SERVER", raising=False)
+    # BOTH carried names, not just one: a deployment shell that exports
+    # SHANTY_ONTO_NS (every crew session here does) leaked into the ambient
+    # fallback and failed this test on a healthy tree.
+    monkeypatch.delenv("SHANTY_ONTO_NS", raising=False)
     (tmp_path / "env.json").write_text("{ not json")
 
     env = claude_settings_for_role("worker", root=tmp_path)["env"]

@@ -26,6 +26,7 @@ st context <query>            what code should I be looking at? (bobbin)
 st doctor [--install]         what's installed, stale, missing (out-of-box)
 st project                    materialize the crew cards FROM the graph
 st tend                       supervise the crew: respawn what DIED, never what was RETIRED
+st tend --reauth              relaunch every AUTH-DEAD agent (run AFTER the operator re-logs in)
 st attach <agent>             attach to a crew member by name (socket + pane resolved; via shanty)
 st dashboard [admin]          live, tier-scoped view: roster/state/work, self-refreshing
 ```
@@ -221,6 +222,40 @@ Two rules fall out, and they are the load-bearing part:
 This is still a heuristic on somebody else's TUI rendering, and it is the *cheap* tier of the fix.
 The better one is for a worker's own hook to report `idle`/`running`/`queued` into `.shanty` so the
 tier reads a **fact instead of a rendering** — the Stop event is the natural carrier (aegis-w9z1).
+
+## `auth-dead` — login expired, and the pane lies `idle` (aegis-arma)
+
+Measured 2026-07-22: an operator re-login rotated the shared credential and **all 9 live crew went
+`● Login expired · Please run /login` at once** — with the ready UI still up and the input box
+empty, which is `idle` to every other predicate. So the dead fleet stayed on the free list, Rule
+Zero held the coordinator's stop hostage to nine unfeedable corpses, and tend's cycle driver
+prompted a saturated dead pane over and over into the very banner it could not see. Recovery was
+nine by-hand `st stop` + `st new`.
+
+Now it is a named verdict. The banner is runtime chrome, so `ClaudeRuntime.auth_dead()` owns the
+markers (tail-only, trailing blanks dropped, **line-anchored** — a `grep -n` over a dead pane's
+scrollback prints the banner mid-line, and a substring match would have called the grepping agent
+auth-dead; measured in the session that wrote it). `work_state` takes the answer as a passed-in
+flag like `ui_up`/`awaiting`; `AUTH_DEAD` outranks everything but busy/wedged (a pane genuinely
+computing has working auth by construction). It falls out of `free`, out of feed_check's feedable
+set, and out of the cycle driver's saturated set — one verdict, every consumer.
+
+Recovery is **one command**: `st tend --reauth`, run **after** the operator re-logs in — `/login`
+in a pane is an interactive browser OAuth flow nothing can drive, so a relaunch (which re-reads
+the refreshed credential) is the whole remedy. Deliberately a flag on `tend`, not an auto-heal on
+the default pass: a pass cannot know whether the operator re-logged in yet, and relaunching against
+a still-stale credential kill-loops the fleet. Same rule shape as `--cycle-stale`: the supervisor
+*reports* (`auth-dead` is a fault, exit 2), the explicit flag *acts*. The kill honours the `st
+stop` ownership guard (a name match is not permission to kill), the respawn is the same Tender path
+as a normal pass, and the verify is honest about its boundary: it proves the process **came up**,
+not that it is authed — the banner only shows on the first failed API call, so if the operator did
+not re-log in first, the next `st crew` says so.
+
+Two honest limits. An agent whose auth expired while *idle* shows no banner until something makes
+it try an API call — detection keys on the failed turn, so a freshly-dead quiet pane still reads
+`idle` until first touch. And an agent whose *response text* begins a line with the exact banner is
+indistinguishable from the banner — accepted: the line anchor already refuses every quoted/grepped
+form actually measured.
 
 ## `st roles --check` — the hierarchy, verified
 
