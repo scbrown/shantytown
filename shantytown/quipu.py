@@ -25,6 +25,24 @@ import urllib.request
 
 from .protocols import Agent
 
+
+def request_headers() -> dict:
+    """Headers for every quipu request: JSON, plus `Authorization: Bearer` when
+    the environment carries `QUIPU_AUTH_TOKEN`.
+
+    Quipu gates its WRITE endpoints behind a bearer once the server's
+    `auth_token` is set (reads stay open). This is the client half, shipped
+    ahead of the server flip so the flip is config-only: with the env set every
+    request carries the bearer (harmless on reads, required on writes); unset
+    or empty — an empty value must not become a wrong credential — nothing
+    changes against today's open server.
+    """
+    headers = {"Content-Type": "application/json"}
+    token = os.environ.get("QUIPU_AUTH_TOKEN")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
 # The ontology IRI base. THIS IS DATA IDENTITY, NOT COSMETICS: every triple in a
 # graph is keyed under it, so a deployment that changes this value stops joining
 # its own existing facts — new entities land beside the old ones instead of on
@@ -108,7 +126,7 @@ class QuipuRegistry:
         req = urllib.request.Request(
             self.server + "/query",
             data=json.dumps({"query": sparql}).encode(),
-            headers={"Content-Type": "application/json"},
+            headers=request_headers(),
         )
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
@@ -200,7 +218,7 @@ class QuipuRegistry:
                 "predicate": ONTO + predicate,
                 "value": ONTO + obj,
             }).encode(),
-            headers={"Content-Type": "application/json"},
+            headers=request_headers(),
         )
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
@@ -248,7 +266,7 @@ class QuipuRegistry:
         req = urllib.request.Request(
             self.server + "/knot",
             data=json.dumps({"turtle": turtle}).encode(),
-            headers={"Content-Type": "application/json"},
+            headers=request_headers(),
         )
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
