@@ -104,3 +104,22 @@ def test_set_refuses_orphan_and_cycles_at_write_time():
     # stubbed out so no HTTP happens)
     reg._knot = lambda turtle: None
     reg.set(Agent(name="newbie", role="worker", reports_to="ian"))
+
+
+# --- bearer auth (the client half of the quipu write-auth flip) ---------------
+
+def test_headers_carry_bearer_only_when_env_token_is_set(monkeypatch):
+    from shantytown.quipu import request_headers
+
+    # Unset: today's open-server behaviour, byte-identical headers.
+    monkeypatch.delenv("QUIPU_AUTH_TOKEN", raising=False)
+    assert request_headers() == {"Content-Type": "application/json"}
+
+    # Empty: must NOT become `Bearer ` — an empty env var is unset, not a
+    # (wrong) credential that turns a misconfiguration into 401s.
+    monkeypatch.setenv("QUIPU_AUTH_TOKEN", "")
+    assert "Authorization" not in request_headers()
+
+    # Set: every request carries the bearer.
+    monkeypatch.setenv("QUIPU_AUTH_TOKEN", "sekrit")
+    assert request_headers()["Authorization"] == "Bearer sekrit"
