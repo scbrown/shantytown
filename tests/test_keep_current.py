@@ -182,3 +182,39 @@ def test_a_dark_agent_gets_no_pull_and_no_prompt(tmp_path):
                     refresh=lambda ws: pulled.append(ws) or None)
     assert d.sweep(reg.all(), _Runtime()) == []
     assert pulled == [], "not st's agent -> not st's pull either"
+
+
+# --- the bd repo default: one resolver, never the ambient cwd (aegis-quvg) ---
+
+def test_the_beads_tracker_defaults_its_repo_via_the_feed_check_resolver(tmp_path, monkeypatch):
+    """st inbox read 'no beads database found' from any non-store cwd — the
+    tend-loop disease (bd5f55a) on the read side. The tracker's repo now
+    defaults through feed_check.bd_cwd (admin workspace walked to .beads), so
+    the Rule Zero gate and every beads-backed read share ONE answer."""
+    from types import SimpleNamespace
+    rig = tmp_path / "rig"
+    ws = rig / "crew" / "sattler"
+    ws.mkdir(parents=True)
+    (rig / ".beads").mkdir()
+    reg = _Reg([Agent(name="sattler", role="administrator", workspace=str(ws))])
+    monkeypatch.setattr(cli, "_registry", lambda a: reg)
+    a = SimpleNamespace(root=tmp_path, backend="beads", repo=None, registry="files")
+    trk = cli._tracker(a)
+    assert trk.repo == str(rig), "must resolve the rig root, not inherit the cwd"
+
+
+def test_an_explicit_repo_flag_always_wins(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    monkeypatch.setattr(cli, "_registry",
+                        lambda a: (_ for _ in ()).throw(AssertionError("must not resolve")))
+    a = SimpleNamespace(root=tmp_path, backend="beads", repo="/explicit/rig",
+                        registry="files")
+    assert cli._tracker(a).repo == "/explicit/rig"
+
+
+def test_a_failed_resolution_falls_back_to_ambient_never_invents(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    monkeypatch.setattr(cli, "_registry",
+                        lambda a: (_ for _ in ()).throw(RuntimeError("no registry")))
+    a = SimpleNamespace(root=tmp_path, backend="beads", repo=None, registry="files")
+    assert cli._tracker(a).repo is None, "fail toward today's default, not a guess"

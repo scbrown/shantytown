@@ -136,8 +136,30 @@ def _tracker(a, default="files"):
     not.
     """
     if _backend(a, default) == "beads":
-        return beads_mod.BeadsTracker(repo=getattr(a, "repo", None))
+        return beads_mod.BeadsTracker(repo=getattr(a, "repo", None)
+                                      or _default_bd_repo(a))
     return FilesTracker(a.root / "items")
+
+
+def _default_bd_repo(a) -> str | None:
+    """Where bd resolves its store when `--repo` was not given: feed_check's
+    bd_cwd walk-up (the admin card's workspace, walked to the nearest .beads) —
+    NEVER the ambient cwd (aegis-quvg).
+
+    The ambient-cwd default on bd-backed paths is a measured recurring class:
+    the tend loop ran two days with the idle-fleet push dead on it (bd5f55a),
+    and `st inbox` read "no beads database found" from any non-store cwd —
+    including ~/gt/shantytown, where an operator most naturally stands. ONE
+    resolver, shared with feed_check, so the Rule Zero gate and every beads-
+    backed read can never disagree about where the store lives. Explicit
+    `--repo` always wins; a failed resolution falls back to None (ambient cwd,
+    today's behavior) — fail toward the old default, never toward an invented
+    path."""
+    try:
+        from .feed_check import bd_cwd
+        return bd_cwd(_registry(a))
+    except Exception:
+        return None
 
 
 def _plate(a):
