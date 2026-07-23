@@ -203,8 +203,9 @@ class CycleDriver:
             return {}
 
     def _save(self, ledger: dict) -> None:
+        from .files import write_json_atomic
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(ledger, indent=2, sort_keys=True))
+        write_json_atomic(self.path, ledger)
 
     def sweep(self, agents, runtime) -> list[str]:
         """One pass. PROMPT each newly-saturated agent to cycle, re-arm any that
@@ -293,8 +294,9 @@ class Notifier:
             return {}
 
     def _save(self, ledger: dict) -> None:
+        from .files import write_json_atomic
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(ledger, indent=2, sort_keys=True))
+        write_json_atomic(self.path, ledger)
 
     def sweep(self, agents, runtime) -> list[str]:
         """One pass. PUSH each newly-blocked worker to its coordinator, clear the
@@ -394,8 +396,9 @@ class IdleFleetAlerter:
             return []
 
     def _save(self, alerted: list) -> None:
+        from .files import write_json_atomic
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(sorted(alerted), indent=2))
+        write_json_atomic(self.path, sorted(alerted))
 
     def sweep(self, agents) -> list[str]:
         """One pass. If any NEWLY-free-feedable worker exists AND there is

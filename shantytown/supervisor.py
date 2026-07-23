@@ -162,8 +162,9 @@ class PassLog:
         self.path = Path(root) / "tend" / "last.json"
 
     def record(self, rep) -> None:
+        from .files import write_json_atomic
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(rep.as_record(), indent=2, sort_keys=True))
+        write_json_atomic(self.path, rep.as_record())
 
     def last(self) -> dict | None:
         try:
