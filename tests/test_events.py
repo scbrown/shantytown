@@ -112,3 +112,32 @@ def test_empty_drain_is_not_an_error(store):
     """A destination with nothing pending drains [] — the idle case, the common
     case, and NOT a failure."""
     assert store.drain("nobody-home") == []
+
+
+# --- corruption must not dam the store (the ev-172 incident, 2026-07-23) ---------
+
+def test_one_corrupt_file_does_not_dam_the_store(tmp_path, capsys):
+    """An EMPTY event file (writer killed mid-write, pre-atomic persist) made
+    pending() raise for EVERY destination: 47 events sat undeliverable behind one
+    0-byte file, the coordinator's Stop hook died on every stop, and a closed
+    security bead was re-slung twice from the resulting stale picture (aegis-jk40).
+    The store must deliver everything it CAN read, and say what it skipped."""
+    store = FilesEvents(tmp_path / "events")
+    store.persist(to="maldoon", frm="ellie", reason=None, rose=False)
+    (tmp_path / "events" / "ev-172.json").write_text("")          # the specimen
+    store.persist(to="maldoon", frm="tim", reason=None, rose=False)
+    got = store.drain("maldoon")
+    assert [e.frm for e in got] == ["ellie", "tim"], \
+        "readable events on both sides of the corrupt file must still deliver"
+    assert "ev-172" in capsys.readouterr().err, \
+        "the skip must be LOUD — silent tolerance hides the corruption forever"
+
+
+def test_persist_is_atomic_no_tmp_left_behind(tmp_path):
+    """persist() goes through tmp+rename now; the tmp must not survive, or the
+    glob would try to read it (it matches nothing today, but a leaked partial
+    file is exactly the class that caused this incident)."""
+    store = FilesEvents(tmp_path / "events")
+    store.persist(to="maldoon", frm="ellie", reason=None, rose=False)
+    left = list((tmp_path / "events").glob("*.tmp"))
+    assert left == [], f"tmp files leaked: {left}"
