@@ -1,9 +1,9 @@
-"""st — the CLI. Eighteen commands, and the count is load-bearing: each earns its slot.
+"""st — the CLI. Nineteen commands, and the count is load-bearing: each earns its slot.
 
     anchor [--short|--events|--harness] · go · inbox [--count] · task
     · crew [--count] · roles [--check] · role set · new · stop · log · context
     · doctor [--install] · project · tend [--install|--status|--reauth]
-    · attach [-r] · dashboard [admin] · subscribe · worktree [--gc]
+    · attach [-r] · dashboard [admin] · subscribe · worktree [--gc] · stats
 
 Five of those flags are MACHINE-READABLE modes, added for an external status bar
 (anchor --short/--events/--harness, crew --count, inbox --count). They are flags
@@ -326,6 +326,15 @@ def build_parser() -> argparse.ArgumentParser:
     st.add_argument("agent")
     st.add_argument("-n", "--dry-run", action="store_true")
 
+    ss = sub.add_parser("stats", help="what the crew actually did: files, "
+                                      "skills, tokens, activity (local store)")
+    ss.add_argument("agent", nargs="?",
+                    help="one agent's numbers; the whole crew if omitted")
+    ss.add_argument("--files", action="store_true",
+                    help="list the files an agent touched (needs agent)")
+    ss.add_argument("--since", type=float, default=24.0, metavar="HOURS",
+                    help="window in hours (default 24)")
+
     lg = sub.add_parser("log", help="what happened")
     lg.add_argument("agent", nargs="?")
 
@@ -497,6 +506,14 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_stop(a)
     if a.cmd == "log":
         return _cmd_log(a)
+    if a.cmd == "stats":
+        from . import stats as stats_mod
+        if a.files:
+            if not a.agent:
+                print("st stats --files needs an agent", file=sys.stderr)
+                return 2
+            return stats_mod.stats_files(a.root, a.agent, since_h=a.since)
+        return stats_mod.stats_report(a.root, a.agent, since_h=a.since)
     if a.cmd == "new":
         return _cmd_new(a)
     if a.cmd == "project":
