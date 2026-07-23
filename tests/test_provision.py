@@ -46,6 +46,30 @@ def _card(ws) -> Agent:
     return Agent(name="ellie", workspace=str(ws))
 
 
+# --- the metrics-capture hook lands on EVERY provisioned agent (aegis-rcyd) --
+
+def test_capture_hook_injected_with_real_interpreter_and_root(root, ws):
+    """Every provisioned agent must get the PostToolUse capture hook so st stats
+    collects mcp__*/Skill/CLI from launch — baked with an interpreter that can
+    import shantytown (never a bare 'python') and THIS store's root."""
+    P.provision(_card(ws), root)
+    d = json.loads((ws / ".claude" / P.CONSENT_TEMPLATE).read_text())
+    post = d["hooks"]["PostToolUse"]
+    assert len(post) == 1 and post[0]["matcher"] == ".*"
+    cmd = post[0]["hooks"][0]["command"]
+    assert "shantytown.stats capture" in cmd
+    assert f"--root {Path(root).resolve()}" in cmd
+    assert not cmd.startswith("python "), "bare 'python' is not on PATH (tim)"
+
+
+def test_capture_injection_never_breaks_provisioning_on_a_non_json_template(root, ws):
+    """The consent transform must never be why provisioning fails: a non-JSON
+    consent template passes through verbatim (no hook, but no crash)."""
+    (root / "provision" / P.CONSENT_TEMPLATE).write_text("not json at all")
+    P.provision(_card(ws), root)  # must not raise
+    assert (ws / ".claude" / P.CONSENT_TEMPLATE).read_text() == "not json at all"
+
+
 # --- the kit lands, and is VERIFIED by listing ------------------------------
 
 def test_provision_returns_the_servers_it_can_prove(root, ws):
