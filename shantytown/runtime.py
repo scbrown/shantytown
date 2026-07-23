@@ -278,6 +278,17 @@ def _feed_check_cmd(root=None) -> dict:
     return {"type": "command", "command": cmd}
 
 
+def _query_first_cmd() -> dict:
+    """The SessionStart QUERY-FIRST hint (aegis-rcyd adoption fix). Prints the
+    query-the-knowledge-graph-before-you-act directive into the model's live
+    context at every session start — the same injection mechanism as the
+    bobbin-first hint, because a CLAUDE.md line alone did not move quipu-query
+    adoption. Static and stateless (no --root: it reads nothing, prints a fixed
+    directive that uses the agent's own $QUIPU_SERVER), fail-open in the module."""
+    return {"type": "command",
+            "command": f"{_hook_interpreter()} -m shantytown.query_first"}
+
+
 # --- hank policy guard (first-class, Stiwi 2026-07-19) --------------------------
 # Every shantytown-launched agent runs its edits past hank's guard: the agent's
 # edit tool call IS the change event (hank FR-30), so hank answers with a blast-
@@ -447,6 +458,11 @@ def claude_settings_for_role(role: str, root=None) -> dict:
                          "hooks": [{"type": "command", "command": guard_cmd}]})
     return {
         "hooks": {
+            # QUERY-FIRST at session start (aegis-rcyd): inject the "ask the
+            # knowledge graph before you act" directive into live context, the
+            # same way the bobbin-first hint works. Every role gets it — query-
+            # first is not role-scoped. Best-effort, fail-open, blocks nothing.
+            "SessionStart": [{"hooks": [_query_first_cmd()]}],
             "Stop": [{"hooks": stop}],
             # hank policy guard on every edit-shaped tool call. See _HANK_GUARD.
             "PreToolUse": pre_tool,

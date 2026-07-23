@@ -115,6 +115,33 @@ def test_the_settings_format_is_the_harness_s_and_is_unchanged():
         assert "Stop" in via_harness["hooks"]
 
 
+def test_every_role_gets_the_query_first_session_start_hook():
+    """aegis-rcyd adoption fix: QUERY-FIRST is injected at SessionStart for EVERY
+    role (not role-scoped), via the query_first module — the same live-context
+    injection the bobbin-first hint uses, because a CLAUDE.md line alone did not
+    move quipu-query adoption."""
+    from shantytown.runtime import claude_settings_for_role
+    for role in ("worker", "lead", "administrator"):
+        hooks = claude_settings_for_role(role, root="/tmp/r")["hooks"]
+        assert "SessionStart" in hooks, f"{role} has no SessionStart hook"
+        cmds = [h["command"] for grp in hooks["SessionStart"] for h in grp["hooks"]]
+        assert any("shantytown.query_first" in c for c in cmds), \
+            f"{role} SessionStart does not inject query_first: {cmds}"
+
+
+def test_query_first_directive_is_actionable_and_host_agnostic():
+    """The hook's stdout is what lands in context, so it must NAME the rule, give
+    a runnable one-liner, and hardcode no internal host (it uses the agent's own
+    $QUIPU_SERVER)."""
+    from shantytown import query_first
+    d = query_first.DIRECTIVE
+    assert "QUERY-FIRST" in d
+    assert "$QUIPU_SERVER" in d and "/ask" in d, "no runnable, host-agnostic one-liner"
+    assert "grep-first" in d, "does not name the behavior it displaces"
+    assert ".lan" not in d and ".svc" not in d, "leaks an internal host"
+    assert query_first.main() == 0
+
+
 def test_an_unimplemented_harness_is_refused_not_defaulted(tmp_path):
     """A card naming a harness we do not ship must NOT launch claude. Silently
     substituting a different program is the failure this whole file exists to
