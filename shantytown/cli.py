@@ -1905,7 +1905,7 @@ def _cmd_project(a) -> int:
     IT ALSO SHOWS ITS WORK AND REFUSES TO RESTRUCTURE A LIVE CREW SILENTLY
     (aegis-0v97). "Hand-edits are overwritten, which is the point" is true of a
     clean graph. It is catastrophic against a dirty one, and ours is dirty:
-    measured 2026-07-20, the graph declares `luvu` (a HOST — dolt/garage backups
+    measured 2026-07-20, the graph declares `a-backup-host` (a HOST — dolt/garage backups
     live on it) and `mayor` (which this fleet has stated does not exist and never
     will) as crew workers, plus two agents with no card and no session. Projecting
     that would have demoted the live administrator to an orphan worker, cut nine
