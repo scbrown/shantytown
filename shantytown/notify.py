@@ -426,11 +426,11 @@ class IdleFleetAlerter:
         """One pass. Idle workers split by WHO their next work belongs to
         (aegis-wjgt groundwork):
 
-        - UNTHREADED idle + UNASSIGNED ready work -> ONE idle-fleet alert to the
+        - UNHAULING idle + UNASSIGNED ready work -> ONE idle-fleet alert to the
           coordinator (unchanged nk0e behavior, minus the workers below).
-        - THREADED idle (ready beads already ASSIGNED to them) -> the COORDINATOR
+        - HAULING idle (ready beads already ASSIGNED to them) -> the COORDINATOR
           HEARS NOTHING; the WORKER gets a self-feed nudge instead, once per idle
-          episode. This is the thread design's core ask ("without notifying the
+          episode. This is the haul design's core ask ("without notifying the
           coordinator") and, until the stop-hook advance lands, the BELT that
           keeps an excluded worker from stalling silently — no coordinator ping
           may ever mean nobody-pings. It survives as the fallback layer under
@@ -459,44 +459,44 @@ class IdleFleetAlerter:
             ready_beads = self._bd_ready()
         except Exception:
             return []
-        queues = feed_check.threaded(ready_beads)
-        threaded_newly = [w for w in newly if w in queues]
-        unthreaded_free = [w for w in free if w not in queues]
+        queues = feed_check.hauls(ready_beads)
+        hauling_newly = [w for w in newly if w in queues]
+        unhauled_free = [w for w in free if w not in queues]
         newly = [w for w in newly if w not in queues]
 
         # The worker-side nudge: their queue is loaded; feed themselves.
         nudged = []
-        for worker in threaded_newly:
+        for worker in hauling_newly:
             beads = queues[worker]
             target = push_to_own_pane(self._reg, self._panes, worker,
                                       _self_feed_message(worker, beads))
             if target is None:
-                self._log(f"thread: {worker} is idle with {len(beads)} assigned "
+                self._log(f"haul: {worker} is idle with {len(beads)} assigned "
                           f"ready bead(s) but its pane was unreachable — NOT "
                           f"nudged, will retry")
                 continue
             nudged.append(worker)
-            self._log(f"thread: nudged {worker} to self-feed ({len(beads)} "
+            self._log(f"haul: nudged {worker} to self-feed ({len(beads)} "
                       f"assigned ready: {', '.join(beads[:3])}) — coordinator "
                       f"deliberately not pinged")
 
-        ready = feed_check.dispatchable(set(unthreaded_free), ready_beads)
+        ready = feed_check.dispatchable(set(unhauled_free), ready_beads)
         if not newly or not ready:
             # Nothing for the coordinator this pass. Record who was HANDLED
-            # (still-idle already + the nudged), so a still-idle threaded worker
+            # (still-idle already + the nudged), so a still-idle hauling worker
             # is not re-nudged every interval; an un-nudged one stays pending.
             self._save(sorted(already | set(nudged)))
             return nudged
 
         admin = self._push(self._reg, self._panes,
-                           _idle_fleet_message(unthreaded_free, newly, ready))
+                           _idle_fleet_message(unhauled_free, newly, ready))
         if admin is None:
             self._log("idle-fleet: free workers + ready work, but no reachable "
                       "coordinator pane — NOT alerted, will retry")
             self._save(sorted(already | set(nudged)))
             return nudged
-        self._save(sorted(already | set(nudged) | set(unthreaded_free)))
-        self._log(f"idle-fleet: alerted {admin} — {len(unthreaded_free)} idle, "
+        self._save(sorted(already | set(nudged) | set(unhauled_free)))
+        self._log(f"idle-fleet: alerted {admin} — {len(unhauled_free)} idle, "
                   f"{len(ready)} ready")
         return newly + nudged
 
