@@ -398,6 +398,9 @@ class IdleFleetAlerter:
                  bd_ready=None, bd_in_progress=None, context_k=None,
                  handoff_k=None, log=None):
         self.path = Path(root) / "notify" / "idle_fleet.json"
+        # Kept for the launch-stamp ownership gate (aegis-2j2r): tend must
+        # only feed agents st launched, same signal as the hard gate's.
+        self._shanty_root = Path(root)
         self._reg = reg
         self._panes = panes
         self._runtime = runtime
@@ -458,7 +461,8 @@ class IdleFleetAlerter:
         Returns the newly-idle names alerted/nudged this pass. Fully fail-open."""
         from . import feed_check
         try:
-            free = feed_check.free_feedable_workers(self._reg, self._panes, self._runtime)
+            free = feed_check.free_feedable_workers(self._reg, self._panes, self._runtime,
+                                                    root=self._shanty_root)
         except Exception:
             return []                              # detector broke -> stay quiet
         already = set(self._load())

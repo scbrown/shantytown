@@ -65,7 +65,7 @@ def _alerter(tmp_path, reg, panes, free, ready=READY):
 def test_pushes_the_coordinator_when_free_and_work_coexist(tmp_path, monkeypatch):
     reg, panes = _world(tmp_path)
     monkeypatch.setattr("shantytown.feed_check.free_feedable_workers",
-                        lambda *a: ["kelly", "weaver"])
+                        lambda *a, **k: ["kelly", "weaver"])
     a = IdleFleetAlerter(tmp_path, reg, panes, runtime=None,
                          bd_ready=lambda: READY)
     newly = a.sweep(reg.all())
@@ -83,7 +83,7 @@ def test_pushes_the_coordinator_when_free_and_work_coexist(tmp_path, monkeypatch
 def test_a_still_idle_fleet_does_not_re_spam(tmp_path, monkeypatch):
     reg, panes = _world(tmp_path)
     monkeypatch.setattr("shantytown.feed_check.free_feedable_workers",
-                        lambda *a: ["kelly", "weaver"])
+                        lambda *a, **k: ["kelly", "weaver"])
     mk = lambda: IdleFleetAlerter(tmp_path, reg, panes, None, bd_ready=lambda: READY)
     assert sorted(mk().sweep(reg.all())) == ["kelly", "weaver"]   # first: push
     assert mk().sweep(reg.all()) == []                            # same set: silent
@@ -95,11 +95,11 @@ def test_a_newly_idle_agent_re_alerts(tmp_path, monkeypatch):
     reg, panes = _world(tmp_path)
     seq = [["kelly"], ["kelly", "weaver"]]        # weaver becomes idle later
     monkeypatch.setattr("shantytown.feed_check.free_feedable_workers",
-                        lambda *a: seq[0])
+                        lambda *a, **k: seq[0])
     a1 = IdleFleetAlerter(tmp_path, reg, panes, None, bd_ready=lambda: READY)
     assert a1.sweep(reg.all()) == ["kelly"]
     monkeypatch.setattr("shantytown.feed_check.free_feedable_workers",
-                        lambda *a: seq[1])
+                        lambda *a, **k: seq[1])
     a2 = IdleFleetAlerter(tmp_path, reg, panes, None, bd_ready=lambda: READY)
     assert a2.sweep(reg.all()) == ["weaver"], "the newly-idle agent must alert"
     assert len(panes.sent) == 2
@@ -107,13 +107,13 @@ def test_a_newly_idle_agent_re_alerts(tmp_path, monkeypatch):
 
 def test_a_worker_that_leaves_free_is_re_armed(tmp_path, monkeypatch):
     reg, panes = _world(tmp_path)
-    monkeypatch.setattr("shantytown.feed_check.free_feedable_workers", lambda *a: ["kelly"])
+    monkeypatch.setattr("shantytown.feed_check.free_feedable_workers", lambda *a, **k: ["kelly"])
     assert IdleFleetAlerter(tmp_path, reg, panes, None, bd_ready=lambda: READY).sweep(reg.all()) == ["kelly"]
     # kelly gets dispatched (no longer free) -> ledger forgets it.
-    monkeypatch.setattr("shantytown.feed_check.free_feedable_workers", lambda *a: [])
+    monkeypatch.setattr("shantytown.feed_check.free_feedable_workers", lambda *a, **k: [])
     assert IdleFleetAlerter(tmp_path, reg, panes, None, bd_ready=lambda: READY).sweep(reg.all()) == []
     # kelly goes idle AGAIN -> fresh episode, alerts again.
-    monkeypatch.setattr("shantytown.feed_check.free_feedable_workers", lambda *a: ["kelly"])
+    monkeypatch.setattr("shantytown.feed_check.free_feedable_workers", lambda *a, **k: ["kelly"])
     assert IdleFleetAlerter(tmp_path, reg, panes, None, bd_ready=lambda: READY).sweep(reg.all()) == ["kelly"]
 
 
@@ -121,21 +121,21 @@ def test_a_worker_that_leaves_free_is_re_armed(tmp_path, monkeypatch):
 
 def test_free_workers_but_no_dispatchable_work_does_not_alert(tmp_path, monkeypatch):
     reg, panes = _world(tmp_path)
-    monkeypatch.setattr("shantytown.feed_check.free_feedable_workers", lambda *a: ["kelly"])
+    monkeypatch.setattr("shantytown.feed_check.free_feedable_workers", lambda *a, **k: ["kelly"])
     # ready beads all dark-assigned -> dispatchable() returns [] -> not neglect.
     a = IdleFleetAlerter(tmp_path, reg, panes, None,
                          bd_ready=lambda: [{"id": "x", "assignee": "crew/arnold"}])
     assert a.sweep(reg.all()) == []
     assert panes.sent == []
     # and it did NOT record kelly, so when work appears the alert fires.
-    monkeypatch.setattr("shantytown.feed_check.free_feedable_workers", lambda *a: ["kelly"])
+    monkeypatch.setattr("shantytown.feed_check.free_feedable_workers", lambda *a, **k: ["kelly"])
     a2 = IdleFleetAlerter(tmp_path, reg, panes, None, bd_ready=lambda: READY)
     assert a2.sweep(reg.all()) == ["kelly"]
 
 
 def test_no_free_workers_is_silent(tmp_path, monkeypatch):
     reg, panes = _world(tmp_path)
-    monkeypatch.setattr("shantytown.feed_check.free_feedable_workers", lambda *a: [])
+    monkeypatch.setattr("shantytown.feed_check.free_feedable_workers", lambda *a, **k: [])
     a = IdleFleetAlerter(tmp_path, reg, panes, None, bd_ready=lambda: READY)
     assert a.sweep(reg.all()) == [] and panes.sent == []
 
@@ -153,7 +153,7 @@ def test_a_broken_detector_stays_quiet(tmp_path, monkeypatch):
 
 def test_a_bd_hiccup_does_not_alert_and_leaves_it_pending(tmp_path, monkeypatch):
     reg, panes = _world(tmp_path)
-    monkeypatch.setattr("shantytown.feed_check.free_feedable_workers", lambda *a: ["kelly"])
+    monkeypatch.setattr("shantytown.feed_check.free_feedable_workers", lambda *a, **k: ["kelly"])
     def bd_boom():
         raise RuntimeError("bd down")
     a = IdleFleetAlerter(tmp_path, reg, panes, None, bd_ready=bd_boom)
@@ -161,7 +161,7 @@ def test_a_bd_hiccup_does_not_alert_and_leaves_it_pending(tmp_path, monkeypatch)
     assert panes.sent == []
     # bd recovers -> kelly (never recorded) alerts.
     a2 = IdleFleetAlerter(tmp_path, reg, panes, None, bd_ready=lambda: READY)
-    monkeypatch.setattr("shantytown.feed_check.free_feedable_workers", lambda *a: ["kelly"])
+    monkeypatch.setattr("shantytown.feed_check.free_feedable_workers", lambda *a, **k: ["kelly"])
     assert a2.sweep(reg.all()) == ["kelly"]
 
 
@@ -169,13 +169,13 @@ def test_an_unreachable_coordinator_is_not_recorded(tmp_path, monkeypatch):
     # no admin pane live -> push_to_admin returns None -> not recorded, retried.
     reg, panes = _world(tmp_path, admin_pane="p-down")
     panes._live.discard("p-down")
-    monkeypatch.setattr("shantytown.feed_check.free_feedable_workers", lambda *a: ["kelly"])
+    monkeypatch.setattr("shantytown.feed_check.free_feedable_workers", lambda *a, **k: ["kelly"])
     a = IdleFleetAlerter(tmp_path, reg, panes, None, bd_ready=lambda: READY)
     assert a.sweep(reg.all()) == []
     # admin comes back -> retry fires.
     panes._live.add("p-down")
     a2 = IdleFleetAlerter(tmp_path, reg, panes, None, bd_ready=lambda: READY)
-    monkeypatch.setattr("shantytown.feed_check.free_feedable_workers", lambda *a: ["kelly"])
+    monkeypatch.setattr("shantytown.feed_check.free_feedable_workers", lambda *a, **k: ["kelly"])
     assert a2.sweep(reg.all()) == ["kelly"]
 
 
@@ -198,7 +198,7 @@ def _hauling_world(tmp_path, monkeypatch, in_progress=None, context_k=None,
                 Agent(name="billy", role="worker", pane="p-billy")])
     panes = _Panes({"p-admin", "p-billy"})
     monkeypatch.setattr("shantytown.feed_check.free_feedable_workers",
-                        lambda *a: ["billy"])
+                        lambda *a, **k: ["billy"])
     monkeypatch.setattr("shantytown.feed_check.bd_cwd", lambda reg: None)
     if claims is not None:
         monkeypatch.setattr("shantytown.feed_check.bd_claim",
