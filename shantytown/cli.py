@@ -2243,9 +2243,40 @@ def _cmd_tend(a) -> int:
     print(f"  tend heartbeat: a pass every {loop}s. Blocked workers are pushed to "
           f"their coordinator within one interval. Ctrl-C to stop.",
           file=sys.stderr)
+    # THE LOOP'S OWN STALENESS (aegis-arma follow-up, measured). A long-running
+    # loop is a MEMORY image of the code at start: the live one ran for two days
+    # while the editable install moved under it — every fix (auth-dead gating,
+    # the idle-fleet push's bd cwd) landed on disk and reached nothing, the
+    # aegis-ttlr class one level up (disk current, PROCESS stale). So the loop
+    # watches its own package fingerprint and RE-EXECS itself when the code
+    # changes — same argv, fresh import, loud line in between. A supervisor
+    # that must be manually restarted to pick up its own fixes is a supervisor
+    # that runs old code exactly when it matters.
+    fp = _code_fingerprint()
     while True:
         _tend_once(a, quiet=True)
+        now = _code_fingerprint()
+        if fp is not None and now is not None and now != fp:
+            print("  st tend: the installed code CHANGED under this loop — "
+                  "re-exec to run what is on disk.", file=sys.stderr)
+            os.execv(sys.executable, [sys.executable] + sys.argv)
         time.sleep(loop)
+
+
+def _code_fingerprint(pkg=None) -> str | None:
+    """A cheap identity for the package code THIS process would import: name,
+    mtime and size of every module file. Editable install: these are the
+    checkout's files, so a `git pull` changes it. Non-editable: they are the
+    venv copy's, so a reinstall changes it. None = could not look — and the
+    caller treats that as 'never re-exec', because a supervisor that exec-loops
+    on a stat error is worse than one that runs old code."""
+    try:
+        pkg = Path(pkg) if pkg else Path(__file__).resolve().parent
+        parts = [f"{f.name}:{f.stat().st_mtime_ns}:{f.stat().st_size}"
+                 for f in sorted(pkg.glob("*.py"))]
+        return "|".join(parts) or None
+    except OSError:
+        return None
 
 
 def _tend_once(a, quiet: bool = False) -> int:
