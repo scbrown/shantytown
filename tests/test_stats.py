@@ -36,6 +36,37 @@ def test_tool_call_recorded(tmp_path, monkeypatch):
     assert row == ("kelly", "tool", "Edit", "/tmp/x.py")
 
 
+def test_mcp_tool_recorded(tmp_path, monkeypatch):
+    # aegis-rcyd: the store must SEE mcp__* — the whole point of the capture fix.
+    monkeypatch.setenv("SHANTY_AGENT", "kelly")
+    monkeypatch.delenv("ST_STATS_PUSHGATEWAY", raising=False)
+    p = _payload_tool(tool_name="mcp__bobbin__search",
+                      tool_input={"query": "where is X configured"})
+    assert _run_capture(tmp_path, p, monkeypatch) == 0
+    row = sqlite3.connect(tmp_path / "stats.sqlite").execute(
+        "SELECT tool, file, detail FROM events").fetchone()
+    assert row == ("mcp__bobbin__search", None, None)
+
+
+def test_bash_binary_attributed_in_detail(tmp_path, monkeypatch):
+    # aegis-rcyd: hank/bobbin CLI runs via Bash — record the binary so 'Bash×N'
+    # is not the whole story. Leading VAR=val + wrappers are skipped.
+    monkeypatch.setenv("SHANTY_AGENT", "kelly")
+    monkeypatch.delenv("ST_STATS_PUSHGATEWAY", raising=False)
+    for cmd, want in [
+        ("hank impact foo", "hank"),
+        ("BOBBIN_SERVER=http://s /home/x/.local/bin/bobbin search q", "bobbin"),
+        ("env FOO=1 bd ready", "bd"),
+        ("git log --oneline", "git"),
+    ]:
+        root = tmp_path / want
+        p = _payload_tool(tool_name="Bash", tool_input={"command": cmd})
+        assert _run_capture(root, p, monkeypatch) == 0
+        got = sqlite3.connect(root / "stats.sqlite").execute(
+            "SELECT tool, detail FROM events").fetchone()
+        assert got == ("Bash", want), f"{cmd!r} -> {got}"
+
+
 def test_skill_use_recorded_as_skill(tmp_path, monkeypatch):
     monkeypatch.setenv("SHANTY_AGENT", "kelly")
     monkeypatch.delenv("ST_STATS_PUSHGATEWAY", raising=False)

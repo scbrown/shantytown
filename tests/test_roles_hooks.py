@@ -212,6 +212,20 @@ def test_no_bash_guard_emitted_by_default(tmp_path):
     assert "Bash" not in matchers
 
 
+def test_metrics_capture_wired_for_every_role_matches_all_tools(tmp_path):
+    # aegis-rcyd Phase 0: every st-launched role must capture EVERY tool
+    # (matcher '.*'), so st stats sees mcp__* / Skill / CLI, not just
+    # Bash/Read/Edit/Write. The store root is baked in (agent runs elsewhere).
+    for role in ("worker", "lead", "administrator"):
+        s = runtime.claude_settings_for_role(role, root=tmp_path)
+        post = s["hooks"].get("PostToolUse")
+        assert post, f"{role}: no PostToolUse capture hook"
+        assert len(post) == 1 and post[0]["matcher"] == ".*", role
+        cmd = post[0]["hooks"][0]["command"]
+        assert "shantytown.stats capture" in cmd, role
+        assert f"--root {tmp_path.resolve()}" in cmd, role
+
+
 def test_env_json_bash_guard_is_emitted_for_every_role(tmp_path):
     (tmp_path / "env.json").write_text(
         '{"SHANTY_BASH_GUARD": "/usr/local/lib/guards/host-policy.sh"}')

@@ -242,6 +242,23 @@ def _stop_cmd(mode: str, root=None) -> dict:
     return {"type": "command", "command": cmd}
 
 
+def _capture_cmd(root=None) -> dict:
+    """The PostToolUse metrics-capture command, store location BAKED IN.
+
+    Same rooting reason as _stop_cmd: the agent runs in ITS OWN workspace, which
+    has no .shanty, so an unrooted capture would look for the store in the wrong
+    place and silently record nothing. Wired at the call site with matcher '.*' —
+    EVERY tool, including `mcp__*` (bobbin/homelab/quipu MCP) and Skill, not only
+    Bash/Read/Edit/Write — so `st stats` can actually measure tool leverage
+    (aegis-rcyd Phase 0). Capture is fail-open (stats.main never returns nonzero),
+    so a broken stats layer is invisible to the tool call it observes.
+    """
+    cmd = f"{_hook_interpreter()} -m shantytown.stats capture"
+    if root is not None:
+        cmd += f" --root {Path(root).resolve()}"
+    return {"type": "command", "command": cmd}
+
+
 def _feed_check_cmd(root=None) -> dict:
     """The administrator's Rule Zero feed-check Stop hook (aegis-hfta). Same shape
     and same baked-in --root as _stop_cmd, so it resolves the real store from the
@@ -424,6 +441,11 @@ def claude_settings_for_role(role: str, root=None) -> dict:
             "Stop": [{"hooks": stop}],
             # hank policy guard on every edit-shaped tool call. See _HANK_GUARD.
             "PreToolUse": pre_tool,
+            # Metrics capture on EVERY tool call (matcher '.*'), so st stats sees
+            # mcp__* (bobbin/homelab/quipu) + Skill + CLI-via-Bash, not only
+            # Bash/Read/Edit/Write. Without this the store is blind to the three
+            # systems we most want to measure leverage of (aegis-rcyd Phase 0).
+            "PostToolUse": [{"matcher": ".*", "hooks": [_capture_cmd(root)]}],
         },
         # Pre-answer the project-MCP consent screen. A FRESH workspace makes Claude
         # Code ask "N new MCP servers found — enable?" and that prompt BLOCKS the
