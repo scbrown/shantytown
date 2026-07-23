@@ -120,8 +120,17 @@ class Runtime(Protocol):
     def hooks(self, card: Agent) -> HookSpec: ...          # capability declaration
 
 
-def require_capability(program, card: Agent) -> None:
+def require_capability(program, card: Agent,
+                       consequence: str = "Nothing written, nothing launched.") -> None:
     """Refuse a card whose ROLE needs a capability the launched PROGRAM lacks.
+
+    `consequence` is the caller's TRUE statement of what did not happen, appended
+    verbatim. It must not overclaim: the gate fires at two sites (aegis-w5l9) and
+    each has a different true consequence — the role-set/plan site refuses before
+    any registry write ("Nothing written."), the launch site refuses a start of a
+    card that may already be on disk ("Nothing launched."). The old single string
+    "Nothing written, nothing launched." was false at the launch site, where the
+    card had already been written by an earlier `role set`.
 
     `program` is the object that ACTUALLY runs the agent — the Harness the card
     selects (harness.for_card), not a hardcoded runtime. That distinction is the
@@ -141,7 +150,7 @@ def require_capability(program, card: Agent) -> None:
         raise CapabilityError(
             f"harness {program.name!r} does not declare blocking stop hooks; "
             f"role {card.role!r} requires stop-event delivery to the model. "
-            f"{card.name} stays worker. Nothing written, nothing launched."
+            f"{card.name} stays worker. {consequence}"
         )
 
 
@@ -745,7 +754,9 @@ class ClaudeRuntime:
         # and the launch cannot disagree about which program this is.
         from . import harness as harness_mod
         program = harness_mod.for_card(card)           # UnknownHarness -> refuse
-        require_capability(program, card)              # CapabilityError -> refuse
+        # Launch site: the card may already be on disk (a prior `role set`), so
+        # only "Nothing launched." is true here — not "Nothing written" (w5l9).
+        require_capability(program, card, consequence="Nothing launched.")
         settings_path = self._resolve(card)
         if not settings_path:
             raise SettingsError(
@@ -926,7 +937,7 @@ class CodexRuntime:
         return HookSpec(blocking_stop=False)   # the capability it lacks
 
     def compose(self, card: Agent) -> str:
-        require_capability(self, card)                 # refuses lead/administrator
+        require_capability(self, card, consequence="Nothing launched.")  # refuses lead/administrator
         settings_path = self._resolve(card)
         if not settings_path:
             raise SettingsError(

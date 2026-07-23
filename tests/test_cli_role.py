@@ -35,6 +35,31 @@ def test_role_set_dry_run_writes_nothing(tmp_path):
     assert json.loads((root / "crew" / "malcolm.json").read_text())["role"] == "worker"
 
 
+class _NonBlockingHarness:
+    name = "codex"
+
+    def hooks(self, card):
+        from shantytown.runtime import HookSpec
+        return HookSpec(blocking_stop=False)
+
+
+def test_role_set_refuses_a_lead_the_harness_cannot_host_and_writes_nothing(tmp_path, monkeypatch):
+    """aegis-w5l9 verify recipe: `st role set <it> lead` on a card whose harness
+    lacks blocking stop hooks exits 1, the card on disk still reads worker, and
+    NO lead settings.json was emitted — the gate fires before any write, not at
+    `st new` launch after the card already landed."""
+    monkeypatch.setattr("shantytown.harness.for_card", lambda card: _NonBlockingHarness())
+    root = crew(tmp_path, arnold={"role": "administrator"}, malcolm={"role": "worker"})
+
+    rc = main(["--root", str(root), "role", "set", "malcolm", "lead"])
+
+    assert rc == REFUSED, "an unhostable lead must exit 1"
+    assert json.loads((root / "crew" / "malcolm.json").read_text())["role"] == "worker", \
+        "the card must be untouched — the gate fired before the write"
+    assert not (root / "settings" / "lead.settings.json").exists(), \
+        "no lead settings.json may be emitted for a refused role set"
+
+
 def test_role_set_refuses_lead_under_lead(tmp_path):
     root = crew(tmp_path, arnold={"role": "administrator"},
                 malcolm={"role": "lead", "reports_to": "arnold"},
