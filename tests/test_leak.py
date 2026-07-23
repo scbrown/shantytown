@@ -1,8 +1,15 @@
 """THE LEAK TEST IS THE INTERFACE.
 
 docs/adapters.md: the suite runs the whole harness on files-registry +
-files-tracker + none-context + none-knowledge + bare tmux. No quipu, no beads,
-no bobbin, no multiplexer. If this goes red, something leaked into the core.
+files-tracker + none-context + bare tmux. No quipu, no beads, no bobbin, no
+multiplexer. If this goes red, something leaked into the core.
+
+There is deliberately NO "none knowledge" in this run: the knowledge adapter
+layer is not built (aegis-ks9b — no Knowledge protocol, no quipu/none impl).
+When it is built, add `+ none knowledge` here AND construct the none-knowledge
+adapter in test_harness_runs_with_no_backends_at_all, so this docstring stays
+true. test_docs_drift.py pins the documented `Knowledge` protocol to its
+absence, so it cannot be re-described as shipped without the code.
 """
 from __future__ import annotations
 import subprocess
