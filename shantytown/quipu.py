@@ -25,6 +25,68 @@ import urllib.request
 
 from .protocols import Agent
 
+
+def request_headers() -> dict:
+    """Headers for every quipu request: JSON, plus `Authorization: Bearer` when
+    the environment carries `QUIPU_AUTH_TOKEN`.
+
+    Quipu gates its WRITE endpoints behind a bearer once the server's
+    `auth_token` is set (reads stay open). This is the client half, shipped
+    ahead of the server flip so the flip is config-only: with the env set every
+    request carries the bearer (harmless on reads, required on writes); unset
+    or empty — an empty value must not become a wrong credential — nothing
+    changes against today's open server.
+    """
+    headers = {"Content-Type": "application/json"}
+    token = os.environ.get("QUIPU_AUTH_TOKEN") or _token_from_file()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
+def _http_error_detail(e: urllib.error.HTTPError) -> str:
+    """The engine's own message out of a 4xx/5xx body (internal-ref). Quipu
+    answers a bad query with a JSON `{"error": "..."}`; surface that exact text
+    ('unsupported FILTER expression: ...') so the operator's next move is
+    obvious. Falls back to the raw body, then the reason phrase — reading the
+    body must never itself raise (a broken error path hiding the real error is
+    the failure this whole fix is about)."""
+    try:
+        raw = e.read().decode("utf-8", "replace")
+    except Exception:
+        return getattr(e, "reason", "") or "(no body)"
+    try:
+        parsed = json.loads(raw)
+        if isinstance(parsed, dict) and parsed.get("error"):
+            return str(parsed["error"])
+    except ValueError:
+        pass
+    return raw.strip()[:500] or (getattr(e, "reason", "") or "(no body)")
+
+
+def _token_from_file() -> str:
+    """The bearer token from its file, or "" — the file-first half of the
+    distribution.
+
+    Env-only distribution has a coverage hole: a process launched BEFORE the
+    token existed keeps its environment forever, so the moment the server
+    starts enforcing, every pre-flip session 401s. A file is read at REQUEST
+    time, so distribution reaches running sessions too. Env still wins above —
+    it is the per-invocation override, not the transport.
+
+    Path: `QUIPU_AUTH_TOKEN_FILE` if set, else `~/.config/quipu/token`.
+    Unreadable/absent is "" (no auth configured), matching the open-server
+    default.
+    """
+    path = os.environ.get("QUIPU_AUTH_TOKEN_FILE") or os.path.expanduser(
+        "~/.config/quipu/token"
+    )
+    try:
+        with open(path, encoding="utf-8") as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
 # The ontology IRI base. THIS IS DATA IDENTITY, NOT COSMETICS: every triple in a
 # graph is keyed under it, so a deployment that changes this value stops joining
 # its own existing facts — new entities land beside the old ones instead of on
@@ -47,6 +109,22 @@ class QuipuWriteRejected(Exception):
     differs (retry/escalate vs fix the payload). Both used to be invisible: /knot
     reports a refusal as {"conforms": false} with NO "error" key, so the write
     path swallowed it and reported success."""
+
+
+class QuipuQueryRejected(Exception):
+    """quipu REACHED, understood, and REJECTED the QUERY — a 4xx / error body,
+    not a connection failure (internal-ref).
+
+    The read-side twin of QuipuWriteRejected. It exists because the query path
+    conflated two facts the operator must act on differently: a real
+    connection failure means "check the network / restart the service", while a
+    400 'unsupported FILTER expression' means "rewrite the query". Both used to
+    raise QuipuUnreachable, so a SPARQL feature the engine does not support
+    (property paths under NOT EXISTS) surfaced to the operator as
+    QuipuUnreachable — sending them to the wrong remedy entirely. `urllib`
+    makes this a trap: HTTPError is a SUBCLASS of URLError, so a 4xx caught by
+    `except URLError` reads as unreachable without the body ever being looked
+    at."""
 
 
 def _local(iri: str) -> str:
@@ -89,11 +167,32 @@ def derive_agents(rows: list[dict]) -> list[Agent]:
 
 
 class QuipuRegistry:
-    """Identity from the quipu graph. get / all / set over `aegis:CrewMember`."""
+    """Identity from the quipu graph. get / all / set over `aegis:CrewMember`.
+
+    NON-LIVE MEMBERS ARE EXCLUDED AT THE QUERY (internal-ref): the graph keeps
+    retired / never-instantiated CrewMembers for history, marked with
+    `a:crewStatus` (SHACL-enforced value set; ABSENCE of the property = active —
+    the failure asymmetry is deliberate: forgetting to mark a retiree leaves a
+    harmless extra row, while forgetting to mark someone active would erase a
+    real agent). Without the filter, `st project` would mint cards for mayor /
+    strider / walker — and a mayor card recreates the black-hole dispatch
+    recipient this fleet retired (internal-ref). One resolver: every consumer of
+    all()/get() inherits the exclusion.
+
+    THE FORM IS `OPTIONAL … FILTER(!bound(…))`, NOT `FILTER NOT EXISTS`,
+    because quipu's engine REJECTS the latter ("unsupported FILTER
+    expression") — and _query raises on an error body, so the modern form
+    would have turned every all() call into QuipuUnreachable fleet-wide.
+    Found only by running the query against the live engine; the injected
+    test backend was green throughout (internal-ref). Verify any future edit
+    to this query against a real quipu before shipping it.
+    """
 
     _ALL = (
         f"PREFIX a: <{ONTO}> "
-        "SELECT ?s ?rt WHERE { ?s a a:CrewMember . OPTIONAL { ?s a:reports_to ?rt } }"
+        "SELECT ?s ?rt WHERE { ?s a a:CrewMember . "
+        "OPTIONAL { ?s a:crewStatus ?cs } FILTER(!bound(?cs)) "
+        "OPTIONAL { ?s a:reports_to ?rt } }"
     )
 
     def __init__(self, server: str | None = None, timeout: float = 5.0):
@@ -103,20 +202,35 @@ class QuipuRegistry:
         self.timeout = timeout
 
     def _query(self, sparql: str) -> list[dict]:
-        """POST a SPARQL query; return its rows. Raises `QuipuUnreachable` on a
-        connection failure OR an error body — an errored query is NO result."""
+        """POST a SPARQL query; return its rows. Raises `QuipuQueryRejected` when
+        the server ANSWERED but refused the query (a 4xx / error body), and
+        `QuipuUnreachable` only when the server could not be reached (internal-ref).
+        An errored query is NO result either way — but the caller's remedy
+        differs, so the two are different exceptions."""
         req = urllib.request.Request(
             self.server + "/query",
             data=json.dumps({"query": sparql}).encode(),
-            headers={"Content-Type": "application/json"},
+            headers=request_headers(),
         )
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                 body = json.loads(resp.read())
+        except urllib.error.HTTPError as e:
+            # The server ANSWERED with a 4xx/5xx — it is reachable; the query (or
+            # server state) is the problem. Read the body for the engine's own
+            # message ('unsupported FILTER expression: ...') rather than reporting
+            # a reachable server as unreachable. MUST precede the URLError arm:
+            # HTTPError is a subclass of URLError, and catching the parent first
+            # is exactly the conflation this fix removes.
+            detail = _http_error_detail(e)
+            raise QuipuQueryRejected(
+                f"quipu rejected the query (HTTP {e.code}): {detail}") from e
         except (urllib.error.URLError, OSError, ValueError) as e:
             raise QuipuUnreachable(f"quipu at {self.server} unreachable: {e}") from e
         if isinstance(body, dict) and body.get("error"):
-            raise QuipuUnreachable(f"quipu query error: {body['error']}")
+            # A 200 carrying an error body is still a query rejection, not
+            # unreachability — the server plainly answered.
+            raise QuipuQueryRejected(f"quipu rejected the query: {body['error']}")
         return body.get("rows", []) if isinstance(body, dict) else []
 
     def all(self) -> list[Agent]:
@@ -200,7 +314,7 @@ class QuipuRegistry:
                 "predicate": ONTO + predicate,
                 "value": ONTO + obj,
             }).encode(),
-            headers={"Content-Type": "application/json"},
+            headers=request_headers(),
         )
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
@@ -248,7 +362,7 @@ class QuipuRegistry:
         req = urllib.request.Request(
             self.server + "/knot",
             data=json.dumps({"turtle": turtle}).encode(),
-            headers={"Content-Type": "application/json"},
+            headers=request_headers(),
         )
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:

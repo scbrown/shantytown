@@ -82,3 +82,23 @@ def test_summary_line_without_top(monkeypatch):
     monkeypatch.setattr(desirepath.subprocess, "run",
                         _fake_run(json.dumps({"total_desires": 5, "unique_paths": 2, "top_desires": []})))
     assert desirepath.summary_line() == "5 failed tool calls captured (2 unique)"
+
+
+def test_fresh_dp_with_null_top_desires_does_not_crash(monkeypatch):
+    """A FRESH dp — zero data, exactly the state `st doctor --install` leaves it
+    in — emits `"top_desires": null`. `.get(key, [])` returns that existing None,
+    and iterating it crashed doctor with a TypeError the moment its own install
+    became visible (internal-ref, found live in the e2e sandbox)."""
+    fresh = json.dumps({
+        "total_desires": 0,
+        "unique_paths": 0,
+        "top_sources": {},
+        "top_desires": None,
+    })
+    monkeypatch.setattr(desirepath.shutil, "which", lambda _: "/usr/bin/dp")
+    monkeypatch.setattr(desirepath.subprocess, "run", _fake_run(fresh))
+    s = desirepath.summary()
+    assert s == {"total": 0, "unique": 0, "top": []}
+    # zero captures renders a line (total is 0, not None) — the caller's
+    # total-is-None guard hides only ABSENT/unreadable, not "installed, no data"
+    assert desirepath.summary_line() == "0 failed tool calls captured (0 unique)"

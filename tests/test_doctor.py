@@ -164,3 +164,83 @@ def test_detect_touches_nothing_on_disk(tmp_path, monkeypatch):
     # nothing written to the cwd, and the only subprocess was the read-only --version
     assert list(tmp_path.iterdir()) == []
     assert ran == [("quipu-server", "--version")]
+
+
+# --- UNPATHED: installed to GOBIN, invisible to PATH (internal-ref) ------------
+
+GO_SPEC = ToolSpec("desirepath", "dp", ("dp", "--version"), r"(\d+\.\d+\.\d+)",
+                   toolchain="go", installs_via="go install", leverage="signal",
+                   release=None)
+
+
+def go_probes(*, dp_at=None, version_out=("dp 0.2.0", 0), recorder=None):
+    """dp absent from PATH; go present; dp optionally sitting in a fake GOBIN."""
+    def which(name):
+        return "/usr/bin/go" if name == "go" else None
+
+    def run(argv):
+        if recorder is not None:
+            recorder.append(tuple(argv))
+        if tuple(argv) == ("go", "env", "GOBIN"):
+            return 0, ""          # unset -> default ~/go/bin path logic
+        out, rc = version_out
+        return rc, out
+
+    def offpath(spec, *, which, run):
+        return dp_at
+    return dict(which=which, run=run, fetch=lambda r: (None, None), offpath=offpath)
+
+
+def test_gobin_install_is_unpathed_not_absent():
+    """The wmy7 lie: a SUCCESSFUL go install must not read as 'not installed'."""
+    h = detect(GO_SPEC, **go_probes(dp_at="/fake/gobin/dp"))
+    assert h.present is False
+    assert h.state == doc.UNPATHED
+    assert h.unpathed_at == "/fake/gobin/dp"
+    assert h.version == "0.2.0"          # version read via the absolute path
+
+
+def test_truly_absent_go_tool_is_still_absent():
+    """Both worlds must differ: no binary anywhere is ABSENT, not UNPATHED."""
+    h = detect(GO_SPEC, **go_probes(dp_at=None))
+    assert h.state == doc.ABSENT and h.unpathed_at is None
+
+
+def test_unpathed_exit_code_is_actionable_1():
+    h = detect(GO_SPEC, **go_probes(dp_at="/fake/gobin/dp"))
+    assert doc.exit_code([h]) == 1
+
+
+def test_unpathed_plan_skips_with_the_path_fix_not_a_reinstall():
+    h = detect(GO_SPEC, **go_probes(dp_at="/fake/gobin/dp"))
+    p = doc.plan_install(h)
+    assert p.action == "skip" and p.steps == ()
+    assert "/fake/gobin" in p.reason and "PATH" in p.reason
+
+
+def test_unpathed_report_names_the_location_and_the_action():
+    h = detect(GO_SPEC, **go_probes(dp_at="/fake/gobin/dp"))
+    r = doc.report([h])
+    assert "installed at /fake/gobin/dp" in r
+    assert "NOT on your PATH" in r and "add /fake/gobin to PATH" in r
+    assert "not installed" not in r
+
+
+def test_off_path_location_respects_explicit_gobin():
+    """_off_path_location itself: an explicit `go env GOBIN` wins over ~/go/bin."""
+    calls = []
+    def which(name):
+        return "/usr/bin/go" if name == "go" else None
+    def run(argv):
+        calls.append(tuple(argv))
+        return 0, "/custom/gobin\n"
+    import os as _os
+    real_isfile, real_access = _os.path.isfile, _os.access
+    try:
+        _os.path.isfile = lambda p: p == "/custom/gobin/dp"
+        _os.access = lambda p, m: True
+        got = doc._off_path_location(GO_SPEC, which=which, run=run)
+    finally:
+        _os.path.isfile, _os.access = real_isfile, real_access
+    assert got == "/custom/gobin/dp"
+    assert ("go", "env", "GOBIN") in calls

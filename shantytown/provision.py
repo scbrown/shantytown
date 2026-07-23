@@ -168,6 +168,40 @@ def missing_kit(card: Agent, root) -> list[str]:
     return gaps
 
 
+def _consent_for_role(text: str, role: str) -> str:
+    """WORKERS lose the interactive picker; every other role keeps it.
+
+    The template's `permissions.deny AskUserQuestion` is the internal-ref flip: a
+    worker's option-picker blocks its pane invisibly (7 of 10 workers stalled on
+    pickers at once, found only by hand-capturing panes), so workers must route
+    decisions to beads/inbox instead — and A/B proof on that bead shows the deny
+    strips the picker while ordinary permission prompts survive. But this ONE
+    template renders into EVERY provisioned workspace, and a lead/administrator
+    picker is a HUMAN channel (the administrator's picker is answered by the
+    overseer over remote control). Denying it there severs the human, not the
+    stall. Role-blind rendering was the bug; this filter is the narrowest fix:
+    only AskUserQuestion is stripped, any other deny entry passes through, and a
+    template that is not JSON passes through verbatim — this helper must never
+    be the reason provisioning fails.
+    """
+    if role == "worker":
+        return text
+    try:
+        cfg = json.loads(text)
+    except ValueError:
+        return text
+    deny = cfg.get("permissions", {}).get("deny")
+    if isinstance(deny, list) and "AskUserQuestion" in deny:
+        deny = [t for t in deny if t != "AskUserQuestion"]
+        if deny:
+            cfg["permissions"]["deny"] = deny
+        else:
+            del cfg["permissions"]["deny"]
+            if not cfg["permissions"]:
+                del cfg["permissions"]
+    return json.dumps(cfg, indent=2) + "\n"
+
+
 def provision(card: Agent, root, *, secrets=None) -> list[str]:
     """Equip the agent's workspace. Returns the server names it can now reach.
 
@@ -206,9 +240,9 @@ def provision(card: Agent, root, *, secrets=None) -> list[str]:
     if consent.is_file():
         out = ws / ".claude"
         out.mkdir(parents=True, exist_ok=True)
-        (out / CONSENT_TEMPLATE).write_text(
-            render(consent.read_text(), {"SERVERS": ""}) if "${SERVERS}"
-            in consent.read_text() else consent.read_text())
+        text = (render(consent.read_text(), {"SERVERS": ""}) if "${SERVERS}"
+                in consent.read_text() else consent.read_text())
+        (out / CONSENT_TEMPLATE).write_text(_consent_for_role(text, card.role))
 
     got = servers_in(target)
     want = servers_in_text(tmpl.read_text())

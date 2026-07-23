@@ -115,15 +115,54 @@ def _registry(a):
     return FilesRegistry(a.root / "crew")
 
 
+def _deployment_default(a, key: str) -> str | None:
+    """A deployment-declared default for `key`: <root>/env.json (gitignored
+    deployment config), then the ambient env — the SAME source order the launch
+    side already uses for carried env and SHANTY_BASH_GUARD (runtime.py), so
+    "where deployment config lives" has one answer, not two.
+
+    Why this exists (internal-ref): the shanty status-bar segment and the session
+    picker both call PLAIN `st anchor <agent> --short` — by design, a public
+    repo must not embed a tracker path. On a fleet whose plates live in beads,
+    plain `st anchor` resolved to the files backend and rendered EMPTY, so both
+    surfaces were blank, consistently and with exit 0. The deployment needs to
+    say "my tracker is beads at <repo>" ONCE; this is where it says it.
+    """
+    root = getattr(a, "root", None)
+    if root is not None:
+        try:
+            loaded = json.loads((Path(root) / "env.json").read_text())
+            if isinstance(loaded, dict) and loaded.get(key):
+                return str(loaded[key])
+        except (OSError, ValueError):
+            pass
+    return os.environ.get(key) or None
+
+
 def _backend(a, default="files") -> str:
-    """The selected tracker backend, or `default` when --backend was not given.
+    """The selected tracker backend: explicit --backend, else the deployment's
+    SHANTY_BACKEND (env.json/env), else `default` (per-command).
 
     ONE resolver, because the sentinel only buys honesty if nothing re-guesses
     it. `--backend` now defaults to None so "the user said files" and "the user
     said nothing" stop being the same value — which they had to stop being for
     `mail -d` to default differently without overriding an explicit choice.
+    A deployment default sits BETWEEN those: quieter than a flag, louder than
+    the built-in guess — and an unrecognized value REFUSES rather than falling
+    through to files, because a silent files fallback is the exact blank-plate
+    bug this knob exists to fix (internal-ref).
     """
-    return getattr(a, "backend", None) or default
+    explicit = getattr(a, "backend", None)
+    if explicit:
+        return explicit
+    declared = _deployment_default(a, "SHANTY_BACKEND")
+    if declared:
+        if declared not in ("files", "beads", "forgejo"):
+            raise SystemExit(f"  refused: SHANTY_BACKEND={declared!r} is not a "
+                             "backend (files|beads|forgejo). Fix env.json/env; "
+                             "a typo must not silently mean files.")
+        return declared
+    return default
 
 
 def _tracker(a, default="files"):
@@ -138,6 +177,7 @@ def _tracker(a, default="files"):
     b = _backend(a, default)
     if b == "beads":
         return beads_mod.BeadsTracker(repo=getattr(a, "repo", None)
+                                      or _deployment_default(a, "SHANTY_BEADS_REPO")
                                       or _default_bd_repo(a))
     if b == "forgejo":
         # --repo is owner/name here (the forge's coordinates), not a directory.
@@ -256,12 +296,15 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--root", type=Path, default=_default_root())
     ap.add_argument("--backend", choices=["files", "beads", "forgejo"], default=None,
                     help="tracker backend (identity is always files). #3. "
-                         "Unset means per-command default: files everywhere, "
-                         "EXCEPT `mail -d`, which defaults to beads because a "
-                         "must-survive message belongs in the shared store "
-                         "(dearing, qdal.2). Pass --backend files to force local.")
+                         "Unset means the deployment's SHANTY_BACKEND "
+                         "(<root>/env.json, then env), else per-command "
+                         "default: files everywhere, EXCEPT `mail -d`, which "
+                         "defaults to beads because a must-survive message "
+                         "belongs in the shared store (dearing, qdal.2). Pass "
+                         "--backend files to force local.")
     ap.add_argument("--repo", default=None,
-                    help="bd -C <dir> when --backend beads")
+                    help="bd -C <dir> when --backend beads (unset: deployment's "
+                         "SHANTY_BEADS_REPO, else the .beads walk-up)")
     ap.add_argument("--registry", choices=["files", "quipu"], default="files",
                     help="identity backend: files (projection/default) or quipu "
                          "(the graph, the source of truth).")
@@ -1727,6 +1770,9 @@ def _cmd_crew(a) -> int:
               f"dispatch, and do not press Enter at")
         print(f"    someone else's pane to 'un-stall' it. Look with "
               f"`st log <agent>` and ask its owner.")
+        print(f"    To resubmit once confirmed: a bare Enter does NOT submit "
+              f"(measured) — use C-u,")
+        print(f"    re-send the text with `send-keys -l`, pause ~1s, then Enter.")
     # The whole point of the verdict (internal-ref). A column still makes the reader
     # scan 18 rows, and these agents are in NEITHER the free list nor the busy one
     # — so before this block a coordinator's summary said "5 free, 9 busy" of 18
@@ -1952,6 +1998,19 @@ def _cmd_project(a) -> int:
         agents = QuipuRegistry().all()
     except Exception as e:
         print(f"  could not project: quipu unreachable: {e}", file=sys.stderr)
+        return CANNOT_TELL
+
+    # ZERO agents from a REACHABLE graph is almost never "no crew" — it is a
+    # wrong namespace (SHANTY_ONTO_NS unset -> the library's example default,
+    # which holds none of any real fleet's facts) answering "nobody exists"
+    # with a straight face. This used to fall through to "already projected:
+    # 0 cards match the graph. Nothing to do." — a false pass ellie documented
+    # and internal-ref asked to close. Could-not-tell, not success.
+    if not agents:
+        print("  could not project: the graph answered but returned ZERO "
+              "CrewMembers — wrong namespace? (SHANTY_ONTO_NS is "
+              f"{'set' if os.environ.get('SHANTY_ONTO_NS') else 'UNSET — using the library example default'})",
+              file=sys.stderr)
         return CANNOT_TELL
 
     files = FilesRegistry(a.root / "crew")

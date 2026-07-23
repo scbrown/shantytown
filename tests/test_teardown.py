@@ -21,7 +21,12 @@ from shantytown.tmux import Tmux
 
 pytestmark = pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux not installed")
 
-SOCK = "st-teardown-test"
+# Unique per RUN, not a fixed name (internal-ref): two suite runs sharing a socket
+# kill each other's server via _cleanup — measured 7/10 setup failures with two
+# concurrent runs vs 0/15 solo. On a host where several agents hack this repo at
+# once, that IS the ~1-in-5 "flake", and it trains re-run-until-green. A pid'd
+# socket makes the collision structurally impossible instead of merely unlikely.
+SOCK = f"st-teardown-{os.getpid()}"
 
 
 def _cleanup():
@@ -46,6 +51,15 @@ def _child_pid_in(session: str) -> int | None:
     return int(r.stdout.strip()) if r.stdout.strip().isdigit() else None
 
 
+def _fg_command(session: str) -> str:
+    """The pane's foreground command name (e.g. "bash" until the sent line runs,
+    then "sleep") — the observable that setup is actually complete."""
+    r = subprocess.run(["tmux", "-L", SOCK, "display-message", "-t", session,
+                        "-p", "#{pane_current_command}"],
+                       capture_output=True, text=True)
+    return r.stdout.strip()
+
+
 def _alive(pid: int) -> bool:
     try:
         os.killpg(pid, 0)
@@ -62,7 +76,17 @@ def test_kill_session_reaps_the_pane_child_process():
         # a child that IGNORES SIGHUP, modelling claude: it survives the pty close
         # that kill-session triggers, and is only reaped by the tree-kill.
         t.send("victim", "trap '' HUP; sleep 300")
-        time.sleep(0.5)
+        # Poll with a deadline, not a fixed sleep: wait until the pane's fg
+        # command IS the sleep — which also proves the trap was processed (same
+        # command line, sequential), so kill_session cannot fire before the
+        # child actually models claude's SIGHUP-ignoring survival. A fixed 0.5s
+        # was a guess about host load; a guess that loses makes the setup
+        # assert fail for reasons unrelated to the behaviour under test.
+        deadline = time.time() + 10
+        while _fg_command("victim") != "sleep" and time.time() < deadline:
+            time.sleep(0.05)
+        assert _fg_command("victim") == "sleep", \
+            "setup: the SIGHUP-ignoring sleep never became the pane's fg command"
         pane_pid = _child_pid_in("victim")
         assert pane_pid and _alive(pane_pid), "setup: pane process should be alive"
 

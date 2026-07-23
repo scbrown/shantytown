@@ -94,7 +94,19 @@ def _tail(screen: str, n: int = _TAIL_LINES) -> str:
     # Strips: every text predicate below judges CONTENT, and content is what is
     # left when the attributes come off. Doing it here means a screen captured
     # with -e and one captured without are the same input to all of them.
-    return "\n".join(strip_attrs(screen).splitlines()[-n:])
+    #
+    # TRAILING BLANK ROWS ARE DROPPED FIRST (internal-ref). tmux pads a capture to
+    # the pane height, so a UI sitting N rows above the bottom arrives with N
+    # blank lines under it — and a fixed window off the raw bottom then spends
+    # itself on padding. kelly's answered picker hid behind five blank rows
+    # (internal-ref); twelve stranded-input panes hid behind seven and printed
+    # `idle` (internal-ref). awaiting_answer and auth_dead already trimmed for
+    # exactly this reason; the predicates on THIS window were still blind.
+    # Padding is not content, so it does not get to spend the window.
+    lines = strip_attrs(screen).splitlines()
+    while lines and not lines[-1].strip():
+        lines.pop()
+    return "\n".join(lines[-n:])
 
 
 def looks_wedged(screen: str) -> bool:
@@ -174,8 +186,21 @@ def input_state(screen: str) -> str:
     On a stripped capture with text in the box this returns UNKNOWN, never a
     guess. That is the point. The caller that dispatches on UNKNOWN would be
     typing into a buffer whose contents it cannot see — which is what happened.
+
+    TRAILING BLANK ROWS ARE DROPPED FIRST (internal-ref), attribute-aware because
+    this is the one predicate that must keep the RAW lines (it reads the dim
+    attribute). tmux pads captures to pane height; on real stranded panes the
+    prompt line sat above SEVEN rows of padding, fell outside the raw 8-line
+    window, and this returned ABSENT — which work_state reads as
+    box-does-not-apply and falls through to IDLE. Twelve deliberately-typed,
+    never-submitted commands (bd ready, dispatch verdicts, a relayed Stiwi
+    decision) printed `idle` that way in one coordination session, each needing
+    a hand pane-capture to even find.
     """
-    for raw in reversed(screen.splitlines()[-_TAIL_LINES:]):
+    lines = screen.splitlines()
+    while lines and not strip_attrs(lines[-1]).strip():
+        lines.pop()
+    for raw in reversed(lines[-_TAIL_LINES:]):
         plain = strip_attrs(raw).strip()
         if not plain or plain[0] not in _PROMPT_GLYPHS:
             continue

@@ -331,6 +331,34 @@ def bash_guard_command(root=None) -> str | None:
     return os.environ.get("SHANTY_BASH_GUARD") or None
 
 
+def stop_capture_command(root=None) -> str | None:
+    """The deployment's session-capture Stop hook command, or None for none.
+
+    SHANTY_STOP_CAPTURE names a command appended to every role's Stop hook list —
+    the extension point for deployment knowledge-capture hooks (internal-ref: that
+    deployment wires its canonical session-capture dispatcher here; the harness
+    override layer it replaces retires with its surface). Shantytown ships NO
+    capture hook and hardcodes NO path: what a deployment captures at session end
+    is its own business, so the value lives in env.json (gitignored deployment
+    config) or the ambient env — the same source order as SHANTY_BASH_GUARD — and
+    absent both, nothing extra is emitted.
+
+    Appended AFTER the role's own stop machinery on purpose: send/drain/haul
+    semantics (send-first persistence, Rule Zero feed gate) must be settled before
+    a capture hook gets a turn. The hook contract is Claude Code's Stop contract;
+    solicitation etiquette (block-once, session markers) is the command's own
+    responsibility, not the emitter's.
+    """
+    if root is not None:
+        try:
+            loaded = json.loads((Path(root) / "env.json").read_text())
+            if isinstance(loaded, dict) and loaded.get("SHANTY_STOP_CAPTURE"):
+                return str(loaded["SHANTY_STOP_CAPTURE"])
+        except (OSError, ValueError):
+            pass
+    return os.environ.get("SHANTY_STOP_CAPTURE") or None
+
+
 def settings_for_role(role: str, root=None, harness_name: str | None = None) -> dict:
     """The settings file a role needs, IN ITS HARNESS'S FORMAT — the CONTENT
     `role set` emits and `st new`'s launch reads via --settings (#6, arnold
@@ -376,6 +404,13 @@ def claude_settings_for_role(role: str, root=None) -> dict:
         stop = [_stop_cmd("drain", root), _feed_check_cmd(root)]
     else:
         raise ValueError(f"unknown role {role!r}; expected worker/lead/administrator")
+    # Deployment session-capture hook (internal-ref): emitted ONLY when the
+    # deployment configures one — see stop_capture_command. Appended last so
+    # the role's own stop machinery (send-first, drain, feed gate) is settled
+    # before capture gets a turn.
+    capture_cmd = stop_capture_command(root)
+    if capture_cmd:
+        stop.append({"type": "command", "command": capture_cmd})
     pre_tool = [_guard_hook()]
     # Deployment Bash guard (internal-ref): emitted ONLY when the deployment
     # configures one — see bash_guard_command. Matcher Bash, so every shell

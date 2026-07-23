@@ -59,9 +59,14 @@ def summary() -> dict | None:
     data = _run_json("stats", "--json")
     if not isinstance(data, dict):
         return None
+    # `or []`, not a .get default: a FRESH dp (zero data — exactly the state
+    # `st doctor --install` leaves it in) emits `"top_desires": null`, and
+    # .get(key, []) returns that existing None. Found live by the internal-ref
+    # end-to-end: doctor crashed with a TypeError the moment the tool it had
+    # just installed became visible.
     top = [
         (d.get("name"), d.get("count"))
-        for d in data.get("top_desires", [])
+        for d in (data.get("top_desires") or [])
         if isinstance(d, dict) and d.get("name")
     ]
     return {

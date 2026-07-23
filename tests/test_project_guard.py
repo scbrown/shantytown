@@ -151,3 +151,19 @@ def test_clean_projection_is_idempotent_and_quiet(tmp_path, monkeypatch, capsys)
 
     assert rc == OK
     assert "Nothing to do" in capsys.readouterr().out
+
+
+def test_zero_agents_from_a_reachable_graph_is_could_not_tell(tmp_path, monkeypatch, capsys):
+    """internal-ref closing an ellie-documented false pass: an empty-but-reachable
+    graph (wrong SHANTY_ONTO_NS answers 'nobody exists' with a straight face)
+    used to print 'already projected: 0 cards match the graph. Nothing to do.'
+    and exit 0. Zero crew from a reachable graph is could-not-tell, loudly."""
+    from types import SimpleNamespace
+    root = crew(tmp_path)          # no cards, and —
+    graph(monkeypatch)             # — a reachable graph with ZERO agents
+    panes(monkeypatch)
+    a = SimpleNamespace(root=root, dry_run=True, force=False)
+    rc = cli._cmd_project(a)
+    err = capsys.readouterr().err
+    assert rc == cli.CANNOT_TELL
+    assert "ZERO CrewMembers" in err and "namespace" in err

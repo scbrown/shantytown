@@ -176,3 +176,55 @@ def test_triage_asks_for_attributes():
 
     run_triage(_Recording(screen=_pane(EMPTY_LINE)), "%1", "work")
     assert seen["attrs"] is True
+
+
+# --- pane padding must not hide the box (internal-ref) -------------------------
+
+# tmux pads a capture to the pane HEIGHT, so a UI sitting above the bottom
+# arrives with blank rows under it. On 2026-07-23 twelve deliberately-typed,
+# never-submitted commands (bd ready, dispatch verdicts, a relayed decision)
+# printed `idle` in one coordination session: the prompt line sat above SEVEN
+# rows of padding, fell outside input_state's raw 8-line window, and ABSENT
+# fell through to IDLE. Same lesson as kelly's picker behind five blank rows
+# (internal-ref) — fixed there, still live here.
+#
+# This line is VERBATIM from the reproduced stranded pane (capture-pane -p -e,
+# 2026-07-23): glyph coloured, typed text bare — the queued shape.
+STRANDED_LINE_REAL = "\x1b[39m❯\xa0bd ready"
+
+
+def _padded(pane: str, blanks: int = 7) -> str:
+    """The pane as tmux actually hands it over: content, then padding rows."""
+    return pane + "\n" * blanks
+
+
+def test_trailing_pane_padding_does_not_hide_the_input_box():
+    """The ns56 shape byte-for-byte: every input answer must survive padding.
+    Pre-fix, all three read ABSENT — the box fell clean out of the window."""
+    assert triage.input_state(_padded(_pane(STRANDED_LINE_REAL))) == triage.INPUT_QUEUED
+    assert triage.input_state(_padded(_pane(QUEUED_LINE))) == triage.INPUT_QUEUED
+    assert triage.input_state(_padded(_pane(PLACEHOLDER_LINE))) == triage.INPUT_PLACEHOLDER
+    assert triage.input_state(_padded(_pane(EMPTY_LINE))) == triage.INPUT_EMPTY
+
+
+def test_padded_stranded_pane_is_queued_not_idle():
+    """The consequence that cost the coordinator twelve hand-captures: a
+    stranded command above padding printed `idle` and sat there until a human
+    re-typed it. It is QUEUED, and queued panes get their own summary block."""
+    assert triage.work_state(_padded(_pane(STRANDED_LINE_REAL)), ui_up=True) \
+        == triage.QUEUED
+
+
+def test_tail_predicates_see_content_above_pane_padding():
+    """The same hole one window over: _tail() spent itself on padding too, so a
+    busy pane's in-flight marker above enough blank rows went unseen. BUSY must
+    survive padding — order still holds (busy beats the queued box).
+
+    Padding is nine rows ON PURPOSE: the whole raw window (8 lines) must be
+    padding, or the marker on the pane's last content line still slips inside
+    it and this test cannot tell a trimmed window from an untrimmed one — the
+    mutation check caught exactly that with seven."""
+    busy = _pane(QUEUED_LINE).replace("for agents", "· esc to interrupt")
+    assert triage.mid_flight(_padded(busy, blanks=9)), \
+        "in-flight marker lost to padding"
+    assert triage.work_state(_padded(busy, blanks=9), ui_up=True) == triage.BUSY

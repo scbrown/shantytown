@@ -230,3 +230,44 @@ def test_ambient_env_supplies_the_guard_when_env_json_lacks_it(tmp_path, monkeyp
     s = runtime.claude_settings_for_role("worker", root=tmp_path)
     bash = [h for h in s["hooks"]["PreToolUse"] if h.get("matcher") == "Bash"]
     assert bash and bash[0]["hooks"][0]["command"] == "/usr/local/lib/guards/ambient.sh"
+
+
+# --- the deployment session-capture Stop hook extension point (internal-ref) --
+
+
+def test_no_capture_hook_emitted_by_default(tmp_path):
+    """Shantytown ships no capture hook: absent deployment config, every role's
+    Stop list is exactly its own stop machinery (positive shape assert, not just
+    absence — same-output-two-worlds discipline)."""
+    s = runtime.claude_settings_for_role("worker", root=tmp_path)
+    cmds = [h["command"] for h in s["hooks"]["Stop"][0]["hooks"]]
+    assert len(cmds) == 2  # send + haul, nothing appended
+    assert all("stop_event" in c for c in cmds)
+
+
+def test_env_json_capture_hook_is_appended_last_for_every_role(tmp_path):
+    (tmp_path / "env.json").write_text(
+        '{"SHANTY_STOP_CAPTURE": "/usr/local/lib/hooks/session-capture.sh"}')
+    for role, own_count in (("worker", 2), ("lead", 2), ("administrator", 2)):
+        s = runtime.claude_settings_for_role(role, root=tmp_path)
+        hooks = s["hooks"]["Stop"][0]["hooks"]
+        # appended, exactly once, LAST — the role's own machinery precedes it
+        assert len(hooks) == own_count + 1, role
+        assert hooks[-1] == {"type": "command",
+                             "command": "/usr/local/lib/hooks/session-capture.sh"}, role
+        assert all("session-capture" not in h["command"] for h in hooks[:-1]), role
+
+
+def test_ambient_env_supplies_the_capture_hook(tmp_path, monkeypatch):
+    monkeypatch.setenv("SHANTY_STOP_CAPTURE", "/usr/local/lib/hooks/ambient-capture.sh")
+    s = runtime.claude_settings_for_role("worker", root=tmp_path)
+    hooks = s["hooks"]["Stop"][0]["hooks"]
+    assert hooks[-1]["command"] == "/usr/local/lib/hooks/ambient-capture.sh"
+
+
+def test_env_json_capture_wins_over_ambient(tmp_path, monkeypatch):
+    (tmp_path / "env.json").write_text(
+        '{"SHANTY_STOP_CAPTURE": "/from/env.json"}')
+    monkeypatch.setenv("SHANTY_STOP_CAPTURE", "/from/ambient")
+    s = runtime.claude_settings_for_role("worker", root=tmp_path)
+    assert s["hooks"]["Stop"][0]["hooks"][-1]["command"] == "/from/env.json"

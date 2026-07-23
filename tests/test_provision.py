@@ -73,6 +73,46 @@ def test_the_consent_pre_answer_is_written(root, ws):
     assert json.loads((ws / ".claude" / P.CONSENT_TEMPLATE).read_text())
 
 
+def test_the_picker_deny_reaches_a_worker(root, ws):
+    # internal-ref: a worker's option-picker blocks its pane invisibly. The deny
+    # in the consent template must land verbatim in a WORKER's workspace.
+    d = root / "provision"
+    (d / P.CONSENT_TEMPLATE).write_text(json.dumps(
+        {"permissions": {"deny": ["AskUserQuestion"]},
+         "enabledMcpjsonServers": ["bobbin"]}))
+    P.provision(Agent(name="ellie", role="worker", workspace=str(ws)), root)
+    cfg = json.loads((ws / ".claude" / P.CONSENT_TEMPLATE).read_text())
+    assert cfg["permissions"]["deny"] == ["AskUserQuestion"]
+
+
+def test_the_picker_deny_does_NOT_reach_a_lead_or_administrator(root, ws):
+    # The administrator's picker is a HUMAN channel (answered by the overseer
+    # over remote control). Role-blind rendering would sever the human, not the
+    # stall — only AskUserQuestion is stripped, the rest of the deny survives.
+    d = root / "provision"
+    (d / P.CONSENT_TEMPLATE).write_text(json.dumps(
+        {"permissions": {"deny": ["AskUserQuestion", "WebSearch"]},
+         "enabledMcpjsonServers": ["bobbin"]}))
+    for role in ("lead", "administrator"):
+        P.provision(Agent(name="dearing", role=role, workspace=str(ws)), root)
+        cfg = json.loads((ws / ".claude" / P.CONSENT_TEMPLATE).read_text())
+        assert cfg["permissions"]["deny"] == ["WebSearch"], role
+        assert cfg["enabledMcpjsonServers"] == ["bobbin"], \
+            "the strip must not disturb the rest of the consent file"
+
+
+def test_an_empty_deny_is_removed_not_left_as_debris(root, ws):
+    # A lead whose only deny was the picker gets NO permissions key at all —
+    # an empty {"permissions": {"deny": []}} reads as intent nobody has.
+    d = root / "provision"
+    (d / P.CONSENT_TEMPLATE).write_text(json.dumps(
+        {"permissions": {"deny": ["AskUserQuestion"]},
+         "enabledMcpjsonServers": ["bobbin"]}))
+    P.provision(Agent(name="sattler", role="administrator", workspace=str(ws)), root)
+    cfg = json.loads((ws / ".claude" / P.CONSENT_TEMPLATE).read_text())
+    assert "permissions" not in cfg
+
+
 def test_provision_is_idempotent(root, ws):
     first = P.provision(_card(ws), root)
     body = (ws / ".mcp.json").read_text()

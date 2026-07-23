@@ -68,6 +68,7 @@ if [ "${1:-}" = "--selftest" ]; then
   # Synthesises its own config, so the controls run without the real names ever
   # appearing in this repo — and so the test proves the MECHANISM, which is the
   # only thing this file is now responsible for.
+  SELF=$(cd "$(dirname "$0")" && pwd)/$(basename "$0")   # abs path; the reachability test cd's away
   tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
   # Synthetic config: the controls must prove the MECHANISM without the estate's
   # real names ever appearing in this public file. Reserved names only
@@ -110,6 +111,37 @@ if [ "${1:-}" = "--selftest" ]; then
   # The unconfigured path must be VISIBLE, never silent.
   out=$(SCRUB_PATTERNS_FILE=/nonexistent "$0" --check-unconfigured 2>&1 >/dev/null)
   case "$out" in *"NOT CONFIGURED"*) echo "ok   unconfigured is loud" ;; *) echo "FAIL unconfigured is silent"; fail=1 ;; esac
+
+  # NEW-REF REACHABILITY (aegis-5c9z): a real bare remote + clone, because this
+  # control is about ref-walking, not pattern matching. A tag pointing at
+  # already-public history must ADD nothing; a new branch with a new leak must
+  # still be caught. Reserved .invalid names only.
+  if command -v git >/dev/null 2>&1; then
+    r=$(mktemp -d); (
+      cf="$r/scrub.conf"
+      printf 'internal_host_re=forge\\.invalid\npatterns=[a-z0-9-]+\\.invalid\\b\n' > "$cf"
+      git init -q --bare "$r/pub.git"
+      git clone -q "$r/pub.git" "$r/w" 2>/dev/null
+      cd "$r/w"
+      git config user.email t@t; git config user.name t
+      echo "host old-thing.invalid" > f.txt   # existing public debt
+      git add f.txt; git commit -qm "seed old-thing.invalid"
+      git push -q origin HEAD:main; git fetch -q origin 2>/dev/null
+      Z=0000000000000000000000000000000000000000
+      # tag on public commit -> allow
+      git tag v1
+      if echo "refs/tags/v1 $(git rev-parse v1) refs/tags/v1 $Z" | SCRUB_PATTERNS_FILE="$cf" bash "$SELF" origin "$r/pub.git" >/dev/null 2>&1; then
+        echo "ok   tag on public history is allowed"
+      else echo "FAIL tag on public history refused (aegis-5c9z)"; exit 1; fi
+      # new branch adding a new leak -> refuse
+      git checkout -q -b feat; echo "new bad-thing.invalid" > g.txt; git add g.txt; git commit -qm feat
+      if echo "refs/heads/feat $(git rev-parse feat) refs/heads/feat $Z" | SCRUB_PATTERNS_FILE="$cf" bash "$SELF" origin "$r/pub.git" >/dev/null 2>&1; then
+        echo "FAIL new leak in new branch was allowed"; exit 1
+      else echo "ok   new leak in a new branch is refused"; fi
+    ) || fail=1
+    rm -rf "$r"
+  fi
+
   [ "$fail" -eq 0 ] && echo "selftest PASSED" || echo "selftest FAILED"
   exit "$fail"
 fi
@@ -141,16 +173,42 @@ violations=0
 while read -r _lref lsha _rref rsha; do
   [ "$lsha" = "0000000000000000000000000000000000000000" ] && continue
   if [ "$rsha" = "0000000000000000000000000000000000000000" ]; then
-    range="$lsha"          # new branch: check the commit itself
-    diffcmd=(git show --format=%B "$lsha" -- . "${GUARD_EXCLUDE[@]}")
+    # NEW REF (branch or tag). The added content is the commits reachable from
+    # lsha that are NOT already on the remote — NOT all of lsha's ancestry
+    # (aegis-5c9z: a release tag pointing at already-public history walked the
+    # whole repo as "added" and refused itself, training the --no-verify habit
+    # the guard must not normalise).
+    #
+    # The "already public" boundary is the remote's ACTUAL refs via ls-remote,
+    # not local remote-tracking refs — the latter can be stale or absent and a
+    # push guard must not depend on their freshness. Keep only remote shas we
+    # hold locally as objects (rev-list --not needs local objects). Offline / a
+    # brand-new remote yields an empty boundary => scan all of lsha's history,
+    # the correct conservative behaviour when nothing is known-public yet.
+    remote_have=$(git ls-remote "$REMOTE_URL" 2>/dev/null | awk '{print $1}' \
+                  | while read -r h; do git cat-file -e "$h^{commit}" 2>/dev/null && echo "$h"; done)
+    newcommits=$(git rev-list "$lsha" ${remote_have:+--not $remote_have} 2>/dev/null)
+    if [ -z "$newcommits" ]; then
+      continue   # ref adds no new commits (e.g. a tag on public history) — nothing to scan
+    fi
+    # Diff + messages of EXACTLY the new commits (git show per commit: its patch
+    # vs its parent, so '+' lines are what that commit genuinely added). Raw
+    # here; the single PATTERNS grep below is the one matcher for both branches.
+    addedlines=""
+    rawmsgs=""
+    for c in $newcommits; do
+      addedlines+=$(git show --format= "$c" -- . "${GUARD_EXCLUDE[@]}" 2>/dev/null | grep -E '^\+' || true)$'\n'
+      rawmsgs+=$(git log -1 --format=%B "$c" 2>/dev/null)$'\n'
+    done
   else
-    range="$rsha..$lsha"
-    diffcmd=(git diff "$rsha" "$lsha" -- . "${GUARD_EXCLUDE[@]}")
+    # Branch update: diff against the remote tip — pre-existing content is excluded
+    # by construction.
+    addedlines=$(git diff "$rsha" "$lsha" -- . "${GUARD_EXCLUDE[@]}" 2>/dev/null | grep -E '^\+' || true)
+    rawmsgs=$(git log --format=%B "$rsha..$lsha" 2>/dev/null)
   fi
   # ADDED lines only (+ prefix), so pre-existing occurrences never trip it.
-  addedlines=$("${diffcmd[@]}" 2>/dev/null | grep -E '^\+' || true)
   added=$(printf '%s\n' "$addedlines" | grep -nE "$PATTERNS" || true)
-  msgs=$(git log --format=%B "$range" 2>/dev/null | grep -nE "$PATTERNS" || true)
+  msgs=$(printf '%s\n' "$rawmsgs" | grep -nE "$PATTERNS" || true)
   # Ticket IDs are checked in FILE CONTENT only (the diff), never in commit
   # messages — a bead ref in a subject is the fleet's deliberate internal habit,
   # but the same ref in a CHANGELOG or a source comment reaching a public repo is

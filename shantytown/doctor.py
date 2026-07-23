@@ -34,6 +34,11 @@ from dataclasses import dataclass
 
 # The single word for a tool's row. Each exists to stop one specific lie (above).
 ABSENT = "absent"       # binary not on PATH
+UNPATHED = "unpathed"   # installed in the toolchain's install dir, but that dir is
+                        # not on PATH — exit 1. Exists to stop the internal-ref lie:
+                        # `go install` SUCCEEDS into GOBIN, PATH lookup can't see
+                        # it, and "not installed" made a successful install
+                        # indistinguishable from a failed one.
 UNKNOWN = "unknown"     # present, but version or latest could not be determined — exit 2
 STALE = "stale"         # present, version known, older than the latest release
 CURRENT = "current"     # present, version known, == latest
@@ -109,11 +114,12 @@ class Health:
     latest: str | None
     latest_error: str | None     # set iff we tried to check latest and could not
     toolchain_ok: bool
+    unpathed_at: str | None = None   # absolute path when installed off-PATH (wmy7)
 
     @property
     def state(self) -> str:
         if not self.present:
-            return ABSENT
+            return UNPATHED if self.unpathed_at else ABSENT
         if self.version_error is not None:
             return UNKNOWN
         if self.latest and self.version and _older(self.version, self.latest):
@@ -133,6 +139,34 @@ class Health:
 
 def _which(name: str) -> str | None:
     return shutil.which(name)
+
+
+def _off_path_location(spec: ToolSpec, *, which, run) -> str | None:
+    """Where the toolchain would have installed spec.binary OFF the PATH, if it
+    is actually there — else None. Consulted only when PATH lookup fails: the
+    observer widens to the writer's known destination instead of reporting
+    nonexistence it cannot establish (internal-ref; same declared-vs-deployed
+    class as ss7x/nipg — the tool exists, the observer cannot see it).
+    """
+    # go ONLY, deliberately: cargo's ~/.cargo/bin is on PATH by rustup
+    # convention (and is on PATH here), so widening to it would trade a real
+    # false-negative fix for host-dependent detection nobody needs yet.
+    if spec.toolchain != "go":
+        return None
+    gobin = ""
+    if which("go") is not None:
+        rc, out = run(("go", "env", "GOBIN"))
+        if rc == 0:
+            gobin = (out or "").strip()
+    if not gobin:
+        # go's documented default when GOBIN is unset: $GOPATH/bin, GOPATH
+        # defaulting to ~/go. Checking the default even without a go on
+        # PATH is deliberate — the binary outlives its toolchain.
+        gobin = os.path.join(os.path.expanduser("~"), "go", "bin")
+    p = os.path.join(gobin, spec.binary)
+    if os.path.isfile(p) and os.access(p, os.X_OK):
+        return p
+    return None
 
 
 def _run(argv: tuple[str, ...]) -> tuple[int, str]:
@@ -182,13 +216,19 @@ def _older(a: str, b: str) -> bool:
 
 
 def detect(spec: ToolSpec, *, which=_which, run=_run, fetch=_fetch_latest,
-           check_latest: bool = True) -> Health:
+           check_latest: bool = True, offpath=_off_path_location) -> Health:
     """Detect one tool. Reads PATH, runs --version, optionally checks the latest
     release. Mutates NOTHING."""
     present = which(spec.binary) is not None
+    unpathed_at = None
+    if not present:
+        unpathed_at = offpath(spec, which=which, run=run)
     version = version_error = None
-    if present:
-        rc, out = run(spec.version_argv)
+    if present or unpathed_at:
+        # For an off-PATH binary, run it by its absolute path — its version is
+        # as knowable as anyone's; only its PATH entry is missing.
+        argv = spec.version_argv if present else (unpathed_at,) + spec.version_argv[1:]
+        rc, out = run(argv)
         m = re.search(spec.version_re, out or "")
         if rc == 0 and m:
             version = m.group(1)
@@ -207,7 +247,8 @@ def detect(spec: ToolSpec, *, which=_which, run=_run, fetch=_fetch_latest,
     else:
         toolchain_ok = which(spec.toolchain) is not None
 
-    return Health(spec, present, version, version_error, latest, latest_error, toolchain_ok)
+    return Health(spec, present, version, version_error, latest, latest_error,
+                  toolchain_ok, unpathed_at)
 
 
 def detect_all(specs: tuple[ToolSpec, ...] = SPECS, **kw) -> list[Health]:
@@ -220,7 +261,7 @@ def exit_code(healths: list[Health]) -> int:
     dominates: a report you cannot trust is worse than one that says 'fix this'."""
     if any(h.uncertain for h in healths):
         return 2
-    if any(h.state in (ABSENT, STALE) for h in healths):
+    if any(h.state in (ABSENT, UNPATHED, STALE) for h in healths):
         return 1
     return 0
 
@@ -248,6 +289,12 @@ def plan_install(health: Health) -> InstallPlan:
         # working binary over an upstream --version bug. Leave it, say why.
         return InstallPlan(s.name, "skip",
                            "present but version unknown — not reinstalling over a working binary", ())
+    if health.state == UNPATHED:
+        # The install already succeeded; the missing piece is the operator's
+        # PATH, which no reinstall fixes. Skip WITH the one action that does.
+        d = os.path.dirname(health.unpathed_at or "")
+        return InstallPlan(s.name, "skip",
+                           f"already installed at {health.unpathed_at} — add {d} to PATH; reinstalling would change nothing", ())
     # ABSENT or STALE from here.
     if s.release is None and s.toolchain == "unknown":
         return InstallPlan(s.name, "refuse", f"no known install mechanism — {s.installs_via}", ())
@@ -291,7 +338,7 @@ def run_install(plan: InstallPlan, *, run=_run, dry_run: bool = False) -> None:
 
 # --- rendering ---------------------------------------------------------------
 
-_GLYPH = {ABSENT: "✗", UNKNOWN: "?", STALE: "△", CURRENT: "✓", PRESENT: "•"}
+_GLYPH = {ABSENT: "✗", UNPATHED: "!", UNKNOWN: "?", STALE: "△", CURRENT: "✓", PRESENT: "•"}
 
 
 def report(healths: list[Health], *, plans: list[InstallPlan] | None = None) -> str:
@@ -300,6 +347,10 @@ def report(healths: list[Health], *, plans: list[InstallPlan] | None = None) -> 
         g = _GLYPH.get(h.state, "?")
         if h.state == ABSENT:
             detail = "not installed"
+        elif h.state == UNPATHED:
+            v = f"{h.version} " if h.version else ""
+            detail = (f"{v}installed at {h.unpathed_at} — NOT on your PATH "
+                      f"(add {os.path.dirname(h.unpathed_at)} to PATH)")
         elif h.state == UNKNOWN:
             reason = h.version_error or h.latest_error or "could not determine state"
             if h.spec.version_broken and h.version_error:
