@@ -108,8 +108,13 @@ def test_set_refuses_orphan_and_cycles_at_write_time():
 
 # --- bearer auth (the client half of the quipu write-auth flip) ---------------
 
-def test_headers_carry_bearer_only_when_env_token_is_set(monkeypatch):
+def test_headers_carry_bearer_only_when_env_token_is_set(monkeypatch, tmp_path):
     from shantytown.quipu import request_headers
+
+    # Isolate from the HOST's real token file — this test is about the env
+    # var, and a developer machine that has done the z10 flip carries
+    # ~/.config/quipu/token, which the fallback would (correctly) read.
+    monkeypatch.setenv("QUIPU_AUTH_TOKEN_FILE", str(tmp_path / "absent"))
 
     # Unset: today's open-server behaviour, byte-identical headers.
     monkeypatch.delenv("QUIPU_AUTH_TOKEN", raising=False)
