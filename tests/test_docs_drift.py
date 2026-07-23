@@ -263,3 +263,97 @@ def test_env_allowlist_has_not_rotted():
             f"{name} is on the internal allowlist but is now in the README table — "
             f"pick one."
         )
+
+
+# --- adapter protocols in the docs are pinned to the code (aegis-ks9b) --------
+#
+# The knowledge adapter layer was described as shipped — a `Knowledge(Protocol)`
+# with two implementations, in three docs and this suite's own leak-test
+# docstring — while no Knowledge/Fact/Episode/TxId existed anywhere in
+# shantytown/. test_command_count pins command NAMES; nothing pinned the adapter
+# rows, so that drifted freely for weeks. This pins every Protocol the docs write
+# in a ```python block to the code: a documented protocol must either EXIST in
+# shantytown.protocols, or be marked PLANNED right above its class line. You
+# cannot have it both ways — a PLANNED protocol that actually exists fails too,
+# so building one forces un-marking the doc (and the leak-test docstring with it).
+
+ADAPTERS_MD = ROOT / "docs" / "adapters.md"
+
+
+def _documented_protocols(md_text: str) -> dict[str, bool]:
+    """{ProtocolName: is_marked_planned} for every `class X(Protocol):` written
+    in a fenced ```python block. `planned` is true when the contiguous COMMENT
+    block immediately above the class (its doc-comment) contains PLANNED
+    (case-insensitive)."""
+    out: dict[str, bool] = {}
+    for block in re.findall(r"```python\n(.*?)```", md_text, re.S):
+        lines = block.splitlines()
+        for i, line in enumerate(lines):
+            m = re.match(r"\s*class\s+([A-Z]\w+)\s*\(\s*Protocol\s*\)", line)
+            if not m:
+                continue
+            # walk up through the contiguous comment lines directly above.
+            planned = False
+            j = i - 1
+            while j >= 0 and lines[j].lstrip().startswith("#"):
+                if "planned" in lines[j].lower():
+                    planned = True
+                    break
+                j -= 1
+            out[m.group(1)] = planned
+    return out
+
+
+def _protocols_defined_in_code() -> set[str]:
+    """Every `class X(Protocol)` DEFINED anywhere in the shantytown package.
+    Protocols live across modules (protocols.py, runtime.py, …), so this scans
+    source rather than one module — a doc'd protocol must be defined somewhere,
+    not in a particular file."""
+    defined: set[str] = set()
+    for py in (ROOT / "shantytown").glob("*.py"):
+        for m in re.finditer(
+            r"^class\s+([A-Z]\w+)\s*\([^)]*\bProtocol\b[^)]*\)", py.read_text(), re.M
+        ):
+            defined.add(m.group(1))
+    return defined
+
+
+def test_documented_adapter_protocols_match_the_code():
+    documented = _documented_protocols(ADAPTERS_MD.read_text())
+    assert documented, "no `class X(Protocol)` blocks found in adapters.md — parser broke?"
+    defined = _protocols_defined_in_code()
+
+    for name, planned in sorted(documented.items()):
+        exists = name in defined
+        if planned:
+            assert not exists, (
+                f"adapters.md marks `{name}` PLANNED, but a `class {name}(Protocol)` "
+                f"EXISTS in shantytown/. It was built — remove the PLANNED marker "
+                f"(and update tests/test_leak.py's docstring + the leak run)."
+            )
+        else:
+            assert exists, (
+                f"adapters.md documents `class {name}(Protocol)` as shipped, but no "
+                f"`class {name}(Protocol)` is defined anywhere in shantytown/. Either "
+                f"build it (with its second implementation + the leak-test wiring) or "
+                f"mark the block PLANNED. This is exactly the aegis-ks9b drift: a row "
+                f"written before the code."
+            )
+
+
+def test_knowledge_layer_is_absent_until_built():
+    """The specific aegis-ks9b invariant, pinned directly: if any of the
+    knowledge-layer symbols appear in the code, the docs must stop calling the
+    layer PLANNED (this test then flips to requiring the full set). Guards against
+    a half-build that adds Knowledge but leaves the docs/leak-test lying either
+    way."""
+    import shantytown.protocols as protocols
+
+    knowledge_symbols = [hasattr(protocols, n) for n in ("Knowledge", "Fact", "Episode", "TxId")]
+    if any(knowledge_symbols):
+        assert all(knowledge_symbols), (
+            "a PARTIAL knowledge layer exists in shantytown.protocols "
+            f"(present: {[n for n in ('Knowledge','Fact','Episode','TxId') if hasattr(protocols,n)]}). "
+            "Build the whole protocol (Knowledge/Fact/Episode/TxId) or none of it, "
+            "and update the docs off PLANNED — aegis-ks9b."
+        )

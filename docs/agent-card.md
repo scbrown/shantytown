@@ -116,9 +116,10 @@ So quipu now has two distinct jobs, and they should not share a switch:
 | job | what it holds | optional? |
 |---|---|---|
 | **registry** | who exists, who reports to whom, what role | **NO — required** |
-| **knowledge** | episodes, facts, what we learned | **yes — `none` adapter still valid** |
+| **knowledge** *(planned — not built, aegis-ks9b)* | episodes, facts, what we learned | **yes — `none` adapter still valid** *(when built)* |
 
-The `none` knowledge adapter survives. There is no `none` registry.
+The `none` knowledge adapter survives *(once knowledge exists — aegis-ks9b; it does not yet)*. There
+is no `none` registry.
 
 **What this costs, stated plainly:** shantytown gains a hard dependency on a graph database, and
 "smaller than what it replaces" gets harder to defend. Two honest mitigations, and I'd want Stiwi's

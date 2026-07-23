@@ -168,7 +168,7 @@ interface, with a second implementation as the proof.
 |---|---|---|---|
 | tracker | `get` / `update` | beads | `files` (markdown dir) |
 | context | `relevant` | bobbin | `none` |
-| knowledge | `search` / `record` | quipu | `none` |
+| knowledge *(planned — not built, aegis-ks9b)* | `search` / `record` | quipu | `none` |
 | events | `subscribe` | **quipu** (cursored transaction log) | `none` |
 | telemetry | `record_miss` | dp | `none` |
 | runtime | `start` / `send` / `hooks` | Claude Code | opencode / codex |
