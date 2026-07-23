@@ -2254,7 +2254,20 @@ def _cmd_tend(a) -> int:
     # that runs old code exactly when it matters.
     fp = _code_fingerprint()
     while True:
-        _tend_once(a, quiet=True)
+        # A CRASHED PASS IS NOT A DEAD SUPERVISOR (aegis-ey7n). The live loop
+        # died to one uncaught OSError (ENOSPC in a ledger write) and nothing
+        # restarted it — a supervisor with no supervisor. One bad pass logs its
+        # traceback and the next interval tries again; a persistent fault
+        # repeats loudly every interval, which is exactly what an operator can
+        # see and a dead process is exactly what they cannot. KeyboardInterrupt
+        # and SystemExit still pass through — Ctrl-C must keep killing it.
+        try:
+            _tend_once(a, quiet=True)
+        except Exception:  # noqa: BLE001 — survive anything a pass can raise
+            import traceback
+            print(f"  ⚠ st tend: this pass CRASHED — supervision continues; "
+                  f"next pass in {loop}s. Traceback:", file=sys.stderr)
+            traceback.print_exc()
         now = _code_fingerprint()
         if fp is not None and now is not None and now != fp:
             print("  st tend: the installed code CHANGED under this loop — "
@@ -2300,8 +2313,26 @@ def _tend_once(a, quiet: bool = False) -> int:
     # heartbeat does not re-spam a still-blocked worker every interval.
     if not a.dry_run:
         _log = lambda msg: print(f"  {msg}", file=sys.stderr)
-        woke = notify_mod.Notifier(
-            Path(a.root), _registry(a), panes, log=_log).sweep(agents, runtime)
+
+        # EACH SWEEP FAILS ALONE, LOUDLY — THE SUPERVISOR SURVIVES (aegis-ey7n).
+        # These sweeps write ledgers, and a write can fail for reasons that have
+        # nothing to do with supervision: the live loop DIED at 22:37:37 on
+        # ENOSPC inside Notifier._save — an uncaught OSError killed the whole
+        # supervisor, nothing restarted it, and the fleet ran unsupervised for
+        # half an hour on the exact night a full disk was also tearing event
+        # files (the ev-172 dam). A notification layer must never take the
+        # respawn layer down with it: the pass itself (respawn, PassLog) is the
+        # job; the pushes are best-effort on top.
+        def _sweep(label, fn):
+            try:
+                return fn()
+            except Exception as e:  # noqa: BLE001 — any sweep error is survivable
+                print(f"  ⚠ tend: the {label} sweep CRASHED ({e!r}) — "
+                      f"supervision continues without it this pass", file=sys.stderr)
+                return []
+
+        woke = _sweep("blocked-worker", lambda: notify_mod.Notifier(
+            Path(a.root), _registry(a), panes, log=_log).sweep(agents, runtime))
         if woke:
             print(f"  ⚠ pushed {len(woke)} blocked worker(s) to their "
                   f"coordinator: {', '.join(woke)}", file=sys.stderr)
@@ -2309,8 +2340,8 @@ def _tend_once(a, quiet: bool = False) -> int:
         # checkpoint-then-/clear on its own pane, so it self-heals instead of
         # sitting idle-and-refused until a human raw-tmuxes it. Deduped once per
         # saturation episode; the instruction checkpoints BEFORE clearing.
-        cycled = notify_mod.CycleDriver(
-            Path(a.root), _registry(a), panes, log=_log).sweep(agents, runtime)
+        cycled = _sweep("saturation-cycle", lambda: notify_mod.CycleDriver(
+            Path(a.root), _registry(a), panes, log=_log).sweep(agents, runtime))
         if cycled:
             print(f"  ⚠ prompted {len(cycled)} saturated agent(s) to checkpoint "
                   f"+ /clear: {', '.join(cycled)}", file=sys.stderr)
@@ -2319,8 +2350,8 @@ def _tend_once(a, quiet: bool = False) -> int:
         # a coordinator forgetting to dispatch is the same invisible failure w0kk
         # fixed for blocked workers. Deduped per idle episode, fail-open, and it
         # reuses the SAME free/dispatchable computation as hfta's hard gate.
-        idle = notify_mod.IdleFleetAlerter(
-            Path(a.root), _registry(a), panes, runtime, log=_log).sweep(agents)
+        idle = _sweep("idle-fleet", lambda: notify_mod.IdleFleetAlerter(
+            Path(a.root), _registry(a), panes, runtime, log=_log).sweep(agents))
         if idle:
             print(f"  ⚠ alerted the coordinator — {len(idle)} newly-idle feedable "
                   f"worker(s) with work ready: {', '.join(idle)}", file=sys.stderr)

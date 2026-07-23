@@ -419,3 +419,38 @@ def test_an_empty_or_unreadable_package_is_None_never_reexec_fuel(tmp_path):
     empty = tmp_path / "nothing"
     empty.mkdir()
     assert cli._code_fingerprint(empty) is None
+
+
+# --- the supervisor survives its sweeps (aegis-ey7n, the ENOSPC death) -------
+
+def test_a_crashing_notify_sweep_does_not_kill_the_pass(tmp_path, monkeypatch, capsys):
+    """The live loop died to ONE uncaught OSError inside a ledger write: the
+    notification layer took the respawn layer down with it, and nothing
+    restarted the supervisor. Each sweep now fails alone and loudly."""
+    import json as _json
+    from shantytown import cli, notify as notify_mod
+
+    crew = tmp_path / "crew"; crew.mkdir()
+    (crew / "w.json").write_text(_json.dumps({"role": "worker", "pane": "p-w"}))
+    panes = _Panes(screens={"p-w": IDLE})
+    monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: panes)
+
+    class _Boom:
+        def __init__(self, *a, **k): pass
+        def sweep(self, *a, **k):
+            raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(notify_mod, "Notifier", _Boom)
+    monkeypatch.setattr(notify_mod, "CycleDriver", _Boom)
+    monkeypatch.setattr(notify_mod, "IdleFleetAlerter", _Boom)
+
+    class _A:
+        root = tmp_path; dry_run = False
+        backend = "files"; repo = None; registry = "files"
+
+    rc = cli._tend_once(_A())          # must RETURN, not raise
+    err = capsys.readouterr().err
+    assert err.count("CRASHED") == 3, "each sweep must fail alone and loudly"
+    assert "supervision continues" in err
+    # The pass itself still ran and recorded its health signal.
+    assert rc in (cli.OK, cli.CANNOT_TELL)
