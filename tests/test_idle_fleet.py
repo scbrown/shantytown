@@ -184,3 +184,42 @@ def test_the_message_names_who_is_free_and_what_is_ready():
     assert "kelly" in msg and "weaver" in msg and "aegis-9" in msg
     assert "newly idle: weaver" in msg
     assert "DISPATCH" in msg and "RULE ZERO" in msg
+
+
+# --- the thread groundwork (aegis-wjgt): assigned = self-feeding -------------
+
+def _threaded_world(tmp_path, monkeypatch):
+    """One idle worker with an ASSIGNED ready bead, one admin to (not) alert."""
+    reg = _Reg([Agent(name="sattler", role="administrator", pane="p-admin"),
+                Agent(name="billy", role="worker", pane="p-billy")])
+    panes = _Panes({"p-admin", "p-billy"})
+    monkeypatch.setattr("shantytown.feed_check.free_feedable_workers",
+                        lambda *a: ["billy"])
+    ready = [{"id": "aegis-9", "title": "queued work",
+              "assignee": "beads_aegis/crew/billy"}]
+    return IdleFleetAlerter(tmp_path, reg, panes, runtime=None,
+                            bd_ready=lambda: ready, log=lambda m: None), panes
+
+
+def test_a_threaded_idle_worker_nudges_the_WORKER_not_the_coordinator(tmp_path, monkeypatch):
+    """The design's core ask: the coordinator hears NOTHING about a worker whose
+    next work is already assigned — and 'no coordinator ping' must never mean
+    'nobody pings': the worker gets the self-feed nudge (the belt under the
+    future stop-hook advance)."""
+    alerter, panes = _threaded_world(tmp_path, monkeypatch)
+    assert alerter.sweep([]) == ["billy"]
+    targets = [p for p, _ in panes.sent]
+    assert "p-billy" in targets, "the worker must be nudged"
+    assert "p-admin" not in targets, "the coordinator must hear nothing"
+    (_, msg), = [x for x in panes.sent if x[0] == "p-billy"]
+    assert "aegis-9" in msg and "self-feed" in msg
+
+
+def test_the_self_feed_nudge_is_once_per_idle_episode(tmp_path, monkeypatch):
+    alerter, panes = _threaded_world(tmp_path, monkeypatch)
+    alerter.sweep([])
+    alerter.sweep([])
+    alerter.sweep([])
+    assert len(panes.sent) == 1, "a 30s heartbeat must not re-spam the worker"
+
+
