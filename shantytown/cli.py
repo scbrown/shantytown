@@ -1,9 +1,9 @@
-"""st — the CLI. Seventeen commands, and the count is load-bearing: each earns its slot.
+"""st — the CLI. Eighteen commands, and the count is load-bearing: each earns its slot.
 
     anchor [--short|--events|--harness] · go · inbox [--count] · task
     · crew [--count] · roles [--check] · role set · new · stop · log · context
     · doctor [--install] · project · tend [--install|--status|--reauth]
-    · attach [-r] · dashboard [admin] · subscribe
+    · attach [-r] · dashboard [admin] · subscribe · worktree [--gc]
 
 Five of those flags are MACHINE-READABLE modes, added for an external status bar
 (anchor --short/--events/--harness, crew --count, inbox --count). They are flags
@@ -77,7 +77,8 @@ from .runtime import (asks_a_question, auth_expired, ClaudeRuntime, CapabilityEr
                       SettingsError, emitted_stop_directions, live_stop_directions,
                       live_wiring, settings_for_role)
 from .tmux import Tmux, declared_socket
-from .workspace import WorkspaceError, ensure_workspace
+from .workspace import (WorkspaceError, cleanup_worktree, ensure_workspace,
+                        ensure_worktree, worktree_for)
 from .provision import ProvisionError, provision as provision_ws
 
 # `st new` liveness poll: how long to wait for the runtime to appear in the pane
@@ -396,6 +397,19 @@ def build_parser() -> argparse.ArgumentParser:
     sb.add_argument("--server", default=None,
                     help="quipu server (default $QUIPU_SERVER)")
 
+    wt = sub.add_parser("worktree",
+                        help="provision (or gc) an agent's isolated worktree off "
+                             "a SHARED project repo — so agents never share an "
+                             "index/HEAD")
+    wt.add_argument("repo",
+                    help="the shared checkout: a path, or a bare name under "
+                         "$GT_ROOT (~/gt), e.g. `quipu` -> ~/gt/quipu")
+    wt.add_argument("agent", nargs="?",
+                    help="whose worktree; defaults to $SHANTY_AGENT")
+    wt.add_argument("--gc", action="store_true",
+                    help="remove the worktree IFF unchanged — never discards "
+                         "uncommitted or unpushed work")
+
     return ap
 
 
@@ -465,6 +479,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_dashboard(a)
     if a.cmd == "subscribe":
         return _cmd_subscribe(a)
+    if a.cmd == "worktree":
+        return _cmd_worktree(a)
     return _not_yet(a.cmd)
 
 
@@ -1920,6 +1936,47 @@ def _cmd_project(a) -> int:
         files.set(ag)
     print(f"\n  projected {len(agents)} cards from the graph -> {a.root / 'crew'}\n")
     return OK
+
+
+def _resolve_repo(repo: str) -> Path:
+    """A shared repo, as a path OR a bare name under $GT_ROOT (~/gt) — so both
+    `st worktree /home/x/gt/quipu` and `st worktree quipu` reach the same tree,
+    matching scripts/crew-worktree.sh's `$GT_ROOT/$repo` resolution."""
+    p = Path(repo).expanduser()
+    if p.is_absolute() or "/" in repo or p.exists():
+        return p
+    root = Path(os.environ.get("GT_ROOT", Path.home() / "gt"))
+    return root / repo
+
+
+def _cmd_worktree(a) -> int:
+    """worktree <repo> [<agent>] [--gc] — st PROVISIONS the isolated worktree so
+    the agent never runs `git worktree add` by hand (aegis-h2rr).
+
+    A shared project checkout (~/gt/shantytown, quipu, hank, goldblum) is
+    multi-writer: index and HEAD belong to the working copy, so two agents
+    committing there corrupt each other silently (aegis-repg/iaef). Each agent
+    gets its own worktree off the shared repo instead — <repo>-wt/<agent> on
+    branch wt/<agent>. Provision prints the path (the cwd to work in). --gc removes
+    it IFF unchanged; it NEVER discards uncommitted or unpushed work.
+    """
+    agent = a.agent or os.environ.get("SHANTY_AGENT")
+    if not agent:
+        print("  refused: no agent. `st worktree <repo> <agent>` or set "
+              "$SHANTY_AGENT.", file=sys.stderr)
+        return REFUSED
+    repo = _resolve_repo(a.repo)
+    try:
+        if a.gc:
+            removed = cleanup_worktree(repo, agent)
+            dest = worktree_for(repo, agent)
+            print(f"  {'removed' if removed else 'kept (holds work, or absent)'}: {dest}")
+            return OK
+        print(ensure_worktree(repo, agent))
+        return OK
+    except WorkspaceError as e:
+        print(f"  refused: {e}", file=sys.stderr)
+        return REFUSED
 
 
 def _cmd_subscribe(a) -> int:

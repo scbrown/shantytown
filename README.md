@@ -24,7 +24,7 @@
 *Create a work item. Tell an agent to go get it. That's the whole idea.*
 
 [![dispatch 3.4s](https://img.shields.io/badge/dispatch-3.4s-brightgreen)](#-measured-against-gas-town)
-[![17 commands](https://img.shields.io/badge/commands-17-blue)](#-the-whole-surface)
+[![18 commands](https://img.shields.io/badge/commands-18-blue)](#-the-whole-surface)
 [![tests](https://img.shields.io/badge/tests-764%20passing-blue)](#-principles)
 [![python](https://img.shields.io/badge/python-3.11%2B-blue)](#-install)
 [![dependencies none](https://img.shields.io/badge/dependencies-none-blue)](#-install)
@@ -172,7 +172,7 @@ stop.* Here is what the gate measured.
 
 | | `gt sling` | `st go` | |
 |---|---:|---:|---|
-| Commands | ~110 | **17** | *a small, deliberate fraction of the surface, by measured use* |
+| Commands | ~110 | **18** | *a small, deliberate fraction of the surface, by measured use* |
 | dispatch (dry-run) | 51.54 s | **0.15 s** | **~344× faster** |
 | dispatch (real) | > 120 s ⏱️ | **3.40 s** | **≥35× faster** |
 | Dolt connections | 63 | **3** | **21× fewer** |
@@ -262,9 +262,10 @@ st tend                           supervise the crew: respawn what DIED, never w
 st attach <agent>                 attach to a crew member by name (socket + pane resolved; via shanty)
 st dashboard [admin]              live, tier-scoped view: roster/state/work, self-refreshing
 st subscribe                      watch quipu entity events; route governed workflows to the admin
+st worktree <repo> [agent]        provision an agent's isolated worktree off a SHARED project repo
 ```
 
-Seventeen, and the count is load-bearing: a test pins this block to the parser, so the next command
+Eighteen, and the count is load-bearing: a test pins this block to the parser, so the next command
 either updates the list or fails CI.
 
 ## 🔀 Workflows & events
