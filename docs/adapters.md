@@ -27,7 +27,7 @@ first didn't leak.
 | **tracker** | **beads** | `files` — a directory of markdown. Zero dependencies. |
 | **panes** | bare `tmux` | `shanty` / `herdr` adapters, later |
 | **context** | **bobbin** | none-adapter (returns nothing, harness still works) |
-| **knowledge** | **quipu** | none-adapter |
+| **knowledge** *(planned — not built)* | quipu | none-adapter |
 
 The **registry** row is the one that breaks the pattern and it's worth staring at: it is the only
 layer with **no `none` option** — you cannot start an agent whose identity you can't read. It still
@@ -100,8 +100,14 @@ things and conflating them is how a harness grows a town:
 - **bobbin — context.** Given what an agent is doing, what code should it be looking at? Read-only,
   synchronous, best-effort. Already earns its place: it surfaced the files behind a failure repeatedly
   while we built this.
-- **quipu — knowledge.** What do we know, and what did we just learn? Read on start (*"query before
-  you act"*), write on stop (*"capture what you learned"*).
+- **quipu — knowledge** *(PLANNED, not built — aegis-ks9b).* What do we know, and what did we just
+  learn? Read on start (*"query before you act"*), write on stop (*"capture what you learned"*). The
+  *capture-at-stop* behaviour this describes is real and shipped, but it lives in the crew's
+  **graph-capture Stop hook + graph-extract skill** (POST to quipu's REST `/episode`), **not** behind
+  a shantytown adapter. This layer — `Knowledge`, `Fact`, `Episode`, `TxId`, a `QuipuKnowledge` impl,
+  a `none` impl — is a design sketch; none of it exists in `shantytown/`. If it is ever built, it must
+  ship with its second implementation and the leak test must actually construct the `none` one (the
+  drift-pin below fails the moment the `Knowledge` block below stops saying PLANNED without the code).
 
 ```python
 class Context(Protocol):        # bobbin
@@ -109,6 +115,8 @@ class Context(Protocol):        # bobbin
     # raises ContextUnavailable when it could not look. See below — this is
     # not decoration, the signature is unsound without it.
 
+# PLANNED — not built (aegis-ks9b). No Knowledge/Fact/Episode/TxId exists in
+# shantytown/. Sketch only; see the note above.
 class Knowledge(Protocol):      # quipu
     def search(self, query: str) -> list[Fact]: ...
     def record(self, episode: Episode) -> TxId: ...
@@ -145,11 +153,12 @@ share a switch:
 | quipu's job | holds | optional? |
 |---|---|---|
 | **registry** | identity, hierarchy, role | **no — required** |
-| **knowledge** | episodes, facts | **yes — `none` adapter valid** |
+| **knowledge** *(planned)* | episodes, facts | **yes — `none` adapter valid** *(when built; not built yet — aegis-ks9b)* |
 
-The `none` **knowledge** adapter is still the test: an agent with no bobbin and no episode-store
-starts, works, and stops. If it can't, we didn't build a harness with knowledge — we built a knowledge
-system with a harness attached, and that's the thing this repo exists to not be. There is no `none`
+The `none` **knowledge** adapter *(once knowledge is built — aegis-ks9b)* is meant to be the test: an
+agent with no bobbin and no episode-store starts, works, and stops. If it can't, we didn't build a
+harness with knowledge — we built a knowledge system with a harness attached, and that's the thing
+this repo exists to not be. There is no `none`
 registry, and that is a real cost to "smaller than what it replaces" — argued honestly in
 `agent-card.md`.
 
@@ -188,9 +197,11 @@ triage calls quipu directly, the adapter is decorative and the second implementa
 we're maintaining for the README.
 
 **The check is mechanical, not cultural:** the test suite runs the whole harness on
-**`files` registry + `files` tracker + `none` context + `none` knowledge + bare tmux**. No quipu, no
+**`files` registry + `files` tracker + `none` context + bare tmux**. No quipu, no
 beads, no bobbin, no multiplexer. If that goes red, we leaked. That test is the interface — everything
-above is commentary.
+above is commentary. *(There is no `none` knowledge in that run: the knowledge layer is not built —
+aegis-ks9b. When it is, this sentence and `tests/test_leak.py` gain `+ none knowledge`, and the test
+must construct it.)*
 
 Note what that run proves and what it doesn't: it proves *the core doesn't import quipu*. It does not
 license shipping the flat registry — quipu is the default because identity wants provenance, history,
