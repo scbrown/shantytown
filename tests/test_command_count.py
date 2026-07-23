@@ -55,7 +55,7 @@ def test_docstring_and_code_agree_on_the_command_set():
     )
 
 
-def test_the_surface_is_seventeen():
+def test_the_surface_is_eighteen():
     """A bare number check too, so 'the docs claim N' is itself pinned.
 
     Grew to 13 with `project` — materialize the crew cards from the graph (the
@@ -97,8 +97,17 @@ def test_the_surface_is_seventeen():
     disjoint surface off 14, and both sides' "15" claims were true in their own
     world. This merge is where the two worlds reconciled to 17.)
 
+    Grew to 18 with `worktree` — provision an agent's isolated worktree off a
+    SHARED project repo. A shared checkout shares its index and HEAD, so two agents
+    committing there corrupt each other silently; st gives each its own worktree so
+    the shared tree is never the write surface for two writers. It is not a flag on
+    another command because it MUTATES the working set (creates a worktree, or
+    removes one under --gc) — the same reason tend and attach earn their own slots:
+    a consequence hidden behind a flag on a read is a consequence someone triggers
+    by running the safe-looking thing. Owner-directed (the worktrees bug).
+
     Each command still earns its slot."""
-    assert len(_actual_subcommands()) == 17, (
+    assert len(_actual_subcommands()) == 18, (
         "the command count changed. If that's intended, update the number here and "
         "the cli.py docstring together — and say why the surface grew in docs/cli.md."
     )
