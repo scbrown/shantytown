@@ -188,38 +188,70 @@ def test_the_message_names_who_is_free_and_what_is_ready():
 
 # --- the haul groundwork (aegis-wjgt): assigned = self-feeding -------------
 
-def _hauling_world(tmp_path, monkeypatch):
+def _hauling_world(tmp_path, monkeypatch, in_progress=None, context_k=None,
+                   claims=None):
     """One idle worker with an ASSIGNED ready bead, one admin to (not) alert."""
     reg = _Reg([Agent(name="sattler", role="administrator", pane="p-admin"),
                 Agent(name="billy", role="worker", pane="p-billy")])
     panes = _Panes({"p-admin", "p-billy"})
     monkeypatch.setattr("shantytown.feed_check.free_feedable_workers",
                         lambda *a: ["billy"])
+    monkeypatch.setattr("shantytown.feed_check.bd_cwd", lambda reg: None)
+    if claims is not None:
+        monkeypatch.setattr("shantytown.feed_check.bd_claim",
+                            lambda cwd, nid: claims.append(nid))
     ready = [{"id": "aegis-9", "title": "queued work",
               "assignee": "beads_aegis/crew/billy"}]
     return IdleFleetAlerter(tmp_path, reg, panes, runtime=None,
-                            bd_ready=lambda: ready, log=lambda m: None), panes
+                            bd_ready=lambda: ready,
+                            bd_in_progress=lambda cwd: in_progress or [],
+                            context_k=(lambda w: context_k),
+                            log=lambda m: None), panes
 
 
-def test_a_threaded_idle_worker_nudges_the_WORKER_not_the_coordinator(tmp_path, monkeypatch):
-    """The design's core ask: the coordinator hears NOTHING about a worker whose
-    next work is already assigned — and 'no coordinator ping' must never mean
-    'nobody pings': the worker gets the self-feed nudge (the belt under the
-    future stop-hook advance)."""
-    alerter, panes = _hauling_world(tmp_path, monkeypatch)
+def test_an_already_idle_hauler_is_FED_its_next_bead_not_the_coordinator(tmp_path, monkeypatch):
+    """The already-idle gap, closed: an idle worker never stops again on its
+    own, so tend is the second advance trigger — it FEEDS the actual next bead
+    (claimed, named, same voice as the stop hook), and the coordinator hears
+    NOTHING."""
+    claims = []
+    alerter, panes = _hauling_world(tmp_path, monkeypatch, claims=claims)
     assert alerter.sweep([]) == ["billy"]
     targets = [p for p, _ in panes.sent]
-    assert "p-billy" in targets, "the worker must be nudged"
+    assert "p-billy" in targets, "the worker must be fed"
     assert "p-admin" not in targets, "the coordinator must hear nothing"
     (_, msg), = [x for x in panes.sent if x[0] == "p-billy"]
-    assert "aegis-9" in msg and "self-feed" in msg
+    assert "HAUL" in msg and "aegis-9" in msg and "bd show aegis-9" in msg
+    assert claims == ["aegis-9"], "the fed bead is claimed in_progress"
 
 
-def test_the_self_feed_nudge_is_once_per_idle_episode(tmp_path, monkeypatch):
-    alerter, panes = _hauling_world(tmp_path, monkeypatch)
+def test_the_feed_is_once_per_idle_episode(tmp_path, monkeypatch):
+    alerter, panes = _hauling_world(tmp_path, monkeypatch, claims=[])
     alerter.sweep([])
     alerter.sweep([])
     alerter.sweep([])
     assert len(panes.sent) == 1, "a 30s heartbeat must not re-spam the worker"
+
+
+def test_an_active_anchor_blocks_the_feed(tmp_path, monkeypatch):
+    """Pane-idle + in_progress anchor is the halt-shaped state, not a feed
+    moment — and without this guard a re-sweep would drain the queue into
+    claims the worker never acted on."""
+    claims = []
+    alerter, panes = _hauling_world(
+        tmp_path, monkeypatch, claims=claims,
+        in_progress=[{"id": "aegis-1", "assignee": "billy"}])
+    assert alerter.sweep([]) == []
+    assert panes.sent == [] and claims == []
+
+
+def test_past_the_handoff_line_tend_instructs_the_reset_not_food(tmp_path, monkeypatch):
+    claims = []
+    alerter, panes = _hauling_world(tmp_path, monkeypatch, claims=claims,
+                                    context_k=650.0)
+    assert alerter.sweep([]) == ["billy"]
+    (_, msg), = [x for x in panes.sent if x[0] == "p-billy"]
+    assert "HANDOFF" in msg and "650" in msg
+    assert "aegis-9" not in msg and claims == [], "past the line, nothing is fed"
 
 
