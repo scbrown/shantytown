@@ -38,10 +38,34 @@ def request_headers() -> dict:
     changes against today's open server.
     """
     headers = {"Content-Type": "application/json"}
-    token = os.environ.get("QUIPU_AUTH_TOKEN")
+    token = os.environ.get("QUIPU_AUTH_TOKEN") or _token_from_file()
     if token:
         headers["Authorization"] = f"Bearer {token}"
     return headers
+
+
+def _token_from_file() -> str:
+    """The bearer token from its file, or "" — the file-first half of the
+    distribution.
+
+    Env-only distribution has a coverage hole: a process launched BEFORE the
+    token existed keeps its environment forever, so the moment the server
+    starts enforcing, every pre-flip session 401s. A file is read at REQUEST
+    time, so distribution reaches running sessions too. Env still wins above —
+    it is the per-invocation override, not the transport.
+
+    Path: `QUIPU_AUTH_TOKEN_FILE` if set, else `~/.config/quipu/token`.
+    Unreadable/absent is "" (no auth configured), matching the open-server
+    default.
+    """
+    path = os.environ.get("QUIPU_AUTH_TOKEN_FILE") or os.path.expanduser(
+        "~/.config/quipu/token"
+    )
+    try:
+        with open(path, encoding="utf-8") as f:
+            return f.read().strip()
+    except OSError:
+        return ""
 
 # The ontology IRI base. THIS IS DATA IDENTITY, NOT COSMETICS: every triple in a
 # graph is keyed under it, so a deployment that changes this value stops joining
