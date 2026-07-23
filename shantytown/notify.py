@@ -395,7 +395,8 @@ class IdleFleetAlerter:
     """
 
     def __init__(self, root, reg, panes, runtime, *, push=push_to_admin,
-                 bd_ready=None, log=None):
+                 bd_ready=None, bd_in_progress=None, context_k=None,
+                 handoff_k=None, log=None):
         self.path = Path(root) / "notify" / "idle_fleet.json"
         self._reg = reg
         self._panes = panes
@@ -409,6 +410,12 @@ class IdleFleetAlerter:
         from . import feed_check
         self._bd_ready = bd_ready or (
             lambda: feed_check._bd_ready(feed_check.bd_cwd(reg)))
+        self._bd_in_progress = bd_in_progress or feed_check.bd_in_progress
+        # The worker's context depth off its live pane (the same footer read
+        # saturation uses); injected for tests. None = unreadable = never over.
+        self._context_k = context_k or self._pane_context_k
+        from .stop_event import HAUL_HANDOFF_K
+        self._handoff_k = handoff_k if handoff_k is not None else HAUL_HANDOFF_K
         self._log = log or (lambda msg: None)
 
     def _load(self) -> list:
@@ -421,6 +428,18 @@ class IdleFleetAlerter:
         from .files import write_json_atomic
         self.path.parent.mkdir(parents=True, exist_ok=True)
         write_json_atomic(self.path, sorted(alerted))
+
+    def _pane_context_k(self, worker: str) -> float | None:
+        """The worker's context depth off its live pane — the same footer read
+        saturation uses. None on any failure: unknown is never over the line."""
+        try:
+            card = self._reg.get(worker)
+            if not card.pane:
+                return None
+            return triage_mod.context_tokens_k(
+                triage_mod.strip_attrs(self._panes.capture(card.pane, attrs=True)))
+        except Exception:
+            return None
 
     def sweep(self, agents) -> list[str]:
         """One pass. Idle workers split by WHO their next work belongs to
@@ -464,20 +483,55 @@ class IdleFleetAlerter:
         unhauled_free = [w for w in free if w not in queues]
         newly = [w for w in newly if w not in queues]
 
-        # The worker-side nudge: their queue is loaded; feed themselves.
+        # TEND IS THE SECOND ADVANCE TRIGGER (the already-idle gap): the stop
+        # hook advances a worker AT a stop, but an ALREADY-IDLE worker never
+        # stops again on its own — a queue loaded after it idled sat until a
+        # human bootstrapped it (measured at first fleet queue-load). So tend
+        # FEEDS the idle hauler its actual next bead — same message, same
+        # claim, same handoff line as the stop-hook advance (one voice,
+        # feed_check's) — never a generic "go look" nudge, and never a
+        # coordinator ping. Guards, in order:
+        #   - an ACTIVE ANCHOR skips the feed (pane-idle + in_progress anchor
+        #     is the halt-shaped state, not a feed moment — and without this
+        #     guard a re-sweep would drain the whole queue into claims while
+        #     the worker acted on none of them);
+        #   - past the HANDOFF LINE the feed becomes the checkpoint+/clear
+        #     instruction (the same 60%-of-window line the stop hook applies).
         nudged = []
+        if hauling_newly:
+            try:
+                cwd = feed_check.bd_cwd(self._reg)
+                active_names = {
+                    (b.get("assignee") or "").split("/")[-1]
+                    for b in self._bd_in_progress(cwd)
+                }
+            except Exception:
+                active_names = None            # could not tell -> feed nobody
         for worker in hauling_newly:
             beads = queues[worker]
-            target = push_to_own_pane(self._reg, self._panes, worker,
-                                      _self_feed_message(worker, beads))
+            if active_names is None or worker in active_names:
+                self._log(f"haul: {worker} idle with {len(beads)} queued but "
+                          f"anchor state {'unreadable' if active_names is None else 'ACTIVE'}"
+                          f" — not fed this pass")
+                continue
+            if (ck := self._context_k(worker)) is not None and ck >= self._handoff_k:
+                message = feed_check.haul_handoff_message(ck, self._handoff_k)
+            else:
+                nid = beads[0]
+                try:
+                    feed_check.bd_claim(cwd, nid)
+                except Exception:
+                    pass                       # best-effort, same as the stop hook
+                message = feed_check.haul_feed_message(nid, "", len(beads) - 1)
+            target = push_to_own_pane(self._reg, self._panes, worker, message)
             if target is None:
                 self._log(f"haul: {worker} is idle with {len(beads)} assigned "
                           f"ready bead(s) but its pane was unreachable — NOT "
-                          f"nudged, will retry")
+                          f"fed, will retry")
                 continue
             nudged.append(worker)
-            self._log(f"haul: nudged {worker} to self-feed ({len(beads)} "
-                      f"assigned ready: {', '.join(beads[:3])}) — coordinator "
+            self._log(f"haul: fed {worker} its next bead ({beads[0]}; "
+                      f"{len(beads) - 1} more queued) — coordinator "
                       f"deliberately not pinged")
 
         ready = feed_check.dispatchable(set(unhauled_free), ready_beads)
@@ -501,17 +555,7 @@ class IdleFleetAlerter:
         return newly + nudged
 
 
-def _self_feed_message(worker: str, beads: list[str]) -> str:
-    # The design citation lives HERE, not in the emitted string (the ratchet's
-    # rule, which fired on the first draft of this very message): the thread
-    # design bead is aegis-wjgt.
-    top = ", ".join(beads[:3])
-    return (
-        f"⚠ st tend: you are IDLE with {len(beads)} ready item(s) already assigned "
-        f"to you ({top}). Your queue self-feeds — run `bd ready`, take the top "
-        f"assigned item, and continue. The coordinator was deliberately NOT "
-        f"pinged: assigned work is yours to advance, not theirs to re-dispatch. "
-        f"(auto-nudge from st tend, once per idle episode.)")
+
 
 
 def _idle_fleet_message(free: list[str], newly: list[str], ready) -> str:

@@ -226,3 +226,53 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+# --- the haul advance's shared voice (stop-hook trigger + tend trigger) ------
+#
+# Two triggers, ONE advance: the worker's own Stop hook fires it at a stop
+# (instant), and tend fires it for a worker that is ALREADY idle — an idle
+# worker never stops again on its own, so a queue loaded after it idled would
+# sit forever (measured: the one idle worker at fleet queue-load needed a
+# manual bootstrap; every mid-turn worker advanced fine). Same message, same
+# claim, same handoff line — built here so the two can never drift.
+
+def haul_feed_message(nid: str, title: str, rest: int) -> str:
+    """The advance instruction: the specific next bead, claimed and named."""
+    t = (title or "")[:80]
+    return (
+        f"HAUL: next on your haul: {nid} ({t}). Read it (`bd show {nid}`) and "
+        f"execute; close it when done and the haul advances itself ({rest} more "
+        f"after this). If your context is deep, checkpoint + /clear FIRST — the "
+        f"haul survives it. The coordinator was not pinged: this queue is yours.")
+
+
+def haul_handoff_message(context_k: float, line_k: float) -> str:
+    """Past the handoff line: shed context first; the haul resumes itself."""
+    return (
+        f"HAUL HANDOFF: you are at {int(context_k)}k — past the {int(line_k)}k "
+        f"handoff line (60% of the window). Do NOT start the next item. (1) "
+        f"CHECKPOINT anything unwritten to the bead trail now; (2) run /clear. "
+        f"Your haul resumes automatically on the fresh context.")
+
+
+def bd_in_progress(cwd: str | None) -> list[dict]:
+    """`bd list --status in_progress --json` — the active-anchor set. Raises;
+    callers fail open."""
+    r = subprocess.run(["bd", "list", "--status", "in_progress", "--json"],
+                       capture_output=True, text=True, timeout=20, cwd=cwd)
+    if r.returncode != 0:
+        raise RuntimeError(f"bd list failed: {r.stderr.strip()}")
+    return json.loads(r.stdout)
+
+
+def bd_claim(cwd: str | None, bead_id: str) -> None:
+    """Claim a bead in_progress — the dispatcher's write, shared by both
+    advance triggers so the tracker shows the truth and the worker's next stop
+    sees an active anchor. Raises; callers treat a failed claim as best-effort
+    (the instruction tells the worker to read the bead either way)."""
+    r = subprocess.run(["bd", "update", bead_id, "--status", "in_progress",
+                        "--json"],
+                       capture_output=True, text=True, timeout=20, cwd=cwd)
+    if r.returncode != 0:
+        raise RuntimeError(f"bd update failed: {r.stderr.strip()}")
