@@ -40,7 +40,8 @@ CREATE TABLE IF NOT EXISTS events (
     tool    TEXT,
     file    TEXT,
     skill   TEXT,
-    session TEXT
+    session TEXT,
+    detail  TEXT                    -- Bash: invoked binary (CLI attribution, rcyd)
 );
 CREATE INDEX IF NOT EXISTS idx_events_agent_ts ON events(agent, ts);
 CREATE TABLE IF NOT EXISTS tokens (
@@ -60,6 +61,13 @@ def _db(root: Path) -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=2000")
     conn.executescript(_SCHEMA)
+    # Migrate pre-detail stores in place (aegis-rcyd): CREATE TABLE IF NOT EXISTS
+    # won't add a column to an existing events table. Idempotent — the duplicate-
+    # column error just means it's already there.
+    try:
+        conn.execute("ALTER TABLE events ADD COLUMN detail TEXT")
+    except sqlite3.OperationalError:
+        pass
     return conn
 
 
@@ -75,6 +83,37 @@ def _file_of(tool_input: dict) -> str | None:
         if isinstance(v, str) and v:
             return v
     return None
+
+
+def _bash_bin(tool_input: dict) -> str | None:
+    """The leading executable of a Bash command, so CLI-via-Bash usage (hank,
+    bobbin, bd, git, curl to a service…) is attributable — 'Bash×313' cannot tell
+    you whether the crew is reaching for hank/bobbin (aegis-rcyd Phase 0). Best-
+    effort: skip leading `VAR=val` assignments and `env`/`sudo` wrappers, take the
+    basename of the first real token. Returns None on anything unparseable — the
+    row is still recorded, just without a CLI attribution (fail-soft)."""
+    cmd = tool_input.get("command")
+    if not isinstance(cmd, str) or not cmd.strip():
+        return None
+    try:
+        import shlex
+        toks = shlex.split(cmd)
+    except ValueError:
+        toks = cmd.split()
+    i = 0
+    while i < len(toks):
+        t = toks[i]
+        if "=" in t and not t.startswith(("-", "/")) and t.split("=", 1)[0].isidentifier():
+            i += 1  # leading FOO=bar assignment
+            continue
+        if t in ("env", "sudo", "command", "nice", "nohup", "time"):
+            i += 1  # simple wrapper — the real binary is next
+            continue
+        break
+    if i >= len(toks):
+        return None
+    from os.path import basename
+    return basename(toks[i]) or None
 
 
 def _transcript_tokens(path: str) -> tuple[int, int]:
@@ -106,11 +145,16 @@ def capture(root: Path, payload: dict) -> None:
         if hook == "PostToolUse" or payload.get("tool_name"):
             ti = payload.get("tool_input") or {}
             tool = payload.get("tool_name") or "?"
+            # `detail` holds the invoked binary for Bash, so CLI-via-Bash usage
+            # (hank/bobbin/bd/git/…) is attributable, not just "Bash×N"
+            # (aegis-rcyd Phase 0). `file` stays the edited/read path — keeping
+            # the file-touch metrics clean.
             conn.execute(
-                "INSERT INTO events(ts, agent, kind, tool, file, skill, session)"
-                " VALUES (?,?,?,?,?,?,?)",
+                "INSERT INTO events(ts, agent, kind, tool, file, skill, session,"
+                " detail) VALUES (?,?,?,?,?,?,?,?)",
                 (now, agent, "tool", tool, _file_of(ti),
-                 ti.get("skill") if tool == "Skill" else None, session),
+                 ti.get("skill") if tool == "Skill" else None, session,
+                 _bash_bin(ti) if tool == "Bash" else None),
             )
         else:  # Stop (or anything stop-shaped): record the stop + token totals
             conn.execute(
@@ -214,6 +258,15 @@ def stats_report(root: Path, agent: str | None = None, since_h: float = 24.0,
             [cutoff] + args).fetchall()
         if tools:
             print("  tools:  " + ", ".join(f"{t}×{n}" for t, n in tools), file=out)
+        # CLI-via-Bash attribution (aegis-rcyd): which binaries the crew reached
+        # for — the leverage signal 'Bash×N' hides (hank/bobbin/bd/git/curl…).
+        cli = conn.execute(
+            f"SELECT detail, COUNT(*) FROM events WHERE kind='tool'"
+            f" AND tool='Bash' AND detail IS NOT NULL AND ts>? {where}"
+            f" GROUP BY detail ORDER BY 2 DESC LIMIT 10",
+            [cutoff] + args).fetchall()
+        if cli:
+            print("  cli:    " + ", ".join(f"{c}×{n}" for c, n in cli), file=out)
     finally:
         conn.close()
     return 0
