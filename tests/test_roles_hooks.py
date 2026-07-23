@@ -212,18 +212,19 @@ def test_no_bash_guard_emitted_by_default(tmp_path):
     assert "Bash" not in matchers
 
 
-def test_metrics_capture_wired_for_every_role_matches_all_tools(tmp_path):
-    # aegis-rcyd Phase 0: every st-launched role must capture EVERY tool
-    # (matcher '.*'), so st stats sees mcp__* / Skill / CLI, not just
-    # Bash/Read/Edit/Write. The store root is baked in (agent runs elsewhere).
+def test_metrics_capture_is_NOT_in_settings_but_carries_the_right_interpreter(tmp_path):
+    # aegis-rcyd: capture is delivered via the provision consent settings (which
+    # self-heal every launch), NOT --settings (emitted only on `role set`, so it
+    # went stale fleet-wide). --settings must carry NO PostToolUse — a second copy
+    # would double-count. But the SHARED _capture_cmd helper must bake a real
+    # interpreter (able to import shantytown), never a bare 'python' (tim).
     for role in ("worker", "lead", "administrator"):
         s = runtime.claude_settings_for_role(role, root=tmp_path)
-        post = s["hooks"].get("PostToolUse")
-        assert post, f"{role}: no PostToolUse capture hook"
-        assert len(post) == 1 and post[0]["matcher"] == ".*", role
-        cmd = post[0]["hooks"][0]["command"]
-        assert "shantytown.stats capture" in cmd, role
-        assert f"--root {tmp_path.resolve()}" in cmd, role
+        assert "PostToolUse" not in s["hooks"], f"{role}: capture must not be in --settings"
+    cmd = runtime._capture_cmd(tmp_path)["command"]
+    assert "shantytown.stats capture" in cmd
+    assert f"--root {tmp_path.resolve()}" in cmd
+    assert not cmd.startswith("python "), "must not be a bare 'python' (not on PATH)"
 
 
 def test_env_json_bash_guard_is_emitted_for_every_role(tmp_path):

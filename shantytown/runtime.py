@@ -450,11 +450,13 @@ def claude_settings_for_role(role: str, root=None) -> dict:
             "Stop": [{"hooks": stop}],
             # hank policy guard on every edit-shaped tool call. See _HANK_GUARD.
             "PreToolUse": pre_tool,
-            # Metrics capture on EVERY tool call (matcher '.*'), so st stats sees
-            # mcp__* (bobbin/homelab/quipu) + Skill + CLI-via-Bash, not only
-            # Bash/Read/Edit/Write. Without this the store is blind to the three
-            # systems we most want to measure leverage of (aegis-rcyd Phase 0).
-            "PostToolUse": [{"matcher": ".*", "hooks": [_capture_cmd(root)]}],
+            # NOTE: metrics capture (PostToolUse, matcher '.*') is delivered via
+            # the PROVISION consent settings (provision._with_capture_hook), NOT
+            # here — that file is re-applied on EVERY launch so it self-heals,
+            # whereas --settings is only emitted on `role set` and went stale
+            # fleet-wide (aegis-rcyd: 693024d wired it here but running agents
+            # never regenerated it). Keeping it in ONE place avoids double-capture
+            # (Claude Code fires hooks from every settings source it merges).
         },
         # Pre-answer the project-MCP consent screen. A FRESH workspace makes Claude
         # Code ask "N new MCP servers found — enable?" and that prompt BLOCKS the
