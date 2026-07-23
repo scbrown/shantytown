@@ -186,7 +186,7 @@ class CycleDriver:
     """
 
     def __init__(self, root, reg, panes, *, push=push_to_own_pane, wiring=None,
-                 log=None):
+                 refresh=None, log=None):
         self.path = Path(root) / "notify" / "cycling.json"
         self._reg = reg
         self._panes = panes
@@ -194,6 +194,11 @@ class CycleDriver:
         # agent -> LiveWiring | None. Injected so a test models wired/dark
         # without composing launch lines; the default reads the LIVE process.
         self._wiring_fn = wiring or self._wiring
+        # workspace-path -> error | None. Keep-current at the cycle (aegis-4zld):
+        # the agent is about to /clear, and the fresh context must read a CURRENT
+        # tree — a cycle onto a stale one re-derives against code that already
+        # changed. None = no pulling (tests, dry contexts).
+        self._refresh = refresh
         self._log = log or (lambda msg: None)
 
     def _load(self) -> dict:
@@ -243,6 +248,23 @@ class CycleDriver:
                               f"launcher's agent) — not st's to drive, skipping")
                 ledger[agent] = "dark"
                 continue
+            # KEEP CURRENT AT THE CYCLE (aegis-4zld): the agent is idle-saturated
+            # — a safe moment — and about to /clear. Pull ff-only BEFORE the
+            # prompt lands so the post-clear context starts on a current tree.
+            # A refused pull never blocks the cycle (the /clear matters more),
+            # but it is LOUD: cycling onto known-stale code is worth a line.
+            if self._refresh is not None:
+                try:
+                    card = self._reg.get(agent)
+                    if card.workspace:
+                        if err := self._refresh(card.workspace):
+                            self._log(f"cycle: {agent}'s workspace was NOT "
+                                      f"brought current (ff-only refused: "
+                                      f"{err.splitlines()[0]}) — cycling on the "
+                                      f"existing tree")
+                except Exception as e:  # noqa: BLE001 — pull is best-effort
+                    self._log(f"cycle: keep-current for {agent} errored ({e!r}) "
+                              f"— cycling on the existing tree")
             target = self._push(self._reg, self._panes, agent, _cycle_message())
             if target is None:
                 self._log(f"cycle: {agent} is saturated but its pane was "

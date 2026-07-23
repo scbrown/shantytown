@@ -616,6 +616,15 @@ def _cmd_new(a) -> int:
     except WorkspaceError as e:
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED
+    # KEEP CURRENT ON RELAUNCH (aegis-4zld): a fresh session must start on a
+    # current tree — launch is the other safe pull moment (nothing is running
+    # in the workspace yet). ff-only + kit-preserving; a refused pull is LOUD
+    # and never blocks the launch (stale-but-working beats no agent).
+    if card.workspace:
+        if err := _refresh_clone(card.workspace):
+            print(f"  ⚠ workspace not brought current (ff-only pull refused: "
+                  f"{err.splitlines()[0]}) — launching on the existing tree.",
+                  file=sys.stderr)
     # EQUIPPED OR NOT CREATED. A workspace is not a provisioned agent: a fresh
     # clone has no .mcp.json (it is uncommitted BY DESIGN — it carries a bearer
     # token), so an agent launched from one has no code search, no graph and no
@@ -1445,6 +1454,19 @@ def _cmd_go(a) -> int:
         print(p.render()); print("\n  triage: " + decision.render())
         print("  0 writes. 1 tracker call, 1 send-keys.")
         return OK
+    # KEEP CURRENT, MECHANIZED (aegis-4zld). Assignment is a SAFE pull moment —
+    # the agent is between items by definition of being dispatched to — so bring
+    # its workspace current (ff-only, kit-preserving) BEFORE the item lands and
+    # work starts on a stale tree. A refused pull (local dirt, the aegis-43ph
+    # condition) does NOT block the dispatch, but it rides INTO the dispatch
+    # note so the agent starts knowing its tree may be stale — visible to both
+    # ends, silent to neither. Deliberately NOT inside Dispatcher.go: the
+    # dispatcher's asserted budget is one read/one write/one send, and a git
+    # pull is the launcher's business, not the dispatch protocol's.
+    if warn := _keep_current(a, a.agent):
+        print(f"  ⚠ {warn}", file=sys.stderr)
+        tag = f"[st keep-current: {warn}]"
+        note = f"{note} — {tag}" if note else tag
     try:
         p = d.go(a.item, a.agent, note=note, reassign=a.reassign)
     except AlreadyAssigned as e:
@@ -1983,17 +2005,56 @@ def _not_yet(cmd: str) -> int:
 # --- tend: the only command that RESTARTS things ----------------------------
 
 def _refresh_clone(path) -> str | None:
-    """ff-only pull at the ONE moment it is safe: the agent is down, nothing
-    holds the checkout, and no live session can be racing it. Returns an error
+    """ff-only pull at a SAFE moment: the agent is down, between items, or being
+    relaunched — nothing holds the checkout mid-thought. Returns an error
     string (loud) or None. NEVER raises — a failure here must not stop a
-    respawn, because trading an outage for a stale checkout is the worse deal."""
+    respawn or a dispatch, because trading an outage for a stale checkout is
+    the worse deal. And NEVER anything but --ff-only: force/reset against a
+    crew clone is the aegis-repg/iaef data-loss class.
+
+    .MCP.JSON SURVIVES THE PULL (aegis-4zld). The provisioned kit carries a
+    live bearer token and is uncommitted BY DESIGN — so history can delete or
+    replace a tracked template out from under it, and a refused pull can leave
+    it half-restored. The kit is copied aside before the pull and put back if
+    the pull removed or changed it: an agent must never come out of a
+    keep-current pull with its tools stripped (the five-agents-worked-a-night-
+    without-tools class, via a new door)."""
     import subprocess
     try:
+        mcp = Path(path) / ".mcp.json"
+        saved = mcp.read_bytes() if mcp.is_file() else None
         r = subprocess.run(["git", "-C", str(path), "pull", "--ff-only"],
                            capture_output=True, text=True, timeout=60)
-        return None if r.returncode == 0 else (r.stderr or r.stdout).strip()
+        err = None if r.returncode == 0 else (r.stderr or r.stdout).strip()
+        if saved is not None and (not mcp.is_file() or mcp.read_bytes() != saved):
+            mcp.write_bytes(saved)
+        return err
     except Exception as e:                       # not a repo, git absent, timeout
         return str(e)
+
+
+def _keep_current(a, agent_name: str) -> str | None:
+    """Bring `agent_name`'s workspace clone current (ff-only) — the crew 'Keep
+    Current' rule as MECHANISM instead of memory (aegis-4zld; Stiwi's ask).
+
+    Returns None when the workspace is current (or the card names none —
+    nothing to pull is not a failure), else a one-line WARNING the caller must
+    surface: a stale-but-working agent beats a failed dispatch, but staleness
+    must be VISIBLE, never silent (the deploy-lag disease, aegis-daoh/ttlr, is
+    exactly invisible staleness). Never raises, never blocks."""
+    try:
+        card = _registry(a).get(agent_name)
+    except Exception:
+        return None                    # the dispatch path will name the real error
+    if not card.workspace:
+        return None
+    err = _refresh_clone(card.workspace)
+    if err is None:
+        return None
+    first = err.splitlines()[0] if err else "unknown"
+    return (f"workspace could not be brought current (ff-only pull refused: "
+            f"{first}) — dispatching anyway on the EXISTING tree; it may be "
+            f"stale. Clean or reconcile {card.workspace} to restore keep-current.")
 
 
 def _systemctl_user_active(unit: str) -> bool:
@@ -2341,7 +2402,8 @@ def _tend_once(a, quiet: bool = False) -> int:
         # sitting idle-and-refused until a human raw-tmuxes it. Deduped once per
         # saturation episode; the instruction checkpoints BEFORE clearing.
         cycled = _sweep("saturation-cycle", lambda: notify_mod.CycleDriver(
-            Path(a.root), _registry(a), panes, log=_log).sweep(agents, runtime))
+            Path(a.root), _registry(a), panes, refresh=_refresh_clone,
+            log=_log).sweep(agents, runtime))
         if cycled:
             print(f"  ⚠ prompted {len(cycled)} saturated agent(s) to checkpoint "
                   f"+ /clear: {', '.join(cycled)}", file=sys.stderr)
