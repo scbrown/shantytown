@@ -20,8 +20,8 @@ from shantytown.protocols import Agent
 
 TEMPLATE = {
     "mcpServers": {
-        "bobbin": {"type": "http", "url": "http://bobbin-mcp.svc/mcp"},
-        "homelab": {"type": "http", "url": "http://homelab-mcp.svc/mcp",
+        "bobbin": {"type": "http", "url": "http://bobbin-mcp.invalid/mcp"},
+        "homelab": {"type": "http", "url": "http://homelab-mcp.invalid/mcp",
                     "headers": {"Authorization": "Bearer ${HOMELAB_MCP_TOKEN}"}},
     }
 }

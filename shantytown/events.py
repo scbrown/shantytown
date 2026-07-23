@@ -27,7 +27,7 @@ store is non-empty loops the destination forever — it can never go idle. So dr
 MARKS each event delivered and returns it ONCE; a later stop with nothing new
 drains empty and the destination idles.
 
-WHAT AN EVENT MUST CARRY (aegis-w9z1, measured by sattler 2026-07-19). The rail
+WHAT AN EVENT MUST CARRY (internal-ref, measured by sattler 2026-07-19). The rail
 above names the fact that makes the naive payload unactionable: a Stop hook fires
 per TURN, not per SESSION. So "X stopped" does NOT mean X is idle — sattler was
 handed three such events, opened both panes, and found tim in `Envisioning… (39s)`
@@ -49,6 +49,8 @@ therefore computed at DRAIN time, by the reader, against a live pane
 """
 from __future__ import annotations
 import json
+import os
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -67,16 +69,24 @@ class StopEvent:
     rose: bool = False           # did it rise past a down lead to the admin?
     delivered: bool = False      # BLOCK-ONCE marker: has the drain handed it over?
     shells: int | None = None    # background shells the sender still owned AT STOP
-                                 # (aegis-q73g). "weaver stopped" and "weaver
+                                 # (internal-ref). "weaver stopped" and "weaver
                                  # stopped, 1 shell still running" are different
                                  # facts and only the second is actionable — a
                                  # stop event carrying only the first invites the
                                  # destination to book turn-end as task-end.
                                  # None = NOT REPORTED, never "zero".
     ts: float = 0.0              # epoch seconds at persist. 0.0 = UNSTAMPED (an
-                                 # event written before aegis-w9z1) — the reader
+                                 # event written before internal-ref) — the reader
                                  # must render that as "age unknown", never as
                                  # "just now", which is the one wrong answer.
+    context_k: float | None = None
+                                 # the sender's context depth AT STOP, in k tokens
+                                 # (internal-ref). "gennaro stopped" and "gennaro
+                                 # stopped past the 400k cycle threshold at 687k"
+                                 # are different facts, and only the second tells
+                                 # the destination not to hand it the next item
+                                 # until it cycles. None = NOT REPORTED (a turn was
+                                 # in flight so the footer was gone), never "fine".
     item: str | None = None      # what `frm` held at its stop, if anything
     item_status: str | None = None
                                  # its status, or "?" meaning COULD NOT LOOK.
@@ -84,7 +94,7 @@ class StopEvent:
                                  # item=None + status="?" is "the tracker did not
                                  # answer". Collapsing those two would let a
                                  # coordinator read a failed lookup as finished
-                                 # work — the aegis-mt0r class.
+                                 # work — the internal-ref class.
 
 
 @runtime_checkable
@@ -95,7 +105,8 @@ class Events(Protocol):
     its protocol; a stop event and a work item are different types on one store."""
     def persist(self, to: str, frm: str, reason: str | None, rose: bool,
                 shells: int | None = None, item: str | None = None,
-                item_status: str | None = None) -> StopEvent:
+                item_status: str | None = None,
+                context_k: float | None = None) -> StopEvent:
         """SEND: durably record an event addressed to `to`. Survival guarantee —
         it is on the store before it is read, so it cannot vanish if `to` is down.
 
@@ -117,7 +128,7 @@ class Events(Protocol):
 
         This is a SIGNATURE widening, not a surface one: still two methods, and
         the predicate stays with the CALLER, so the store never learns what
-        'busy' means (aegis-w9z1)."""
+        'busy' means (internal-ref)."""
         ...
     def pending(self, me: str) -> list[StopEvent]:
         """LOOK, don't take: MY undelivered events, marking NOTHING (aegis status
@@ -159,17 +170,30 @@ class FilesEvents:
 
     def persist(self, to: str, frm: str, reason: str | None, rose: bool,
                 shells: int | None = None, item: str | None = None,
-                item_status: str | None = None) -> StopEvent:
+                item_status: str | None = None,
+                context_k: float | None = None) -> StopEvent:
         self.root.mkdir(parents=True, exist_ok=True)
         ev = StopEvent(id=self._next_id(), to=to, frm=frm, reason=reason, rose=rose,
                        shells=shells, ts=time.time(), item=item,
-                       item_status=item_status)
-        (self.root / f"{ev.id}.json").write_text(json.dumps({
+                       item_status=item_status, context_k=context_k)
+        # ATOMIC: tmp + rename. write_text() straight to the final name is how
+        # the empty ev-172.json happened — a writer killed between open() and
+        # write left a 0-byte file that every pending() then choked on. rename
+        # within one directory is atomic on POSIX, so a reader sees the old
+        # world or the new file, never a torn one.
+        self._write_json(self.root / f"{ev.id}.json", {
             "to": ev.to, "frm": ev.frm, "reason": ev.reason,
             "rose": ev.rose, "delivered": ev.delivered, "shells": ev.shells,
             "ts": ev.ts, "item": ev.item, "item_status": ev.item_status,
-        }, indent=2, sort_keys=True))
+            "context_k": ev.context_k,
+        })
         return ev
+
+    @staticmethod
+    def _write_json(path: Path, d: dict) -> None:
+        tmp = path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(d, indent=2, sort_keys=True))
+        os.replace(tmp, path)
 
     def _read(self, p: Path) -> StopEvent:
         d = json.loads(p.read_text())
@@ -179,18 +203,54 @@ class FilesEvents:
                          rose=d.get("rose", False), delivered=d.get("delivered", False),
                          shells=d.get("shells"),
                          ts=float(d.get("ts") or 0.0), item=d.get("item"),
-                         item_status=d.get("item_status"))
+                         item_status=d.get("item_status"),
+                         context_k=d.get("context_k"))
 
     def pending(self, me: str) -> list[StopEvent]:
-        """PURE READ — no mkdir, no rewrite, nothing marked."""
+        """PURE READ — no mkdir, no rewrite, nothing marked.
+
+        One corrupt file must not dam the store. An EMPTY ev-172.json (a writer
+        killed mid-write, before persist() became atomic) made this loop raise on
+        every drain for every destination: sattler's Stop hook died 47 events deep,
+        her picture of finished work froze, and she re-slung a CLOSED security bead
+        twice from the stale list (internal-ref, 2026-07-23). latest_by_sender()
+        already skipped corrupt files; this loop crashed on them — same store, two
+        answers. Skip LOUDLY: a warning names the file so the operator sees the
+        corruption, instead of the whole event system silently dying around it."""
         if not self.root.is_dir():
             return []
         mine = []
         for p in sorted(self.root.glob("ev-*.json"), key=lambda q: self._n(q.stem)):
-            ev = self._read(p)
+            try:
+                ev = self._read(p)
+            except (OSError, ValueError, KeyError) as e:
+                print(f"events: SKIPPING corrupt {p.name} ({type(e).__name__}: {e}) "
+                      f"— quarantine or delete it; it cannot be delivered",
+                      file=sys.stderr)
+                continue
             if ev.to == me and not ev.delivered:
                 mine.append(ev)
         return mine
+
+    def latest_by_sender(self) -> dict:
+        """The most recent stop-event timestamp for each SENDER — the closest
+        proxy the store has to "when did this agent last do something" (internal-ref
+        last-activity, until Part B captures per-tool-call events). A PURE READ
+        over the whole store, delivered or not: a stop is a stop regardless of
+        whether a coordinator drained it. Senders with only ts=0 events (written
+        before timestamps existed) are omitted rather than reported as "just now"
+        — a fabricated recency is the one wrong answer (the mt0r lesson)."""
+        latest: dict[str, float] = {}
+        if not self.root.is_dir():
+            return latest
+        for p in self.root.glob("ev-*.json"):
+            try:
+                ev = self._read(p)
+            except (OSError, ValueError, KeyError):
+                continue
+            if ev.ts and ev.ts > latest.get(ev.frm, 0.0):
+                latest[ev.frm] = ev.ts
+        return latest
 
     def drain(self, me: str, accept=None) -> list[StopEvent]:
         # `accept` DEFERS rather than drops: an event the caller will not take
@@ -205,7 +265,7 @@ class FilesEvents:
             p = self.root / f"{ev.id}.json"
             d = json.loads(p.read_text())
             d["delivered"] = True
-            p.write_text(json.dumps(d, indent=2, sort_keys=True))
+            self._write_json(p, d)   # atomic — see persist()
         return mine
 
 
@@ -219,11 +279,12 @@ class NullEvents:
 
     def persist(self, to: str, frm: str, reason: str | None, rose: bool,
                 shells: int | None = None, item: str | None = None,
-                item_status: str | None = None) -> StopEvent:
+                item_status: str | None = None,
+                context_k: float | None = None) -> StopEvent:
         self._n += 1
         ev = StopEvent(id=f"ev-{self._n}", to=to, frm=frm, reason=reason, rose=rose,
                        shells=shells, ts=time.time(), item=item,
-                       item_status=item_status)
+                       item_status=item_status, context_k=context_k)
         self._events.append(ev)
         return ev
 
@@ -238,5 +299,5 @@ class NullEvents:
             self._events[self._events.index(e)] = StopEvent(
                 id=e.id, to=e.to, frm=e.frm, reason=e.reason, rose=e.rose,
                 delivered=True, shells=e.shells, ts=e.ts, item=e.item,
-                item_status=e.item_status)
+                item_status=e.item_status, context_k=e.context_k)
         return mine

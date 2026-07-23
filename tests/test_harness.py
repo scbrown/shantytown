@@ -23,8 +23,27 @@ import pytest
 from shantytown import harness as harness_mod
 from shantytown.files import FilesRegistry
 from shantytown.protocols import Agent
-from shantytown.runtime import ClaudeRuntime, settings_for_role
+from shantytown.runtime import (ClaudeRuntime, CapabilityError, HookSpec,
+                                require_capability, settings_for_role)
 from shantytown.tmux import NullPanes
+
+
+class _NonBlockingHarness:
+    """A REGISTERED harness that cannot deliver blocking stop hooks — the harness-
+    level twin of CodexRuntime, so the capability gate can be shown to CLOSE (and,
+    for a worker, OPEN) through the object the CARD actually selects. Kept test-only
+    and injected: harness.py deliberately ships no guessed second program (its own
+    docstring forbids it), and what is under test here is the GATE, not codex flags."""
+    name = "codex-test"
+
+    def launch(self, card, settings_path, root=None):
+        return f"SHANTY_AGENT={card.name} codex-test --settings {settings_path}"
+
+    def settings(self, role, root=None):
+        return {}
+
+    def hooks(self, card):
+        return HookSpec(blocking_stop=False)
 
 
 # Captured from the implementation as it stood BEFORE harness.py existed, by
@@ -103,6 +122,51 @@ def test_an_unimplemented_harness_is_refused_not_defaulted(tmp_path):
     card = Agent(name="ellie", role="worker", harness="codex")
     with pytest.raises(harness_mod.UnknownHarness):
         _runtime().compose(card)
+
+
+# --- the capability declaration lives on the harness now (internal-ref) ------------
+
+def test_claude_harness_declares_the_blocking_stop_capability():
+    """The declaration MOVED here, onto the program the card selects. Claude Code
+    delivers blocking stop hooks, so a lead/administrator on it is hostable — and
+    the gate, asked the harness directly, opens for it."""
+    h = harness_mod.ClaudeHarness()
+    assert h.hooks(Agent(name="x", role="lead")).blocking_stop is True
+    require_capability(h, Agent(name="x", role="administrator"))    # must not raise
+
+
+def test_claude_runtime_hooks_FORWARD_to_the_cards_harness():
+    """ClaudeRuntime no longer declares blocking_stop itself — it forwards to the
+    card's harness, so there is ONE source of truth and the two cannot drift (the
+    drift that let the gate rubber-stamp a non-claude card). A card naming a
+    non-blocking harness makes the RUNTIME report non-blocking too."""
+    rt = _runtime()
+    assert rt.hooks(Agent(name="x", role="lead")).blocking_stop is True   # claude
+    # forwards to whatever the card names:
+    import pytest as _pytest
+    with _pytest.MonkeyPatch.context() as m:
+        m.setitem(harness_mod._HARNESSES, "codex-test", _NonBlockingHarness())
+        card = Agent(name="x", role="lead", harness="codex-test")
+        assert rt.hooks(card).blocking_stop is False
+
+
+@pytest.mark.parametrize("role,hostable", [("worker", True), ("lead", False),
+                                           ("administrator", False)])
+def test_the_gate_asks_the_CARDS_harness_not_the_runtime(monkeypatch, role, hostable):
+    """THE FIX. Build a ClaudeRuntime (blocking_stop=True) — exactly what the CLI
+    always builds — but give the card a NON-blocking harness. Before internal-ref the
+    gate asked `self` and rubber-stamped the lead; now it asks the program the card
+    NAMES and refuses. The worker is the positive control: the gate must still OPEN
+    for a role that needs no stop delivery, and the launch must carry the CARD's
+    program, proving compose went through card.harness rather than claude's argv."""
+    monkeypatch.setitem(harness_mod._HARNESSES, "codex-test", _NonBlockingHarness())
+    card = Agent(name="malcolm", role=role, harness="codex-test")
+    rt = _runtime()
+    if hostable:
+        assert "codex-test --settings" in rt.compose(card)         # gate OPENS
+    else:
+        with pytest.raises(CapabilityError, match="blocking stop hooks"):
+            rt.compose(card)                                       # gate CLOSES
 
 
 def test_the_card_round_trips_the_harness_field(tmp_path: Path):

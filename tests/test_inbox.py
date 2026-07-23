@@ -25,7 +25,8 @@ from pathlib import Path
 import pytest
 
 from shantytown.files import FilesTracker, items as files_items, plate as files_plate
-from shantytown.inbox import FilesInbox, Inbox, TrackerInbox, is_message
+from shantytown.inbox import FilesInbox, Inbox, MessageTooLong, TrackerInbox, is_message
+from shantytown.protocols import WorkItem
 
 
 @pytest.fixture(params=["files", "tracker"])
@@ -109,12 +110,12 @@ def test_a_tracker_backed_message_never_reaches_the_plate(tmp_path: Path):
     and her actual P1 disappears behind it."""
     trk = FilesTracker(tmp_path / "items")
     box = TrackerInbox(trk, lambda: files_items(trk))
-    trk.update("aegis-9h2", title="Restore the den service",
+    trk.update("internal-ref", title="Restore the den service",
                status="in_progress", assignee="ellie")
     box.deliver("ellie", "nice work")
 
     on_plate = files_plate(trk, "ellie")
-    assert on_plate is not None and on_plate.id == "aegis-9h2", (
+    assert on_plate is not None and on_plate.id == "internal-ref", (
         "a message evicted the agent's work from the plate")
     # ...and it is genuinely there, in the inbox, not simply dropped.
     assert [m.body for m in box.unread("ellie")] == ["nice work"]
@@ -135,7 +136,7 @@ def test_the_legacy_mail_prefix_is_excluded_too(tmp_path: Path):
     store RIGHT NOW, i.e. sitting on real plates. Excluding the old prefix is not
     tidiness — it un-breaks the plates that are already broken."""
     trk = FilesTracker(tmp_path / "items")
-    trk.update("aegis-old", title="mail: HANDOFF from before the inbox",
+    trk.update("internal-ref", title="mail: HANDOFF from before the inbox",
                status="open", assignee="ellie")
     assert is_message("mail: anything")
     assert files_plate(trk, "ellie") is None
@@ -182,3 +183,54 @@ def test_the_files_inbox_does_keep_the_sender(tmp_path: Path):
     box = FilesInbox(tmp_path / "inbox")
     box.deliver("ellie", "hi", frm="sattler")
     assert box.unread("ellie")[0].frm == "sattler"
+
+
+# --- the durable channel is thin, and refuses cleanly when a message won't fit
+# (internal-ref). The cap is the TRACKER's (bd = 500), not the inbox's — so only a
+# backend that declares one refuses; the files store carries any length.
+
+class _CappedTracker:
+    """A tracker with bd's 500-char title cap, and nothing else."""
+    _TITLE_MAX = 500
+
+    def __init__(self):
+        self.created = []
+
+    def create(self, title, **fields):
+        self.created.append(title)
+        return WorkItem(id="st-c1", title=title, status="open",
+                        assignee=fields.get("assignee"))
+
+
+def test_tracker_inbox_refuses_a_message_over_the_title_cap(tmp_path: Path):
+    """A body that would push the `inbox: <body>` title past the tracker's cap is
+    refused with MessageTooLong BEFORE any write — never a leaked bd error, never a
+    silent truncation. The message names the remedy (a bead + a pointer)."""
+    tracker = _CappedTracker()
+    box = TrackerInbox(tracker, lambda: [])
+    with pytest.raises(MessageTooLong) as ei:
+        box.deliver("ellie", "x" * 494)          # "inbox: " + 494 = 501 > 500
+    assert "bead" in str(ei.value)
+    assert tracker.created == [], "a refused message must not be written"
+
+
+def test_tracker_inbox_delivers_at_the_cap_boundary(tmp_path: Path):
+    tracker = _CappedTracker()
+    box = TrackerInbox(tracker, lambda: [])
+    box.deliver("ellie", "x" * 493)              # title == 500, exactly fits
+    assert len(tracker.created) == 1
+
+
+def test_a_backend_with_no_title_cap_carries_a_long_message(tmp_path: Path):
+    """The cap is the tracker's, not the inbox's: FilesInbox (no title, no cap) and
+    a TrackerInbox over an uncapped tracker both carry a 2000-char body. The refusal
+    is not a blanket inbox limit — it is honouring the concrete store's real one."""
+    long = "y" * 2000
+    fbox = FilesInbox(tmp_path / "inbox")
+    fbox.deliver("ellie", long)
+    assert fbox.unread("ellie")[0].body == long
+
+    trk = FilesTracker(tmp_path / "items")        # FilesTracker declares no TITLE_MAX
+    tbox = TrackerInbox(trk, lambda: files_items(trk))
+    tbox.deliver("maldoon", long)                 # must not raise
+    assert tbox.unread("maldoon")[0].body == long

@@ -49,7 +49,7 @@ INFLIGHT_MARKERS = ("esc to interrupt", "Running…", "Running...", "tokens · e
 # contains every one of these strings.
 _TAIL_LINES = 8
 
-# --- attributes: the one bit `capture-pane -p` throws away (aegis-x6xh) ------
+# --- attributes: the one bit `capture-pane -p` throws away (internal-ref) ------
 #
 # MEASURED across 18 live panes, 2026-07-20, `capture-pane -p -e`:
 #
@@ -200,12 +200,12 @@ def input_state(screen: str) -> str:
 # whole cost of collapsing them is on record in this file (context_high, which
 # reported False for every real pane and looked fine doing it).
 #
-# QUEUED joined them for the same reason (aegis-x6xh): a pane whose UI is up,
+# QUEUED joined them for the same reason (internal-ref): a pane whose UI is up,
 # whose spinner is gone, and whose input box holds unsubmitted text is NOT idle.
-# It is the aegis-16e stall shape — and it used to print `idle` and land on the
+# It is the internal-ref stall shape — and it used to print `idle` and land on the
 # free list, where the next send-keys would concatenate onto the stuck text.
 #
-# WAITING joined them for the aegis-qxc2 measurement: 7 of 10 workers were sitting
+# WAITING joined them for the internal-ref measurement: 7 of 10 workers were sitting
 # on blocking option-pickers SIMULTANEOUSLY, and every one printed `?`. That was
 # honest — the ready UI is displaced by the picker, so `ui_up` is False and UNSURE
 # is the correct answer to the question being asked. It was also useless: "I could
@@ -215,9 +215,25 @@ def input_state(screen: str) -> str:
 # three scars from (context_high, placeholder-vs-queued, None-is-not-zero).
 BUSY, IDLE, WEDGED, UNSURE, QUEUED = "busy", "idle", "wedged", "?", "queued"
 WAITING = "waiting"           # a picker is up and BLOCKING — needs a person, not a nudge
+SATURATED = "saturated"       # PAST THE 400k CYCLE THRESHOLD — looks free, is a
+                              # wall (internal-ref). 400k is a CYCLE point, not the
+                              # ~1M context limit: past it, an agent must
+                              # checkpoint its state to its bead and /clear before
+                              # taking a new task. Naming it "% of limit" was a lie
+                              # (Stiwi's correction) — 400k is not the ceiling.
+AUTH_DEAD = "auth-dead"       # the runtime's LOGIN EXPIRED (internal-ref). The UI is
+                              # up, the box is empty, and every API call fails —
+                              # measured 2026-07-22: an operator re-login left all
+                              # 9 crew like this, and every one printed `idle`, so
+                              # feed_check counted them feedable and tend prompted
+                              # into the dead panes. Not idle: BROKEN. The remedy
+                              # is a relaunch (`st tend --reauth`) after the
+                              # operator re-logs in — /login in the pane is an
+                              # interactive browser OAuth flow nothing can drive.
 
 
-def work_state(screen: str, ui_up: bool, awaiting: bool = False) -> str:
+def work_state(screen: str, ui_up: bool, awaiting: bool = False,
+               limit_k: float = None, auth_dead: bool = False) -> str:
     """Is this agent WORKING right now? The verdict `st crew` never asked for.
 
     The predicates already existed — dispatch.py has refused sends into busy
@@ -246,6 +262,19 @@ def work_state(screen: str, ui_up: bool, awaiting: bool = False) -> str:
         return WEDGED
     if mid_flight(screen):
         return BUSY
+    # AUTH-DEAD next (internal-ref): `auth_dead` is the RUNTIME's answer, passed in
+    # exactly like `ui_up` and `awaiting` — the login banner is runtime chrome and
+    # this module knows no runtime's markers. After mid_flight on purpose (a pane
+    # genuinely computing is busy; an auth-dead one cannot compute, so a spinner
+    # means auth is fine), and BEFORE everything else: an auth-dead agent's picker,
+    # empty box or saturation footer are all facts about a session that cannot make
+    # an API call, and reporting any of them instead sends the coordinator to
+    # answer a question or drive a cycle in a pane where nothing can run. Measured:
+    # all 9 crew read `idle` through an entire login expiry, and tend's cycle
+    # driver prompted a saturated auth-dead pane over and over — every prompt
+    # failed with the same banner it could not see.
+    if auth_dead:
+        return AUTH_DEAD
     # AFTER mid_flight on purpose. A pane that is genuinely computing is BUSY even
     # if a picker's chrome is somewhere on it, and this ordering means the new
     # verdict can only ever convert a `?` — it cannot take an agent that used to
@@ -258,7 +287,7 @@ def work_state(screen: str, ui_up: bool, awaiting: bool = False) -> str:
     if not ui_up:
         return UNSURE
     # The UI is up and nothing is in flight. That is NOT enough to say idle
-    # (aegis-x6xh): ask the input box, and believe it when it says it does not
+    # (internal-ref): ask the input box, and believe it when it says it does not
     # know. Pass this function a capture taken WITH attributes or UNKNOWN is
     # the honest answer for every pane whose box has text in it.
     ins = input_state(screen)
@@ -266,11 +295,35 @@ def work_state(screen: str, ui_up: bool, awaiting: bool = False) -> str:
         return QUEUED
     if ins == INPUT_UNKNOWN:
         return UNSURE
+    # The pane is up, quiet, and its box is empty — which reads as IDLE, the free
+    # list, the next dispatch target. But an agent PAST the 400k cycle threshold
+    # is not free: it must checkpoint + /clear before more work, so it is a wall
+    # (internal-ref). Three agents sat here past the threshold (687k/562k/524k) for
+    # fifteen hours, printed `idle`, and had work piled on that they could not
+    # hold. The number was already on the pane ("/clear to save 687.8k tokens")
+    # and already read by context_tokens_k; the tier just never asked whether it
+    # was past the line. SATURATED converts what would be IDLE — it never takes an
+    # agent that reads busy/queued/waiting, so like every state above it, additive.
+    #
+    # ONLY detectable here, and that is honest, not a gap: while a turn is in
+    # flight the runtime replaces the "/clear to save" footer with the spinner, so
+    # context_tokens_k returns None and a BUSY agent's depth is genuinely
+    # unreadable from the pane. We do not guess it — a busy agent past the
+    # threshold reads busy, and the number becomes available the moment it idles.
+    threshold = CYCLE_THRESHOLD_K if limit_k is None else limit_k
+    tokens = context_tokens_k(screen)
+    if tokens is not None and tokens >= threshold:
+        return SATURATED
     return IDLE
 
 
 CTX_HINT = re.compile(r"/clear to save ([0-9.]+)k tokens")
 CONTEXT_HIGH_TOKENS_K = 400.0
+# The CYCLE THRESHOLD (Stiwi, internal-ref): past this many k tokens, an agent must
+# checkpoint state to its bead and /clear BEFORE taking a new task. It is NOT the
+# context limit (~1M) — it is the point at which cycling is cheaper than carrying
+# on, so displaying depth as "% of limit" against 400k was a lie and was removed.
+CYCLE_THRESHOLD_K = 400.0
 
 
 def context_tokens_k(screen: str) -> float | None:
@@ -283,6 +336,23 @@ def context_tokens_k(screen: str) -> float | None:
     """
     m = CTX_HINT.search(strip_attrs(screen))
     return float(m.group(1)) if m else None
+
+
+def saturated(screen: str, limit_k: float = CYCLE_THRESHOLD_K) -> bool:
+    """Is this agent PAST THE CYCLE THRESHOLD? (internal-ref)
+
+    Named for the DECISION it drives: past 400k the agent must checkpoint state to
+    its bead and /clear before taking a new task — unconditional on relatedness
+    (Stiwi's rule). It is NOT a claim about the ~1M context limit. A deep agent
+    does not just go slow: it loses earlier context, re-derives settled decisions,
+    and misses constraints stated hundreds of thousands of tokens ago. Piling on
+    produces worse output, not merely later output — so cycle first.
+
+    None (footer not showing — a turn in flight) is NOT saturated: unknown is not
+    over-limit, and mid_flight is judged first anyway.
+    """
+    tokens = context_tokens_k(screen)
+    return tokens is not None and tokens >= limit_k
 
 
 def context_high(screen: str, limit_k: float = CONTEXT_HIGH_TOKENS_K) -> bool:
@@ -324,14 +394,14 @@ def triage(panes, target: str, new_work: str) -> Decision:
         return Decision(Action.RESTART, "no session",
                         {"pane": target, "exists": False})
 
-    # WITH attributes (aegis-x6xh): dim is the only thing separating a
+    # WITH attributes (internal-ref): dim is the only thing separating a
     # placeholder suggestion from queued-unsubmitted text, and `-p` alone drops
     # it. Every other predicate here strips internally, so this one capture
     # serves both views of the SAME instant.
     screen = panes.capture(target, attrs=True)
     lines = len(screen.splitlines())
     # Recorded on EVERY screen-based verdict, including the ones it does not
-    # change (aegis-q73g ask 1). Whether a live background shell should block a
+    # change (internal-ref ask 1). Whether a live background shell should block a
     # dispatch is a judgement nobody has ruled; that it must be VISIBLE is not.
     # A NUDGE that silently declined to look at a running build is the same class
     # of answer as a check that cannot fail — it reads clean either way, so the
@@ -351,11 +421,11 @@ def triage(panes, target: str, new_work: str) -> Decision:
                         {"pane": target, "shells": shells,
                          "marker": next(m for m in INFLIGHT_MARKERS if m in _tail(screen))})
 
-    # The input box, BEFORE any nudge/clear decision (aegis-x6xh). send-keys
+    # The input box, BEFORE any nudge/clear decision (internal-ref). send-keys
     # does not replace a pane's input buffer, it APPENDS to it — so sending into
     # a box that already holds text produces one concatenated line that is
     # neither message. REFUSE covers both the fact and the doubt:
-    #   queued  — there is real unsubmitted text in there (a live aegis-16e
+    #   queued  — there is real unsubmitted text in there (a live internal-ref
     #             stall, or a human mid-sentence). Either way, not ours to type
     #             over, and "un-stalling" it by hand is the defect, not the fix.
     #   unknown — the box has text and the capture carried no attributes, so
@@ -376,11 +446,27 @@ def triage(panes, target: str, new_work: str) -> Decision:
     # NUDGE never silently means "I couldn't see".
     tokens = context_tokens_k(screen)
     hi = context_high(screen)
-    if hi and unrelated(screen, new_work):
-        return Decision(Action.CLEAR, "high context, unrelated",
-                        {"pane": target, "context_k": tokens, "shells": shells,
-                         "limit_k": CONTEXT_HIGH_TOKENS_K,
-                         "screen_lines": lines, "overlap": "below threshold"})
+    # PAST THE CYCLE THRESHOLD -> CYCLE FIRST (Stiwi's rule, internal-ref).
+    # UNCONDITIONAL on relatedness: past 400k, more work degrades the agent whether
+    # or not it overlaps what it was doing, so there is no relatedness gate — an
+    # earlier build gated on `unrelated` and a 687k agent handed RELATED work
+    # slipped through as `healthy NUDGE`, which is how three agents stayed past the
+    # threshold for fifteen hours. The remedy is CHECKPOINT-BEFORE-CLEAR: write
+    # state to the bead FIRST, THEN /clear, THEN take the task — an auto-clear
+    # would lose whatever was not saved, so the tier refuses and NAMES the remedy,
+    # it does not perform it. `context_k` is the raw depth; there is deliberately
+    # NO "% of limit" — 400k is a cycle point, not the ceiling, and framing depth
+    # as a fraction of it was a lie.
+    if tokens is not None and tokens >= CYCLE_THRESHOLD_K:
+        return Decision(
+            Action.CLEAR,
+            "past the 400k cycle threshold — checkpoint, then clear",
+            {"pane": target, "context_k": tokens, "shells": shells,
+             "cycle_threshold_k": CYCLE_THRESHOLD_K,
+             "remedy": "checkpoint state to the bead, THEN /clear (or hand off to "
+                       "a fresh session), THEN take the task. Do NOT auto-clear — "
+                       "it loses work that was not saved. Unconditional on "
+                       "relatedness: past 400k, cycle before more work."})
 
     return Decision(Action.NUDGE, "healthy",
                     {"pane": target, "context_k": tokens, "shells": shells,

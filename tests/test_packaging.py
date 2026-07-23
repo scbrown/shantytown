@@ -1,4 +1,4 @@
-"""The package must actually BUILD (aegis-daoh follow-on).
+"""The package must actually BUILD (internal-ref follow-on).
 
 THE GAP THIS CLOSES. Every other test in this suite imports `shantytown` from the
 SOURCE TREE, so all 497 of them stay green while the package is completely
@@ -16,7 +16,7 @@ layout rather than the docs commit that caused it.
 `st` is installed NON-EDITABLE from this tree, so "can it build" is not a packaging
 nicety here: it is whether the fleet's harness can be deployed at all. A green test
 suite that cannot answer that question is the same shape as everything else on
-aegis-daoh — the artifact looked fine, the running thing was something else.
+internal-ref — the artifact looked fine, the running thing was something else.
 
 This calls setuptools' REAL build backend (~0.2s, no network, no isolation), so it
 fails for the same reason a real `pip install` would, rather than asserting a

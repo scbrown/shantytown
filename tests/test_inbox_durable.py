@@ -14,7 +14,8 @@ import pytest
 
 import shantytown.cli as cli
 from shantytown.cli import main, OK, REFUSED, CANNOT_TELL
-from shantytown.inbox import Message
+from shantytown.inbox import Message, TrackerInbox
+from shantytown.protocols import WorkItem
 
 
 def _root(tmp_path: Path, pane="crew-ian") -> Path:
@@ -95,6 +96,60 @@ def test_durable_returns_2_when_persist_fails(tmp_path, monkeypatch, capsys):
     assert rc == CANNOT_TELL
     assert "persist FAILED" in capsys.readouterr().err
     assert sent == [], "a failed durable persist must NOT downgrade to a live send"
+
+
+# --- too-long is a REFUSAL, not a "could not tell" (internal-ref) --------------
+
+class _CappedTracker:
+    """A tracker that caps a title like bd does (TITLE_MAX=500). Records creates so
+    a test can prove a too-long message NEVER reached the store."""
+    _TITLE_MAX = 500
+
+    def __init__(self):
+        self.created = []
+
+    def create(self, title, **fields):
+        self.created.append((title, fields))
+        return WorkItem(id="st-cap1", title=title, status="open",
+                        assignee=fields.get("assignee"))
+
+
+def test_durable_REFUSES_a_too_long_message_and_does_not_call_it_cannot_tell(tmp_path, monkeypatch, capsys):
+    """The bug: a message over the tracker's title cap failed with a leaked bd
+    validation string, returned CANNOT_TELL (2, 'store maybe unreachable'), and
+    left the agent unable to tell a transient outage from a message that will NEVER
+    fit. It is a permanent, actionable REFUSED (1) — and nothing is written."""
+    tracker = _CappedTracker()
+    box = TrackerInbox(tracker, lambda: [])
+    monkeypatch.setattr(cli, "_inbox", lambda a, **kw: box)
+    monkeypatch.setattr(cli, "Tmux", lambda *a, **k: _NoSend())
+    body = "x" * 494                              # title = "inbox: " + 494 = 501 > 500
+    rc = main(["--root", str(_root(tmp_path)), "inbox", "-d", "ian", body])
+    assert rc == REFUSED, "too-long must be REFUSED (1), not CANNOT_TELL (2)"
+    err = capsys.readouterr().err
+    assert "refused" in err and "carries at most" in err   # names the real limit
+    assert "494" in err, "the refusal states the actual length that overflowed"
+    assert "bead" in err, "the refusal must name the remedy (put it in a bead)"
+    assert "could not tell" not in err, "must not read as a transient store outage"
+    assert tracker.created == [], "a refused message must NOT be written to the store"
+
+
+def test_durable_delivers_a_message_at_the_cap_boundary(tmp_path, monkeypatch):
+    """The other side of the discriminator: a body that exactly fits (title == cap)
+    delivers. Proves the refusal is a real boundary, not a blanket rejection."""
+    tracker = _CappedTracker()
+    box = TrackerInbox(tracker, lambda: [])
+    monkeypatch.setattr(cli, "_inbox", lambda a, **kw: box)
+    monkeypatch.setattr(cli, "Tmux", lambda *a, **k: _NoSend())
+    body = "x" * 493                              # title = "inbox: " + 493 = 500 == cap
+    rc = main(["--root", str(_root(tmp_path)), "inbox", "-d", "ian", body])
+    assert rc == OK
+    assert len(tracker.created) == 1
+
+
+class _NoSend:
+    def exists(self, pane): return False
+    def send(self, pane, text): raise AssertionError("recipient down — no send")
 
 
 # --- refusal + dry-run create nothing ---------------------------------------

@@ -6,10 +6,31 @@ leaked into the core. If this is hard to write, the interface is wrong.
 """
 from __future__ import annotations
 import json
+import os
 from pathlib import Path
 
 from .inbox import is_message
 from .protocols import Agent, WorkItem
+
+
+def write_json_atomic(path: Path, value) -> None:
+    """Write JSON as tmp + rename — a reader sees the old file or the new one,
+    never a torn one.
+
+    THE INCIDENT (internal-ref, and events.py's ev-172 before it, same night,
+    same disk-full): `write_text()` straight to the final name truncates FIRST.
+    A writer killed between the truncate and the write — ENOSPC at 22:37:37 did
+    exactly this to notify's blocked.json — leaves a 0-byte file. Every torn
+    JSON store then becomes somebody's dam downstream (ev-172 froze sattler's
+    drain 47 events deep; she re-slung a closed bead twice off the stale view).
+    `os.replace` within one directory is atomic on POSIX.
+
+    events.py carries its own private copy of this pattern (franklin's a12f16e,
+    which predates this helper); everything else writes through here.
+    """
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(value, indent=2, sort_keys=True))
+    os.replace(tmp, path)
 
 
 class FilesRegistry:
@@ -196,7 +217,7 @@ def plate(tracker: FilesTracker, agent: str) -> WorkItem | None:
 def items(tracker: FilesTracker) -> list[WorkItem]:
     """EVERY item in this store. The per-backend LISTER, injected into
     TrackerInbox exactly the way plate() is injected into anchor — a query, and
-    queries stay off the three-function Tracker protocol (aegis-gqr8).
+    queries stay off the three-function Tracker protocol (internal-ref).
 
     Returns [] for an absent store, which is correct HERE and would not be in
     all(): a tracker directory that does not exist yet is a store with no items,

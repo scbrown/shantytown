@@ -1,4 +1,4 @@
-"""roles --check, THIRD LEG: does the RUNNING PROCESS match the graph? (aegis-0v97)
+"""roles --check, THIRD LEG: does the RUNNING PROCESS match the graph? (internal-ref)
 
 Leg two (test_roles_hooks.py) verifies the ROLE'S ARTIFACT carries the right stop
 hooks. This leg exists because that question is strictly weaker than the one the
@@ -138,7 +138,7 @@ def test_the_note_says_what_it_HAS_not_only_what_it_lacks(tmp_path):
     "carries NO stop hooks at all". That is false as English and false in the
     EXPENSIVE direction: the 8 real agents it named do carry hooks — gastown's,
     including the rm -rf and force-push tap guards — they simply carry no
-    `stop_event` direction. Read literally the old string IS aegis-05up
+    `stop_event` direction. Read literally the old string IS internal-ref
     ("respawn dropped --settings, the guards are gone"), a genuine emergency
     that was not happening. A reader would scramble for the wrong thing, or
     start disbelieving 05up for when it really fires."""
@@ -153,16 +153,23 @@ def test_the_note_says_what_it_HAS_not_only_what_it_lacks(tmp_path):
     assert "/gt/crew/.claude/settings.json" in note
 
 
-def test_a_process_with_no_settings_at_all_is_still_called_out_as_05up(tmp_path):
+def test_a_process_with_no_settings_at_all_is_still_named_as_hookless(tmp_path):
     """The genuinely hookless case must stay distinguishable from the
     wrong-hooks case — that is the whole point of the wording fix. It is not
-    softened away, it is NAMED."""
+    softened away, it is NAMED.
+
+    The assertion used to pin an internal ticket id, because the note carried
+    one. That is what an internal identifier looks like once it has leaked into
+    BEHAVIOUR rather than documentation: the id was not a comment about the
+    code, it was part of the output contract, and a test held it there. Removing
+    it from the note alone would have gone red — the string and the assertion had
+    to move together, which is exactly why this class is worth calling out."""
     reg = _tier(tmp_path)
     live = lambda p: LiveWiring(directions=set(), settings_path=None)
     note = next(r for r in roles.check(reg, live=live).rows
                 if r.agent == "lead").note
     assert "NO --settings at all" in note
-    assert "aegis-05up" in note
+    assert "hookless-zombie case" in note
 
 
 def test_a_healthy_tier_passes_all_three_legs(tmp_path):

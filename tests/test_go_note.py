@@ -1,4 +1,4 @@
-"""`st go --note` — a caveat must ride IN the dispatch payload (aegis-8013).
+"""`st go --note` — a caveat must ride IN the dispatch payload (internal-ref).
 
 `st go <item> <agent>` took an item and an agent and nothing else, so a dispatch
 that needed a qualifier had two bad options and no good one:
@@ -128,15 +128,15 @@ def test_cli_note_reaches_the_pane(tmp_path, monkeypatch, capsys):
     panes = NullPanes(screen="")
     monkeypatch.setattr(cli, "Tmux", lambda *a, **k: panes)
     rc = main(["--root", str(_root(tmp_path)), "go", "item-1", "ellie",
-               "--note", "aegis-43ph: no clone can fast-forward"])
+               "--note", "internal-ref: no clone can fast-forward"])
     assert rc == OK
-    assert "aegis-43ph" in panes.sent[0][1]
+    assert "internal-ref" in panes.sent[0][1]
     # and the sender is shown what actually went out
-    assert "note: aegis-43ph" in capsys.readouterr().out
+    assert "note: internal-ref" in capsys.readouterr().out
 
 
 def test_cli_note_file_reaches_the_pane(tmp_path, monkeypatch):
-    """--note-file is the aegis-0214 answer: prose with backticks and $(...) in a
+    """--note-file is the internal-ref answer: prose with backticks and $(...) in a
     `--note "..."` string is expanded BY THE SHELL before st sees it. A file is
     inert, so the note that arrives is the note that was written."""
     note = tmp_path / "note.md"
@@ -152,7 +152,7 @@ def test_cli_note_file_reaches_the_pane(tmp_path, monkeypatch):
 def test_cli_refuses_an_unreadable_note_file_rather_than_dispatching_without_it(
         tmp_path, monkeypatch, capsys):
     """The dangerous degradation: send the work WITHOUT the caveat. That is the
-    failure aegis-8013 exists to close, so an unreadable note is a refusal (no
+    failure internal-ref exists to close, so an unreadable note is a refusal (no
     send, no tracker write), never a note-less dispatch."""
     panes = NullPanes(screen="")
     monkeypatch.setattr(cli, "Tmux", lambda *a, **k: panes)

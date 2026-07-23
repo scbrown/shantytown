@@ -91,7 +91,7 @@ class Report:
 def required_stop_directions(a: Agent, agents: list[Agent]) -> set[str]:
     """What stop directions THIS agent's position in the graph requires.
 
-    PUBLIC because `st new` asks the same question at LAUNCH time (aegis-8p0j
+    PUBLIC because `st new` asks the same question at LAUNCH time (internal-ref
     gap 1) that `--check` asks after the fact. There must be exactly ONE
     definition of "what does this agent need": if the launcher and the checker
     computed it separately, a disagreement between them would be unattributable —
@@ -110,7 +110,7 @@ _needs = required_stop_directions       # the in-module name, unchanged
 
 
 def _live_verdict(a: Agent, agents: list[Agent], live) -> tuple[str, str]:
-    """The THIRD leg (aegis-0v97): does the RUNNING PROCESS match the graph?
+    """The THIRD leg (internal-ref): does the RUNNING PROCESS match the graph?
 
     Leg two asks whether the ROLE'S ARTIFACT carries the right hooks. That is a
     strictly weaker question, and the gap between them is not theoretical — it
@@ -139,12 +139,12 @@ def _live_verdict(a: Agent, agents: list[Agent], live) -> tuple[str, str]:
     need = _needs(a, agents)
     missing = need - directions
     if missing:
-        # SAY WHAT IT HAS, NOT ONLY WHAT IT LACKS (dearing, aegis-0v97). The
+        # SAY WHAT IT HAS, NOT ONLY WHAT IT LACKS (dearing, internal-ref). The
         # first version of this said "carries NO stop hooks at all", which is
         # false as English and false in the expensive direction: the 8 agents it
         # named DO carry hooks — gastown's, including the rm -rf and force-push
         # tap guards — they simply carry no `stop_event` direction. Read
-        # literally, the old string is aegis-05up ("respawn dropped --settings,
+        # literally, the old string is internal-ref ("respawn dropped --settings,
         # the guards are gone"), a genuine emergency that was NOT happening.
         # Whoever read it would either scramble for the wrong thing or start
         # disbelieving 05up for when it does fire. Naming the settings path also
@@ -154,7 +154,7 @@ def _live_verdict(a: Agent, agents: list[Agent], live) -> tuple[str, str]:
         whence = (f", its --settings is {wiring.settings_path}"
                   if wiring.settings_path
                   else ", and its launch line carries NO --settings at all "
-                       "(this one IS the hookless-zombie case, cf. aegis-05up)")
+                       "(this one IS the hookless-zombie case)")
         # Name EVERY consequence, not the first one. A lead missing both legs
         # strands its reports as well as itself, and reporting only "its own
         # stop dies here" would understate it by seven agents.

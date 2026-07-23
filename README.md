@@ -24,8 +24,8 @@
 *Create a work item. Tell an agent to go get it. That's the whole idea.*
 
 [![dispatch 3.4s](https://img.shields.io/badge/dispatch-3.4s-brightgreen)](#-measured-against-gas-town)
-[![15 commands](https://img.shields.io/badge/commands-15-blue)](#-the-whole-surface)
-[![tests](https://img.shields.io/badge/tests-506%20passing-blue)](#-principles)
+[![19 commands](https://img.shields.io/badge/commands-19-blue)](#-the-whole-surface)
+[![tests](https://img.shields.io/badge/tests-764%20passing-blue)](#-principles)
 [![python](https://img.shields.io/badge/python-3.11%2B-blue)](#-install)
 [![dependencies none](https://img.shields.io/badge/dependencies-none-blue)](#-install)
 [![license MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
@@ -172,7 +172,7 @@ stop.* Here is what the gate measured.
 
 | | `gt sling` | `st go` | |
 |---|---:|---:|---|
-| Commands | ~110 | **15** | *a small, deliberate fraction of the surface* |
+| Commands | ~110 | **19** | *a small, deliberate fraction of the surface, by measured use* |
 | dispatch (dry-run) | 51.54 s | **0.15 s** | **~344× faster** |
 | dispatch (real) | > 120 s ⏱️ | **3.40 s** | **≥35× faster** |
 | Dolt connections | 63 | **3** | **21× fewer** |
@@ -259,10 +259,14 @@ st context <query>                what code should I be looking at?
 st doctor [--install]             what's installed, what's stale, what's missing
 st project                        materialize the crew cards FROM the graph
 st tend                           supervise the crew: respawn what DIED, never what was RETIRED
+st attach <agent>                 attach to a crew member by name (socket + pane resolved; via shanty)
+st dashboard [admin]              live, tier-scoped view: roster/state/work, self-refreshing
 st subscribe                      watch quipu entity events; route governed workflows to the admin
+st worktree <repo> [agent]        provision an agent's isolated worktree off a SHARED project repo
+st stats [agent]                  what the crew actually did: files, skills, tokens (local store)
 ```
 
-Fifteen, and the count is load-bearing: a test pins this block to the parser, so the next command
+Nineteen, and the count is load-bearing: a test pins this block to the parser, so the next command
 either updates the list or fails CI.
 
 ## 🔀 Workflows & events
@@ -315,14 +319,17 @@ set to run the harness on the files tracker.
 
 | variable | what it points at | default |
 |---|---|---|
+| `SHANTY_ROOT` | **which store `st` reads and writes** — the single most consequential setting. Precedence: `--root` > `$SHANTY_ROOT` > `cwd/.shanty`, and the CLI and the Stop hook resolve it identically. If it is unset and you run `st` from a directory with no `.shanty`, `st` operates on an empty store — not the fleet's. | `./.shanty` |
 | `SHANTY_AGENT` | who you are, so `st anchor` needs no argument | — |
-| `SHANTY_TMUX_SOCKET` | the named tmux server your agents live on | bare tmux |
+| `SHANTY_TMUX_SOCKET` | the named tmux server your agents live on. **The store's `settings/tmux-socket` file wins over this** — a socket declared in the store is read from there, not from your shell's ambient env, so the answer cannot change with which pane you ran `st` from. | bare tmux |
+| `SHANTY_DARK_AGENTS` | names (space/comma-separated) Rule Zero and tend must never count feedable — panes another orchestrator keeps respawning with this deployment's worker settings, which carry the stop-event wiring but route nothing here. The launch-stamp ownership gate excludes unstamped agents structurally; this list is the explicit override/belt for named ghosts. | the gastown-dark crew |
 | `QUIPU_SERVER` | quipu, for `--registry quipu`, `st project`, or `st subscribe` | `http://localhost:3030` |
 | `SHANTY_ONTO_NS` | the ontology IRI base your graph is keyed under | `http://shantytown.example/ontology/` |
 | `BOBBIN_SERVER` | bobbin, for `st context` | `http://localhost:8080` |
 | `SHANTY_RANKER` | `policy` to weight the admin workflow by Hank blast radius; else rule-based | — |
 | `SHANTY_FORGEJO_URL` | a self-hosted forge, for `st doctor`'s release checks | `http://localhost:3000` |
 | `SHANTY_REACTOR_URL` | reactor, if you use it as an event source | `http://localhost:8075` |
+| `SHANTY_CANONICAL_SOURCE` | the checkout a fleet deploy must be built from, for `st doctor`'s self-check. Unset and not in a git checkout → the check is `CANNOT_TELL`, never OK. | git top-level of the running package |
 
 ⚠️ **`SHANTY_ONTO_NS` is data identity, not cosmetics.** Every triple in a graph is keyed under it.
 Pick one per graph, set it before the first write, and never change it — repointing it does not
@@ -334,7 +341,7 @@ error, it just stops new facts from joining the old ones.
 |---|---|
 | [`docs/vision.md`](docs/vision.md) | what this replaces, and how we'll know it failed |
 | [`docs/design.md`](docs/design.md) | the shape: dispatch, triage, trackers, panes |
-| [`docs/cli.md`](docs/cli.md) | the fourteen commands, and the anchor |
+| [`docs/cli.md`](docs/cli.md) | the sixteen commands, and the anchor |
 | [`docs/agent-card.md`](docs/agent-card.md) | identity — the graph is the truth, the card is a projection |
 | [`docs/roles.md`](docs/roles.md) | worker / lead / administrator, and why a lead absorbs |
 | [`docs/adapters.md`](docs/adapters.md) | first-class defaults, pluggable everything |

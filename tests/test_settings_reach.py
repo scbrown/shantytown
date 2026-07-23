@@ -1,5 +1,5 @@
-"""`role set` must say who the settings rewrite did NOT reach (aegis-nipg item 2,
-recovered from a stash on aegis-qio0).
+"""`role set` must say who the settings rewrite did NOT reach (internal-ref item 2,
+recovered from a stash on internal-ref).
 
 THE INCIDENT THESE TESTS ENCODE. `--settings` is read ONCE, at launch. So the
 operator who just changed the hooks has, at that moment, changed nothing about the

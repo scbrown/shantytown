@@ -137,7 +137,7 @@ class Panes(Protocol):
     # VERIFY needs: a fast agent scrolls the echoed dispatch off-screen before we
     # can look, so a visible-only check can never confirm a delivery that worked.
     # attrs=True keeps the RENDERING attributes (tmux `-e`), not just the text.
-    # Required by triage.input_state (aegis-x6xh): dim is the only thing that
+    # Required by triage.input_state (internal-ref): dim is the only thing that
     # separates Claude Code's placeholder suggestion from real queued-unsubmitted
     # input, both of which render as `❯ <text>`, and plain capture strips exactly
     # that bit. An adapter that cannot supply attributes returns plain text and
@@ -149,7 +149,7 @@ class Panes(Protocol):
     # handoff) is untouched. Required because "is this lead up" must mean "will
     # it drain", not "does something answer to its name": a pane resurrected by a
     # FOREIGN launcher carries that launcher's wiring, and routing to it on the
-    # strength of the name alone loses every event (aegis-0v97). An adapter that
+    # strength of the name alone loses every event (internal-ref). An adapter that
     # cannot read it returns None, and the caller fails toward RISING.
     def cmdline(self, pane: str) -> str | None: ...
                                                # it to decide, #2 verify reads it

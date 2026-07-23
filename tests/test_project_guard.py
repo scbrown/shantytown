@@ -1,9 +1,9 @@
 """st project — the guard that stops a dirty graph from restructuring a live crew.
 
-aegis-0v97. `project` used to be a bare `for ag in agents: files.set(ag)`: no
+internal-ref. `project` used to be a bare `for ag in agents: files.set(ag)`: no
 preview, no confirmation, no notion that any of those agents might be RUNNING.
 That is safe only while the graph is clean, and ours was not — measured on the
-live store, the graph declared a HOST (luvu) and a process this fleet has stated
+live store, the graph declared a HOST (a-backup-host) and a process this fleet has stated
 does not exist (mayor) as crew workers, and projecting it would have demoted the
 live administrator and cut ten running agents loose.
 
@@ -100,14 +100,14 @@ def test_dry_run_writes_nothing_and_creates_no_ghost_cards(tmp_path, monkeypatch
     root = crew(tmp_path, sattler={"role": "administrator", "pane": "shanty-sattler"})
     graph(monkeypatch,
           Agent(name="sattler", role="worker"),
-          Agent(name="luvu", role="worker"))       # a HOST, per the live graph
+          Agent(name="a-backup-host", role="worker")) # a HOST, per the live graph
     panes(monkeypatch, "shanty-sattler")
 
     rc = main(["--root", str(root), "project", "-n"])
 
     assert rc == OK
     assert role_of(root, "sattler") == "administrator"
-    assert not (root / "crew" / "luvu.json").exists(), "dry-run must mint no cards"
+    assert not (root / "crew" / "a-backup-host.json").exists(), "dry-run must mint no cards"
 
 
 def test_dangling_supervisor_is_surfaced(tmp_path, monkeypatch, capsys):

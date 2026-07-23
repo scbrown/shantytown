@@ -50,8 +50,12 @@ class QuipuEvents:
     methods are the only seam tests override (mirrors test_reactor's _Fake)."""
 
     def __init__(self, server: str | None = None, timeout: float = 5.0):
+        # localhost, NOT an internal hostname: this repo is public, and a real
+        # deployment's address is deployment config ($QUIPU_SERVER), never a
+        # default baked into source. Same rule and same default as quipu.py —
+        # the ratchet test caught this one carrying a private hostname.
         self.server = (server or os.environ.get("QUIPU_SERVER")
-                       or "http://quipu.svc").rstrip("/")
+                       or "http://localhost:3030").rstrip("/")
         self.timeout = timeout
 
     def _get(self, path: str) -> dict:

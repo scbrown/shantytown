@@ -382,3 +382,135 @@ def test_cmd_tend_dry_run_writes_no_pass_log(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: _Panes(live=set()))
     cli._cmd_tend(_Args(root, dry_run=True))
     assert supervisor.PassLog(root).last() is None
+
+
+# --- the loop's own staleness (internal-ref follow-up): re-exec on code change
+
+def test_code_fingerprint_moves_when_a_module_changes(tmp_path):
+    """MEASURED: the live `st tend --loop` ran a two-day-old memory image while
+    the editable install moved under it — every fix landed on disk and reached
+    nothing (the internal-ref class, one level up: disk current, PROCESS stale).
+    The fingerprint is what the loop watches to re-exec itself."""
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    mod = pkg / "notify.py"
+    mod.write_text("old = 1\n")
+    before = cli._code_fingerprint(pkg)
+    assert before is not None
+    assert cli._code_fingerprint(pkg) == before      # stable when nothing moved
+    import os
+    mod.write_text("new = 2\n")
+    os.utime(mod, ns=(1, 1))                         # force a distinct mtime
+    assert cli._code_fingerprint(pkg) != before
+
+
+def test_a_new_module_changes_the_fingerprint(tmp_path):
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    (pkg / "a.py").write_text("x = 1\n")
+    before = cli._code_fingerprint(pkg)
+    (pkg / "b.py").write_text("y = 2\n")
+    assert cli._code_fingerprint(pkg) != before
+
+
+def test_an_empty_or_unreadable_package_is_None_never_reexec_fuel(tmp_path):
+    # None = could not look; the loop treats it as 'never re-exec' — a
+    # supervisor that exec-loops on a stat error is worse than a stale one.
+    empty = tmp_path / "nothing"
+    empty.mkdir()
+    assert cli._code_fingerprint(empty) is None
+
+
+# --- the supervisor survives its sweeps (internal-ref, the ENOSPC death) -------
+
+def test_a_crashing_notify_sweep_does_not_kill_the_pass(tmp_path, monkeypatch, capsys):
+    """The live loop died to ONE uncaught OSError inside a ledger write: the
+    notification layer took the respawn layer down with it, and nothing
+    restarted the supervisor. Each sweep now fails alone and loudly."""
+    import json as _json
+    from shantytown import cli, notify as notify_mod
+
+    crew = tmp_path / "crew"; crew.mkdir()
+    (crew / "w.json").write_text(_json.dumps({"role": "worker", "pane": "p-w"}))
+    panes = _Panes(screens={"p-w": IDLE})
+    monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: panes)
+
+    class _Boom:
+        def __init__(self, *a, **k): pass
+        def sweep(self, *a, **k):
+            raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(notify_mod, "Notifier", _Boom)
+    monkeypatch.setattr(notify_mod, "CycleDriver", _Boom)
+    monkeypatch.setattr(notify_mod, "IdleFleetAlerter", _Boom)
+
+    class _A:
+        root = tmp_path; dry_run = False
+        backend = "files"; repo = None; registry = "files"
+
+    rc = cli._tend_once(_A())          # must RETURN, not raise
+    err = capsys.readouterr().err
+    assert err.count("CRASHED") == 3, "each sweep must fail alone and loudly"
+    assert "supervision continues" in err
+    # The pass itself still ran and recorded its health signal.
+    assert rc in (cli.OK, cli.CANNOT_TELL)
+
+
+# --- the respawn ownership gate (internal-ref) --------------------------------
+
+class _StampedLaunches:
+    """Real-API stub: get() answers from a stamped set; root is a real dir so
+    the any-stamps probe reads actual files."""
+    def __init__(self, root, stamped=()):
+        from pathlib import Path
+        self.root = Path(root)
+        self.root.mkdir(parents=True, exist_ok=True)
+        for n in stamped:
+            (self.root / f"{n}.json").write_text("{}")
+        self._stamped = set(stamped)
+
+    def get(self, name):
+        return {"agent": name} if name in self._stamped else None
+
+    def verdict(self, name):
+        return "current"
+
+
+def test_an_unstamped_card_is_REFUSED_a_respawn_when_stamps_exist(tmp_path):
+    """st tend was one of the dark-crew trap's own respawners: a pilot-era
+    registry card for another orchestrator's fleet reads 'down' whenever that
+    orchestrator cycles it, and the respawn manufactured a pane carrying st's
+    worker settings (observed live: 'RESPAWNED dearing'). No launch stamp =
+    never launched by st = not st's to respawn."""
+    dead = Agent(name="dearing", pane="aegis-crew-dearing", workspace="/ws/d")
+    panes = _Panes(live=set())
+    rt = _Runtime()
+    said = []
+    launches = _StampedLaunches(tmp_path / "launched", stamped=("weaver",))
+    rep = _tender(panes, rt, launches=launches, log=said.append).pass_over([dead])
+    f, = rep.findings
+    assert f.verdict == tend_mod.REFUSED and not f.acted
+    assert rt.started == [], "must not manufacture a pane it does not own"
+    assert any("not st's to respawn" in m for m in said), "the refusal must be loud"
+
+
+def test_an_empty_stamp_store_does_not_gate_the_respawn(tmp_path):
+    """CANNOT-TELL: no stamps at all proves nothing about ownership — a fresh
+    deployment must still self-heal its own dead workers."""
+    dead = Agent(name="ellie", pane="p-ellie", workspace="/ws/e")
+    panes = _Panes(live=set())
+    rt = _Runtime()
+    launches = _StampedLaunches(tmp_path / "launched", stamped=())
+    rep = _tender(panes, rt, launches=launches).pass_over([dead])
+    f, = rep.findings
+    assert f.verdict == tend_mod.RESPAWNED and f.acted
+
+
+def test_a_stamped_dead_worker_is_still_respawned(tmp_path):
+    dead = Agent(name="weaver", pane="p-weaver", workspace="/ws/w")
+    panes = _Panes(live=set())
+    rt = _Runtime()
+    launches = _StampedLaunches(tmp_path / "launched", stamped=("weaver",))
+    rep = _tender(panes, rt, launches=launches).pass_over([dead])
+    f, = rep.findings
+    assert f.verdict == tend_mod.RESPAWNED and f.acted

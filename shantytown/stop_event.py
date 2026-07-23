@@ -20,7 +20,7 @@ TWO MODES, the two halves of arnold's frame:
           so a later stop with nothing new prints nothing and the destination
           idles instead of wedging.
 
-A STOP EVENT IS A TURN BOUNDARY, NOT AN IDLE AGENT (aegis-w9z1). Claude Code's
+A STOP EVENT IS A TURN BOUNDARY, NOT AN IDLE AGENT (internal-ref). Claude Code's
 Stop hook fires at the end of every TURN. So `send` cannot know whether the agent
 it names is finished or merely between thoughts, and it must not pretend: the
 only pane it could inspect is its own, from inside its own blocking hook, and any
@@ -55,7 +55,7 @@ from .policy import NullRanker, PolicyRanker
 from .protocols import RankUnavailable
 from .runtime import ClaudeRuntime, live_wiring
 from .tier import route_stop
-from .triage import running_shells
+from .triage import running_shells, context_tokens_k, CYCLE_THRESHOLD_K
 from .tmux import Tmux
 
 
@@ -72,7 +72,7 @@ def _root(argv: list[str]) -> Path:
 
 def _lead_is_up(reg: FilesRegistry, panes) -> "callable":
     """route_stop asks 'is this lead reachable?' — and REACHABLE MEANS IT WILL
-    DRAIN, not that something answers to its name (dearing, aegis-0v97).
+    DRAIN, not that something answers to its name (dearing, internal-ref).
 
     This used to be `pane exists`, and that is the same defect one layer over
     from the checker's: a pane is a name, and a name is not a capability. It was
@@ -110,7 +110,7 @@ def _lead_is_up(reg: FilesRegistry, panes) -> "callable":
 
 
 def _my_shells(reg: FilesRegistry, panes, me: str) -> int | None:
-    """Background shells I still own AT MY OWN STOP (aegis-q73g).
+    """Background shells I still own AT MY OWN STOP (internal-ref).
 
     Read off MY pane, whose address comes from MY card — the same route
     _lead_is_up uses, so the hook needs no new coupling and no new env var. Any
@@ -126,13 +126,30 @@ def _my_shells(reg: FilesRegistry, panes, me: str) -> int | None:
         return None
 
 
+def _my_context_k(reg: FilesRegistry, panes, me: str) -> float | None:
+    """My context depth AT MY OWN STOP, in k tokens (internal-ref).
+
+    Read off my own pane, the same route as _my_shells — the "/clear to save N
+    tokens" footer the runtime prints. A destination told only "gennaro stopped"
+    hands gennaro the next item; told "gennaro stopped past the 400k cycle
+    threshold at 687k" it does not. None on any failure, and — like shells — never
+    a fabricated 0: a stop taken mid-turn has no footer to read, and "not reported"
+    is the truth there, not "context is fine".
+    """
+    try:
+        pane = reg.get(me).pane
+        return context_tokens_k(panes.capture(pane)) if pane else None
+    except Exception:
+        return None
+
+
 def _plate_of(root: Path, me: str) -> tuple[str | None, str | None]:
     """What `me` held when it stopped: (item_id, status).
 
     Three distinct answers, and the third is why this returns a pair instead of an
     id: (None, None) = the plate was empty; (id, status) = it held that; and
     (None, "?") = THE TRACKER DID NOT ANSWER. A lookup that failed must not render
-    as finished work — that is the whole aegis-mt0r lesson, and it is one `except`
+    as finished work — that is the whole internal-ref lesson, and it is one `except`
     away from happening here.
 
     Files backend only, deliberately: the emitted hook command carries no --backend
@@ -158,15 +175,119 @@ def _send(reg: FilesRegistry, events: FilesEvents, panes, me: str,
         return 1
     reason = routing.reason.value if routing.reason else None
     shells = _my_shells(reg, panes, me)
+    context_k = _my_context_k(reg, panes, me)
     item, item_status = _plate_of(root, me) if root is not None else (None, "?")
     ev = events.persist(to=routing.to, frm=me, reason=reason, rose=routing.rose,
-                        shells=shells, item=item, item_status=item_status)
+                        shells=shells, item=item, item_status=item_status,
+                        context_k=context_k)
+    over = context_k is not None and context_k >= CYCLE_THRESHOLD_K
     # Silent on stdout (a non-blocking Stop hook's stdout is discarded anyway);
     # a terse stderr line is useful when a human runs it by hand.
     print(f"stop_event: {me} stopped -> persisted {ev.id} to {routing.to}"
           + (f" (ROSE: {reason})" if routing.rose else "")
-          + (f" [{shells} shell(s) still running]" if shells else ""), file=sys.stderr)
+          + (f" [{shells} shell(s) still running]" if shells else "")
+          + (f" [SATURATED {int(context_k)}k]" if over else ""), file=sys.stderr)
     return 0
+
+
+# --- the HAUL advance (the sequenced-worker self-feed) -----------------------
+
+# The mid-haul HANDOFF line, in k tokens: 60% OF THE ~1M WINDOW (Stiwi's call,
+# on the design bead). Deliberately NOT derived from triage's 400k
+# CYCLE_THRESHOLD_K — the two lines answer different questions. 400k is the
+# NEW-work dispatch wall: past it, an agent must cycle before TAKING work. A
+# hauling worker is different: between beads its context is disposable BY
+# CONSTRUCTION (the anchor just closed, the work is durable in the bead trail),
+# so the haul may grind past 400k — and at 600k the advance stops feeding and
+# instructs the handoff instead.
+HAUL_HANDOFF_K = 600.0
+
+
+def _bd_json(args: list[str], cwd: str | None) -> list[dict]:
+    """One bd read, JSON out, or raise — the caller's fail-open catches it."""
+    import subprocess
+    r = subprocess.run(["bd", *args, "--json"], capture_output=True, text=True,
+                       timeout=20, cwd=cwd)
+    if r.returncode != 0:
+        raise RuntimeError(f"bd {' '.join(args)} failed: {r.stderr.strip()}")
+    return json.loads(r.stdout)
+
+
+def _assigned_to(me: str, beads: list[dict]) -> list[dict]:
+    """The beads assigned to `me` — trailing-segment match, the same parse
+    feed_check.hauls uses (bd stores crew paths or bare names)."""
+    out = []
+    for b in beads:
+        assignee = b.get("assignee") or ""
+        if assignee.split("/")[-1] == me:
+            out.append(b)
+    return out
+
+
+def _haul(reg: FilesRegistry, panes, me: str, root: Path) -> int:
+    """The worker's own advance: anchor closed + assigned ready work -> BLOCK
+    the stop with the next bead as the reason — the same model-reaching
+    protocol drain and the Rule Zero gate already use. The coordinator is not
+    involved at any point; that is the feature.
+
+    A STOP IS A TURN BOUNDARY, NOT AN IDLE AGENT (internal-ref), so the advance
+    fires only on evidence the anchor actually finished: nothing of mine
+    in_progress AND something of mine ready. Mid-work turn ends fall through
+    silently — halting there would halt every haul within minutes (the design
+    correction this module's own header taught).
+
+    SELF-TERMINATING like feed_check: each feed claims the bead in_progress,
+    so the next stop sees an active anchor and allows. The handoff branch
+    blocks until the agent /clears — it terminates on the RIGHT condition
+    (compliance), never a counter.
+
+    FAIL-OPEN ABSOLUTELY: any error allows the stop, and the worker degrades
+    to the tend self-feed nudge (the belt) and normal idle flow. A broken
+    advance must never trap a worker at its own stop."""
+    try:
+        if reg.get(me).role != "worker":
+            return 0
+        from .feed_check import bd_cwd
+        cwd = bd_cwd(reg)
+        # An active anchor = mid-work turn boundary. bd list is filtered
+        # client-side (same reason as feed_check: assignee formats vary).
+        active = _assigned_to(me, _bd_json(["list", "--status", "in_progress"], cwd))
+        if active:
+            return 0
+        mine = _assigned_to(me, _bd_json(["ready"], cwd))
+        if not mine:
+            return 0
+
+        # THE HANDOFF LINE: past 60% of the window, the advance stops feeding
+        # and instructs the reset — between beads is the uniquely safe moment
+        # to shed context, and feeding another bead here would spend the
+        # remaining headroom on work that deserves a fresh session. None
+        # (footer unreadable) is NOT over the line — unknown never blocks.
+        from .feed_check import haul_feed_message, haul_handoff_message
+        ck = _my_context_k(reg, panes, me)
+        if ck is not None and ck >= HAUL_HANDOFF_K:
+            print(json.dumps({"decision": "block",
+                              "reason": haul_handoff_message(ck, HAUL_HANDOFF_K)}))
+            return 0
+
+        nxt = mine[0]
+        nid = nxt.get("id", "?")
+        title = (nxt.get("title") or "")[:80]
+        rest = len(mine) - 1
+        # Claim it the way a dispatch would, so the tracker shows the truth and
+        # the next stop sees an active anchor. Best-effort: a failed claim
+        # still feeds — the agent claims by hand per the instruction. The
+        # message is feed_check's — ONE voice for both advance triggers.
+        try:
+            _bd_json(["update", nid, "--status", "in_progress"], cwd)
+        except Exception:
+            pass
+        print(json.dumps({"decision": "block",
+                          "reason": "anchor closed ✓ — "
+                          + haul_feed_message(nid, title, rest)}))
+        return 0
+    except Exception:
+        return 0                     # fail-open: never trap a worker's stop
 
 
 DOWN = "down"        # a fifth verdict triage cannot produce: there is no pane.
@@ -244,15 +365,25 @@ def _compose_reason(events: list[StopEvent], verdicts: dict, now: float,
         e = latest[name]
         tag = f" (ROSE: {e.reason})" if e.rose else (f" [{e.reason}]" if e.reason else "")
         # The shell count is the difference between "its turn ended" and "it is
-        # finished" (aegis-q73g). Said in the destination's own words, because
+        # finished" (internal-ref). Said in the destination's own words, because
         # the destination is the one about to book the item as done. Taken from
         # the LATEST event only: an earlier count is a fact about an earlier turn,
         # and re-asserting it here would report a shell that has since exited.
         if e.shells:
             tag += (f" — STILL RUNNING {e.shells} background shell(s): its TURN "
                     f"ended, its WORK may not have")
+        # PAST THE CYCLE THRESHOLD (internal-ref), from the latest event's own
+        # reading. The difference between "gennaro stopped" and "gennaro stopped as
+        # a wall": a destination that hands the next item to a past-threshold agent
+        # is piling onto one that must cycle first. context_k is None when the stop
+        # was mid-turn (no footer) — not reported, so not asserted. Raw depth, no
+        # "% of limit" — 400k is a cycle point, not the ceiling.
+        if e.context_k is not None and e.context_k >= CYCLE_THRESHOLD_K:
+            tag += (f" — PAST THE 400k CYCLE THRESHOLD at {int(e.context_k)}k: do "
+                    f"NOT hand it the next item until it CHECKPOINTS state to its "
+                    f"bead, THEN /clears")
         more = f" ({counts[name]} events)" if counts[name] > 1 else ""
-        # BLOCKED ON A QUESTION (aegis-qxc2). The bare verdict `waiting` is already
+        # BLOCKED ON A QUESTION (internal-ref). The bare verdict `waiting` is already
         # better than the `?` it replaces, but a coordinator reading this line is
         # deciding what to DO, and "waiting" alone does not say that the thing it is
         # waiting for is THEM. Spelled out here rather than left to be inferred,
@@ -299,7 +430,7 @@ def _drain(events: FilesEvents, me: str, reg=None, panes=None,
     if not got:
         # Nothing to act on -> NO block -> idle. This is now also the turn-boundary
         # case: every pending sender is still mid-flight, so there is no decision
-        # to make and waking the destination would be the aegis-w9z1 bug itself.
+        # to make and waking the destination would be the internal-ref bug itself.
         if deferred:
             print(f"stop_event: {deferred} event(s) held back — sender(s) still "
                   f"mid-flight", file=sys.stderr)
@@ -343,8 +474,8 @@ def _compose_workflow(reg, panes, plate, rank, events, me: str) -> str:
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     mode = argv[0] if argv else ""
-    if mode not in ("send", "drain"):
-        print("usage: python -m shantytown.stop_event send|drain [--root DIR]",
+    if mode not in ("send", "drain", "haul"):
+        print("usage: python -m shantytown.stop_event send|drain|haul [--root DIR]",
               file=sys.stderr)
         return 2
     me = os.environ.get("SHANTY_AGENT")
@@ -358,6 +489,8 @@ def main(argv: list[str] | None = None) -> int:
     panes = Tmux()
     if mode == "send":
         return _send(reg, events, panes, me, root)
+    if mode == "haul":
+        return _haul(reg, panes, me, root)
     # shows_ready_ui is the RUNTIME's marker check (triage stays runtime-blind).
     # It reads only the screen, so the settings resolver it never calls is None.
     runtime = ClaudeRuntime(panes, lambda card: None, root=root)

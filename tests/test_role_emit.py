@@ -24,12 +24,22 @@ def _stop_commands(settings: dict) -> list[str]:
     return [h["command"] for h in hooks]
 
 
-_PY = sys.executable or "python3"
+# The interpreter the EMITTER chooses, which is no longer simply sys.executable:
+# it must be one that can actually import shantytown (internal-ref — a lead's hooks
+# were emitted naming /usr/bin/python3, which cannot, so they were dead). These
+# tests are about send/drain DIRECTIONS; the interpreter property itself is
+# covered by tests/test_hook_interpreter.py.
+from shantytown.runtime import _hook_interpreter
+_PY = _hook_interpreter()
 
 
-def test_worker_settings_send_only():
+def test_worker_settings_send_then_haul():
+    """send FIRST (the event persists whatever happens), then the haul advance
+    (the sequenced-worker self-feed; fail-open, so a worker without a queue is
+    exactly as before)."""
     cmds = _stop_commands(settings_for_role("worker"))
-    assert cmds == [f"{_PY} -m shantytown.stop_event send"]
+    assert cmds == [f"{_PY} -m shantytown.stop_event send",
+                    f"{_PY} -m shantytown.stop_event haul"]
 
 
 def test_lead_settings_send_and_drain():
@@ -39,10 +49,17 @@ def test_lead_settings_send_and_drain():
                     f"{_PY} -m shantytown.stop_event drain"]
 
 
-def test_administrator_settings_drain_only():
-    """Root: receives only; its own stop terminates (no send)."""
+def test_administrator_settings_drain_and_feed_check():
+    """Root: receives only (no `send`), and its own stop is GATED. Beside the drain
+    that delivers received events sits the Rule Zero feed-check (internal-ref): it
+    blocks the admin's stop while free feedable workers and dispatchable beads
+    coexist, so the coordinator cannot go idle with the fleet idle. Fail-open lives
+    inside the module; here we only pin that the hook is EMITTED, in order."""
     cmds = _stop_commands(settings_for_role("administrator"))
-    assert cmds == [f"{_PY} -m shantytown.stop_event drain"]
+    assert cmds == [
+        f"{_PY} -m shantytown.stop_event drain",
+        f"{_PY} -m shantytown.feed_check",
+    ]
 
 
 def test_hook_interpreter_actually_exists():
@@ -191,7 +208,8 @@ def test_role_set_emits_the_settings_file(tmp_path):
     p = root / "settings" / "worker.settings.json"
     assert p.is_file(), "role set did not emit the role's settings.json"
     assert _stop_commands(json.loads(p.read_text())) == [
-        f"{_PY} -m shantytown.stop_event send --root {root.resolve()}"
+        f"{_PY} -m shantytown.stop_event send --root {root.resolve()}",
+        f"{_PY} -m shantytown.stop_event haul --root {root.resolve()}",
     ]
 
 

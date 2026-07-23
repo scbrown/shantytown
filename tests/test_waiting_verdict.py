@@ -1,4 +1,4 @@
-"""A pane BLOCKED ON A QUESTION is its own verdict, not `?` (aegis-qxc2).
+"""A pane BLOCKED ON A QUESTION is its own verdict, not `?` (internal-ref).
 
 MEASURED (sattler, 2026-07-20): 7 of 10 workers sat on interactive option-pickers
 SIMULTANEOUSLY and every one printed `?` in `st crew`. `?` was the correct answer
@@ -117,7 +117,7 @@ def test_an_agent_QUOTING_picker_chrome_is_not_waiting():
     that — the same scar triage carries for classifying a healthy agent wedged
     because it printed a traceback."""
     talking = (
-        'reading aegis-qxc2, which quotes "Enter to select · n to add notes"\n'
+        'reading internal-ref, which quotes "Enter to select · n to add notes"\n'
         'and "Ready to submit your answers?" — I am merely discussing pickers.\n'
         + "\n" * 8
         + "\x1b[38;5;246m❯\xa0\x1b[39m\n"

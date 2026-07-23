@@ -29,7 +29,7 @@ def _reg(tmp_path: Path) -> FilesRegistry:
 
 # A drain-capable launch line. `up` alone is no longer enough to be routed to:
 # _lead_is_up now means "will it DRAIN", not "does a pane answer to that name"
-# (aegis-0v97). Panes listed in `up` are modelled as st-launched unless the test
+# (internal-ref). Panes listed in `up` are modelled as st-launched unless the test
 # overrides cmdlines to model a FOREIGN launcher.
 # REAL files, not string literals: live_wiring PARSES the settings the launch line
 # names, so a fake path reads as "cannot tell" and (correctly) rises. Modelling
@@ -42,7 +42,7 @@ _FAKE = pathlib.Path(tempfile.mkdtemp(prefix="st-stopev-"))
 # stop_event hook. This is the gastown shape that made dearing look available.
 _FOREIGN = _FAKE / "foreign.settings.json"
 _FOREIGN.write_text(json.dumps({"hooks": {"Stop": [
-    {"hooks": [{"command": "/home/braino/.local/bin/gt costs record &"}]}]}}))
+    {"hooks": [{"command": "/home/user/.local/bin/gt costs record &"}]}]}}))
 
 DRAIN_CMDLINE = f"claude --settings {_FAKE / 'settings' / 'lead.settings.json'}"
 FOREIGN_CMDLINE = f"claude --settings {_FOREIGN}"
@@ -148,7 +148,7 @@ def test_main_rejects_a_bad_mode(tmp_path, monkeypatch):
     assert stop_event.main(["frobnicate", "--root", str(tmp_path)]) == 2
 
 
-# --- aegis-w9z1: a stop is a TURN boundary, so the drain checks the pane -------
+# --- internal-ref: a stop is a TURN boundary, so the drain checks the pane -------
 
 def _pending(root: Path, to: str) -> list:
     """Undelivered events for `to`, read WITHOUT draining (so a test can assert a
@@ -173,7 +173,7 @@ def test_drain_DEFERS_an_event_whose_sender_is_still_mid_flight(tmp_path, capsys
     rc = stop_event._drain(ev, "maldoon", reg, panes, _ready)
     assert rc == 0
     assert capsys.readouterr().out == "", \
-        "blocked the lead on a turn boundary — the whole aegis-w9z1 bug"
+        "blocked the lead on a turn boundary — the whole internal-ref bug"
     assert len(_pending(tmp_path, "maldoon")) == 1, \
         "a deferred event was consumed, not held — that LOSES the stop"
 
@@ -306,7 +306,7 @@ def test_main_send_end_to_end(tmp_path, monkeypatch):
 
 
 def test_send_RISES_when_the_lead_is_UP_but_CANNOT_DRAIN(tmp_path):
-    """THE aegis-0v97 CASE, and the reason `up` stopped meaning "pane exists".
+    """THE internal-ref CASE, and the reason `up` stopped meaning "pane exists".
 
     dearing's pane was resurrected by a FOREIGN launcher (gt-crew-up) carrying
     gastown's settings — real hooks, but no `stop_event` direction. Under the old
@@ -353,7 +353,7 @@ def test_unreadable_process_fails_toward_RISING(tmp_path):
     assert len(ev.drain("hammond")) == 1
 
 
-# --- BLOCKED ON A QUESTION reaches the coordinator (aegis-qxc2) -----------------
+# --- BLOCKED ON A QUESTION reaches the coordinator (internal-ref) -----------------
 
 # A real picker footer, as captured off lowery's pane 2026-07-20. Colour-split per
 # word on the live pane; the plain form is what the runtime hands the predicate.

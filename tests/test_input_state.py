@@ -1,4 +1,4 @@
-"""A placeholder suggestion is not queued input — aegis-x6xh.
+"""A placeholder suggestion is not queued input — internal-ref.
 
 Both render as `❯ <text>`. The ONLY thing that separates them is a rendering
 attribute, and `capture-pane -p` strips exactly that attribute. So the tier's
@@ -7,7 +7,7 @@ one liveness oracle was ambiguous in both directions at once:
   - a healthy IDLE agent showing a suggestion read as a stalled dispatch, and an
     administrator typed into its buffer to "un-stall" it (measured, sattler,
     2026-07-20 — the keystrokes went into a pane that had nothing wrong with it);
-  - a REAL stall (send-keys landed, Enter never did — the aegis-16e shape) reads
+  - a REAL stall (send-keys landed, Enter never did — the internal-ref shape) reads
     as "just a suggestion, it's fine" and gets left wedged.
 
 Every screen below is VERBATIM from a live pane on 2026-07-20, captured with

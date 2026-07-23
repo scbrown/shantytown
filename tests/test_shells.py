@@ -1,4 +1,4 @@
-"""Background shells are work that outlives the turn — aegis-q73g.
+"""Background shells are work that outlives the turn — internal-ref.
 
 A worker whose TURN ended while a build/test/`gh run watch` is still live is not
 finished, and the tier modelled none of it: triage passed the pane dispatchable,

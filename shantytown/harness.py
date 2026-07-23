@@ -32,9 +32,16 @@ A card with no `harness` field means "claude" — every card in existence today.
 """
 from __future__ import annotations
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable, TYPE_CHECKING
 
 from .protocols import Agent
+
+if TYPE_CHECKING:
+    # Type-only: the capability declaration returns runtime.HookSpec, but harness
+    # must not import runtime at module load (the import graph is one-directional —
+    # runtime imports harness, never the reverse; see settings() below). The real
+    # value is produced by a call-time import inside hooks().
+    from .runtime import HookSpec
 
 # The default, and the answer for every card that does not say otherwise.
 DEFAULT = "claude"
@@ -63,6 +70,18 @@ class Harness(Protocol):
         and a second harness emits its own."""
         ...
 
+    def hooks(self, card: Agent) -> "HookSpec":
+        """The CAPABILITY declaration the gate keys on: can the program this
+        harness launches deliver a blocking stop hook to the MODEL?
+
+        It lives HERE, on the harness, because it is a property of the PROGRAM —
+        and the program is what the card selects (for_card), NOT the Runtime the
+        CLI happens to construct. That mismatch was the whole of internal-ref: the
+        gate asked a hardcoded ClaudeRuntime while the launched program came from
+        card.harness. A capability declared on the object the card cannot pick is
+        a gate that cannot see what it is gating."""
+        ...
+
 
 class ClaudeHarness:
     """Claude Code. First-class, and — for now — the only one.
@@ -81,7 +100,7 @@ class ClaudeHarness:
         # this a first-run claude stops at a "Claude in Chrome extension detected"
         # consent prompt that BLOCKS the ready UI — so st new's verify never sees
         # live and returns could-not-tell (2) for an agent that would be fine.
-        # Live-fire confirmed (aegis-84z1): `claude --no-chrome` goes straight to
+        # Live-fire confirmed (internal-ref): `claude --no-chrome` goes straight to
         # the ready UI, is_live True. This is the prod 0-path fix.
         # Remote Control ON BY DEFAULT (Stiwi 2026-07-19). A fleet you cannot reach
         # is a fleet you cannot run: this session sat unreachable for a day with an
@@ -93,7 +112,7 @@ class ClaudeHarness:
         flags = f"--no-chrome --remote-control {card.name}"
         # --dangerously-skip-permissions is OPT-IN per agent (card.dangerous), never
         # global — a crew worker that must act without prompts sets it on its own
-        # card; nobody else inherits it (the pilot, aegis-qdal.5).
+        # card; nobody else inherits it (the pilot, internal-ref.5).
         if card.dangerous:
             flags += " --dangerously-skip-permissions"
         # BOBBIN_ROLE is how hank's policy guard resolves WHICH scope applies
@@ -102,12 +121,12 @@ class ClaudeHarness:
         # agent is what lets ONE hook registration serve every role — without it
         # the guard has no scope to enforce and every agent is ungoverned.
         # SHANTY_ROOT is the BELT to --settings' braces, and it exists because of a
-        # measured incident (aegis-nipg, sattler 2026-07-19). --settings is read ONCE,
+        # measured incident (internal-ref, sattler 2026-07-19). --settings is read ONCE,
         # at launch: when the Stop hook was later corrected on disk to carry an
         # absolute --root (c3fb472), every ALREADY-RUNNING agent kept the old unrooted
         # command forever. kelly's own pane showed it —
         #     stop_event send: no such agent: kelly (looked in
-        #     /home/braino/gt/beads_aegis/crew/kelly/.shanty/crew/kelly.json)
+        #     <workspace>/crew/<agent>/.shanty/crew/<agent>.json)
         # — the cwd/.shanty default, resolved against the agent's OWN workspace, which
         # has no .shanty. The agent still looked "up" in `st crew`, still worked, still
         # committed; only its stop events vanished, so the administrator at the root of
@@ -141,6 +160,17 @@ class ClaudeHarness:
         # graph one-directional (runtime imports harness, never the reverse).
         from .runtime import claude_settings_for_role
         return claude_settings_for_role(role, root=root)
+
+    def hooks(self, card: Agent) -> "HookSpec":
+        # Claude Code delivers blocking stop hooks — measured, load-bearing: a
+        # lead/administrator's reports' stop events reach the MODEL via a blocking
+        # Stop hook's `reason` (a non-blocking hook's stdout is discarded). This is
+        # the SINGLE literal declaration of the capability now; ClaudeRuntime.hooks
+        # forwards here rather than restating it, so the two cannot drift apart
+        # (which is how the gate came to rubber-stamp a non-claude card, internal-ref).
+        # Call-time import, same one-directional reason as settings() above.
+        from .runtime import HookSpec
+        return HookSpec(blocking_stop=True)
 
 
 _HARNESSES = {h.name: h for h in (ClaudeHarness(),)}

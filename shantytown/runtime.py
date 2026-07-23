@@ -29,7 +29,10 @@ HONEST BOUNDARY (say it so nobody over-claims):
     never be read as "hooks registered" — it cannot show that.
 """
 from __future__ import annotations
+import os
 import json
+import shutil
+import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -76,7 +79,7 @@ class SettingsError(RuntimeError):
 
 
 def asks_a_question(rt, screen: str) -> bool:
-    """Does `rt` say a BLOCKING picker is up on this screen? (aegis-qxc2)
+    """Does `rt` say a BLOCKING picker is up on this screen? (internal-ref)
 
     Tolerates a runtime that cannot answer. Pane-reading is an OPTIONAL capability
     here — CodexRuntime implements neither this nor shows_ready_ui — and the two
@@ -95,6 +98,20 @@ def asks_a_question(rt, screen: str) -> bool:
     return bool(ask(screen)) if callable(ask) else False
 
 
+def auth_expired(rt, screen: str) -> bool:
+    """Does `rt` say its LOGIN EXPIRED banner is on this screen? (internal-ref)
+
+    The auth twin of asks_a_question, with the identical tolerance and the
+    identical safety argument: a runtime that reads no panes (codex) cannot
+    answer, and False-because-could-not-ask is safe ONLY because of where it
+    lands — the flag can only ever convert some other verdict INTO `auth-dead`,
+    so failing to ask leaves the verdict as it was. It can never manufacture
+    auth-death, and it can never hide a busy/wedged agent behind it.
+    """
+    ask = getattr(rt, "auth_dead", None)
+    return bool(ask(screen)) if callable(ask) else False
+
+
 @runtime_checkable
 class Runtime(Protocol):
     """An agent runtime does three things (adapters.md). start() is this ruling."""
@@ -103,19 +120,26 @@ class Runtime(Protocol):
     def hooks(self, card: Agent) -> HookSpec: ...          # capability declaration
 
 
-def require_capability(rt: Runtime, card: Agent) -> None:
-    """Refuse a card whose role needs a capability its runtime cannot declare.
+def require_capability(program, card: Agent) -> None:
+    """Refuse a card whose ROLE needs a capability the launched PROGRAM lacks.
+
+    `program` is the object that ACTUALLY runs the agent — the Harness the card
+    selects (harness.for_card), not a hardcoded runtime. That distinction is the
+    whole of internal-ref: the CLI only ever builds ClaudeRuntime (blocking_stop=
+    True), so asking `self` rubber-stamped every card while the program that ran
+    came from card.harness. Ask the harness and the gate sees what it is gating.
 
     This is the capability gate adapters.md sketches:
-        role 'lead' requires on_report_stop delivery; runtime 'codex' does not
+        role 'lead' requires on_report_stop delivery; a harness that does not
         declare blocking stop hooks -> malcolm stays worker, nothing written.
-    Keyed on the runtime's DECLARED hooks(), not on a hardcoded name check, so a
-    third runtime that happens to support blocking stop hooks passes without a
-    code change here — the declaration is the source of truth.
+    Keyed on the DECLARED hooks(), never a name (adapters.md:86-87), so a third
+    capable program passes without editing here — the declaration is the source of
+    truth. Duck-typed on `.hooks()`/`.name`: a Harness satisfies it, and so does a
+    self-contained runtime that is its own program (CodexRuntime, the test double).
     """
-    if card.role in _ROLES_NEEDING_STOP and not rt.hooks(card).blocking_stop:
+    if card.role in _ROLES_NEEDING_STOP and not program.hooks(card).blocking_stop:
         raise CapabilityError(
-            f"runtime {rt.name!r} does not declare blocking stop hooks; "
+            f"harness {program.name!r} does not declare blocking stop hooks; "
             f"role {card.role!r} requires stop-event delivery to the model. "
             f"{card.name} stays worker. Nothing written, nothing launched."
         )
@@ -140,7 +164,65 @@ SettingsResolver = Callable[[Agent], "str | None"]
 # turn, which silently killed the whole stop-event route (send/drain, #6): the
 # feature looked shipped and had never once run. sys.executable is by
 # construction an interpreter that exists and can import shantytown.
-_PY = sys.executable or "python3"
+# ...BUT "by construction" was an ASSUMPTION, and it is false in the case that
+# matters. sys.executable is the interpreter that RAN THE EMITTER, which is only
+# the interpreter that can import shantytown when the emitter was invoked through
+# the installed entry point. Emit from a source checkout with the system python —
+# `python3 -m shantytown.cli role set ...`, which is exactly how one regenerates
+# settings while developing — and you bake in `/usr/bin/python3`, which cannot
+# import shantytown at all.
+#
+# MEASURED on the live store, 2026-07-20: lead.settings.json carried
+#     /usr/bin/python3 -m shantytown.stop_event send|drain
+# and `/usr/bin/python3 -c "import shantytown"` is a ModuleNotFoundError. So the
+# lead's hooks were dead — the identical silent outcome as the `python: not found`
+# bug above, reintroduced through a different door, in the file the whole
+# stop-event route depends on. The comment above asserted the property; nothing
+# checked it.
+#
+# So CHECK it. A hook interpreter that cannot import the package is not a hook.
+def _usable(py: str) -> bool:
+    """Can this interpreter actually import shantytown? Asked, not assumed."""
+    if not py:
+        return False
+    try:
+        # cwd="/" ON PURPOSE. Python prepends the CWD to sys.path for -c, so
+        # running this from a source checkout imports the LOCAL shantytown/ dir
+        # and every interpreter looks usable — my first version of this check
+        # returned True for /usr/bin/python3, which cannot import shantytown at
+        # all, because I ran it from the worktree. The emitted hook executes in
+        # the AGENT'S workspace, which has no shantytown/, so "/" is the honest
+        # model of where it will actually run.
+        return subprocess.run([py, "-c", "import shantytown"], cwd="/",
+                              capture_output=True, timeout=15).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def _hook_interpreter() -> str:
+    """The interpreter to bake into emitted Stop hooks.
+
+    Prefers the one running us (correct when invoked via the installed `st`), then
+    the interpreter beside the installed console script — which is what a
+    dev-shell invocation must fall back to, since the settings it writes are for
+    the DEPLOYED agents, not for the shell that happened to emit them.
+
+    RAISES rather than emitting a dead hook: this repo refuses settings-less
+    launches for the same reason, and a hook that cannot start is indistinguishable
+    from a tier with no hooks at all.
+    """
+    if _usable(sys.executable):
+        return sys.executable
+    st = shutil.which("st")
+    if st:
+        cand = str(Path(st).resolve().parent / "python")
+        if _usable(cand):
+            return cand
+    raise SettingsError(
+        "no interpreter available that can import shantytown — refusing to emit a "
+        f"Stop hook that cannot run (tried {sys.executable!r} and the interpreter "
+        "beside the installed `st`). Install shantytown, or run this through the "
+        "installed entry point.")
 
 
 def _stop_cmd(mode: str, root=None) -> dict:
@@ -154,7 +236,17 @@ def _stop_cmd(mode: str, root=None) -> dict:
     workers, zero events). Baking the absolute root is what makes send/drain
     reach the real store no matter where the agent is launched.
     """
-    cmd = f"{_PY} -m shantytown.stop_event {mode}"
+    cmd = f"{_hook_interpreter()} -m shantytown.stop_event {mode}"
+    if root is not None:
+        cmd += f" --root {Path(root).resolve()}"
+    return {"type": "command", "command": cmd}
+
+
+def _feed_check_cmd(root=None) -> dict:
+    """The administrator's Rule Zero feed-check Stop hook (internal-ref). Same shape
+    and same baked-in --root as _stop_cmd, so it resolves the real store from the
+    admin's own workspace. Fail-open lives inside the module, not here."""
+    cmd = f"{_hook_interpreter()} -m shantytown.feed_check"
     if root is not None:
         cmd += f" --root {Path(root).resolve()}"
     return {"type": "command", "command": cmd}
@@ -246,11 +338,18 @@ def claude_settings_for_role(role: str, root=None) -> dict:
         administrator -> [drain]         (root: receives only; its stop terminates)
     """
     if role == "worker":
-        stop = [_stop_cmd("send", root)]
+        # send FIRST (the stop event persists whatever happens), then the HAUL
+        # advance — the self-feed for a worker whose queue is already assigned
+        # (anchor closed -> block-with-next; fail-open, self-terminating).
+        stop = [_stop_cmd("send", root), _stop_cmd("haul", root)]
     elif role == "lead":
         stop = [_stop_cmd("send", root), _stop_cmd("drain", root)]
     elif role == "administrator":
-        stop = [_stop_cmd("drain", root)]
+        # The drain delivers received stop events; the feed-check is the Rule Zero
+        # HARD GATE (internal-ref) — it BLOCKS the admin's own stop while free
+        # feedable workers AND dispatchable beads coexist, so the coordinator
+        # cannot go idle with the fleet idle. Fail-open, self-terminating when fed.
+        stop = [_stop_cmd("drain", root), _feed_check_cmd(root)]
     else:
         raise ValueError(f"unknown role {role!r}; expected worker/lead/administrator")
     return {
@@ -275,8 +374,52 @@ def claude_settings_for_role(role: str, root=None) -> dict:
         # contract names as the place hank reads its tenant from. Without it the
         # guard resolves no scope and decides nothing — running, wired, and inert,
         # which is the failure mode this repo keeps naming.
-        "env": {"BOBBIN_ROLE": role},
+        "env": _settings_env(role, root),
     }
+
+
+# Deployment-supplied environment for emitted settings. NOT a list of values —
+# a list of NAMES to carry through, so no internal hostname ever lives in this
+# repo (that is what the public scrub was for).
+_CARRIED_ENV = ("QUIPU_SERVER", "SHANTY_ONTO_NS")
+
+
+def _settings_env(role: str, root=None) -> dict:
+    """The env block an emitted settings file carries.
+
+    BOBBIN_ROLE, plus any deployment config this install was given. The scrub that
+    made the graph's URL and namespace env-configurable did NOT teach the emitter
+    to emit them, so the live values survived only in two hand-maintained settings
+    files — and the next `role set` silently dropped them. That is exactly what
+    happened: a lead.settings.json emitted today came out with no QUIPU_SERVER and
+    no SHANTY_ONTO_NS, so that lead would launch pointed at the public default,
+    which is a dead localhost and a namespace holding none of this crew's facts.
+
+    The failure is quiet in the worst way. `QuipuRegistry.all()` RAISES on an
+    unreachable graph rather than returning [], so the agent gets an honest
+    "could not tell" — but a wrong-but-reachable namespace would answer "nobody
+    exists" with a straight face. Carrying the config is what keeps that from
+    being a coin flip.
+
+    Source order: <root>/env.json (deployment config, gitignored), then the
+    ambient environment. Absent both, the key is OMITTED and the agent falls back
+    to the library default — never a placeholder written into a live settings file.
+    """
+    env = {"BOBBIN_ROLE": role}
+    supplied: dict[str, str] = {}
+    if root is not None:
+        p = Path(root) / "env.json"
+        try:
+            loaded = json.loads(p.read_text())
+            if isinstance(loaded, dict):
+                supplied = {k: str(v) for k, v in loaded.items()}
+        except (OSError, ValueError):
+            supplied = {}
+    for key in _CARRIED_ENV:
+        val = supplied.get(key) or os.environ.get(key)
+        if val:
+            env[key] = val
+    return env
 
 
 def emitted_stop_directions(root, role: str) -> set[str] | None:
@@ -343,9 +486,9 @@ def settings_path_in_cmdline(cmdline: str) -> str | None:
 class LiveWiring:
     """What a RUNNING process actually carries, and where it came from.
 
-    settings_path is part of the finding, not decoration (dearing, aegis-0v97):
+    settings_path is part of the finding, not decoration (dearing, internal-ref):
     a report that names only what is MISSING reads as "this agent has no hooks",
-    and the reader reasonably concludes aegis-05up — respawn dropped --settings,
+    and the reader reasonably concludes internal-ref — respawn dropped --settings,
     the rm -rf and force-push guards are gone. That is a real emergency and it
     was NOT what we measured. Naming the path says what the agent DOES have and
     makes the foreign launcher self-evident in the output.
@@ -363,7 +506,7 @@ def live_stop_directions(pane: str, cmdline_reader) -> set[str] | None:
 def live_wiring(pane: str, cmdline_reader) -> LiveWiring | None:
     """What stop directions is the process ACTUALLY RUNNING in `pane` carrying?
 
-    THE GAP THIS CLOSES (aegis-0v97). emitted_stop_directions answers "does the
+    THE GAP THIS CLOSES (internal-ref). emitted_stop_directions answers "does the
     ROLE's artifact carry drain?". That is not the question the tier needs. The
     tier needs "will this lead drain?", and the artifact cannot answer it,
     because nothing guarantees the live process was launched from that artifact.
@@ -455,9 +598,24 @@ class ClaudeRuntime:
     # produce a working agent.
     TRUST_MARKERS = ("Do you trust the files in this folder",
                      "1. Yes, I trust this folder")
-    # An interactive picker BLOCKING the pane (aegis-qxc2). See awaiting_answer().
+    # An interactive picker BLOCKING the pane (internal-ref). See awaiting_answer().
     # Read off live panes 2026-07-20, both the unanswered and the answered shape.
     QUESTION_MARKERS = ("Enter to select", "Ready to submit your answers?")
+    # AUTH EXPIRED (internal-ref). MEASURED, not guessed: read verbatim off 8 live
+    # auth-dead crew panes, 2026-07-22 —
+    #     ● Login expired · Please run /login
+    # rendered at column 0 as the runtime's own response line, with the ready UI
+    # still up and the input box empty underneath. That combination is exactly why
+    # the state was invisible: every such pane read `idle`. The banner appears
+    # when an API call FAILS — an agent whose auth expired while idle shows
+    # nothing until something (a dispatch, a tend prompt) makes it try.
+    # Line-anchored via auth_dead(), never a bare substring: this repo's own
+    # source, the bead that asked for this, and any grep over a dead pane's
+    # scrollback all CONTAIN the string (a `grep -n` hit renders as
+    # "sess: 1484:● Login expired · …" — measured in the very session that wrote
+    # this), and a substring match on chrome an agent can quote is the trap every
+    # marker in this file documents.
+    AUTH_MARKERS = ("● Login expired",)
     # Matched in the tail only — see awaiting_answer(). 8 lines, same window every
     # text predicate in triage.py uses; the answered shape sits ~5 lines up.
     _QUESTION_TAIL_LINES = 8
@@ -468,30 +626,39 @@ class ClaudeRuntime:
         self._root = root
 
     def hooks(self, card: Agent) -> HookSpec:
-        # Claude Code declares blocking stop hooks — measured, load-bearing.
-        return HookSpec(blocking_stop=True)
+        # FORWARDS to the card's harness — the single source of truth for this
+        # capability (internal-ref). ClaudeRuntime used to answer blocking_stop=True
+        # for itself, which is exactly what let the gate rubber-stamp a card whose
+        # harness was not claude. Forwarding keeps one literal declaration (on the
+        # harness) and makes this answer honest for a card naming another program.
+        from . import harness as harness_mod
+        return harness_mod.for_card(card).hooks(card)
 
     def compose(self, card: Agent) -> str:
         """Build the launch string, or RAISE. Never returns a settings-less launch.
 
-        Order matters: capability first (a lead on a runtime that cannot host it
-        must refuse before we bother materializing settings), then settings.
+        Order matters. Resolve the harness the CARD names FIRST — an unknown one
+        raises UnknownHarness, a clean refusal — then gate on ITS declared
+        capability (internal-ref: the gate must ask the program that actually
+        launches, not this hardcoded ClaudeRuntime), then materialize settings.
+        Capability still precedes settings: a lead the program cannot host refuses
+        before we bother writing anything.
         """
-        require_capability(self, card)                 # CapabilityError -> refuse
+        # THE ARGV, THE SETTINGS FORMAT, AND THE CAPABILITY ARE ALL THE HARNESS'S
+        # (harness.py). This method keeps only what is the RUNTIME's — the
+        # settings-or-nothing invariant and the assert below — and asks the harness
+        # the CARD names for everything program-specific. One resolve, so the gate
+        # and the launch cannot disagree about which program this is.
+        from . import harness as harness_mod
+        program = harness_mod.for_card(card)           # UnknownHarness -> refuse
+        require_capability(program, card)              # CapabilityError -> refuse
         settings_path = self._resolve(card)
         if not settings_path:
             raise SettingsError(
                 f"could not materialize settings for {card.name} "
                 f"(role {card.role!r}); refusing to launch a settings-less agent."
             )
-        # THE ARGV IS THE HARNESS'S (harness.py). This method keeps what is the
-        # RUNTIME's — the capability gate, the settings-or-nothing invariant, and
-        # the assert below — and delegates the program-specific string to the
-        # harness the CARD names. A card that names one we cannot host raises
-        # UnknownHarness, which is a refusal, not a fallback.
-        from . import harness as harness_mod
-        launch = harness_mod.for_card(card).launch(card, settings_path,
-                                                   root=self._root)
+        launch = program.launch(card, settings_path, root=self._root)
         # The invariant, asserted where it is made. If this ever fails, the bug is
         # here, not downstream — a settings-less string must be UNREACHABLE.
         assert "--settings" in launch, "compose produced a settings-less launch"
@@ -552,7 +719,7 @@ class ClaudeRuntime:
         return any(c in screen for c in self.CONSENT_MARKERS)
 
     def awaiting_answer(self, screen: str) -> bool:
-        """Is an interactive option-picker up and BLOCKING this pane? (aegis-qxc2)
+        """Is an interactive option-picker up and BLOCKING this pane? (internal-ref)
 
         MEASURED 2026-07-20 (sattler): 7 of 10 workers were sitting on pickers at
         once, every one of them printing `?` in `st crew` — which was honest and
@@ -606,6 +773,42 @@ class ClaudeRuntime:
             lines.pop()
         tail = "\n".join(lines[-self._QUESTION_TAIL_LINES:])
         return any(m in tail for m in self.QUESTION_MARKERS + self.TRUST_MARKERS)
+
+    def auth_dead(self, screen: str) -> bool:
+        """Is this pane showing the runtime's LOGIN EXPIRED banner? (internal-ref)
+
+        The state this names: the operator's shared credential expired (or was
+        rotated by a re-login), so every API call this agent makes fails with
+        `● Login expired · Please run /login` — while the ready UI stays up and
+        the input box stays empty, which is `idle` to every other predicate.
+        Measured 2026-07-22: one operator re-login left all 9 crew exactly like
+        this; they were counted feedable, prompted, and dispatched into, and
+        every send died against the same banner.
+
+        Caller hands this the STRIPPED view, same contract as awaiting_answer:
+        the runtime colours its chrome, and a substring under a colour run stops
+        matching.
+
+        TAIL-ONLY with trailing blanks dropped first (kelly's blank-padding
+        lesson, awaiting_answer): the banner is the FAILED TURN's output, so on a
+        live auth-dead pane it sits a few lines above the input box — measured at
+        6 lines up with blanks dropped. The same words deeper in scrollback are
+        history (possibly from an expiry already healed), or an agent TALKING
+        about the banner — this predicate's own bead quotes it verbatim.
+
+        LINE-ANCHORED, not a substring: only a line that BEGINS with the marker
+        counts. The runtime renders the banner as its own response line at column
+        0; a quoted copy almost never lands there — a `grep -n` over a dead
+        pane's scrollback emits "sess: 1484:● Login expired · …", measured in the
+        session that wrote this, and a substring match would have called the
+        grepping agent auth-dead on the spot.
+        """
+        lines = screen.splitlines()
+        while lines and not lines[-1].strip():
+            lines.pop()
+        return any(ln.strip().startswith(m)
+                   for ln in lines[-self._QUESTION_TAIL_LINES:]
+                   for m in self.AUTH_MARKERS)
 
 
 class CodexRuntime:

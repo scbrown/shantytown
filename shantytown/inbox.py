@@ -79,7 +79,7 @@ _LEGACY_PREFIX = "mail:"
 def is_message(title: str) -> bool:
     """Is this tracker item a MESSAGE rather than work? The one predicate, shared
     by files.plate and beads.plate so the two backends cannot disagree about what
-    belongs on a plate (the two-implementation equivalence rule, aegis-260i)."""
+    belongs on a plate (the two-implementation equivalence rule, internal-ref)."""
     t = (title or "").lstrip()
     return t.startswith(PREFIX) or t.startswith(_LEGACY_PREFIX)
 
@@ -90,6 +90,15 @@ def _body_of(title: str) -> str:
         if t.startswith(p):
             return t[len(p):].strip()
     return t
+
+
+class MessageTooLong(ValueError):
+    """A durable message will not fit the tracker item it maps to. A REFUSAL the
+    caller can act on (shorten it, or move the substance to a bead and send a
+    pointer) — NOT a store-unreachable "could not tell", which is transient and
+    invites a pointless retry. Raised BEFORE the store write, so nothing is half-
+    persisted and nothing is silently truncated (internal-ref). The inbox is a thin
+    pointer channel by design (see the module docstring), not a document store."""
 
 
 @runtime_checkable
@@ -188,7 +197,7 @@ class TrackerInbox:
     LISTING is injected, not taken off the Tracker protocol. That protocol is
     three functions (get/update/create) and pinned by test_swap; "show me the
     items" is a QUERY, and queries are exactly what it excludes to keep the
-    tracker from driving the harness (arnold's aegis-gqr8 ruling). The precedent
+    tracker from driving the harness (arnold's internal-ref ruling). The precedent
     is already here: the plate is a per-backend READER injected the same way
     (files.plate / beads.plate). So is this — files.items / beads.items.
     """
@@ -198,10 +207,25 @@ class TrackerInbox:
         self._items = items
 
     def deliver(self, to: str, body: str, frm: str | None = None) -> Message:
+        title = f"{PREFIX} {body}"
+        # If the concrete tracker declares a title cap, honour it HERE — a clean
+        # refusal before the write beats bd rejecting the create with a validation
+        # string the caller then misreads as a store outage (internal-ref). A tracker
+        # with no cap (FilesTracker) skips this and carries any length.
+        cap = getattr(self._tracker, "_TITLE_MAX", None)
+        if cap is not None and len(title) > cap:
+            budget = cap - len(PREFIX) - 1
+            raise MessageTooLong(
+                f"durable message is {len(body)} chars; this inbox carries at most "
+                f"{budget} (it maps to a tracker item titled {PREFIX!r}, capped at "
+                f"{cap}). The inbox is a thin pointer channel, not a document store: "
+                f"put the substance in a bead and send a pointer "
+                f"(e.g. `st inbox {to} 'see <bead-id>'`), or `bd comment <id> --file`."
+            )
         fields = {"assignee": to, "labels": "inbox"}
         if frm:
             fields["description"] = f"from {frm}"
-        item = self._tracker.create(f"{PREFIX} {body}", **fields)
+        item = self._tracker.create(title, **fields)
         return Message(id=item.id, to=to, body=body, frm=frm)
 
     def unread(self, me: str) -> list[Message]:

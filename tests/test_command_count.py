@@ -55,7 +55,7 @@ def test_docstring_and_code_agree_on_the_command_set():
     )
 
 
-def test_the_surface_is_fifteen():
+def test_the_surface_is_nineteen():
     """A bare number check too, so 'the docs claim N' is itself pinned.
 
     Grew to 13 with `project` — materialize the crew cards from the graph (the
@@ -70,13 +70,53 @@ def test_the_surface_is_fifteen():
     triggers by running the safe-looking thing. The verb gets its own slot so the
     mutation shows up in shell history, in `--help`, and here.
 
-    Grew to 15 with `subscribe` — watch quipu entity events and route assigned
+    Grew to 15 with `attach` — attach to a crew member by name. A tool that
+    manages the crew but cannot attach to one is missing its most basic verb, and
+    the manual path (`tmux -L gt-ae5f35 attach -t shanty-weaver`) leaks the two
+    internal details — the socket name and the pane prefix — that st already hides
+    in crew/go/tend. It is not a flag on `crew` for the same reason `tend` is not:
+    `crew` is a read, and `attach` hands the terminal to a live agent's pane. It
+    earns the slot the way go/stop do — a core, frequent operator action with its
+    own refusal discipline (unknown or down agent refused by name), and it is
+    where "use shanty, not bare tmux" becomes the default: attach goes THROUGH
+    shanty (themed) when present, bare tmux only when absent.
+
+    Grew to 16 with `dashboard` — a live, self-refreshing view of ONE admin's
+    tier: roster, current work, the REUSED state verdicts, last activity, tallies.
+    It is not `crew` with a flag: `crew` is a one-shot flat roster of the whole
+    fleet; `dashboard` is tier-scoped, composed (crew + anchor + the event
+    ledger), and always-on — the operator keeps it in a second pane. Different
+    lifetime, different scope, different composition; it earns its own verb the
+    way an observability panel is not a status line.
+
+    Grew to 17 with `subscribe` — watch quipu entity events and route assigned
     workflows to the admin (the events adapter integrations.md sketched, finally
     built first-class on Quipu's cursored transaction log). Owner-directed; the
-    count is deliberate friction, not a ceiling.
+    count is deliberate friction, not a ceiling. (15-vs-16 note: attach/dashboard
+    and subscribe landed on DIVERGED remotes — origin and github each grew a
+    disjoint surface off 14, and both sides' "15" claims were true in their own
+    world. This merge is where the two worlds reconciled to 17.)
+
+    Grew to 18 with `worktree` — provision an agent's isolated worktree off a
+    SHARED project repo. A shared checkout shares its index and HEAD, so two agents
+    committing there corrupt each other silently; st gives each its own worktree so
+    the shared tree is never the write surface for two writers. It is not a flag on
+    another command because it MUTATES the working set (creates a worktree, or
+    removes one under --gc) — the same reason tend and attach earn their own slots:
+    a consequence hidden behind a flag on a read is a consequence someone triggers
+    by running the safe-looking thing. Owner-directed (the worktrees bug).
+
+    Grew to 19 with `stats` (internal-ref, PART B of st observability): the query
+    surface over the LOCAL capture store (.shanty/stats.sqlite) that the
+    PostToolUse/Stop hooks append to — files touched, skills used, tokens per
+    agent. It is a command and not a dashboard pane because it answers OFFLINE
+    questions (what did kelly touch last night) that the live tier view never
+    holds, and it is a command and not a flag on `log` because log reads the
+    narrative ledger while stats reads the capture store — two stores, two
+    reads, and hiding one behind the other's flag would imply they agree.
 
     Each command still earns its slot."""
-    assert len(_actual_subcommands()) == 15, (
+    assert len(_actual_subcommands()) == 19, (
         "the command count changed. If that's intended, update the number here and "
         "the cli.py docstring together — and say why the surface grew in docs/cli.md."
     )

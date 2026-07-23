@@ -21,6 +21,15 @@ from .protocols import WorkItem
 
 
 class BeadsTracker:
+    # bd validates a title at <= 500 characters (measured 2026-07-20: a 500-char
+    # title creates, 501 fails "title must be 500 characters or less"). Declared
+    # here, on the concrete tracker, because the limit is bd's — not every Tracker
+    # has one (FilesTracker does not). TrackerInbox reads it to refuse a too-long
+    # message CLEANLY, before the store round-trip, instead of letting bd reject it
+    # with a leaked validation string the caller then misreads as a store outage
+    # (internal-ref).
+    _TITLE_MAX = 500
+
     def __init__(self, repo: str | None = None, timeout: int = 30):
         self.repo = repo          # -C <dir>; None = cwd
         self.timeout = timeout

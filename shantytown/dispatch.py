@@ -35,7 +35,7 @@ def flatten_note(note: str) -> str:
     submit, so a three-line note dispatches the first line and leaves the rest
     typed into a pane that has already started work. That is precisely the
     mid-flight garble triage exists to prevent, arriving through the gate rather
-    than around it (aegis-8013).
+    than around it (internal-ref).
 
     So the note is flattened here, once, on the way in: every run of whitespace
     (newlines included) becomes a single space. A caller who wants structure gets
@@ -131,7 +131,7 @@ class Dispatcher:
         Every refusal here is a precondition failure -> exit 1, and it happens
         BEFORE anything is written. Refusing loudly beats a half-dispatch.
 
-        `note` is a caveat that must ride WITH the work (aegis-8013): it is
+        `note` is a caveat that must ride WITH the work (internal-ref): it is
         composed into the same payload, so it goes through the same triage gate
         and the same verify. The dispatch and its qualifier are delivered
         together or refused together — a caveat that arrives separately can
@@ -143,7 +143,7 @@ class Dispatcher:
         if not self.panes.exists(agent.pane):
             raise LookupError(f"pane {agent.pane} for {agent_name} does not exist")
         item = self.tracker.get(item_id)               # 1 tracker read
-        # Do not STEAL work someone is already doing (aegis-uvw5, the 7yeb shape).
+        # Do not STEAL work someone is already doing (internal-ref, the 7yeb shape).
         # plan() used to read the item and overwrite status/assignee unconditionally,
         # so dispatching an item another agent held silently reassigned it and two
         # agents worked it in parallel. Measured 2026-07-19: two agents investigated

@@ -88,10 +88,12 @@ class FilesLaunches:
             return None
         self.root.mkdir(parents=True, exist_ok=True)
         stamp = Stamp(settings=str(settings_path), sha256=h)
-        (self.root / f"{agent}.json").write_text(
-            json.dumps({"settings": stamp.settings, "sha256": stamp.sha256},
-                       indent=2, sort_keys=True)
-        )
+        # Atomic (internal-ref): a stamp torn by a killed writer would make the
+        # settings verdict a confident lie about a measurement that never
+        # completed — the one thing a stamp must never be.
+        from .files import write_json_atomic
+        write_json_atomic(self.root / f"{agent}.json",
+                          {"settings": stamp.settings, "sha256": stamp.sha256})
         return stamp
 
     def get(self, agent: str) -> Stamp | None:

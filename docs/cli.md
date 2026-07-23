@@ -26,11 +26,16 @@ st context <query>            what code should I be looking at? (bobbin)
 st doctor [--install]         what's installed, stale, missing (out-of-box)
 st project                    materialize the crew cards FROM the graph
 st tend                       supervise the crew: respawn what DIED, never what was RETIRED
+st tend --reauth              relaunch every AUTH-DEAD agent (run AFTER the operator re-logs in)
+st attach <agent>             attach to a crew member by name (socket + pane resolved; via shanty)
+st stats [agent] [--files]    what the crew actually did: files, skills, tokens (local capture store)
+st dashboard [admin]          live, tier-scoped view: roster/state/work, self-refreshing
 st subscribe                  watch quipu entity events; route governed workflows to the admin
+st worktree <repo> [agent]    provision an agent's isolated worktree off a SHARED project repo
 ```
 
-Fifteen. `--dry-run` is on every command that writes, from commit one. The surface grew past the
-original eight by six, each on a specific ask — not drift: **inbox**/**task** (the dispatch/tracker
+Nineteen. `--dry-run` is on every command that writes, from commit one. The surface grew past the
+original eight by nine, each on a specific ask — not drift: **inbox**/**task** (the dispatch/tracker
 pair, owner-directed), **context** (the bobbin Context protocol), **doctor**
 (out-of-box detect/install, Stiwi's direct ask), **project** (the quipu-registry
 projection), and **subscribe** (the quipu events adapter, routing governed workflows to the
@@ -43,7 +48,7 @@ on PATH. This doc said `shanty` in all 29 of its examples long after the entry p
 every command a reader copied out of here was uninvokable — the same defect as a wrong count, in the
 worse place (GitHub #8).
 
-Two of the fifteen were RENAMED on 2026-07-19, and the count did not move — a rename is not a
+Two of the seventeen were RENAMED on 2026-07-19, and the count did not move — a rename is not a
 new command, and the test that pins the number is what proves it:
 
 - **`prime` -> `anchor`.** An agent's anchor is what holds it to its work; the word is the noun and
@@ -125,9 +130,9 @@ without the consequence.*
 ### `--note` / `--note-file` — a caveat that rides WITH the work
 
 ```
-$ st go aegis-9h2 ellie --note "a design doc is landing; pull YOUR OWN workspace, do NOT blind-pull"
+$ st go internal-ref ellie --note "a design doc is landing; pull YOUR OWN workspace, do NOT blind-pull"
 
-  aegis-9h2 -> ellie          in progress
+  internal-ref -> ellie          in progress
   sent to pane %5
   note: a design doc is landing; pull YOUR OWN workspace, do NOT blind-pull
 ```
@@ -184,7 +189,7 @@ state the pane renders ambiguously is a state the tier cannot reason about, and 
 ```
 
 That is either Claude Code's **dimmed placeholder** over an empty buffer (the agent is idle and
-fine), or **real unsubmitted text** left by a `send-keys` whose Enter never landed (the aegis-16e
+fine), or **real unsubmitted text** left by a `send-keys` whose Enter never landed (the internal-ref
 stall). `capture-pane -p` returns plain text, and the dim attribute is precisely the bit it strips —
 so the two are the same bytes. It was ambiguous in **both** directions, and both cost:
 
@@ -220,7 +225,41 @@ Two rules fall out, and they are the load-bearing part:
 
 This is still a heuristic on somebody else's TUI rendering, and it is the *cheap* tier of the fix.
 The better one is for a worker's own hook to report `idle`/`running`/`queued` into `.shanty` so the
-tier reads a **fact instead of a rendering** — the Stop event is the natural carrier (aegis-w9z1).
+tier reads a **fact instead of a rendering** — the Stop event is the natural carrier (internal-ref).
+
+## `auth-dead` — login expired, and the pane lies `idle` (internal-ref)
+
+Measured 2026-07-22: an operator re-login rotated the shared credential and **all 9 live crew went
+`● Login expired · Please run /login` at once** — with the ready UI still up and the input box
+empty, which is `idle` to every other predicate. So the dead fleet stayed on the free list, Rule
+Zero held the coordinator's stop hostage to nine unfeedable corpses, and tend's cycle driver
+prompted a saturated dead pane over and over into the very banner it could not see. Recovery was
+nine by-hand `st stop` + `st new`.
+
+Now it is a named verdict. The banner is runtime chrome, so `ClaudeRuntime.auth_dead()` owns the
+markers (tail-only, trailing blanks dropped, **line-anchored** — a `grep -n` over a dead pane's
+scrollback prints the banner mid-line, and a substring match would have called the grepping agent
+auth-dead; measured in the session that wrote it). `work_state` takes the answer as a passed-in
+flag like `ui_up`/`awaiting`; `AUTH_DEAD` outranks everything but busy/wedged (a pane genuinely
+computing has working auth by construction). It falls out of `free`, out of feed_check's feedable
+set, and out of the cycle driver's saturated set — one verdict, every consumer.
+
+Recovery is **one command**: `st tend --reauth`, run **after** the operator re-logs in — `/login`
+in a pane is an interactive browser OAuth flow nothing can drive, so a relaunch (which re-reads
+the refreshed credential) is the whole remedy. Deliberately a flag on `tend`, not an auto-heal on
+the default pass: a pass cannot know whether the operator re-logged in yet, and relaunching against
+a still-stale credential kill-loops the fleet. Same rule shape as `--cycle-stale`: the supervisor
+*reports* (`auth-dead` is a fault, exit 2), the explicit flag *acts*. The kill honours the `st
+stop` ownership guard (a name match is not permission to kill), the respawn is the same Tender path
+as a normal pass, and the verify is honest about its boundary: it proves the process **came up**,
+not that it is authed — the banner only shows on the first failed API call, so if the operator did
+not re-log in first, the next `st crew` says so.
+
+Two honest limits. An agent whose auth expired while *idle* shows no banner until something makes
+it try an API call — detection keys on the failed turn, so a freshly-dead quiet pane still reads
+`idle` until first touch. And an agent whose *response text* begins a line with the exact banner is
+indistinguishable from the banner — accepted: the line anchor already refuses every quoted/grepped
+form actually measured.
 
 ## `st roles --check` — the hierarchy, verified
 
@@ -246,7 +285,7 @@ non-zero. A checker that can only report health is not a checker.
 | hooks | does the **role's emitted artifact** carry the stop hooks the graph requires? | `hooks:` |
 | live  | does the **process actually running in the pane** carry them? | `live:` |
 
-The third leg exists because the second is not evidence (aegis-0v97). An artifact states
+The third leg exists because the second is not evidence (internal-ref). An artifact states
 *intent*; `st` does not own every process that answers to a name in its registry. Measured on
 the real store: `dearing` was `role=lead`, `lead.settings.json` emitted `[send, drain]`, and the
 check was **green** — while the process in its pane had been launched by a foreign launcher with
@@ -267,7 +306,7 @@ $ st doctor
   • bobbin   0.3.1 installed — 0.6.0 available (STALE)
   ? quipu    present, but cannot report version (known upstream bug: --version opens a store)
   ✗ reactor  not installed
-  • st       installed from /home/braino/gt/shantytown @ 41d9fc2d
+  • st       installed from ~/src/shantytown @ 41d9fc2d
 ```
 
 ### …and it asks the question about ITSELF
@@ -281,13 +320,13 @@ fail. It compares the two things that DO move — the **recorded source path** p
 and that checkout's **git HEAD** against the canonical checkout.
 
 ```
-  ✗ st       `st` was installed from '/home/braino/gt/shantytown-wt/dearing', NOT the canonical
-             checkout '/home/braino/gt/shantytown'. Whatever is in that directory — including
+  ✗ st       `st` was installed from '~/src/shantytown-wt/alice', NOT the canonical
+             checkout '~/src/shantytown'. Whatever is in that directory — including
              uncommitted work — is what the whole fleet is running, and a `pipx reinstall` will
-             faithfully rebuild it. Fix: pipx install --force /home/braino/gt/shantytown
+             faithfully rebuild it. Fix: pipx install --force ~/src/shantytown
 ```
 
-That is a real condition that occurred on 2026-07-20 (aegis-daoh): a deploy run as
+That is a real condition that occurred on 2026-07-20 (internal-ref): a deploy run as
 `pipx install --force <my own worktree>` silently re-pointed the **fleet's** recorded source at one
 crew member's private tree, and a later `pipx reinstall` faithfully rebuilt *that* rather than the
 shared checkout somebody had just pulled. Nothing in the system could say so. Two rules, both
@@ -305,8 +344,8 @@ forward afterwards. That needs a build stamp; until then this is a floor, not a 
 whatever path was last recorded, which is exactly how the above happened).
 
 ```
-cd /home/braino/gt/shantytown && git pull
-pipx install --force /home/braino/gt/shantytown
+cd ~/src/shantytown && git pull
+pipx install --force ~/src/shantytown
 ```
 
 Detect is the product; `--install` is a flag. Three states exist to stop three lies: **absent** vs
@@ -380,7 +419,7 @@ and "something wants to poll this" does not earn a slot.
 
 ```
 $ st anchor --short
-aegis-1o3g
+internal-ref
 
 $ st anchor --short            # empty plate
                               # (nothing on stdout, exit 0)

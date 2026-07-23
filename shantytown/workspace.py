@@ -172,7 +172,7 @@ def ensure_workspace(card: Agent, clone: Cloner = git_clone,
     path = Path(card.workspace).expanduser()
 
     if path.is_dir():
-        # PRESENT IS NOT THE SAME AS CORRECT (aegis-8p0j gap 2). This used to be a
+        # PRESENT IS NOT THE SAME AS CORRECT (internal-ref gap 2). This used to be a
         # bare `return str(path)` — idempotence read as "present -> leave it
         # alone". But dearing's rule is: already there AND CORRECT is success;
         # there but WRONG is an error, never a silent adopt. If the card names a
@@ -247,3 +247,170 @@ def ensure_workspace(card: Agent, clone: Cloner = git_clone,
             f"workspace for {card.name} still does not exist after clone: {path}"
         )
     return str(path)
+
+
+# ---------------------------------------------------------------------------
+# Worktrees for SHARED PROJECT repos (internal-ref).
+#
+# ensure_workspace above owns the agent's OWN clone (crew/<name>): one writer,
+# one tree. This owns the other case: a SHARED project repo — ~/gt/shantytown,
+# ~/gt/quipu, ~/gt/hank, ~/gt/goldblum — that many agents touch at once. A shared
+# checkout shares its index and HEAD with every process in it, so one agent's
+# `git add`/`commit`/`reset` reaches into another's staging area and BOTH SIDES
+# report success (measured: internal-ref/iaef — a commit left `git log` entirely and
+# nothing errored). The fix is not a guard that refuses the commit; it is to give
+# each agent its OWN worktree off the shared repo, so its index/HEAD are its own
+# and the shared checkout is never the write surface for two agents.
+#
+# This used to be a MANUAL step: agents were told to run scripts/crew-worktree.sh
+# / `git worktree add` by hand, and a reminder was put in crew CLAUDE.md. A manual
+# discipline is the vigilance-not-mechanism failure this fleet keeps paying for
+# (internal-ref). st provisions the worktree now; the agent never has to remember.
+#
+# Layout mirrors crew-worktree.sh so the two agree: <repo>-wt/<agent> on branch
+# wt/<agent>. Both the add and the remove are INJECTED, same as cloning above, so
+# the contract is testable without a real repo.
+
+WorktreeAdd = Callable[[Path, Path, str, str], None]     # (shared, dest, agent, base)
+WorktreeRemove = Callable[[Path, Path], None]            # (shared, dest)
+WorktreeHoldsWork = Callable[[Path, str], bool]          # (dest, base) -> keep it?
+
+
+def git_worktree_add(shared: Path, dest: Path, agent: str, base: str) -> None:
+    """Default provisioner: add <dest> as a worktree of <shared> on wt/<agent>.
+
+    Starts the branch off <base> (origin/main) so the agent begins current, not
+    off whatever the shared checkout happens to have checked out. A failed fetch
+    is a WARNING, not a refusal — offline or behind is survivable and the local
+    refs still work; launching off nothing is not. If wt/<agent> already exists (a
+    prior worktree was removed but the branch kept its commits) we reuse it rather
+    than fail trying to re-create it.
+    """
+    branch = f"wt/{agent}"
+    # Bring the shared checkout's refs current; tolerate failure (see docstring).
+    subprocess.run(["git", "-C", str(shared), "fetch", "origin", "--quiet"],
+                   capture_output=True, text=True)
+
+    def _ref_exists(ref: str) -> bool:
+        return subprocess.run(
+            ["git", "-C", str(shared), "rev-parse", "--verify", "--quiet", ref],
+            capture_output=True, text=True).returncode == 0
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if _ref_exists(f"refs/heads/{branch}"):
+        cmd = ["git", "-C", str(shared), "worktree", "add", str(dest), branch]
+    else:
+        start = base if _ref_exists(base) else "HEAD"
+        cmd = ["git", "-C", str(shared), "worktree", "add", "-b", branch,
+               str(dest), start]
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode != 0:
+        raise WorkspaceError(
+            f"git worktree add for {agent} off {shared} failed "
+            f"(exit {r.returncode}): {(r.stderr or r.stdout).strip()}"
+        )
+
+
+def git_worktree_remove(shared: Path, dest: Path) -> None:
+    """Default remover: `git worktree remove <dest>`. Raises on failure."""
+    r = subprocess.run(
+        ["git", "-C", str(shared), "worktree", "remove", str(dest)],
+        capture_output=True, text=True,
+    )
+    if r.returncode != 0:
+        raise WorkspaceError(
+            f"git worktree remove {dest} failed (exit {r.returncode}): "
+            f"{(r.stderr or r.stdout).strip()}"
+        )
+
+
+def git_worktree_holds_work(dest: Path, base: str) -> bool:
+    """True if the worktree holds work worth keeping: a dirty tree OR commits not
+    already in <base>. Either means removing it would DISCARD work, which is the
+    internal-ref failure we exist to prevent — so gc keeps it. Uncertainty (a git
+    call fails) is treated as HOLDS WORK: never discard on a maybe.
+    """
+    dirty = subprocess.run(
+        ["git", "-C", str(dest), "status", "--porcelain"],
+        capture_output=True, text=True)
+    if dirty.returncode != 0 or dirty.stdout.strip():
+        return True
+    ahead = subprocess.run(
+        ["git", "-C", str(dest), "rev-list", "--count", f"{base}..HEAD"],
+        capture_output=True, text=True)
+    if ahead.returncode != 0:
+        return True                      # cannot tell -> keep, never discard
+    return ahead.stdout.strip() not in ("", "0")
+
+
+def _shared_repo(repo: Path | str) -> Path:
+    """Normalize to the SHARED checkout, tolerating being handed the worktree dir
+    or the `<name>-wt` container (crew-worktree.sh does the same on the name)."""
+    p = Path(repo).expanduser()
+    if p.parent.name.endswith("-wt"):            # <name>-wt/<agent>
+        return p.parent.parent / p.parent.name[:-len("-wt")]
+    if p.name.endswith("-wt"):                    # <name>-wt
+        return p.parent / p.name[:-len("-wt")]
+    return p
+
+
+def worktree_for(repo: Path | str, agent: str) -> Path:
+    """Where agent's isolated worktree of <repo> lives: <repo>-wt/<agent>."""
+    shared = _shared_repo(repo)
+    return shared.parent / f"{shared.name}-wt" / agent
+
+
+def ensure_worktree(repo: Path | str, agent: str, base: str = "origin/main",
+                    add: WorktreeAdd = git_worktree_add) -> str:
+    """Guarantee an isolated per-agent worktree off a SHARED project repo; return
+    it as a cwd. Idempotent: an existing worktree is returned untouched (present
+    means present — never re-fetch/reset a tree that may hold uncommitted work,
+    the same rule ensure_workspace keeps).
+
+    RAISE rather than hand back a path we did not verify, exactly like
+    ensure_workspace — an agent launched into a half-made worktree is the silent
+    failure this refuses.
+    """
+    shared = _shared_repo(repo)
+    if not (shared / ".git").exists():
+        raise WorkspaceError(
+            f"no shared git checkout at {shared} to provision a worktree from — "
+            f"refusing to invent one. Fix: pass the path to the real checkout."
+        )
+    dest = shared.parent / f"{shared.name}-wt" / agent
+    if dest.is_dir():
+        return str(dest)                 # already provisioned — idempotent
+    if dest.exists():
+        raise WorkspaceError(
+            f"worktree path for {agent} off {shared} is not a directory: {dest}. "
+            f"Refusing to launch into it."
+        )
+    add(shared, dest, agent, base)
+    if not dest.is_dir():
+        raise WorkspaceError(
+            f"worktree for {agent} off {shared} still does not exist after add: "
+            f"{dest}"
+        )
+    return str(dest)
+
+
+def cleanup_worktree(repo: Path | str, agent: str, base: str = "origin/main",
+                     remove: WorktreeRemove = git_worktree_remove,
+                     holds_work: WorktreeHoldsWork = git_worktree_holds_work
+                     ) -> bool:
+    """Remove agent's worktree IFF it is unchanged; return whether it was removed.
+
+    The isolation:worktree auto-clean — a worktree with no work in it is orphan
+    clutter, but a worktree with uncommitted or unpushed work is an agent's
+    output, and discarding that is the exact data-loss (internal-ref) this whole
+    line of work removes. So: keep on ANY sign of work, and on any uncertainty.
+    Absent worktree -> nothing to do, returns False (not an error: gc is
+    idempotent).
+    """
+    dest = worktree_for(repo, agent)
+    if not dest.is_dir():
+        return False                     # nothing to clean — idempotent
+    if holds_work(dest, base):
+        return False                     # holds work — keep it, never discard
+    remove(_shared_repo(repo), dest)
+    return True

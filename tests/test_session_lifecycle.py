@@ -239,3 +239,47 @@ def test_real_kill_session_stays_idempotent_and_tree_killing(sock):
     t.kill_session("st-idem")
     t.kill_session("st-idem")                        # idempotent: no raise
     assert not t.exists("st-idem")
+
+
+# --- the second factor: SHANTY_OWNED alone is not management (internal-ref) ----
+# Proven live by the pilot's negative control: tend's pre-gate respawns CREATED
+# another orchestrator's crew sessions, so those panes carry the marker while
+# the other fleet operates them — owns() said yes and dry-run reached "would
+# kill" against a live foreign agent. Management = the launch STAMP.
+
+def test_stop_refuses_an_owned_session_whose_agent_has_no_stamp(tmp_path, monkeypatch, capsys):
+    root = _world(tmp_path)
+    (root / "launched").mkdir()
+    (root / "launched" / "weaver.json").write_text("{}")   # store non-empty
+    panes = NullPanes(live=set())
+    panes.new_session("crew-ellie")                        # owned by marker...
+    monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: panes)
+    rc = cli._cmd_stop(_Args(root=root))                   # ...but ellie unstamped
+    assert rc == cli.REFUSED
+    assert "NO launch stamp" in capsys.readouterr().err
+    assert panes.exists("crew-ellie"), "created-but-not-managed must survive"
+
+
+def test_stop_reaps_an_owned_session_when_the_store_is_empty(tmp_path, monkeypatch):
+    """CANNOT-TELL: no stamps at all -> the marker alone decides, as before —
+    a fresh deployment must still be able to reap what it launched."""
+    root = _world(tmp_path)
+    panes = NullPanes(live=set())
+    panes.new_session("crew-ellie")
+    monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: panes)
+    rc = cli._cmd_stop(_Args(root=root))
+    assert rc == cli.OK
+    assert not panes.exists("crew-ellie")
+
+
+def test_stop_reaps_an_owned_and_stamped_session(tmp_path, monkeypatch):
+    root = _world(tmp_path)
+    (root / "launched").mkdir()
+    (root / "launched" / "ellie.json").write_text(
+        '{"settings": "/s.json", "sha256": "abc"}')
+    panes = NullPanes(live=set())
+    panes.new_session("crew-ellie")
+    monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: panes)
+    rc = cli._cmd_stop(_Args(root=root))
+    assert rc == cli.OK
+    assert not panes.exists("crew-ellie")

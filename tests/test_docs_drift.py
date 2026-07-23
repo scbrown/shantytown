@@ -177,7 +177,8 @@ def test_readme_test_badge_matches_the_real_collected_count():
 
 def test_cli_md_stated_count_matches_the_wired_count():
     words = {8: "Eight", 9: "Nine", 10: "Ten", 11: "Eleven", 12: "Twelve",
-             13: "Thirteen", 14: "Fourteen", 15: "Fifteen"}
+             13: "Thirteen", 14: "Fourteen", 15: "Fifteen", 16: "Sixteen",
+             17: "Seventeen", 18: "Eighteen", 19: "Nineteen"}
     n = len(_subcommands())
     assert n in words, "add the number word and update docs/cli.md"
     text = CLI_MD.read_text()
@@ -185,3 +186,80 @@ def test_cli_md_stated_count_matches_the_wired_count():
         f"docs/cli.md does not open its count paragraph with {words[n]!r} for "
         f"{n} wired commands."
     )
+
+
+# --- the Configuration table must list every env var st actually reads --------
+#
+# README:296's Configuration section opens "Everything optional is an environment
+# variable" — a completeness claim. It was false: SHANTY_ROOT, the variable that
+# decides WHICH STORE st reads, was in no doc, and so was SHANTY_CANONICAL_SOURCE
+# (internal-ref). The table's own rule — "a count nobody enforces is a comment" —
+# applies here: pin the table to the code so an operator-facing env var can never
+# again be settable-but-undocumented.
+
+SRC = ROOT / "shantytown"
+
+# SHANTY_* names that are NOT operator-facing configuration and so do NOT belong
+# in the README table. Each needs a reason; the test refuses a bare skip.
+_ENV_ALLOWLIST = {
+    # A tmux SESSION variable st sets on the panes it launches and reads back via
+    # `tmux showenv` (not os.environ) to prove it owns a session before reaping
+    # it. Internal provenance marker, never set by an operator.
+    "SHANTY_OWNED": "tmux session ownership marker, set by st, not operator config",
+}
+
+
+def _shanty_env_names_in_code() -> set[str]:
+    """Every `SHANTY_*` string literal that appears in the package source.
+
+    Literal-based, not call-site-based, on purpose: SHANTY_CANONICAL_SOURCE is
+    read via a module constant (`os.environ.get(_CANONICAL_ENV)`), so scanning
+    only `os.environ.get("SHANTY_...")` call sites would miss exactly the kind of
+    indirection that hides a variable. If the name is spelled anywhere in the
+    code, an operator can set it, so it must be documented or allowlisted.
+    """
+    names: set[str] = set()
+    for py in SRC.glob("*.py"):
+        for m in re.finditer(r"""['"](SHANTY_[A-Z_]+)['"]""", py.read_text()):
+            names.add(m.group(1))
+    return names
+
+
+def _config_table_names() -> set[str]:
+    """The env-var names in backticks inside the README Configuration table."""
+    text = README.read_text()
+    start = text.index("### Configuration")
+    # The table ends at the next heading.
+    end = text.index("\n## ", start)
+    block = text[start:end]
+    return set(re.findall(r"`([A-Z][A-Z0-9_]+)`", block))
+
+
+def test_config_table_lists_every_shanty_env_var_the_code_reads():
+    documented = _config_table_names()
+    undocumented = {
+        n for n in _shanty_env_names_in_code()
+        if n not in documented and n not in _ENV_ALLOWLIST
+    }
+    assert not undocumented, (
+        f"these SHANTY_* env vars are read by the code but absent from the README "
+        f"Configuration table (which claims to list everything): {sorted(undocumented)}. "
+        f"Add each to the table, or to _ENV_ALLOWLIST with a reason if it is not "
+        f"operator-facing. SHANTY_ROOT is the one that already bit us."
+    )
+
+
+def test_env_allowlist_has_not_rotted():
+    """An allowlisted name must still exist in the code (else drop it) and must
+    NOT have quietly become documented (else it belongs in neither list)."""
+    in_code = _shanty_env_names_in_code()
+    documented = _config_table_names()
+    for name in _ENV_ALLOWLIST:
+        assert name in in_code, (
+            f"{name} is allowlisted but no longer appears in the code — remove it "
+            f"from _ENV_ALLOWLIST."
+        )
+        assert name not in documented, (
+            f"{name} is on the internal allowlist but is now in the README table — "
+            f"pick one."
+        )

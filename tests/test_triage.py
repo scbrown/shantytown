@@ -108,14 +108,30 @@ def test_context_high_is_reachable_from_a_real_capture():
     assert context_high("\n".join("x" for _ in range(500))) is False
 
 
-def test_high_context_but_RELATED_still_nudges():
-    """The discriminating case: high context alone must NOT trigger CLEAR."""
+def test_over_limit_REFUSES_even_related_work():
+    """CONTRACT CHANGE (internal-ref). This test used to assert that high-context
+    RELATED work NUDGES — that the `unrelated` gate discriminated. That gate is
+    exactly what let a 687k agent keep taking work: related continuation slipped
+    through as `healthy NUDGE`, and three agents sat past the threshold for
+    fifteen hours because of it. Past 400k, related work degrades the agent too
+    (it drops earlier context, re-derives settled decisions), so there is NO
+    relatedness gate: past the line, cycle first — related or not.
+
+    737.6k is well past the 400k cycle threshold. It refuses now, with NO
+    relatedness recorded (Stiwi's corrected rule: unconditional) and NO
+    "% of limit" (400k is a cycle point, not the ~1M ceiling).
+    """
     screen = "\n".join(
         ["● restore the den dashboard service step %d" % i for i in range(20)]
         + ["                  new task? /clear to save 737.6k tokens"]
     )
     d = triage(panes(screen), "%1", "restore the den dashboard service")
-    assert d.action is Action.NUDGE, "CLEAR fired on RELATED work — it isn't discriminating"
+    assert d.action is Action.CLEAR, "past-threshold related work must refuse, not nudge"
+    assert "cycle threshold" in d.why and "checkpoint" in d.why
+    assert "overlap" not in d.inputs and "ratio" not in d.inputs, "relatedness/% gone"
+    assert d.inputs["context_k"] == 737.6
+    assert d.inputs["cycle_threshold_k"] == 400.0
+    assert "checkpoint" in d.inputs["remedy"] and "THEN /clear" in d.inputs["remedy"]
 
 
 def test_every_decision_is_inspectable():

@@ -165,7 +165,7 @@ class Tmux:
         # -e keeps the SGR sequences. Off by default because every plain-text
         # consumer (verify's substring match, the `st log` dump) would otherwise
         # have to strip them; on for triage, which needs dim to tell a
-        # placeholder from queued input (aegis-x6xh).
+        # placeholder from queued input (internal-ref).
         args = ["capture-pane", "-t", pane, "-p"]
         if attrs:
             args.append("-e")
@@ -341,7 +341,7 @@ class NullPanes:
         now, and the seed wins because a test that states a launch line means it.
 
         The second impl of Tmux.cmdline, and faithful for the reason that matters
-        to aegis-8p0j: a real pane's process cmdline IS the string the launcher
+        to internal-ref: a real pane's process cmdline IS the string the launcher
         typed into it. Modelling it as the last send keeps the launch-time hook
         check honest in tests — a double that always returned a well-formed
         cmdline would make `st new`'s verification unfalsifiable, which is the

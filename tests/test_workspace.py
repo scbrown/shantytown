@@ -60,7 +60,7 @@ def test_present_workspace_is_returned_untouched(tmp_path):
     clone = _fake_clone()
 
     card = Agent(name="ellie", workspace=str(ws), workspace_source="git@x:repo.git")
-    # The tree IS the card's source (aegis-8p0j gap 2 now checks this), so the
+    # The tree IS the card's source (internal-ref gap 2 now checks this), so the
     # adopt is legitimate and the original property holds unchanged.
     ok_origin = lambda p: "git@x:repo.git"          # noqa: E731
     assert ensure_workspace(card, clone=clone, origin=ok_origin) == str(ws)
@@ -180,7 +180,7 @@ def test_git_clone_failure_raises_workspace_error(tmp_path):
     assert "failed" in str(e.value)
 
 
-# --- present but the WRONG TREE: refuse, never silently adopt (aegis-8p0j) ----
+# --- present but the WRONG TREE: refuse, never silently adopt (internal-ref) ----
 #
 # The negative controls are the deliverable here. Before this, `if path.is_dir():
 # return` adopted anything shaped like a directory, so an agent could be launched

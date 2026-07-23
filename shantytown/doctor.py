@@ -85,6 +85,18 @@ SPECS: tuple[ToolSpec, ...] = (
         leverage="bead-lifecycle events feeding the harness",
         release=None,
     ),
+    # dp records FAILED tool calls — the capabilities an agent reached for that did
+    # not exist. OPTIONAL: st works whole without it; when present, st reads its
+    # signal (see desirepath.py). Source-only like beads (no release published),
+    # and its version is a commit hash, not semver — the regex captures the token
+    # after "dp " and release=None means no latest comparison, so it reads PRESENT.
+    ToolSpec(
+        "desirepath", "dp", ("dp", "version"), r"dp\s+(\S+)",
+        toolchain="go",
+        installs_via="go install from source (no release binary is published)",
+        leverage="the failed-tool-call signal — what the crew reached for that did not exist",
+        release=None,
+    ),
 )
 
 
@@ -258,6 +270,8 @@ def _install_steps(spec: ToolSpec, health: Health) -> tuple[str, ...]:
     source build only when there is no release."""
     if spec.name == "beads":
         return ("go install github.com/steveyegge/beads/cmd/bd@latest",)
+    if spec.name == "desirepath":
+        return ("go install github.com/scbrown/desire-path/cmd/dp@latest",)
     if spec.toolchain == "cargo":
         # Prefer a published release binary; cargo is the fallback when none.
         return (f"cargo install --git https://github.com/{spec.release.split(':',1)[1]}",)
@@ -301,6 +315,16 @@ def report(healths: list[Health], *, plans: list[InstallPlan] | None = None) -> 
                 detail += f"; latest unknown ({h.latest_error})"
         lines.append(f"  {g} {h.spec.name:8} {detail}")
         lines.append(f"      leverage: {h.spec.leverage}")
+        # When dp is present, show the signal it has actually captured — proof the
+        # tool is not just installed but feeding st. Self-hiding: summary_line()
+        # returns None if dp is absent or has no readable data, and we print
+        # nothing (internal-ref). st consumes dp's published `stats --json`, not its
+        # SQLite directly.
+        if h.spec.name == "desirepath" and h.present:
+            from . import desirepath
+            sig = desirepath.summary_line()
+            if sig:
+                lines.append(f"      signal: {sig}")
     lines.append("")
     if plans:
         lines.append("install plan:")

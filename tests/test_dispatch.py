@@ -166,12 +166,12 @@ def test_exists_matches_session_names_not_only_pane_ids():
         subprocess.run = orig
 
 
-# --- do not STEAL work another agent already holds (aegis-uvw5 / the 7yeb shape) ---
+# --- do not STEAL work another agent already holds (internal-ref / the 7yeb shape) ---
 
 def test_dispatching_an_item_another_agent_HOLDS_is_refused(world):
     """plan() used to read the item and overwrite status/assignee unconditionally,
     so dispatching an item someone else held silently reassigned it and two agents
-    worked it in parallel. Measured 2026-07-19: two agents investigated aegis-uvw5
+    worked it in parallel. Measured 2026-07-19: two agents investigated internal-ref
     five minutes apart, ran the same commands, hit the same wall — duplicated
     effort no tool ever flagged. The refusal must write NOTHING and send NOTHING."""
     from shantytown.dispatch import AlreadyAssigned

@@ -58,13 +58,13 @@ def test_short_prints_only_the_id(tmp_path, monkeypatch, capsys):
     _card(tmp_path, "ellie", role="worker")
     from shantytown.files import FilesTracker
     FilesTracker(tmp_path / "items").update(
-        "aegis-1o3g", title="Restore the den service",
+        "internal-ref", title="Restore the den service",
         status="in_progress", assignee="ellie")
 
     assert _run(["anchor", "ellie", "--short"], tmp_path, monkeypatch,
                 NullPanes()) == cli.OK
     out = capsys.readouterr().out
-    assert out == "aegis-1o3g\n", f"the status bar would render {out!r}"
+    assert out == "internal-ref\n", f"the status bar would render {out!r}"
 
 
 def test_short_prints_nothing_on_an_empty_plate(tmp_path, monkeypatch, capsys):
@@ -81,11 +81,11 @@ def test_short_resolves_the_agent_from_the_environment(tmp_path, monkeypatch, ca
     runs with no argument."""
     _card(tmp_path, "ellie", role="worker")
     from shantytown.files import FilesTracker
-    FilesTracker(tmp_path / "items").update("aegis-9h2", title="t",
+    FilesTracker(tmp_path / "items").update("internal-ref", title="t",
                                             status="in_progress", assignee="ellie")
     monkeypatch.setenv("SHANTY_AGENT", "ellie")
     assert _run(["anchor", "--short"], tmp_path, monkeypatch, NullPanes()) == cli.OK
-    assert capsys.readouterr().out == "aegis-9h2\n"
+    assert capsys.readouterr().out == "internal-ref\n"
 
 
 def test_short_keeps_stdout_clean_when_it_could_not_look(tmp_path, monkeypatch, capsys):

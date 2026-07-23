@@ -70,9 +70,13 @@ BUSY = "busy"                 # a session appeared and is mid-flight — hands o
 REFUSED = "refused"           # could not act, and said why (workspace, launch)
 UNTENDABLE = "no-pane"        # no pane on the card: nothing to supervise
 UNEQUIPPED = "unequipped"     # alive, but its workspace lacks the tool kit
+AUTH_DEAD = "auth-dead"       # alive, login expired: every API call fails
+                              # (internal-ref). NOT auto-relaunched on a default
+                              # pass — see the rule in _live — `st tend --reauth`
+                              # is the explicit one-command recovery.
 
 
-_FAULTS = frozenset({RESURRECTED, DEAF, REFUSED, UNEQUIPPED})
+_FAULTS = frozenset({RESURRECTED, DEAF, REFUSED, UNEQUIPPED, AUTH_DEAD})
 
 
 @dataclass(frozen=True)
@@ -200,6 +204,25 @@ class Tender:
     def _live(self, card: Agent, agents: list[Agent]) -> Finding:
         """An agent that EXISTS. The question is never "is the pane there" — it
         is "can this agent still report", and those are different facts."""
+        # AUTH-DEAD FIRST (internal-ref): login expired, so every API call this
+        # agent makes fails — the wiring and kit checks below are moot for a
+        # session nothing can run in. REPORTED, not auto-relaunched, same rule as
+        # STALE and for a sharper reason: the fix (a relaunch re-reading the
+        # shared credential) only works AFTER the operator re-logs in, and a
+        # default pass cannot know that happened. A supervisor that relaunches
+        # on every pass while the credential is still stale kill-loops the whole
+        # fleet, burning each agent's frozen context for nothing. The explicit
+        # command is `st tend --reauth` — one command, operator-timed.
+        from .runtime import auth_expired
+        plain = triage_mod.strip_attrs(self._panes.capture(card.pane, attrs=True))
+        if auth_expired(self._runtime, plain):
+            return Finding(card.name, "up", AUTH_DEAD,
+                           "alive and LOGIN-EXPIRED: every API call fails; the "
+                           "pane renders idle and nothing can run. Not respawned "
+                           "by this pass — re-login on the operator session "
+                           "FIRST (refreshing the shared credential), then "
+                           "`st tend --reauth` relaunches every auth-dead agent "
+                           "in one command")
         wiring = live_wiring(card.pane, self._panes.cmdline)
         if wiring is None:
             return Finding(card.name, "up", DEAF,
@@ -233,6 +256,31 @@ class Tender:
 
     def _respawn(self, card: Agent, dry_run: bool) -> Finding:
         """It is down and it was not retired. Bring it back — loudly."""
+        # OWNERSHIP GATE (internal-ref). st tend was one of the dark-crew trap's
+        # own respawners: pilot-era registry cards for another orchestrator's
+        # fleet went "down" whenever that orchestrator cycled them, and this
+        # respawn brought them back primed with THIS deployment's worker
+        # settings — manufacturing the very panes that carry st wiring but
+        # route nothing to st (observed live: "RESPAWNED dearing ... into
+        # 'aegis-crew-dearing'"). Same signal as the feed gate: an agent with
+        # no launch stamp was never launched by st and is not st's to respawn.
+        # CANNOT-TELL honored: if NO agent has a stamp the store proves
+        # nothing, so no gate (a fresh deployment must still self-heal).
+        # Fail-open: any error reading the store means NO gate (the respawn
+        # proceeds as it always did) — the gate is a refinement, and a broken
+        # gate must not turn the self-heal off.
+        try:
+            unstamped = (self._launches is not None
+                         and self._launches.get(card.name) is None
+                         and any(self._launches.root.glob("*.json")))
+        except Exception:  # noqa: BLE001 — stubbed/legacy stores lack the API
+            unstamped = False
+        if unstamped:
+            # (Citation lives here, not in the emittable string: internal-ref.)
+            why = ("no launch stamp — never launched by st, so not st's "
+                   "to respawn (another orchestrator owns it)")
+            self._log(f"REFUSED {card.name}: {why}")
+            return Finding(card.name, "down", REFUSED, why)
         if dry_run:
             return Finding(card.name, "down", WOULD,
                            f"would ensure {card.workspace or 'default cwd'}, "
@@ -264,7 +312,7 @@ class Tender:
             work = triage_mod.work_state(
                 screen, self._runtime.shows_ready_ui(screen),
                 # An agent stalled on a picker is emphatically not a free pane to
-                # launch into: hands off for the same reason BUSY is (aegis-qxc2).
+                # launch into: hands off for the same reason BUSY is (internal-ref).
                 awaiting=asks_a_question(self._runtime, screen))
             why = (f"a session appeared at {card.pane!r} while this pass ran "
                    f"(triage: {work}) — hands off")

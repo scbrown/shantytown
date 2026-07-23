@@ -1,8 +1,9 @@
-"""st — the CLI. Fifteen commands, and the count is load-bearing: each earns its slot.
+"""st — the CLI. Nineteen commands, and the count is load-bearing: each earns its slot.
 
     anchor [--short|--events|--harness] · go · inbox [--count] · task
     · crew [--count] · roles [--check] · role set · new · stop · log · context
-    · doctor [--install] · project · tend [--install|--status] · subscribe
+    · doctor [--install] · project · tend [--install|--status|--reauth]
+    · attach [-r] · dashboard [admin] · subscribe · worktree [--gc] · stats
 
 Five of those flags are MACHINE-READABLE modes, added for an external status bar
 (anchor --short/--events/--harness, crew --count, inbox --count). They are flags
@@ -23,7 +24,7 @@ already made itself the centre of the world.
 
 Gas Town ships ~110. This is not a smaller version of that list; it is the short
 set we measurably use, and the discipline is the point (docs/cli.md). The surface
-grew past the original ten by five, each on a specific ask — not drift:
+grew past the original ten by seven, each on a specific ask — not drift:
   · context — the bobbin Context protocol
   · doctor  — out-of-box tool detect/install, Stiwi's direct ask
   · project — materialize the crew cards from the graph
@@ -32,6 +33,13 @@ grew past the original ten by five, each on a specific ask — not drift:
               is the only surface that can create a session and launch an agent.
               A consequence behind a flag on a read is a consequence somebody
               triggers by running the safe-looking thing.
+  · attach  — attach to a crew member by name; st resolves the socket + pane so
+              the operator never types `tmux -L <sock> attach -t <pane>`. Goes
+              THROUGH shanty (themed) when present, bare tmux otherwise — this is
+              where "use shanty, not raw tmux" becomes the default view.
+  · dashboard — a live, tier-scoped observability panel: roster, current work, the
+              REUSED state verdicts, last activity. The always-on sibling of the
+              one-shot `crew`; refreshes on an interval in a second pane.
   · subscribe — watch quipu entity events and route governed workflows to the
               admin (the events adapter integrations.md sketched, built first-
               class on Quipu's cursored transaction log). Owner-directed.
@@ -54,21 +62,23 @@ from . import roles as roles_mod
 from . import triage as triage_mod
 from .dispatch import Dispatcher, TriageRefused, SendUnverified, AlreadyAssigned
 from .events import FilesEvents
-from .inbox import FilesInbox, TrackerInbox
+from .inbox import FilesInbox, MessageTooLong, TrackerInbox
 from .triage import Action
 from . import supervisor as sup_mod
 from . import tend as tend_mod
 from . import provision as prov_mod
+from . import notify as notify_mod
 from .files import FilesRegistry, FilesTracker, plate as files_plate
 from .launched import FilesLaunches, CURRENT, STALE, UNKNOWN
 from .quipu import QuipuRegistry
 from . import selfcheck
 from .anchor import Unreachable, anchor as do_anchor
-from .runtime import (asks_a_question, ClaudeRuntime, CapabilityError, SettingsError,
-                      emitted_stop_directions, live_stop_directions, live_wiring,
-                      settings_for_role)
+from .runtime import (asks_a_question, auth_expired, ClaudeRuntime, CapabilityError,
+                      SettingsError, emitted_stop_directions, live_stop_directions,
+                      live_wiring, settings_for_role)
 from .tmux import Tmux, declared_socket
-from .workspace import WorkspaceError, ensure_workspace
+from .workspace import (WorkspaceError, cleanup_worktree, ensure_workspace,
+                        ensure_worktree, worktree_for)
 from .provision import ProvisionError, provision as provision_ws
 
 # `st new` liveness poll: how long to wait for the runtime to appear in the pane
@@ -126,8 +136,30 @@ def _tracker(a, default="files"):
     not.
     """
     if _backend(a, default) == "beads":
-        return beads_mod.BeadsTracker(repo=getattr(a, "repo", None))
+        return beads_mod.BeadsTracker(repo=getattr(a, "repo", None)
+                                      or _default_bd_repo(a))
     return FilesTracker(a.root / "items")
+
+
+def _default_bd_repo(a) -> str | None:
+    """Where bd resolves its store when `--repo` was not given: feed_check's
+    bd_cwd walk-up (the admin card's workspace, walked to the nearest .beads) —
+    NEVER the ambient cwd (internal-ref).
+
+    The ambient-cwd default on bd-backed paths is a measured recurring class:
+    the tend loop ran two days with the idle-fleet push dead on it (bd5f55a),
+    and `st inbox` read "no beads database found" from any non-store cwd —
+    including ~/gt/shantytown, where an operator most naturally stands. ONE
+    resolver, shared with feed_check, so the Rule Zero gate and every beads-
+    backed read can never disagree about where the store lives. Explicit
+    `--repo` always wins; a failed resolution falls back to None (ambient cwd,
+    today's behavior) — fail toward the old default, never toward an invented
+    path."""
+    try:
+        from .feed_check import bd_cwd
+        return bd_cwd(_registry(a))
+    except Exception:
+        return None
 
 
 def _plate(a):
@@ -151,7 +183,7 @@ def _inbox(a, default="files"):
                   a real bead on the aegis store (dearing's qdal.2 parity ruling).
 
     The beads side needs a LISTER, which the three-function Tracker protocol does
-    not have and must not grow (aegis-gqr8). It is injected per-backend, exactly
+    not have and must not grow (internal-ref). It is injected per-backend, exactly
     like the plate reader two functions up.
     """
     # Resolve through _backend, NOT getattr(a,"backend","files"). `--backend`
@@ -204,6 +236,15 @@ def build_parser() -> argparse.ArgumentParser:
     # exist — and anything shelling out to `st` without --root (the status bar
     # segments) rendered EMPTY rather than erroring. Measured: the segments
     # produced nothing from any cwd except the checkout itself.
+    # version + the deployed git SHA: __version__ is static, so
+    # only the SHA distinguishes a fresh install from a stale one.
+    from . import __version__, deployed_sha
+
+    ap.add_argument(
+        "--version",
+        action="version",
+        version=f"st {__version__} ({deployed_sha()})",
+    )
     ap.add_argument("--root", type=Path, default=_default_root())
     ap.add_argument("--backend", choices=["files", "beads"], default=None,
                     help="tracker backend (identity is always files). #3. "
@@ -252,6 +293,14 @@ def build_parser() -> argparse.ArgumentParser:
                     help="take an item another agent already holds. Without this, "
                          "dispatching an assigned item REFUSES rather than silently "
                          "stealing it.")
+    go.add_argument("--worktree", metavar="REPO", default=None,
+                    help="the work touches a SHARED project repo (a path, or a "
+                         "bare name under $GT_ROOT): provision this agent an "
+                         "ISOLATED worktree off it and deliver its path in the "
+                         "dispatch, so two agents on the same repo never share an "
+                         "index/HEAD. Refuses if the worktree cannot be made — "
+                         "dispatching shared-repo work with no isolation is the "
+                         "clobber bug, not a fallback.")
 
     cr = sub.add_parser("crew", help="who exists, what state, what role")
     cr.add_argument("--count", action="store_true",
@@ -276,6 +325,15 @@ def build_parser() -> argparse.ArgumentParser:
     st = sub.add_parser("stop", help="stop it")
     st.add_argument("agent")
     st.add_argument("-n", "--dry-run", action="store_true")
+
+    ss = sub.add_parser("stats", help="what the crew actually did: files, "
+                                      "skills, tokens, activity (local store)")
+    ss.add_argument("agent", nargs="?",
+                    help="one agent's numbers; the whole crew if omitted")
+    ss.add_argument("--files", action="store_true",
+                    help="list the files an agent touched (needs agent)")
+    ss.add_argument("--since", type=float, default=24.0, metavar="HOURS",
+                    help="window in hours (default 24)")
 
     lg = sub.add_parser("log", help="what happened")
     lg.add_argument("agent", nargs="?")
@@ -342,8 +400,32 @@ def build_parser() -> argparse.ArgumentParser:
                     help="undo --retire; the agent is tended again")
     td.add_argument("--interval", default="5min",
                     help="with --install: how often a pass runs (default 5min)")
+    td.add_argument("--loop", type=int, metavar="SECS",
+                    help="run a pass every SECS forever — the blocked-worker "
+                         "heartbeat. A blocked worker is pushed to "
+                         "its coordinator within one interval, on its own.")
+    td.add_argument("--reauth", action="store_true",
+                    help="relaunch every AUTH-DEAD agent (login expired) in one "
+                         "command — run it AFTER the operator re-logs in; a "
+                         "relaunch re-reads the refreshed shared credential")
     td.add_argument("-n", "--dry-run", action="store_true",
                     help="say what would be respawned; touch NOTHING")
+
+    at = sub.add_parser("attach", help="attach to a crew member by name "
+                                       "(socket + pane resolved for you)")
+    at.add_argument("agent", nargs="?",
+                    help="whose pane; defaults to the administrator (the coordinator)")
+    at.add_argument("-r", "--read-only", action="store_true",
+                    help="observe only — no keystroke can land in their work")
+
+    db = sub.add_parser("dashboard", help="a live, self-refreshing view of an "
+                                          "admin's tier (roster/state/work)")
+    db.add_argument("admin", nargs="?",
+                    help="whose tier; defaults to the administrator")
+    db.add_argument("--interval", type=int, default=5, metavar="SECS",
+                    help="refresh every SECS (default 5)")
+    db.add_argument("--once", action="store_true",
+                    help="render one snapshot and exit (no refresh loop)")
 
     sb = sub.add_parser("subscribe",
                         help="watch quipu entity events; route assigned workflows to the admin")
@@ -353,6 +435,19 @@ def build_parser() -> argparse.ArgumentParser:
                     help="poll interval in seconds when looping")
     sb.add_argument("--server", default=None,
                     help="quipu server (default $QUIPU_SERVER)")
+
+    wt = sub.add_parser("worktree",
+                        help="provision (or gc) an agent's isolated worktree off "
+                             "a SHARED project repo — so agents never share an "
+                             "index/HEAD")
+    wt.add_argument("repo",
+                    help="the shared checkout: a path, or a bare name under "
+                         "$GT_ROOT (~/gt), e.g. `quipu` -> ~/gt/quipu")
+    wt.add_argument("agent", nargs="?",
+                    help="whose worktree; defaults to $SHANTY_AGENT")
+    wt.add_argument("--gc", action="store_true",
+                    help="remove the worktree IFF unchanged — never discards "
+                         "uncommitted or unpushed work")
 
     return ap
 
@@ -411,14 +506,28 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_stop(a)
     if a.cmd == "log":
         return _cmd_log(a)
+    if a.cmd == "stats":
+        from . import stats as stats_mod
+        if a.files:
+            if not a.agent:
+                print("st stats --files needs an agent", file=sys.stderr)
+                return 2
+            return stats_mod.stats_files(a.root, a.agent, since_h=a.since)
+        return stats_mod.stats_report(a.root, a.agent, since_h=a.since)
     if a.cmd == "new":
         return _cmd_new(a)
     if a.cmd == "project":
         return _cmd_project(a)
     if a.cmd == "tend":
         return _cmd_tend(a)
+    if a.cmd == "attach":
+        return _cmd_attach(a)
+    if a.cmd == "dashboard":
+        return _cmd_dashboard(a)
     if a.cmd == "subscribe":
         return _cmd_subscribe(a)
+    if a.cmd == "worktree":
+        return _cmd_worktree(a)
     return _not_yet(a.cmd)
 
 
@@ -468,7 +577,7 @@ def _reach_buckets(verdicts) -> tuple[list[str], list[str]]:
     This exists because `crew` (which reports when asked) and `role set` (which
     reports when it CAUSES the drift) must never disagree. Two copies of this
     could, and the first symptom would be one surface calling an agent healthy
-    while the other called it stale — the exact ambiguity aegis-nipg is about.
+    while the other called it stale — the exact ambiguity internal-ref is about.
     That divergence was not hypothetical: this rule was written twice, once here
     and once inline in `_cmd_crew`, and unifying them is what this change is.
     """
@@ -548,10 +657,14 @@ def _cmd_new(a) -> int:
     # `st-`: a session `st new` creates must never collide with one somebody
     # else's tooling already launched under a name we'd also pick.
     session = card.pane or f"st-{card.name}"
-    # PRE-FLIGHT: compose refuses capability/settings BEFORE we touch tmux.
+    # PRE-FLIGHT: compose refuses capability/settings/unknown-harness BEFORE we
+    # touch tmux. UnknownHarness is a REFUSAL by design (harness.py) but was not in
+    # this except, so a card naming a harness we cannot host exited with a
+    # traceback instead of the `refused:` exit-1 path every other refusal uses
+    # (internal-ref). It belongs here with the others: same seam, same outcome.
     try:
         launch = runtime.compose(card)
-    except (CapabilityError, SettingsError) as e:
+    except (CapabilityError, SettingsError, harness_mod.UnknownHarness) as e:
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED
     if a.dry_run:
@@ -566,6 +679,15 @@ def _cmd_new(a) -> int:
     except WorkspaceError as e:
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED
+    # KEEP CURRENT ON RELAUNCH (internal-ref): a fresh session must start on a
+    # current tree — launch is the other safe pull moment (nothing is running
+    # in the workspace yet). ff-only + kit-preserving; a refused pull is LOUD
+    # and never blocks the launch (stale-but-working beats no agent).
+    if card.workspace:
+        if err := _refresh_clone(card.workspace):
+            print(f"  ⚠ workspace not brought current (ff-only pull refused: "
+                  f"{err.splitlines()[0]}) — launching on the existing tree.",
+                  file=sys.stderr)
     # EQUIPPED OR NOT CREATED. A workspace is not a provisioned agent: a fresh
     # clone has no .mcp.json (it is uncommitted BY DESIGN — it carries a bearer
     # token), so an agent launched from one has no code search, no graph and no
@@ -619,14 +741,14 @@ def _cmd_new(a) -> int:
 
 
 def _verify_live_hooks(a, card, runtime, panes, session: str) -> int:
-    """The launch is live — but is it HOOKED? (aegis-8p0j gap 1, aegis-05up.)
+    """The launch is live — but is it HOOKED? (internal-ref gap 1, internal-ref.)
 
     THE GAP THIS CLOSES. runtime.py already states the boundary honestly:
     compose() guarantees --settings was REQUESTED; it does not guarantee hooks
     FIRED, and _observe_live only proves the PROCESS is up. So `st new` could
     print "started" and exit 0 for an agent that came up carrying no stop hooks
     at all. That is not a hypothetical shape of bug — measured 2026-07-20
-    (aegis-0v97), all 8 gastown-launched crew were running RIGHT THEN with no
+    (internal-ref), all 8 gastown-launched crew were running RIGHT THEN with no
     stop hooks; they could not even SEND, and nothing detected it for the entire
     time it was true. `st roles --check` finds it, but only if someone runs it.
     Here it is caught at the moment of launch, by the process's own cmdline.
@@ -640,7 +762,7 @@ def _verify_live_hooks(a, card, runtime, panes, session: str) -> int:
     WHY THIS DOES NOT KILL THE SESSION. A defective agent is left RUNNING and the
     operator is told to remove it. Two reasons: the pane is the evidence (killing
     it destroys the cmdline that proves what went wrong, which is exactly what
-    made aegis-0v97 hard to see), and a launcher that reaps on a verdict is one
+    made internal-ref hard to see), and a launcher that reaps on a verdict is one
     bad verdict away from killing healthy agents. `st stop` already exists and is
     one command. If arnold rules teardown belongs here, it is a small change —
     but it should be a ruling, not a side effect of adding a check.
@@ -670,12 +792,12 @@ def _verify_live_hooks(a, card, runtime, panes, session: str) -> int:
         return CANNOT_TELL
     missing = need - wiring.directions
     if missing:
-        # SAY WHAT IT HAS, NOT ONLY WHAT IT LACKS — dearing's aegis-0v97
+        # SAY WHAT IT HAS, NOT ONLY WHAT IT LACKS — dearing's internal-ref
         # correction (205e492), which landed on roles.py while this was in
         # flight and applies verbatim here. "NO stop hooks at all" is false as
         # English and false in the expensive direction: a process launched by a
         # foreign launcher DOES carry hooks, just not a `stop_event` direction.
-        # Read literally, that string is aegis-05up — "respawn dropped
+        # Read literally, that string is internal-ref — "respawn dropped
         # --settings, the rm -rf and force-push guards are gone" — a real
         # emergency that is NOT what we measured. Naming the settings path makes
         # the foreign launcher self-evident instead of alarming.
@@ -726,6 +848,27 @@ def _cmd_stop(a) -> int:
         print(f"  refused: {a.agent} ({session}) was not launched by st — refusing "
               f"to stop a session st does not own. A name match is not permission "
               f"to kill (the registry pane names collide with the live crew).",
+              file=sys.stderr)
+        return REFUSED
+    # SECOND FACTOR: the LAUNCH STAMP. SHANTY_OWNED alone lied once, live
+    # (wn7g pilot's negative control): tend's pre-gate respawns created
+    # another orchestrator's crew sessions, so those panes carry the marker
+    # while the OTHER fleet operates them — `st stop ellie` dry-ran straight
+    # to "would kill" against the live foreign session. An st-MANAGED agent
+    # has a launch stamp (st new writes it; st stop forgets it); a session st
+    # merely created once does not. No stamp while other stamps exist =
+    # created-but-not-managed = refuse. Empty store = cannot tell = the env
+    # marker alone decides, as before (fresh deployments must still reap).
+    try:
+        launches = _launches(a)
+        unstamped = (launches.get(a.agent) is None
+                     and any(launches.root.glob("*.json")))
+    except Exception:  # noqa: BLE001 — a broken store must not wedge the reap
+        unstamped = False
+    if unstamped:
+        print(f"  refused: {a.agent} ({session}) carries st's session marker but "
+              f"has NO launch stamp — st created this session once but does not "
+              f"manage the agent in it (another orchestrator does). Refusing.",
               file=sys.stderr)
         return REFUSED
     if a.dry_run:
@@ -783,12 +926,15 @@ def _cmd_doctor(a) -> int:
 
     healths = doc.detect_all(specs, check_latest=not a.no_latest)
 
-    # ...and ask the question about ITSELF (aegis-daoh, dearing's ruling). doctor
+    # ...and ask the question about ITSELF (internal-ref, dearing's ruling). doctor
     # reported installed-vs-available for four tools and never once about `st`.
     # The tool that audits deployment drift was the only one exempt, and it is the
     # one whose staleness silently corrupts every other row it prints. Only
     # rendered for a full run: `st doctor bobbin` asked about bobbin.
-    self_h = selfcheck.check_self() if len(specs) == len(doc.SPECS) else None
+    # remote= rides --no-latest: both mean "no network lookups on this run". The
+    # behind-upstream fetch is the same class of question as "0.6.0 available".
+    self_h = (selfcheck.check_self(remote=not a.no_latest)
+              if len(specs) == len(doc.SPECS) else None)
 
     sock_v, sock_why = _socket_check(a)
 
@@ -936,7 +1082,7 @@ def _cmd_role(a) -> int:
 
 
 def _report_who_the_rewrite_did_not_reach(a, roles: set[str]) -> None:
-    """aegis-nipg item 2: WRITING A SETTINGS FILE IS NOT DEPLOYING IT.
+    """internal-ref item 2: WRITING A SETTINGS FILE IS NOT DEPLOYING IT.
 
     Emitting settings changes bytes on disk and reaches NOBODY already running —
     `--settings` is read once, at launch. So the operator who just changed the
@@ -1114,7 +1260,13 @@ def _cmd_inbox(a) -> int:
     local durability. We PRINT where it landed so the durability is never ambiguous.
 
     Durable exit codes:
-      REFUSED (1)      no such agent
+      REFUSED (1)      no such agent — OR the message is too long for the durable
+                       inbox. On the beads backend a message maps to a tracker
+                       item whose TITLE holds it, and bd caps a title at 500 chars
+                       (so ~493 of body). The inbox is a THIN POINTER CHANNEL, not
+                       a document store: a real escalation goes in a BEAD, and the
+                       inbox carries the pointer. The refusal names the remedy and
+                       is a REFUSED (permanent), never a CANNOT_TELL (internal-ref).
       CANNOT_TELL (2)  could NOT persist (store unreachable) — the survival
                        guarantee failed, so we do NOT downgrade to a silent
                        routine send and report success
@@ -1191,7 +1343,13 @@ def _inbox_durable(a, agent, msg: str, panes) -> int:
     # promise cannot be kept; say so (2) rather than silently downgrade to routine.
     try:
         item = _inbox(a, default="beads").deliver(a.agent, msg, frm=_me(a))
-    except Exception as e:                       # bd/store unreachable, etc.
+    except MessageTooLong as e:                  # PERMANENT: the message will never fit
+        # Not a "could not tell" (2) — the store is fine; the message is too long,
+        # and retrying it unchanged will fail identically. That is a REFUSED (1)
+        # the agent must act on, and the exception says exactly how (internal-ref).
+        print(f"  refused: {e}", file=sys.stderr)
+        return REFUSED
+    except Exception as e:                        # bd/store unreachable, etc. — TRANSIENT
         print(f"  could not tell: durable persist FAILED for {agent.name} "
               f"({type(e).__name__}: {str(e)[:100]}). Nothing guaranteed to "
               f"survive; not downgrading to an ephemeral send.", file=sys.stderr)
@@ -1319,7 +1477,7 @@ def _read_note(a) -> str | None:
 
     --note-file exists because a note is prose, and prose typed into a shell as
     `--note "..."` gets `$(...)` and backticks EXPANDED before st ever sees it —
-    the aegis-0214 footgun, where the message either runs or is silently deleted
+    the internal-ref footgun, where the message either runs or is silently deleted
     while the tool reports success. A file (or stdin) is inert.
     """
     if getattr(a, "note_file", None) is not None:
@@ -1364,7 +1522,7 @@ def _cmd_go(a) -> int:
     except OSError as e:
         # A note that cannot be read must NOT degrade to a note-less dispatch:
         # the caveat is the reason the caller used the flag, and sending the work
-        # without it is the exact failure aegis-8013 is about.
+        # without it is the exact failure internal-ref is about.
         print(f"  refused: could not read --note-file: {e}", file=sys.stderr)
         return REFUSED
     if a.dry_run:
@@ -1378,13 +1536,52 @@ def _cmd_go(a) -> int:
             print(f"  refused: {e}", file=sys.stderr)
             return REFUSED
         print(p.render()); print("\n  triage: " + decision.render())
+        if a.worktree:
+            # Dry-run creates NOTHING (the pure-dry-run rule), so name what a real
+            # run would provision without touching disk.
+            print(f"  would provision worktree: "
+                  f"{worktree_for(_resolve_repo(a.worktree), a.agent)}")
         print("  0 writes. 1 tracker call, 1 send-keys.")
         return OK
+    # KEEP CURRENT, MECHANIZED (internal-ref). Assignment is a SAFE pull moment —
+    # the agent is between items by definition of being dispatched to — so bring
+    # its workspace current (ff-only, kit-preserving) BEFORE the item lands and
+    # work starts on a stale tree. A refused pull (local dirt, the internal-ref
+    # condition) does NOT block the dispatch, but it rides INTO the dispatch
+    # note so the agent starts knowing its tree may be stale — visible to both
+    # ends, silent to neither. Deliberately NOT inside Dispatcher.go: the
+    # dispatcher's asserted budget is one read/one write/one send, and a git
+    # pull is the launcher's business, not the dispatch protocol's.
+    if warn := _keep_current(a, a.agent):
+        print(f"  ⚠ {warn}", file=sys.stderr)
+        tag = f"[st keep-current: {warn}]"
+        note = f"{note} — {tag}" if note else tag
+    # ISOLATED WORKTREE for shared-repo work (internal-ref), composed with the
+    # keep-current above: the workspace clone is pulled, and if this item touches a
+    # SHARED project repo, the agent gets its OWN worktree off it so its index/HEAD
+    # cannot be clobbered by another agent (internal-ref). PROVISION FAILURE REFUSES:
+    # dispatching shared-repo work into the shared checkout with no isolation is the
+    # exact bug this removes, so a worktree we cannot make is a hard stop, not a
+    # degrade. A STALE worktree (rebase refused) is not — it rides into the note
+    # like keep-current's does, visible to both ends.
+    if a.worktree:
+        try:
+            wt_path = ensure_worktree(_resolve_repo(a.worktree), a.agent)
+        except WorkspaceError as e:
+            print(f"  refused: worktree — {e}", file=sys.stderr)
+            return REFUSED
+        print(f"  worktree: {wt_path}")
+        wtag = f"[st worktree: work in {wt_path}"
+        if wt_warn := _refresh_worktree(wt_path):
+            print(f"  ⚠ {wt_warn}", file=sys.stderr)
+            wtag += f" — {wt_warn}"
+        wtag += "]"
+        note = f"{note} — {wtag}" if note else wtag
     try:
         p = d.go(a.item, a.agent, note=note, reassign=a.reassign)
     except AlreadyAssigned as e:
         # Refuse rather than steal. Nothing written, nothing sent — two agents on
-        # one item is duplicated effort no tool ever flags (aegis-uvw5 / 7yeb).
+        # one item is duplicated effort no tool ever flags (internal-ref / 7yeb).
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED
     except TriageRefused as e:
@@ -1468,6 +1665,8 @@ def _cmd_crew(a) -> int:
     free, busy, queued, shelled = [], [], [], []
     verdicts = []
     waiting = []
+    saturated = []
+    authdead = []
     print()
     for ag, state, work in _crew_states(agents, panes, runtime):
         if work.endswith("sh"):
@@ -1480,16 +1679,22 @@ def _cmd_crew(a) -> int:
             queued.append(ag.name)
         elif work.startswith(triage_mod.WAITING):
             waiting.append(ag.name)
+        elif work.startswith(triage_mod.SATURATED):
+            # A `context_k=NNN` rides in the work cell (see _crew_states), so the
+            # coordinator sees HOW over-limit, not just that it is.
+            saturated.append(ag.name)
+        elif work.startswith(triage_mod.AUTH_DEAD):
+            authdead.append(ag.name)
         # Only a LIVE agent can be running stale settings. A down agent has no
         # loaded settings to be stale, and will read the current file when it
         # next starts, so reporting on it would be noise that hides the real hits.
-        # Shared with `role set` (aegis-qio0): the verdict rule and the bucket
+        # Shared with `role set` (internal-ref): the verdict rule and the bucket
         # rule each exist ONCE, so the column here and the warning there cannot
         # disagree about the same agent.
         verdict = _settings_verdict(launches, ag.name, state == "up")
         verdicts.append((ag.name, verdict))
         print(f"  {ag.name:<11} {ag.role:<14} {state:<8} {verdict:<8} "
-              f"{work:<11} {ag.pane or '—'}")
+              f"{work:<16} {ag.pane or '—'}")
     stale, unknown = _reach_buckets(verdicts)
     print()
     # The dispatcher's answer, said out loud. A column still makes the operator
@@ -1502,7 +1707,7 @@ def _cmd_crew(a) -> int:
     if busy:
         print(f"  {len(busy)} busy: {', '.join(busy)}")
     # Not free, not busy, and the one state an operator will otherwise "fix" by
-    # hand (aegis-x6xh). Say what it means and what NOT to do about it: the
+    # hand (internal-ref). Say what it means and what NOT to do about it: the
     # incident that produced this line was an administrator reading a pane,
     # inferring a stall, and typing into a healthy agent's buffer.
     if queued:
@@ -1514,7 +1719,7 @@ def _cmd_crew(a) -> int:
               f"dispatch, and do not press Enter at")
         print(f"    someone else's pane to 'un-stall' it. Look with "
               f"`st log <agent>` and ask its owner.")
-    # The whole point of the verdict (aegis-qxc2). A column still makes the reader
+    # The whole point of the verdict (internal-ref). A column still makes the reader
     # scan 18 rows, and these agents are in NEITHER the free list nor the busy one
     # — so before this block a coordinator's summary said "5 free, 9 busy" of 18
     # agents and three stalled workers fell silently down the gap between the two
@@ -1532,7 +1737,7 @@ def _cmd_crew(a) -> int:
         print(f"    the bead with a recommendation and carry on — a question in a "
               f"pane reaches nobody and")
         print(f"    dies with the session.")
-    # Say the consequence, not just the count (aegis-q73g). The reader who needs
+    # Say the consequence, not just the count (internal-ref). The reader who needs
     # this line is the administrator about to book the previous item as done.
     if shelled:
         print(f"  ⚠ {len(shelled)} agent(s) still own live background shells: "
@@ -1542,7 +1747,44 @@ def _cmd_crew(a) -> int:
         print("    unruled — but a build, a test run or a `gh run watch` is "
               "unfinished work, and the next")
         print("    item's output will land on top of it.")
-    if free or busy or queued or shelled:
+    # The bead this state was built for (internal-ref). A saturated agent reads as
+    # `idle` on every prior version of this command, so it lands on the free list
+    # and gets work piled on — three agents sat past the threshold (687k/562k/524k)
+    # for fifteen hours exactly that way. It is the fail-SILENT case this whole
+    # file exists to convert: the number was on the pane the entire time. 400k is
+    # a CYCLE threshold, not the ~1M limit — the depth shows as raw k tokens in the
+    # work cell, never as a "% of limit" (that framing was a lie, Stiwi's rule).
+    if saturated:
+        print(f"  ⚠ {len(saturated)} agent(s) PAST THE 400k CYCLE THRESHOLD — NOT "
+              f"free, a dispatch wall: {', '.join(saturated)}")
+        print(f"    They read as idle but cannot hold new work: they drop earlier "
+              f"context, re-derive settled")
+        print(f"    decisions, and miss constraints stated long ago. `st go` "
+              f"REFUSES them (the depth is in the")
+        print(f"    work cell). Remedy: the agent CHECKPOINTS its state to its "
+              f"bead, THEN /clears (or hands off to")
+        print(f"    a fresh session), THEN takes the task — do NOT auto-clear, it "
+              f"loses whatever was not saved. The")
+        print(f"    saturated agent is the LEAST able to notice it must cycle, so "
+              f"this is the coordinator's to drive.")
+    # The bead this state was built for (internal-ref). An operator re-login rotates
+    # the shared credential, and EVERY live agent's session goes login-expired at
+    # once — still rendering a ready UI over an empty box, i.e. `idle` to every
+    # earlier version of this command. All 9 crew sat that way: fed, prompted, and
+    # dispatched into, with every send dying against the banner. Not idle: DEAD.
+    if authdead:
+        print(f"  ⚠ {len(authdead)} agent(s) AUTH-DEAD — login expired, every API "
+              f"call fails: {', '.join(authdead)}")
+        print(f"    They render an idle-looking pane but nothing can run. /login "
+              f"in the pane is an interactive")
+        print(f"    browser OAuth flow — it cannot be driven for them. Recovery: "
+              f"the OPERATOR re-logs in on their")
+        print(f"    own session first (refreshing the shared credential), then "
+              f"`st tend --reauth` relaunches every")
+        print(f"    auth-dead agent in one command. Their frozen context is lost "
+              f"either way — it was already")
+        print(f"    unreachable the moment auth died.")
+    if free or busy or queued or waiting or saturated or authdead or shelled:
         print()
     # Say the consequence, not just the state. The operator who needs this line is
     # the one who just rewrote a settings file and has no reason to suspect it did
@@ -1588,12 +1830,16 @@ def _crew_states(agents, panes, runtime):
             # would be a different moment. Both plain-substring readers get the
             # stripped view; only work_state's input-box check needs the attributes.
             plain = triage_mod.strip_attrs(screen)
-            # awaiting: a BLOCKING picker (aegis-qxc2). Without it these panes
+            # awaiting: a BLOCKING picker (internal-ref). Without it these panes
             # print `?`, which is honest and unactionable — 7 of 10 workers read
             # that way at once while every one of them sat on a question.
+            # auth_dead: the login-expired banner (internal-ref). Without it an
+            # auth-dead pane prints `idle` — all 9 crew did, through a whole
+            # expiry — and lands on the free list.
             work = triage_mod.work_state(
                 screen, runtime.shows_ready_ui(plain),
-                awaiting=asks_a_question(runtime, plain))
+                awaiting=asks_a_question(runtime, plain),
+                auth_dead=auth_expired(runtime, plain))
             # Background shells outlive the turn. An agent whose turn ended with a
             # build/test/`gh run watch` still live is NOT finished, and every
             # surface the administrator has was silent about it. Shown ON the work
@@ -1602,6 +1848,14 @@ def _crew_states(agents, panes, runtime):
             shells = triage_mod.running_shells(screen)
             if shells:
                 work = f"{work}+{shells}sh"
+            # The saturation ratio rides in the cell (internal-ref), so the
+            # coordinator sees HOW over-limit — 172% is a different decision from
+            # 101%. Only when the verdict is saturated; a healthy pane's token
+            # count is not this column's business.
+            if work.startswith(triage_mod.SATURATED):
+                tokens = triage_mod.context_tokens_k(plain)
+                if tokens is not None:
+                    work = f"{work}·{int(tokens)}k"
         else:
             work = "—"
         yield ag, state, work
@@ -1644,7 +1898,7 @@ def _cmd_roles(a) -> int:
 
     # #6.4: hand check the hook READER, so `hooks: ok` reports the settings file
     # `role set` actually emitted instead of naming a column.
-    # aegis-0v97: and hand it the LIVE reader too, so the check measures the
+    # internal-ref: and hand it the LIVE reader too, so the check measures the
     # running process, not only the artifact its role would have emitted. The
     # artifact was green for a lead whose live process had no stop hooks at all.
     panes = _panes(a)
@@ -1670,9 +1924,9 @@ def _cmd_project(a) -> int:
     `roles --check` still surfaces them rather than project hiding a bad graph.
 
     IT ALSO SHOWS ITS WORK AND REFUSES TO RESTRUCTURE A LIVE CREW SILENTLY
-    (aegis-0v97). "Hand-edits are overwritten, which is the point" is true of a
+    (internal-ref). "Hand-edits are overwritten, which is the point" is true of a
     clean graph. It is catastrophic against a dirty one, and ours is dirty:
-    measured 2026-07-20, the graph declares `luvu` (a HOST — dolt/garage backups
+    measured 2026-07-20, the graph declares `a-backup-host` (a HOST — dolt/garage backups
     live on it) and `mayor` (which this fleet has stated does not exist and never
     will) as crew workers, plus two agents with no card and no session. Projecting
     that would have demoted the live administrator to an orphan worker, cut nine
@@ -1778,6 +2032,47 @@ def _cmd_project(a) -> int:
     return OK
 
 
+def _resolve_repo(repo: str) -> Path:
+    """A shared repo, as a path OR a bare name under $GT_ROOT (~/gt) — so both
+    `st worktree /home/x/gt/quipu` and `st worktree quipu` reach the same tree,
+    matching scripts/crew-worktree.sh's `$GT_ROOT/$repo` resolution."""
+    p = Path(repo).expanduser()
+    if p.is_absolute() or "/" in repo or p.exists():
+        return p
+    root = Path(os.environ.get("GT_ROOT", Path.home() / "gt"))
+    return root / repo
+
+
+def _cmd_worktree(a) -> int:
+    """worktree <repo> [<agent>] [--gc] — st PROVISIONS the isolated worktree so
+    the agent never runs `git worktree add` by hand (internal-ref).
+
+    A shared project checkout (~/gt/shantytown, quipu, hank, goldblum) is
+    multi-writer: index and HEAD belong to the working copy, so two agents
+    committing there corrupt each other silently (internal-ref/iaef). Each agent
+    gets its own worktree off the shared repo instead — <repo>-wt/<agent> on
+    branch wt/<agent>. Provision prints the path (the cwd to work in). --gc removes
+    it IFF unchanged; it NEVER discards uncommitted or unpushed work.
+    """
+    agent = a.agent or os.environ.get("SHANTY_AGENT")
+    if not agent:
+        print("  refused: no agent. `st worktree <repo> <agent>` or set "
+              "$SHANTY_AGENT.", file=sys.stderr)
+        return REFUSED
+    repo = _resolve_repo(a.repo)
+    try:
+        if a.gc:
+            removed = cleanup_worktree(repo, agent)
+            dest = worktree_for(repo, agent)
+            print(f"  {'removed' if removed else 'kept (holds work, or absent)'}: {dest}")
+            return OK
+        print(ensure_worktree(repo, agent))
+        return OK
+    except WorkspaceError as e:
+        print(f"  refused: {e}", file=sys.stderr)
+        return REFUSED
+
+
 def _cmd_subscribe(a) -> int:
     """subscribe — watch quipu entity events and route assigned workflows.
 
@@ -1861,15 +2156,88 @@ def _not_yet(cmd: str) -> int:
 # --- tend: the only command that RESTARTS things ----------------------------
 
 def _refresh_clone(path) -> str | None:
-    """ff-only pull at the ONE moment it is safe: the agent is down, nothing
-    holds the checkout, and no live session can be racing it. Returns an error
+    """ff-only pull at a SAFE moment: the agent is down, between items, or being
+    relaunched — nothing holds the checkout mid-thought. Returns an error
     string (loud) or None. NEVER raises — a failure here must not stop a
-    respawn, because trading an outage for a stale checkout is the worse deal."""
+    respawn or a dispatch, because trading an outage for a stale checkout is
+    the worse deal. And NEVER anything but --ff-only: force/reset against a
+    crew clone is the internal-ref/iaef data-loss class.
+
+    .MCP.JSON SURVIVES THE PULL (internal-ref). The provisioned kit carries a
+    live bearer token and is uncommitted BY DESIGN — so history can delete or
+    replace a tracked template out from under it, and a refused pull can leave
+    it half-restored. The kit is copied aside before the pull and put back if
+    the pull removed or changed it: an agent must never come out of a
+    keep-current pull with its tools stripped (the five-agents-worked-a-night-
+    without-tools class, via a new door)."""
     import subprocess
     try:
+        mcp = Path(path) / ".mcp.json"
+        saved = mcp.read_bytes() if mcp.is_file() else None
         r = subprocess.run(["git", "-C", str(path), "pull", "--ff-only"],
                            capture_output=True, text=True, timeout=60)
-        return None if r.returncode == 0 else (r.stderr or r.stdout).strip()
+        err = None if r.returncode == 0 else (r.stderr or r.stdout).strip()
+        if saved is not None and (not mcp.is_file() or mcp.read_bytes() != saved):
+            mcp.write_bytes(saved)
+        return err
+    except Exception as e:                       # not a repo, git absent, timeout
+        return str(e)
+
+
+def _keep_current(a, agent_name: str) -> str | None:
+    """Bring `agent_name`'s workspace clone current (ff-only) — the crew 'Keep
+    Current' rule as MECHANISM instead of memory (internal-ref; Stiwi's ask).
+
+    Returns None when the workspace is current (or the card names none —
+    nothing to pull is not a failure), else a one-line WARNING the caller must
+    surface: a stale-but-working agent beats a failed dispatch, but staleness
+    must be VISIBLE, never silent (the deploy-lag disease, internal-ref/ttlr, is
+    exactly invisible staleness). Never raises, never blocks."""
+    try:
+        card = _registry(a).get(agent_name)
+    except Exception:
+        return None                    # the dispatch path will name the real error
+    if not card.workspace:
+        return None
+    err = _refresh_clone(card.workspace)
+    if err is None:
+        return None
+    first = err.splitlines()[0] if err else "unknown"
+    return (f"workspace could not be brought current (ff-only pull refused: "
+            f"{first}) — dispatching anyway on the EXISTING tree; it may be "
+            f"stale. Clean or reconcile {card.workspace} to restore keep-current.")
+
+
+def _refresh_worktree(dest, base: str = "origin/main") -> str | None:
+    """Bring a project WORKTREE current — by REBASE onto <base>, not ff-pull.
+
+    The keep-current sibling _refresh_clone ff-pulls a clone on `main`. A worktree
+    is on `wt/<agent>`, so an ff-only pull of origin/main either no-ops (wrong
+    branch) or fails — the caveat flagged on internal-ref. The right move is the
+    crew-worktree pattern: rebase wt/<agent> onto origin/main. But ONLY when the
+    tree is clean: rebasing over uncommitted work is the force/reset data-loss
+    (internal-ref) this whole line removes. A dirty tree, or a rebase that conflicts,
+    is LEFT AS-IS and reported — a stale-but-intact worktree beats a mangled one.
+    Never raises; returns a one-line warning or None (current)."""
+    import subprocess
+    try:
+        subprocess.run(["git", "-C", str(dest), "fetch", "origin", "--quiet"],
+                       capture_output=True, text=True, timeout=60)
+        dirty = subprocess.run(["git", "-C", str(dest), "status", "--porcelain"],
+                               capture_output=True, text=True)
+        if dirty.returncode != 0 or dirty.stdout.strip():
+            return ("worktree has local changes — not rebased onto "
+                    f"{base}; working on it as-is (may be behind).")
+        r = subprocess.run(["git", "-C", str(dest), "rebase", base],
+                           capture_output=True, text=True, timeout=60)
+        if r.returncode != 0:
+            # Leave the worktree usable: abort the half-applied rebase.
+            subprocess.run(["git", "-C", str(dest), "rebase", "--abort"],
+                           capture_output=True, text=True)
+            first = (r.stderr or r.stdout).splitlines()
+            return (f"worktree rebase onto {base} refused "
+                    f"({first[0] if first else 'conflict'}) — on the existing tree.")
+        return None
     except Exception as e:                       # not a repo, git absent, timeout
         return str(e)
 
@@ -1891,6 +2259,173 @@ def _systemctl_user_active(unit: str) -> bool:
 def _run_cmd(argv) -> None:
     import subprocess
     subprocess.run(argv, capture_output=True, text=True, timeout=60)
+
+
+def _attach_argv(pane: str, socket, read_only: bool, has_shanty: bool):
+    """Build (argv, env-overlay) for the attach — the pure, testable core.
+
+    THROUGH SHANTY when it is on PATH (the themed bar + segments Stiwi wants the
+    attach to be), falling back to bare tmux only when it is absent — the same
+    self-hiding discipline the segments already use. Either way the operator never
+    types the socket or the `shanty-`/`aegis-crew-` pane prefix: st resolved both.
+
+    The socket is passed to shanty via SHANTY_TMUX_SOCKET (shanty honours it as of
+    the companion change), so shanty views the FLEET's real sessions on their
+    existing socket — no agent is migrated onto shanty's own server (internal-ref's
+    ruling holds; shanty is the VIEW). tmux takes it as `-L`.
+    """
+    if has_shanty:
+        env = {"SHANTY_TMUX_SOCKET": socket} if socket else {}
+        argv = ["shanty", "attach"]
+        if read_only:
+            argv.append("-r")
+        argv.append(pane)
+        return argv, env
+    argv = ["tmux"]
+    if socket:
+        argv += ["-L", socket]
+    argv += ["attach-session", "-t", pane]
+    if read_only:
+        argv.append("-r")
+    return argv, {}
+
+
+def _exec_attach(argv, env_overlay) -> int:
+    """Hand the terminal to the attach. os.execvpe REPLACES this process, so on
+    success it never returns; only a failed exec (the binary vanished between the
+    PATH check and here) falls through to a could-not-tell."""
+    import os as _os
+    try:
+        _os.execvpe(argv[0], argv, {**_os.environ, **env_overlay})
+    except OSError as e:
+        print(f"  could not exec {argv[0]}: {e}", file=sys.stderr)
+        return CANNOT_TELL
+    return OK  # unreachable on success; keeps the type checker happy
+
+
+def _dashboard_snapshot(a, reg, panes, runtime, now):
+    """One dashboard snapshot for `a.admin`'s tier. Pure-ish: reads the registry,
+    the REUSED crew-state verdicts, the plate, and the event ledger — composes
+    them in dashboard.gather. Separated from the render loop so a test drives it
+    without a clock or a foreground loop."""
+    from . import dashboard as dash_mod
+    from .tier import _find_administrator
+    agents = reg.all()
+    admin = a.admin or _find_administrator(reg)
+    if not admin:
+        return None, "no administrator in the registry to show a tier for"
+    if admin not in {x.name for x in agents}:
+        return None, f"no such agent: {admin}"
+    crew_states = list(_crew_states(agents, panes, runtime))
+    plate = _plate(a)
+    last = FilesEvents(Path(a.root) / "events").latest_by_sender()
+    return dash_mod.gather(admin, agents, crew_states, plate, last, now), None
+
+
+def _cmd_dashboard(a) -> int:
+    """dashboard [admin] — a live, read-only view of one admin's tier.
+
+    The always-on sibling of `st crew`: scoped to an administrator and its crew,
+    it REUSES the same busy/idle/waiting/saturated verdicts (never a second
+    opinion) and refreshes on an interval so an operator keeps it in a pane while
+    talking to that admin. `--once` renders a single snapshot (for scripting);
+    the default loops until interrupted.
+    """
+    from . import dashboard as dash_mod
+
+    reg = _registry(a)
+    panes = _panes(a)
+    runtime = _runtime(a, panes)
+
+    def one() -> tuple[int, "Dashboard | None"]:
+        try:
+            data, err = _dashboard_snapshot(a, reg, panes, runtime, time.time())
+        except Exception as e:
+            print(f"  could not tell: {e}", file=sys.stderr)
+            return CANNOT_TELL, None
+        if data is None:
+            print(f"  refused: {err}", file=sys.stderr)
+            return REFUSED, None
+        return OK, data
+
+    if a.once:
+        rc, data = one()
+        if data is not None:
+            print(dash_mod.render(data, time.time()))
+        return rc
+
+    # The self-refreshing panel. Clear + redraw each interval; Ctrl-C exits clean.
+    print("  st dashboard — refreshing every "
+          f"{a.interval}s. Ctrl-C to stop.", file=sys.stderr)
+    try:
+        while True:
+            rc, data = one()
+            if data is None:
+                return rc                     # a refusal/could-not-tell is terminal
+            # \x1b[2J\x1b[H: clear screen + home, so the pane shows ONE live frame
+            # rather than an ever-growing scrollback of snapshots.
+            print("\x1b[2J\x1b[H", end="")
+            print(dash_mod.render(data, time.time()))
+            time.sleep(a.interval)
+    except KeyboardInterrupt:
+        return OK
+
+
+def _cmd_attach(a, *, execer=_exec_attach, which=None) -> int:
+    """attach [agent] [-r] — attach to a crew member by name.
+
+    st already knows the socket (declared_socket) and the pane (the registry), so
+    the operator never types `tmux -L gt-ae5f35 attach -t shanty-weaver`. Refuses
+    cleanly on an unknown or down agent — never a raw tmux error — the same
+    discipline as go/stop.
+    """
+    import shutil
+    which = which or shutil.which
+    reg = _registry(a)
+    panes = _panes(a)
+    socket = declared_socket(getattr(a, "root", None) or ".")
+
+    name = a.agent
+    if not name:
+        # DEFAULT TO THE ADMINISTRATOR (internal-ref), not $SHANTY_AGENT. The
+        # tier-root coordinator is who the operator most often wants to look at,
+        # and st knows it from the registry — so `st attach` with no arg opens the
+        # coordinator, and an explicit <agent> still targets that agent. Falling
+        # back to $SHANTY_AGENT would open the OPERATOR's own pane, which they are
+        # already in; the useful default is the one they'd otherwise type.
+        from .tier import _find_administrator
+        try:
+            name = _find_administrator(reg)
+        except Exception as e:
+            print(f"  could not tell: {e}", file=sys.stderr)
+            return CANNOT_TELL
+        if not name:
+            # No administrator in the registry — LIST, don't error.
+            try:
+                agents = reg.all()
+            except Exception as e:
+                print(f"  could not tell: {e}", file=sys.stderr)
+                return CANNOT_TELL
+            print("  no administrator to default to — attach to which? name one:")
+            for ag in sorted(agents, key=lambda x: x.name):
+                print(f"    {ag.name}")
+            return OK
+
+    try:
+        card = reg.get(name)
+    except LookupError as e:
+        print(f"  refused: {e}", file=sys.stderr)
+        return REFUSED
+    if not card.pane or not panes.exists(card.pane):
+        where = f"socket {socket!r}" if socket else "the default tmux server"
+        print(f"  refused: {name} is down — no live pane "
+              f"{card.pane or '(none on card)'} on {where}. `st crew` to see who "
+              f"is up.", file=sys.stderr)
+        return REFUSED
+
+    argv, env = _attach_argv(card.pane, socket, a.read_only,
+                             which("shanty") is not None)
+    return execer(argv, env)
 
 
 def _cmd_tend(a) -> int:
@@ -1936,6 +2471,74 @@ def _cmd_tend(a) -> int:
               "look dead and be respawned onto the wrong server.", file=sys.stderr)
         return REFUSED
 
+    # --reauth AFTER the socket guard, deliberately: on a wrong socket every
+    # auth-dead agent would be invisible (or worse, a foreign fleet's panes would
+    # be judged), and this branch KILLS sessions.
+    if getattr(a, "reauth", False):
+        return _tend_reauth(a)
+
+    # --loop <secs>: run passes on an interval, so blocked-worker delivery is
+    # PROMPT ON ITS OWN (internal-ref) rather than "on the coordinator's next stop".
+    # This is the heartbeat the bead's option 2 names; without a running st tend
+    # timer (its systemd install refuses while gastown-crew-watchdog holds the
+    # crew), a foreground/backgrounded `st tend --loop 30` is the runnable one.
+    loop = getattr(a, "loop", None)
+    if not loop:
+        return _tend_once(a)
+    import time
+    print(f"  tend heartbeat: a pass every {loop}s. Blocked workers are pushed to "
+          f"their coordinator within one interval. Ctrl-C to stop.",
+          file=sys.stderr)
+    # THE LOOP'S OWN STALENESS (internal-ref follow-up, measured). A long-running
+    # loop is a MEMORY image of the code at start: the live one ran for two days
+    # while the editable install moved under it — every fix (auth-dead gating,
+    # the idle-fleet push's bd cwd) landed on disk and reached nothing, the
+    # internal-ref class one level up (disk current, PROCESS stale). So the loop
+    # watches its own package fingerprint and RE-EXECS itself when the code
+    # changes — same argv, fresh import, loud line in between. A supervisor
+    # that must be manually restarted to pick up its own fixes is a supervisor
+    # that runs old code exactly when it matters.
+    fp = _code_fingerprint()
+    while True:
+        # A CRASHED PASS IS NOT A DEAD SUPERVISOR (internal-ref). The live loop
+        # died to one uncaught OSError (ENOSPC in a ledger write) and nothing
+        # restarted it — a supervisor with no supervisor. One bad pass logs its
+        # traceback and the next interval tries again; a persistent fault
+        # repeats loudly every interval, which is exactly what an operator can
+        # see and a dead process is exactly what they cannot. KeyboardInterrupt
+        # and SystemExit still pass through — Ctrl-C must keep killing it.
+        try:
+            _tend_once(a, quiet=True)
+        except Exception:  # noqa: BLE001 — survive anything a pass can raise
+            import traceback
+            print(f"  ⚠ st tend: this pass CRASHED — supervision continues; "
+                  f"next pass in {loop}s. Traceback:", file=sys.stderr)
+            traceback.print_exc()
+        now = _code_fingerprint()
+        if fp is not None and now is not None and now != fp:
+            print("  st tend: the installed code CHANGED under this loop — "
+                  "re-exec to run what is on disk.", file=sys.stderr)
+            os.execv(sys.executable, [sys.executable] + sys.argv)
+        time.sleep(loop)
+
+
+def _code_fingerprint(pkg=None) -> str | None:
+    """A cheap identity for the package code THIS process would import: name,
+    mtime and size of every module file. Editable install: these are the
+    checkout's files, so a `git pull` changes it. Non-editable: they are the
+    venv copy's, so a reinstall changes it. None = could not look — and the
+    caller treats that as 'never re-exec', because a supervisor that exec-loops
+    on a stat error is worse than one that runs old code."""
+    try:
+        pkg = Path(pkg) if pkg else Path(__file__).resolve().parent
+        parts = [f"{f.name}:{f.stat().st_mtime_ns}:{f.stat().st_size}"
+                 for f in sorted(pkg.glob("*.py"))]
+        return "|".join(parts) or None
+    except OSError:
+        return None
+
+
+def _tend_once(a, quiet: bool = False) -> int:
     panes = _panes(a)
     try:
         agents = _registry(a).all()
@@ -1951,15 +2554,190 @@ def _cmd_tend(a) -> int:
         log=lambda msg: print(f"  {msg}", file=sys.stderr),
     )
     rep = tender.pass_over(agents, dry_run=a.dry_run)
-    print()
-    print(rep.render())
-    print()
+    # DELIVER blocked workers to their coordinator (internal-ref). Not on a dry run
+    # — a dry run pushes nothing, same as it launches nothing. Deduped, so a
+    # heartbeat does not re-spam a still-blocked worker every interval.
+    if not a.dry_run:
+        _log = lambda msg: print(f"  {msg}", file=sys.stderr)
+
+        # EACH SWEEP FAILS ALONE, LOUDLY — THE SUPERVISOR SURVIVES (internal-ref).
+        # These sweeps write ledgers, and a write can fail for reasons that have
+        # nothing to do with supervision: the live loop DIED at 22:37:37 on
+        # ENOSPC inside Notifier._save — an uncaught OSError killed the whole
+        # supervisor, nothing restarted it, and the fleet ran unsupervised for
+        # half an hour on the exact night a full disk was also tearing event
+        # files (the ev-172 dam). A notification layer must never take the
+        # respawn layer down with it: the pass itself (respawn, PassLog) is the
+        # job; the pushes are best-effort on top.
+        def _sweep(label, fn):
+            try:
+                return fn()
+            except Exception as e:  # noqa: BLE001 — any sweep error is survivable
+                print(f"  ⚠ tend: the {label} sweep CRASHED ({e!r}) — "
+                      f"supervision continues without it this pass", file=sys.stderr)
+                return []
+
+        woke = _sweep("blocked-worker", lambda: notify_mod.Notifier(
+            Path(a.root), _registry(a), panes, log=_log).sweep(agents, runtime))
+        if woke:
+            print(f"  ⚠ pushed {len(woke)} blocked worker(s) to their "
+                  f"coordinator: {', '.join(woke)}", file=sys.stderr)
+        # DRIVE THE CYCLE (internal-ref): a saturated IDLE agent is prompted to
+        # checkpoint-then-/clear on its own pane, so it self-heals instead of
+        # sitting idle-and-refused until a human raw-tmuxes it. Deduped once per
+        # saturation episode; the instruction checkpoints BEFORE clearing.
+        cycled = _sweep("saturation-cycle", lambda: notify_mod.CycleDriver(
+            Path(a.root), _registry(a), panes, refresh=_refresh_clone,
+            log=_log).sweep(agents, runtime))
+        if cycled:
+            print(f"  ⚠ prompted {len(cycled)} saturated agent(s) to checkpoint "
+                  f"+ /clear: {', '.join(cycled)}", file=sys.stderr)
+        # ALERT THE IDLE FLEET (internal-ref): the SOFT half of Rule Zero. If free
+        # feedable workers and dispatchable beads coexist, push the coordinator —
+        # a coordinator forgetting to dispatch is the same invisible failure w0kk
+        # fixed for blocked workers. Deduped per idle episode, fail-open, and it
+        # reuses the SAME free/dispatchable computation as hfta's hard gate.
+        idle = _sweep("idle-fleet", lambda: notify_mod.IdleFleetAlerter(
+            Path(a.root), _registry(a), panes, runtime, log=_log).sweep(agents))
+        if idle:
+            print(f"  ⚠ alerted the coordinator — {len(idle)} newly-idle feedable "
+                  f"worker(s) with work ready: {', '.join(idle)}", file=sys.stderr)
+    if not quiet:
+        print()
+        print(rep.render())
+        print()
     # The health signal, written even on a dry run — "a pass ran" is the fact
     # somebody needs when the supervisor itself has stopped. Recorded AFTER the
     # pass so it can never claim work that did not happen.
     if not a.dry_run:
         sup_mod.PassLog(Path(a.root)).record(rep)
     return OK if rep.healthy() else CANNOT_TELL
+
+
+def _tend_reauth(a) -> int:
+    """tend --reauth — relaunch every AUTH-DEAD agent, in one command (internal-ref).
+
+    THE INCIDENT THIS REPLACES: an operator re-login rotated the shared
+    credential and every live agent's session went login-expired at once — nine
+    agents, each needing a by-hand `st stop` + `st new`, while every roster
+    surface said `idle`. This is that recovery as ONE command, run at the moment
+    only the operator can know: AFTER they have re-logged in. /login inside a
+    pane is an interactive browser OAuth flow — it cannot be driven for the
+    agent, so relaunch (which re-reads the refreshed credential) is the whole
+    remedy.
+
+    Deliberately a flag on tend and not an auto-heal on the default pass: a pass
+    cannot know whether the operator has re-logged in yet, and relaunching
+    against a still-stale credential kill-loops the fleet — each agent comes up,
+    dies on its first call, and is killed again next pass, burning its frozen
+    context for nothing. Same shape as the --cycle-stale rule in tend.__doc__:
+    the supervisor REPORTS, the explicit flag ACTS.
+
+    The verdict is the SAME work_state `st crew` renders (via _crew_states) —
+    never a second opinion — and the respawn goes through the SAME Tender as a
+    normal pass, so retirement, workspace-ensure, clone-refresh and the
+    appeared-while-we-looked race guard all hold. What this adds around them:
+    the kill (tend never kills), the ownership guard on it (a name match is not
+    permission to kill — same rule as `st stop`), and a liveness verify after.
+
+    HONEST BOUNDARY: the verify proves the process CAME UP, not that it is
+    authed — the banner only appears on the first failed API call, so a launch
+    against a still-stale credential looks identical here. If the operator did
+    not re-log in first, the next `st crew` will say so.
+    """
+    panes = _panes(a)
+    try:
+        agents = _registry(a).all()
+    except Exception as e:
+        print(f"  could not tell: {e}", file=sys.stderr)
+        return CANNOT_TELL
+    runtime = _runtime(a, panes)
+    dead = [ag for ag, state, work in _crew_states(agents, panes, runtime)
+            if state == "up" and work.startswith(triage_mod.AUTH_DEAD)]
+    if not dead:
+        print("  no auth-dead agents — nothing to relaunch.")
+        return OK
+
+    relaunch, refused = [], 0
+    for card in dead:
+        if tend_mod.is_retired(card):
+            # Retired-and-alive is already tend's RESURRECTED alarm; reauth must
+            # not use auth-death as a side door to relaunching what was
+            # deliberately stopped.
+            print(f"  skip {card.name}: RETIRED — auth-dead, and deliberately "
+                  f"stopped; not relaunching.")
+            continue
+        if not panes.owns(card.pane):
+            print(f"  refused: {card.name} ({card.pane}) was not launched by st — "
+                  f"refusing to kill a session st does not own. A name match is "
+                  f"not permission to kill. Its own launcher recovers it, or: "
+                  f"kill it by hand, then `st new {card.name}` brings it back "
+                  f"st-owned.", file=sys.stderr)
+            refused += 1
+            continue
+        relaunch.append(card)
+    if a.dry_run:
+        for card in relaunch:
+            print(f"  would: kill {card.pane} and relaunch {card.name}")
+        return REFUSED if refused else OK
+    if not relaunch:
+        return REFUSED if refused else OK
+
+    print(f"  relaunching {len(relaunch)} auth-dead agent(s): "
+          f"{', '.join(c.name for c in relaunch)}")
+    stuck = 0
+    for card in relaunch:
+        panes.kill_session(card.pane)
+        if panes.exists(card.pane):
+            print(f"  could not tell: killed {card.pane} but it is still there — "
+                  f"not relaunching {card.name} over a live session.",
+                  file=sys.stderr)
+            stuck += 1
+            continue
+        # The stamp described the DEAD launch; forget it so the respawn's stamp
+        # (below) is the one `st crew` judges staleness against.
+        _launches(a).forget(card.name)
+    relaunch = [c for c in relaunch if not panes.exists(c.pane)]
+
+    # THE SAME respawn path as a normal tend pass — one launcher, not a second.
+    # The spawn also stamps what it launched with (same record `st new` writes),
+    # so the relaunched agent's settings verdict is measured, not `unknown`.
+    def _spawn(card, session):
+        runtime.start(card, session)
+        sp = _default_settings(a.root)(card)
+        if sp:
+            # Best-effort, same contract as `st new`: an unstamped agent reports
+            # `unknown`, which is the state it is in — never fail the launch.
+            _launches(a).record(card.name, sp)
+    tender = tend_mod.Tender(
+        panes, runtime, _launches(a),
+        spawn=_spawn,
+        refresh=_refresh_clone,
+        gaps=lambda card: prov_mod.missing_kit(card, Path(a.root)),
+        log=lambda msg: print(f"  {msg}", file=sys.stderr),
+    )
+    rep = tender.pass_over(relaunch, dry_run=False)
+    print()
+    print(rep.render())
+
+    unverified = []
+    for card in relaunch:
+        if not _observe_live(runtime, panes, card.pane):
+            unverified.append(card.name)
+    if unverified:
+        print(f"  could not tell: {len(unverified)} relaunched agent(s) not "
+              f"observed live within the timeout: {', '.join(unverified)} — "
+              f"check `st log <agent>`.", file=sys.stderr)
+    else:
+        print(f"  {len(relaunch)} agent(s) relaunched and observed live.")
+    print("  live is not authed: the login banner only shows on the first API "
+          "call. If the operator has not re-logged in, they will die again on "
+          "first use — `st crew` will name them auth-dead.")
+    if refused or stuck:
+        return REFUSED
+    if unverified or not rep.healthy():
+        return CANNOT_TELL
+    return OK
 
 
 def _tend_retire(a) -> int:
