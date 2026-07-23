@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Iterator
 
+from .quipu import request_headers
 from .protocols import Event, EventsUnavailable
 
 
@@ -68,7 +69,7 @@ class QuipuEvents:
     def _post(self, path: str, body: dict) -> dict:
         req = urllib.request.Request(
             self.server + path, data=json.dumps(body).encode(),
-            headers={"Content-Type": "application/json"})
+            headers=request_headers())
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as r:
                 return json.loads(r.read())
