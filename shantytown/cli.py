@@ -850,6 +850,27 @@ def _cmd_stop(a) -> int:
               f"to kill (the registry pane names collide with the live crew).",
               file=sys.stderr)
         return REFUSED
+    # SECOND FACTOR: the LAUNCH STAMP. SHANTY_OWNED alone lied once, live
+    # (wn7g pilot's negative control): tend's pre-gate respawns created
+    # another orchestrator's crew sessions, so those panes carry the marker
+    # while the OTHER fleet operates them — `st stop ellie` dry-ran straight
+    # to "would kill" against the live foreign session. An st-MANAGED agent
+    # has a launch stamp (st new writes it; st stop forgets it); a session st
+    # merely created once does not. No stamp while other stamps exist =
+    # created-but-not-managed = refuse. Empty store = cannot tell = the env
+    # marker alone decides, as before (fresh deployments must still reap).
+    try:
+        launches = _launches(a)
+        unstamped = (launches.get(a.agent) is None
+                     and any(launches.root.glob("*.json")))
+    except Exception:  # noqa: BLE001 — a broken store must not wedge the reap
+        unstamped = False
+    if unstamped:
+        print(f"  refused: {a.agent} ({session}) carries st's session marker but "
+              f"has NO launch stamp — st created this session once but does not "
+              f"manage the agent in it (another orchestrator does). Refusing.",
+              file=sys.stderr)
+        return REFUSED
     if a.dry_run:
         print(f"  would: kill-session {session}")
         return OK
