@@ -202,6 +202,38 @@ def _consent_for_role(text: str, role: str) -> str:
     return json.dumps(cfg, indent=2) + "\n"
 
 
+def _with_capture_hook(text: str, root) -> str:
+    """Inject the metrics-capture PostToolUse hook into the workspace consent
+    settings, so EVERY provisioned agent captures tool usage (mcp__*, Skill,
+    CLI-via-Bash) from launch — aegis-rcyd.
+
+    WHY HERE and not in --settings (claude_settings_for_role): this consent file
+    is re-applied on EVERY launch (provision is idempotent, the launcher calls it
+    each start), so it SELF-HEALS — a fleet whose settings went stale picks the
+    hook up on next launch. --settings is emitted only on `role set`, which is
+    exactly why the 693024d wiring never collected fleet-wide: running agents
+    never regenerated it. Single home, so no double-capture.
+
+    The interpreter + store root are BAKED at provision time (in the st process,
+    i.e. the pipx venv python that can actually import shantytown) via
+    runtime._capture_cmd — a static template cannot resolve them, and a bare
+    `python` is not on PATH / cannot import shantytown (aegis-rcyd: tim). Never
+    the reason provisioning fails: a non-JSON / non-dict template passes through
+    verbatim.
+    """
+    from .runtime import _capture_cmd  # lazy: provision<->runtime import hygiene
+    try:
+        cfg = json.loads(text)
+    except ValueError:
+        return text
+    if not isinstance(cfg, dict):
+        return text
+    cfg.setdefault("hooks", {})["PostToolUse"] = [
+        {"matcher": ".*", "hooks": [_capture_cmd(root)]}
+    ]
+    return json.dumps(cfg, indent=2) + "\n"
+
+
 def provision(card: Agent, root, *, secrets=None) -> list[str]:
     """Equip the agent's workspace. Returns the server names it can now reach.
 
@@ -242,7 +274,8 @@ def provision(card: Agent, root, *, secrets=None) -> list[str]:
         out.mkdir(parents=True, exist_ok=True)
         text = (render(consent.read_text(), {"SERVERS": ""}) if "${SERVERS}"
                 in consent.read_text() else consent.read_text())
-        (out / CONSENT_TEMPLATE).write_text(_consent_for_role(text, card.role))
+        final = _with_capture_hook(_consent_for_role(text, card.role), root)
+        (out / CONSENT_TEMPLATE).write_text(final)
 
     got = servers_in(target)
     want = servers_in_text(tmpl.read_text())
