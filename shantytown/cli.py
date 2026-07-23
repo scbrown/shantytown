@@ -213,6 +213,15 @@ def build_parser() -> argparse.ArgumentParser:
     # exist — and anything shelling out to `st` without --root (the status bar
     # segments) rendered EMPTY rather than erroring. Measured: the segments
     # produced nothing from any cwd except the checkout itself.
+    # version + the deployed git SHA: __version__ is static, so
+    # only the SHA distinguishes a fresh install from a stale one.
+    from . import __version__, deployed_sha
+
+    ap.add_argument(
+        "--version",
+        action="version",
+        version=f"st {__version__} ({deployed_sha()})",
+    )
     ap.add_argument("--root", type=Path, default=_default_root())
     ap.add_argument("--backend", choices=["files", "beads"], default=None,
                     help="tracker backend (identity is always files). #3. "
