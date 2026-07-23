@@ -86,12 +86,49 @@ def free_feedable_workers(reg, panes, runtime) -> list[str]:
     return sorted(out)
 
 
-def _bd_ready() -> list[dict]:
-    """`bd ready --json` -> the ready (unblocked, open) beads, or raise. bd resolves
-    its own store from the environment the crew runs in; a failure here propagates
-    to main's fail-open."""
+def bd_cwd(reg) -> str | None:
+    """The directory `bd` must resolve its store FROM: the ADMINISTRATOR's
+    workspace, off its card. None = could not resolve (no admin, no workspace).
+
+    WHY THIS EXISTS (aegis-arma follow-up, measured 2026-07-22). bd resolves its
+    store from the ambient cwd, and 'the environment the crew runs in' is only
+    the right environment for the STOP HOOK — it fires inside the admin's own
+    workspace. The tend loop is a different caller: it runs wherever the
+    operator happened to start it, and the live one ran from a checkout with no
+    beads store at all. So `bd ready` raised 'no beads database found' on EVERY
+    sweep, the alerter's fail-open swallowed it, and the nk0e idle-fleet push
+    never fired once — for two days, silently, while the hard gate (same
+    computation, right cwd) worked. The admin's workspace is where the
+    coordinator itself runs bd, so it is the one directory that is correct for
+    every caller.
+    """
+    for card in reg.all():
+        if card.role == "administrator":
+            if not card.workspace:
+                return None
+            # WALK UP to the nearest .beads. The workspace itself does not
+            # resolve (measured): each crew workspace is its own git clone and
+            # bd stops resolving at the clone boundary, so `bd ready` fails
+            # even from the admin's own directory — the store lives at the RIG
+            # ROOT above it. We deliberately walk past the git boundary bd
+            # respects, because the card's workspace is deployment truth about
+            # WHERE THIS FLEET'S RIG IS in a way the ambient cwd never was.
+            p = Path(card.workspace)
+            for anc in (p, *p.parents):
+                if (anc / ".beads").is_dir():
+                    return str(anc)
+            return None
+    return None
+
+
+def _bd_ready(cwd: str | None = None) -> list[dict]:
+    """`bd ready --json` -> the ready (unblocked, open) beads, or raise.
+
+    `cwd` is where bd resolves its store from (see bd_cwd). None falls back to
+    the ambient cwd — correct for the stop hook, a coin-flip for anything else;
+    a failure propagates to the caller's fail-open."""
     r = subprocess.run(["bd", "ready", "--json"], capture_output=True, text=True,
-                       timeout=20)
+                       timeout=20, cwd=cwd)
     if r.returncode != 0:
         raise RuntimeError(f"bd ready failed: {r.stderr.strip()}")
     return json.loads(r.stdout)
@@ -136,7 +173,10 @@ def main(argv: list[str] | None = None) -> int:
         free = free_feedable_workers(reg, panes, runtime)
         if not free:
             return 0                     # nobody free -> allow the stop
-        ready = dispatchable(set(free), _bd_ready())
+        # bd_cwd, not the ambient cwd, even though the hook usually fires in the
+        # admin's workspace: "usually" is how the tend caller silently never
+        # fired (see bd_cwd). None still falls back to ambient — fail-open.
+        ready = dispatchable(set(free), _bd_ready(bd_cwd(reg)))
         if not ready:
             return 0                     # no dispatchable work -> allow the stop
 

@@ -119,12 +119,13 @@ def test_unreadable_wiring_excludes_the_worker(tmp_path):
 
 def _wire_main(monkeypatch, free, ready_beads=None, bd_raises=False):
     monkeypatch.setattr(feed_check, "free_feedable_workers", lambda *a: free)
+    monkeypatch.setattr(feed_check, "bd_cwd", lambda reg: None)
     if bd_raises:
-        def boom():
+        def boom(cwd=None):
             raise RuntimeError("bd unreachable")
         monkeypatch.setattr(feed_check, "_bd_ready", boom)
     else:
-        monkeypatch.setattr(feed_check, "_bd_ready", lambda: ready_beads or [])
+        monkeypatch.setattr(feed_check, "_bd_ready", lambda cwd=None: ready_beads or [])
     # neutralise the store/tmux setup so main reaches the injected functions.
     import shantytown.files as f
     monkeypatch.setattr(f, "FilesRegistry", lambda *a, **k: object())
@@ -179,3 +180,60 @@ def test_self_terminates_when_free_hits_zero(monkeypatch, capsys):
     _wire_main(monkeypatch, free=[], ready_beads=[{"id": "aegis-9"}])
     assert feed_check.main(["--root", "/x"]) == 0
     assert capsys.readouterr().out == ""
+
+
+# --- bd resolves from the ADMIN's workspace, never the ambient cwd -----------
+
+def test_bd_cwd_walks_up_from_the_admins_workspace_to_the_rig_root(tmp_path):
+    """MEASURED (aegis-arma follow-up), twice over: the live tend loop ran
+    `bd ready` from a checkout with no beads store — 'no beads database found'
+    on every sweep for two days, eaten by fail-open, and the nk0e idle-fleet
+    push never fired once. And the admin's workspace itself does NOT resolve
+    either (each crew workspace is its own git clone; bd stops at the clone
+    boundary) — the store is at the RIG ROOT above it, so bd_cwd walks up."""
+    rig = tmp_path / "rig"
+    ws = rig / "crew" / "sattler"
+    ws.mkdir(parents=True)
+    (rig / ".beads").mkdir()
+    reg = _Reg([Agent(name="sattler", role="administrator", workspace=str(ws)),
+                Agent(name="weaver", role="worker", pane="p-w")])
+    assert feed_check.bd_cwd(reg) == str(rig)
+
+
+def test_a_workspace_with_its_own_store_wins_over_an_ancestor(tmp_path):
+    rig = tmp_path / "rig"
+    ws = rig / "crew" / "sattler"
+    ws.mkdir(parents=True)
+    (rig / ".beads").mkdir()
+    (ws / ".beads").mkdir()
+    reg = _Reg([Agent(name="sattler", role="administrator", workspace=str(ws))])
+    assert feed_check.bd_cwd(reg) == str(ws)
+
+
+def test_bd_cwd_without_an_admin_workspace_or_store_is_None_not_a_guess(tmp_path):
+    assert feed_check.bd_cwd(_Reg([Agent(name="w", role="worker")])) is None
+    assert feed_check.bd_cwd(
+        _Reg([Agent(name="a", role="administrator")])) is None
+    # a workspace with NO .beads anywhere above it: still None, never a guess
+    ws = tmp_path / "lonely" / "crew" / "a"
+    ws.mkdir(parents=True)
+    assert feed_check.bd_cwd(
+        _Reg([Agent(name="a", role="administrator", workspace=str(ws))])) is None
+
+
+def test_bd_ready_runs_bd_in_the_given_cwd(monkeypatch):
+    seen = {}
+
+    class _P:
+        returncode = 0
+        stdout = "[]"
+        stderr = ""
+
+    def fake_run(argv, **kw):
+        seen["cwd"] = kw.get("cwd")
+        return _P()
+
+    import subprocess
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    assert feed_check._bd_ready("/crew/sattler") == []
+    assert seen["cwd"] == "/crew/sattler"
