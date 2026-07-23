@@ -149,3 +149,30 @@ def test_token_file_is_the_fallback_env_the_override(monkeypatch, tmp_path):
     monkeypatch.delenv("QUIPU_AUTH_TOKEN", raising=False)
     monkeypatch.setenv("QUIPU_AUTH_TOKEN_FILE", str(tmp_path / "absent"))
     assert "Authorization" not in request_headers()
+
+
+def test_all_query_excludes_crewStatus_bearing_members():
+    """aegis-wxrm: retired / never-instantiated CrewMembers carry a:crewStatus
+    (absence = active). The exclusion lives IN THE QUERY so every consumer of
+    all()/get() — including `st project` — inherits it; without it a projection
+    mints mayor/strider/walker cards, and a mayor card is the black-hole
+    dispatch recipient this fleet retired (aegis-rvhn). Injected backends
+    bypass SPARQL, so the contract is pinned on the query text itself."""
+    seen = []
+    r = QuipuRegistry(server="http://test.invalid")
+    r._query = lambda sparql: seen.append(sparql) or []
+    try:
+        r.all()
+    except Exception:
+        pass  # empty rows are fine; we care about the query text
+    assert seen, "all() never issued its query"
+    q = " ".join(seen[0].split())
+    # Pin the OPTIONAL/!bound FORM, not just intent: quipu's engine REJECTS
+    # `FILTER NOT EXISTS` ("unsupported FILTER expression"), and _query raises
+    # on an error body — so the modern form makes every all() call read as
+    # quipu-unreachable. Verified against the live engine 2026-07-23: this form
+    # returns 18 members, the NOT EXISTS form returns an error.
+    assert "OPTIONAL { ?s a:crewStatus ?cs } FILTER(!bound(?cs))" in q, \
+        "the crewStatus exclusion left the query — retired members would project again"
+    assert "NOT EXISTS" not in q, \
+        "FILTER NOT EXISTS is UNSUPPORTED by quipu's engine — this query would raise QuipuUnreachable on every call"
