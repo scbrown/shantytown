@@ -256,6 +256,30 @@ class Tender:
 
     def _respawn(self, card: Agent, dry_run: bool) -> Finding:
         """It is down and it was not retired. Bring it back — loudly."""
+        # OWNERSHIP GATE (aegis-2j2r). st tend was one of the dark-crew trap's
+        # own respawners: pilot-era registry cards for another orchestrator's
+        # fleet went "down" whenever that orchestrator cycled them, and this
+        # respawn brought them back primed with THIS deployment's worker
+        # settings — manufacturing the very panes that carry st wiring but
+        # route nothing to st (observed live: "RESPAWNED dearing ... into
+        # 'aegis-crew-dearing'"). Same signal as the feed gate: an agent with
+        # no launch stamp was never launched by st and is not st's to respawn.
+        # CANNOT-TELL honored: if NO agent has a stamp the store proves
+        # nothing, so no gate (a fresh deployment must still self-heal).
+        # Fail-open: any error reading the store means NO gate (the respawn
+        # proceeds as it always did) — the gate is a refinement, and a broken
+        # gate must not turn the self-heal off.
+        try:
+            unstamped = (self._launches is not None
+                         and self._launches.get(card.name) is None
+                         and any(self._launches.root.glob("*.json")))
+        except Exception:  # noqa: BLE001 — stubbed/legacy stores lack the API
+            unstamped = False
+        if unstamped:
+            why = ("no launch stamp — never launched by st, so not st's "
+                   "to respawn (another orchestrator owns it; aegis-2j2r)")
+            self._log(f"REFUSED {card.name}: {why}")
+            return Finding(card.name, "down", REFUSED, why)
         if dry_run:
             return Finding(card.name, "down", WOULD,
                            f"would ensure {card.workspace or 'default cwd'}, "
