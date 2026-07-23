@@ -135,17 +135,42 @@ def _bd_ready(cwd: str | None = None) -> list[dict]:
 
 
 def dispatchable(free: set, ready_beads) -> list[tuple[str, str]]:
-    """Of the ready beads, those a FREE worker could take now: unassigned (claimable
-    by anyone) or already assigned to a free-feedable worker. A bead assigned to a
-    dark or busy agent is excluded — it is not something to hand a free worker."""
+    """Of the ready beads, those the COORDINATOR has to hand out: the UNASSIGNED
+    ones, only.
+
+    THE THREAD REINTERPRETATION (aegis-wjgt groundwork, Stiwi's call): an
+    assigned bead is its worker's OWN QUEUE, not coordinator-dispatch material.
+    This used to also count beads assigned to a free worker — which made the
+    coordinator the delivery mechanism for work the worker already owned (N
+    pings + N manual go's, measured by sattler doing exactly that by hand all
+    evening). Under thread semantics the worker's queue self-feeds; the
+    coordinator's job is only the work NOBODY owns. `free` is still taken so
+    the signature survives; unassigned beads are claimable by anyone free."""
+    _ = free
     out = []
     for b in ready_beads:
-        assignee = b.get("assignee")
-        # bd stores the assignee as a crew path (beads_aegis/crew/<name>) or a bare
-        # name, and often not at all (claim-based flow); compare the trailing name.
-        name = assignee.split("/")[-1] if assignee else ""
-        if not name or name in free:
+        if not b.get("assignee"):
             out.append((b.get("id", "?"), b.get("title", "")))
+    return out
+
+
+def threaded(ready_beads) -> dict[str, list[str]]:
+    """worker name -> the READY beads already assigned to them: each worker's
+    own queue (the thread, in tracker-native terms — aegis-wjgt).
+
+    A worker with a non-empty queue is SELF-FEEDING: excluded from the feedable
+    free list (its next work is already determined; dispatching into it or
+    alerting the coordinator about it are both noise). bd's assignee is a crew
+    path (beads_aegis/crew/<name>) or a bare name; the trailing segment is the
+    worker name, same parse the old dispatchable used."""
+    out: dict[str, list[str]] = {}
+    for b in ready_beads:
+        assignee = b.get("assignee")
+        if not assignee:
+            continue
+        name = assignee.split("/")[-1]
+        if name:
+            out.setdefault(name, []).append(b.get("id", "?"))
     return out
 
 
@@ -176,7 +201,16 @@ def main(argv: list[str] | None = None) -> int:
         # bd_cwd, not the ambient cwd, even though the hook usually fires in the
         # admin's workspace: "usually" is how the tend caller silently never
         # fired (see bd_cwd). None still falls back to ambient — fail-open.
-        ready = dispatchable(set(free), _bd_ready(bd_cwd(reg)))
+        ready_beads = _bd_ready(bd_cwd(reg))
+        # THREADED WORKERS ARE NOT THE COORDINATOR'S TO FEED (aegis-wjgt
+        # groundwork): an idle worker whose queue is already assigned self-feeds
+        # — holding the coordinator's stop hostage over one is the exact inverse
+        # of Rule Zero's purpose. The gate blocks only for (idle unthreaded
+        # workers) x (unassigned ready work).
+        free = [w for w in free if w not in threaded(ready_beads)]
+        if not free:
+            return 0                     # everyone idle is self-feeding -> allow
+        ready = dispatchable(set(free), ready_beads)
         if not ready:
             return 0                     # no dispatchable work -> allow the stop
 

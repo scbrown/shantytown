@@ -29,9 +29,21 @@ def test_a_bead_assigned_to_a_dark_agent_is_NOT_dispatchable():
     assert feed_check.dispatchable({"weaver"}, ready) == []
 
 
-def test_a_bead_assigned_to_a_free_worker_is_dispatchable():
+def test_a_bead_assigned_to_a_free_worker_is_the_workers_own_queue_now():
+    """INVERTED by the thread reinterpretation (aegis-wjgt, Stiwi's call): an
+    assigned bead is its worker's own queue, never coordinator-dispatch
+    material. The old reading made the coordinator the delivery mechanism for
+    work the worker already owned — N pings + N manual go's, measured."""
     ready = [{"id": "aegis-1", "title": "a", "assignee": "weaver"}]
-    assert [b[0] for b in feed_check.dispatchable({"weaver"}, ready)] == ["aegis-1"]
+    assert feed_check.dispatchable({"weaver"}, ready) == []
+    assert feed_check.threaded(ready) == {"weaver": ["aegis-1"]}
+
+
+def test_threaded_parses_crew_paths_and_skips_unassigned():
+    ready = [{"id": "aegis-1", "assignee": "beads_aegis/crew/billy"},
+             {"id": "aegis-2", "assignee": "billy"},
+             {"id": "aegis-3"}]
+    assert feed_check.threaded(ready) == {"billy": ["aegis-1", "aegis-2"]}
 
 
 def test_a_board_of_all_dark_assigned_beads_is_not_dispatchable():
@@ -237,3 +249,14 @@ def test_bd_ready_runs_bd_in_the_given_cwd(monkeypatch):
     monkeypatch.setattr(subprocess, "run", fake_run)
     assert feed_check._bd_ready("/crew/sattler") == []
     assert seen["cwd"] == "/crew/sattler"
+
+
+def test_a_threaded_worker_never_blocks_the_rule_zero_gate(monkeypatch, capsys):
+    """The hard-gate side of the thread exclusion (aegis-wjgt): an idle worker
+    whose queue is already assigned must not hold the coordinator's stop
+    hostage — self-feeding is not a coordinator-stall."""
+    _wire_main(monkeypatch, free=["billy"],
+               ready_beads=[{"id": "aegis-9", "title": "queued",
+                             "assignee": "billy"}])
+    assert feed_check.main(["--root", "/x"]) == 0
+    assert capsys.readouterr().out == "", "self-feeding fleet -> stop allowed, silence"
