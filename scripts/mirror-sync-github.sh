@@ -42,12 +42,26 @@ git fetch -q "$MIRROR_REMOTE" "$BRANCH"
 SRC="$WORK_REMOTE/$BRANCH"
 DST="$MIRROR_REMOTE/$BRANCH"
 
-if ! git merge-base --is-ancestor "$DST" "$SRC"; then
-    echo "✗ $DST is NOT an ancestor of $SRC — the mirror has commits the working" >&2
-    echo "  remote lacks. Reconcile INWARD first (merge mirror-side commits into" >&2
-    echo "  $SRC), then re-run. Forward-only sync never discards mirror history." >&2
-    exit 1
-fi
+# Precondition: the mirror must carry nothing the working remote lacks. In
+# steady state the mirror tip is a chain of THIS SCRIPT'S sync commits on top
+# of some commit that IS an ancestor of the working branch — a raw
+# is-ancestor test fails forever after the first sync (the squash commits
+# exist only mirror-side; learned on first re-run). Walk down through sync
+# commits; whatever they sit on must be an ancestor.
+BASE=$(git rev-parse "$DST")
+while ! git merge-base --is-ancestor "$BASE" "$SRC"; do
+    subj=$(git log -1 --format=%s "$BASE")
+    case "$subj" in
+        "sync: forward-only scrubbed mirror sync"*) BASE=$(git rev-parse "$BASE^") ;;
+        *)
+            echo "✗ $DST carries non-sync commit(s) the working remote lacks" >&2
+            echo "  (tip of foreign history: $(git rev-parse --short "$BASE") \"$subj\")." >&2
+            echo "  Reconcile INWARD first (merge mirror-side commits into $SRC)," >&2
+            echo "  then re-run. Forward-only sync never discards mirror history." >&2
+            exit 1
+            ;;
+    esac
+done
 
 behind=$(git rev-list --count "$DST..$SRC")
 echo "mirror is $behind commit(s) behind $SRC"
