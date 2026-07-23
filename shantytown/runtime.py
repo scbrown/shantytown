@@ -413,7 +413,12 @@ def claude_settings_for_role(role: str, root=None) -> dict:
 # Deployment-supplied environment for emitted settings. NOT a list of values —
 # a list of NAMES to carry through, so no internal hostname ever lives in this
 # repo (that is what the public scrub was for).
-_CARRIED_ENV = ("QUIPU_SERVER", "SHANTY_ONTO_NS")
+# SHANTY_CANONICAL_SOURCE rides along so every agent's `st doctor` self-check
+# audits the DEPLOYMENT's canonical checkout, pinned, rather than asking the
+# running module to vouch for itself (selfcheck.canonical_source resolution
+# order — the pin is the layer that still works for a re-point from a fully
+# independent clone, which the linked-worktree fallback cannot see through).
+_CARRIED_ENV = ("QUIPU_SERVER", "SHANTY_ONTO_NS", "SHANTY_CANONICAL_SOURCE")
 
 
 def _settings_env(role: str, root=None) -> dict:
