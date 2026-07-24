@@ -328,7 +328,7 @@ set to run the harness on the files tracker.
 | `SHANTY_STOP_CAPTURE` | a command appended LAST to every role's Stop hook list — the deployment's session-end knowledge-capture hook. Runs after the role's own stop machinery (send/drain/haul/feed-gate) settles. Solicitation etiquette (block-once, markers) is the command's own responsibility. Unset = nothing appended; shantytown ships no capture hook and hardcodes no path. | — |
 | `SHANTY_STALL_MIN` | minutes an idle worker may hold an in_progress item with zero pane/item/shell change before tend flags it STALLED to the coordinator. Default 15 — ~30 consecutive unchanged 30s passes: far above prompt-render lag, far below the measured hours-long parked failure. | `15` |
 | `SHANTY_DARK_AGENTS` | names (space/comma-separated) Rule Zero and tend must never count feedable — panes another orchestrator keeps respawning with this deployment's worker settings, which carry the stop-event wiring but route nothing here. The launch-stamp ownership gate excludes unstamped agents structurally; this list is the explicit override/belt for named ghosts. | the gastown-dark crew |
-| `QUIPU_SERVER` | quipu, for `--registry quipu`, `st project`, or `st subscribe` | `http://localhost:3030` |
+| `QUIPU_SERVER` | quipu, for `--registry quipu`, `st project`, or `st subscribe`. **Declare it in `<root>/env.json`, not just your shell** — that is the only source a cron entry or a re-exec'd hook still sees, and the default below is quipu-server's own, which [bobbin also defaults to](#quipu_server-and-the-3030-collision). | `http://localhost:3030` |
 | `SHANTY_ONTO_NS` | the ontology IRI base your graph is keyed under | `http://shantytown.example/ontology/` |
 | `BOBBIN_SERVER` | bobbin, for `st context` | `http://localhost:8080` |
 | `SHANTY_RANKER` | `policy` to weight the admin workflow by Hank blast radius; else rule-based | — |
@@ -340,6 +340,37 @@ set to run the harness on the files tracker.
 ⚠️ **`SHANTY_ONTO_NS` is data identity, not cosmetics.** Every triple in a graph is keyed under it.
 Pick one per graph, set it before the first write, and never change it — repointing it does not
 error, it just stops new facts from joining the old ones.
+
+### `QUIPU_SERVER` and the 3030 collision
+
+`quipu-server` binds `127.0.0.1:3030` by default. So does `bobbin serve --http`. Run both on
+one host and whichever starts first owns the port — so the stock default can resolve to a
+completely different daemon, and the quipu client will have no idea.
+
+It now has an idea. A server that answers but does not speak quipu's API raises
+`QuipuNotQuipu`, naming the env var as the remedy:
+
+```
+could not tell: http://localhost:3030/query answered, but not like quipu:
+HTTP 404 — no query endpoint here. Check QUIPU_SERVER — another service
+probably owns that port (quipu-server and bobbin both default to port 3030).
+```
+
+`QuipuNotQuipu` subclasses `QuipuUnreachable`, so the verdict stays *cannot tell* (exit 2) —
+a wrong service is still a graph you did not read. Only the message changed, and the message
+is the part anyone acts on.
+
+**Declare the address in `<root>/env.json`:**
+
+```json
+{ "QUIPU_SERVER": "http://localhost:3032" }
+```
+
+Resolution order is **explicit argument → `<root>/env.json` → `$QUIPU_SERVER` → the default
+above.** env.json outranks the ambient environment on purpose: a cron entry, a hook the
+harness re-exec'd outside the settings env, or a bare `st` from a non-crew shell inherits no
+exported variables, and those are precisely the invocations that used to fall back to the
+stock port in silence.
 
 ## 📚 Docs
 

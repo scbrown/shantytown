@@ -74,8 +74,8 @@ from .quipu import QuipuRegistry
 from . import selfcheck
 from .anchor import Unreachable, anchor as do_anchor
 from .runtime import (asks_a_question, auth_expired, ClaudeRuntime, CapabilityError,
-                      SettingsError, emitted_stop_directions, live_stop_directions,
-                      live_wiring, settings_for_role)
+                      SettingsError, deployment_default, emitted_stop_directions,
+                      live_stop_directions, live_wiring, settings_for_role)
 from .tmux import Tmux, declared_socket
 from .workspace import (WorkspaceError, cleanup_worktree, ensure_workspace,
                         ensure_worktree, worktree_for)
@@ -111,7 +111,12 @@ def _registry(a):
     it straight from the graph. Either way the SAME roles.check runs over it.
     """
     if getattr(a, "registry", "files") == "quipu":
-        return QuipuRegistry()
+        # Pass the root so the graph's address comes from the DEPLOYMENT's
+        # env.json, not from whatever this shell happened to export. Without it
+        # the client falls back to quipu's stock default port — which on a host
+        # where another service owns that port means quietly querying a stranger
+        # (quipu.QuipuNotQuipu).
+        return QuipuRegistry(root=getattr(a, "root", None))
     return FilesRegistry(a.root / "crew")
 
 
@@ -127,16 +132,15 @@ def _deployment_default(a, key: str) -> str | None:
     plain `st anchor` resolved to the files backend and rendered EMPTY, so both
     surfaces were blank, consistently and with exit 0. The deployment needs to
     say "my tracker is beads at <repo>" ONCE; this is where it says it.
+
+    The read itself now lives in `runtime.deployment_default`, shared with the
+    settings emitter and the quipu clients. It was open-coded in two places and
+    MISSING from the clients, and that third absence is the one that bit: a
+    deployment could declare its graph address and the client would still ignore
+    it. This wrapper stays because resolving `a.root` out of an argparse namespace
+    is the CLI's job, not the library's.
     """
-    root = getattr(a, "root", None)
-    if root is not None:
-        try:
-            loaded = json.loads((Path(root) / "env.json").read_text())
-            if isinstance(loaded, dict) and loaded.get(key):
-                return str(loaded[key])
-        except (OSError, ValueError):
-            pass
-    return os.environ.get(key) or None
+    return deployment_default(key, getattr(a, "root", None))
 
 
 def _backend(a, default="files") -> str:
@@ -1995,9 +1999,11 @@ def _cmd_project(a) -> int:
     which side of the divergence is correct.
     """
     try:
-        agents = QuipuRegistry().all()
+        agents = QuipuRegistry(root=getattr(a, "root", None)).all()
     except Exception as e:
-        print(f"  could not project: quipu unreachable: {e}", file=sys.stderr)
+        # The message carries the diagnosis now (wrong service vs unreachable vs
+        # rejected query), so a fixed "unreachable:" prefix would contradict it.
+        print(f"  could not project: {e}", file=sys.stderr)
         return CANNOT_TELL
 
     # ZERO agents from a REACHABLE graph is almost never "no crew" — it is a
@@ -2157,7 +2163,10 @@ def _cmd_subscribe(a) -> int:
     from . import quipu_events as qe
     from . import tier
 
-    events = qe.QuipuEvents(server=a.server)
+    # --server still wins; absent it the DEPLOYMENT's env.json answers, not this
+    # shell's environment. `st subscribe` is the likeliest command to run from
+    # cron or a bare re-exec, which is exactly where the carried env is absent.
+    events = qe.QuipuEvents(server=a.server, root=getattr(a, "root", None))
     registry = _registry(a)
     tracker = _tracker(a)
     panes = Tmux()

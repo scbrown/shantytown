@@ -456,6 +456,45 @@ def claude_settings_for_role(role: str, root=None) -> dict:
 _CARRIED_ENV = ("QUIPU_SERVER", "SHANTY_ONTO_NS", "SHANTY_CANONICAL_SOURCE")
 
 
+def deployment_json(root=None) -> dict:
+    """The deployment's declared config: `<root>/env.json`, or {}.
+
+    THE ONE READER. This was open-coded here and in the CLI's
+    `_deployment_default`, and absent from the clients that most needed it — and
+    that third absence is what let a client's stock default outlive the
+    deployment's own answer. Unreadable / unparseable / not-an-object is {}: a
+    deployment that said NOTHING, which is different from one that said something
+    wrong, and neither is worth raising at config-read time.
+
+    `root=None` falls back to `$SHANTY_ROOT` so a LIBRARY caller (a client with no
+    argparse namespace to consult) resolves the same file the CLI does. It does
+    NOT fall back to cwd: guessing a workspace from wherever an agent happens to
+    be standing is how a config read becomes a coin flip.
+    """
+    if root is None:
+        root = os.environ.get("SHANTY_ROOT")
+    if not root:
+        return {}
+    try:
+        loaded = json.loads((Path(root) / "env.json").read_text())
+    except (OSError, ValueError):
+        return {}
+    return {k: str(v) for k, v in loaded.items()} if isinstance(loaded, dict) else {}
+
+
+def deployment_default(key: str, root=None) -> str | None:
+    """A deployment-declared value for `key`: `<root>/env.json`, then the ambient
+    environment, else None.
+
+    ONE source order for "where deployment config lives", shared by the settings
+    emitter, the CLI, and the quipu clients. env.json wins over the ambient env on
+    purpose: the deployment's written-down answer outranks whatever a particular
+    shell happened to export, so a cron job or a re-exec'd hook that inherited
+    nothing still resolves the deployed value.
+    """
+    return deployment_json(root).get(key) or os.environ.get(key) or None
+
+
 def _settings_env(role: str, root=None) -> dict:
     """The env block an emitted settings file carries.
 
@@ -474,19 +513,17 @@ def _settings_env(role: str, root=None) -> dict:
     being a coin flip.
 
     Source order: <root>/env.json (deployment config, gitignored), then the
-    ambient environment. Absent both, the key is OMITTED and the agent falls back
-    to the library default — never a placeholder written into a live settings file.
+    ambient environment — `deployment_default`'s order, shared with the CLI and
+    the quipu clients. Absent both, the key is OMITTED and the agent falls back to
+    the library default — never a placeholder written into a live settings file.
+
+    `root=None` reads NO env.json here, deliberately narrower than
+    `deployment_default`'s $SHANTY_ROOT fallback: an emitter that was not told
+    which workspace it is writing for must not pick one up from the ambient
+    environment and bake another deployment's address into a settings file.
     """
     env = {"BOBBIN_ROLE": role}
-    supplied: dict[str, str] = {}
-    if root is not None:
-        p = Path(root) / "env.json"
-        try:
-            loaded = json.loads(p.read_text())
-            if isinstance(loaded, dict):
-                supplied = {k: str(v) for k, v in loaded.items()}
-        except (OSError, ValueError):
-            supplied = {}
+    supplied = deployment_json(root) if root is not None else {}
     for key in _CARRIED_ENV:
         val = supplied.get(key) or os.environ.get(key)
         if val:

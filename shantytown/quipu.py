@@ -111,6 +111,33 @@ class QuipuWriteRejected(Exception):
     path swallowed it and reported success."""
 
 
+class QuipuNotQuipu(QuipuUnreachable):
+    """We REACHED a server, it ANSWERED, and it is not a quipu.
+
+    A SUBCLASS of QuipuUnreachable on purpose. The VERDICT was never wrong — a
+    wrong service is still "I could not look", so every existing
+    `except QuipuUnreachable` arm (roles --check's exit 2, `st project`,
+    `st subscribe`) keeps behaving correctly with no edit. What was wrong is the
+    MESSAGE, and therefore the operator's next move: they were sent to check the
+    network, or to rewrite a perfectly good query, when the remedy is to fix
+    QUIPU_SERVER.
+
+    WHY THIS HAD TO EXIST (measured). quipu-server's own default bind is
+    127.0.0.1:3030, and bobbin's HTTP default is 3030 too; whichever starts first
+    owns the port, so the default below can resolve to an entirely different
+    daemon. Then `_query` ended with
+
+        return body.get("rows", []) if isinstance(body, dict) else []
+
+    which turns ANY 200 that is not a query answer into ZERO ROWS. `all()`
+    returned [], `roles.check` built an empty Report, and an empty Report's
+    verdict is OK — so `st roles --check --registry quipu` printed a clean bill of
+    health for a graph it had never spoken to. That is the "reported CLEAR when it
+    couldn't reach its target" failure this module's docstring is written against,
+    arriving through the one door nobody had nailed shut: a reachable stranger.
+    """
+
+
 class QuipuQueryRejected(Exception):
     """quipu REACHED, understood, and REJECTED the QUERY — a 4xx / error body,
     not a connection failure (internal-ref).
@@ -125,6 +152,60 @@ class QuipuQueryRejected(Exception):
     makes this a trap: HTTPError is a SUBCLASS of URLError, so a 4xx caught by
     `except URLError` reads as unreachable without the body ever being looked
     at."""
+
+
+# quipu-server's OWN default bind, so a deployment running quipu at its default
+# works unconfigured. Deliberately NOT this fleet's port: a client that disagrees
+# with its server's documented default is a second lie, and a public repo carries
+# no deployment's address. What makes the guess SAFE is not a better number — it
+# is `resolve_server` preferring the deployment's answer, and `QuipuNotQuipu` when
+# the guess lands on a stranger. See that class: bobbin defaults to 3030 too.
+DEFAULT_SERVER = "http://localhost:3030"
+
+# Statuses meaning "this server has no such endpoint" rather than "your request
+# was bad". That distinction IS the diagnosis: 404/405 on /query says the thing
+# you are talking to has never heard of SPARQL, while 400/401/500 say you reached
+# a quipu that disliked the query, the caller, or its own day.
+_ENDPOINT_MISSING = (404, 405, 410, 501)
+
+
+def resolve_server(server: str | None = None, root=None) -> str:
+    """The quipu address, in the one order that puts the deployment's answer first.
+
+        explicit arg  ->  <root>/env.json  ->  $QUIPU_SERVER  ->  DEFAULT_SERVER
+
+    Reading env.json is the point. Before this the address came from the ambient
+    environment or nowhere, so the deployed value survived only as long as some
+    shell kept exporting it: a cron entry, a hook the harness re-exec'd outside
+    the settings env, or a bare `st` from a non-crew shell all fell back to
+    DEFAULT_SERVER. On a host where another service owns that port — see
+    `QuipuNotQuipu` — "fell back" meant "silently queried the wrong daemon". The
+    deployment writes its address down ONCE, in the same env.json the settings
+    emitter and the CLI already read, and every entry point inherits it.
+    """
+    from .runtime import deployment_default   # local: keeps this client's imports flat
+    return server or deployment_default("QUIPU_SERVER", root) or DEFAULT_SERVER
+
+
+def _body_shape(body) -> str:
+    """A SHORT description of a body we are rejecting, so the operator can see
+    WHAT answered instead of only being told that it was wrong."""
+    if isinstance(body, dict):
+        return f"a JSON object with {', '.join(sorted(body)[:6]) or 'no keys'}"
+    return f"a JSON {type(body).__name__}"
+
+
+def not_quipu(server: str, path: str, evidence: str) -> str:
+    """The operator-facing text for "that is not a quipu".
+
+    Shared by both clients (registry + events) so the two cannot drift into
+    describing one misconfiguration two different ways. It names the env var,
+    because the remedy is the only part of a diagnosis anybody acts on, and it
+    names the collision, because that is the cause every time it is not a typo.
+    """
+    return (f"{server}{path} answered, but not like quipu: {evidence}. "
+            f"Check QUIPU_SERVER — another service probably owns that port "
+            f"(quipu-server and bobbin both default to port 3030).")
 
 
 def _local(iri: str) -> str:
@@ -195,18 +276,26 @@ class QuipuRegistry:
         "OPTIONAL { ?s a:reports_to ?rt } }"
     )
 
-    def __init__(self, server: str | None = None, timeout: float = 5.0):
-        # QUIPU_SERVER is the variable the crew hooks already use. The default is
-        # a local quipu-server, not any particular deployment's hostname.
-        self.server = server or os.environ.get("QUIPU_SERVER") or "http://localhost:3030"
+    def __init__(self, server: str | None = None, timeout: float = 5.0, root=None):
+        # QUIPU_SERVER is the variable the crew hooks already use, and env.json is
+        # where the deployment writes it down so it survives a shell that exported
+        # nothing. ONE resolver, shared with QuipuEvents — see resolve_server.
+        self.server = resolve_server(server, root).rstrip("/")
         self.timeout = timeout
 
     def _query(self, sparql: str) -> list[dict]:
-        """POST a SPARQL query; return its rows. Raises `QuipuQueryRejected` when
-        the server ANSWERED but refused the query (a 4xx / error body), and
-        `QuipuUnreachable` only when the server could not be reached (internal-ref).
-        An errored query is NO result either way — but the caller's remedy
-        differs, so the two are different exceptions."""
+        """POST a SPARQL query; return its rows.
+
+        FOUR outcomes, because collapsing any two of them has already cost this
+        repo a bug:
+
+          rows (maybe [])     the graph answered. [] means NOBODY MATCHED — real.
+          QuipuQueryRejected  a quipu refused THIS query (400 / error body / auth
+                              / 5xx).                  Remedy: fix the query.
+          QuipuNotQuipu       something answered and it is not a quipu.
+                                                       Remedy: fix QUIPU_SERVER.
+          QuipuUnreachable    nothing answered.        Remedy: start the service.
+        """
         req = urllib.request.Request(
             self.server + "/query",
             data=json.dumps({"query": sparql}).encode(),
@@ -222,6 +311,14 @@ class QuipuRegistry:
             # a reachable server as unreachable. MUST precede the URLError arm:
             # HTTPError is a subclass of URLError, and catching the parent first
             # is exactly the conflation this fix removes.
+            if e.code in _ENDPOINT_MISSING:
+                # No /query endpoint AT ALL — not a quipu with an opinion about
+                # our SPARQL, but a server that has never heard of SPARQL.
+                # Reporting this as "quipu rejected the query (HTTP 404)" is what
+                # sent an operator to debug a query that was never the problem.
+                raise QuipuNotQuipu(not_quipu(
+                    self.server, "/query",
+                    f"HTTP {e.code} — no query endpoint here")) from e
             detail = _http_error_detail(e)
             raise QuipuQueryRejected(
                 f"quipu rejected the query (HTTP {e.code}): {detail}") from e
@@ -231,7 +328,23 @@ class QuipuRegistry:
             # A 200 carrying an error body is still a query rejection, not
             # unreachability — the server plainly answered.
             raise QuipuQueryRejected(f"quipu rejected the query: {body['error']}")
-        return body.get("rows", []) if isinstance(body, dict) else []
+        # THE ROWS KEY MUST BE PRESENT. This line used to be
+        #     return body.get("rows", []) if isinstance(body, dict) else []
+        # and that `.get(..., [])` is the whole bug: a 200 from any other service
+        # became zero rows, `all()` reported nobody exists, and roles.check built
+        # an empty Report whose verdict is OK. "Nobody matched" and "you are not
+        # talking to quipu" arrived as the SAME VALUE, and the safer-looking one
+        # won. Absence of the key is a diagnosis now, not a default.
+        if not isinstance(body, dict) or "rows" not in body:
+            raise QuipuNotQuipu(not_quipu(
+                self.server, "/query",
+                f'a 200 with no "rows" key ({_body_shape(body)})'))
+        rows = body["rows"]
+        if not isinstance(rows, list):
+            raise QuipuNotQuipu(not_quipu(
+                self.server, "/query",
+                f'"rows" is a {type(rows).__name__}, not a list'))
+        return rows
 
     def all(self) -> list[Agent]:
         """Every crew member, roles derived. RAISES `QuipuUnreachable` if quipu

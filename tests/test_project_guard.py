@@ -37,6 +37,15 @@ def crew(tmp_path: Path, **agents) -> Path:
 def graph(monkeypatch, *agents):
     """Point `project` at a fake graph. Read-only, so a stub registry is enough."""
     class FakeQuipu:
+        def __init__(self, server=None, timeout=5.0, root=None):
+            # Mirrors the real constructor: the CLI now passes `root=` so the
+            # graph's address comes from the deployment's env.json rather than the
+            # ambient env. A double whose signature drifts from the class it
+            # stands in for turns one wiring change into seven unrelated
+            # failures — and `project`'s broad `except Exception` reported the
+            # resulting TypeError as "could not project", i.e. a backend outage.
+            self.server, self.root = server, root
+
         def all(self):
             return list(agents)
     monkeypatch.setattr(cli, "QuipuRegistry", FakeQuipu)

@@ -16,14 +16,14 @@ re-routing what it already handled.
 from __future__ import annotations
 
 import json
-import os
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Iterator
 
-from .quipu import request_headers
+from .quipu import (_ENDPOINT_MISSING, _body_shape, not_quipu, request_headers,
+                    resolve_server)
 from .protocols import Event, EventsUnavailable
 
 
@@ -46,23 +46,37 @@ _WORKFLOWS_SPARQL = (
 )
 
 
+def _http_detail(server: str, path: str, e) -> str:
+    """One text for a 4xx/5xx on the events surface: an endpoint-shaped status is
+    a WRONG-SERVICE diagnosis (see quipu.QuipuNotQuipu), anything else is a quipu
+    that answered badly. Shared by _get and _post so they cannot disagree."""
+    if e.code in _ENDPOINT_MISSING:
+        return not_quipu(server, path.split("?")[0], f"HTTP {e.code}")
+    return f"quipu at {server} refused {path}: HTTP {e.code}"
+
+
 class QuipuEvents:
     """EventSource over Quipu's cursored transaction log. Read-only; the two HTTP
     methods are the only seam tests override (mirrors test_reactor's _Fake)."""
 
-    def __init__(self, server: str | None = None, timeout: float = 5.0):
+    def __init__(self, server: str | None = None, timeout: float = 5.0, root=None):
         # localhost, NOT an internal hostname: this repo is public, and a real
-        # deployment's address is deployment config ($QUIPU_SERVER), never a
-        # default baked into source. Same rule and same default as quipu.py —
-        # the ratchet test caught this one carrying a private hostname.
-        self.server = (server or os.environ.get("QUIPU_SERVER")
-                       or "http://localhost:3030").rstrip("/")
+        # deployment's address is deployment config, never a default baked into
+        # source. ONE resolver shared with quipu.py (env.json, then $QUIPU_SERVER,
+        # then quipu's own default), so the two clients cannot end up pointed at
+        # different servers from the same deployment.
+        self.server = resolve_server(server, root).rstrip("/")
         self.timeout = timeout
 
     def _get(self, path: str) -> dict:
         try:
             with urllib.request.urlopen(self.server + path, timeout=self.timeout) as r:
                 return json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            # MUST precede the URLError arm — HTTPError subclasses it (the trap
+            # quipu.py documents at length). An endpoint-shaped status means the
+            # ADDRESS is wrong, not that the graph is quiet.
+            raise EventsUnavailable(_http_detail(self.server, path, e)) from e
         except (urllib.error.URLError, OSError, ValueError) as e:
             raise EventsUnavailable(f"quipu at {self.server} unreachable: {e}") from e
 
@@ -73,14 +87,32 @@ class QuipuEvents:
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as r:
                 return json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            raise EventsUnavailable(_http_detail(self.server, path, e)) from e
         except (urllib.error.URLError, OSError, ValueError) as e:
             raise EventsUnavailable(f"quipu at {self.server} unreachable: {e}") from e
 
     def transactions_since(self, since: int, limit: int = 1000) -> list[Event]:
         """New transactions past `since` (the cursor). Raises EventsUnavailable —
-        never returns [] to mean 'could not look'."""
+        never returns [] to mean 'could not look'.
+
+        THE KEY MUST BE PRESENT, same fix and same reason as `quipu._query`: this
+        was `body.get("transactions", [])`, so a 200 from a service with no
+        transaction log became "no new events" — and since the watermark only
+        advances on real events, `poll_and_route` would report `idle` forever
+        against the wrong daemon. `idle` is a claim ABOUT THE GRAPH; it must not
+        be available to a client that never reached one.
+        """
         body = self._get(f"/transactions?since={int(since)}&limit={int(limit)}")
-        rows = body.get("transactions", []) if isinstance(body, dict) else []
+        if not isinstance(body, dict) or "transactions" not in body:
+            raise EventsUnavailable(not_quipu(
+                self.server, "/transactions",
+                f'a 200 with no "transactions" key ({_body_shape(body)})'))
+        rows = body["transactions"]
+        if not isinstance(rows, list):
+            raise EventsUnavailable(not_quipu(
+                self.server, "/transactions",
+                f'"transactions" is a {type(rows).__name__}, not a list'))
         return [Event(id=int(t["id"]), actor=t.get("actor"),
                       source=t.get("source"), timestamp=t.get("timestamp"))
                 for t in rows]
