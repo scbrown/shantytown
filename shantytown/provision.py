@@ -39,6 +39,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import stat
 from pathlib import Path
 
@@ -61,6 +62,14 @@ PROVISION_DIR = "provision"
 MCP_TEMPLATE = "mcp.template.json"
 CONSENT_TEMPLATE = "settings.local.json"
 SECRETS = "secrets.env"
+
+# Skills are the OTHER half of the kit, and they rot the same way .mcp.json went
+# missing. A workspace keeps its skills git-tracked in <ws>/skills/; the runtime
+# reads ONLY <ws>/.claude/skills/. `.claude/` is gitignored, so the bridge between
+# them cannot ship in the clone — it has to be built at provision time or not at
+# all. See link_skills().
+SKILLS_SRC = "skills"
+SKILLS_RUNTIME = (".claude", "skills")
 
 _PLACEHOLDER = re.compile(r"\$\{([A-Z0-9_]+)\}")
 
@@ -147,6 +156,86 @@ def servers_in_text(text: str) -> list[str]:
     return sorted((data.get("mcpServers") or data).keys())
 
 
+def _skill_sources(ws: Path) -> list[Path]:
+    """The workspace's git-tracked skills — a directory with a SKILL.md in it.
+    Anything else under skills/ (a README, a scratch dir) is not a skill."""
+    try:
+        return sorted(p for p in (ws / SKILLS_SRC).iterdir()
+                      if (p / "SKILL.md").is_file())
+    except OSError:
+        return []                              # no skills/ is not an error
+
+
+def skills_linked(ws) -> list[str]:
+    """The skill names the RUNTIME can actually load, measured. Pure read.
+
+    Same discipline as servers_in: not "the directory exists" but "these names
+    resolve, through a symlink, to a real SKILL.md". Every green signal in the
+    original bug (files present, well-formed, committed, pulled) was true of a
+    fleet loading ZERO skills — presence was never the question.
+    """
+    ws = Path(ws).expanduser()
+    dst = ws.joinpath(*SKILLS_RUNTIME)
+    out = []
+    for src in _skill_sources(ws):
+        link = dst / src.name
+        if (link.is_symlink() and os.readlink(link) == str(src)
+                and (link / "SKILL.md").is_file()):
+            out.append(src.name)
+    return out
+
+
+def link_skills(ws) -> list[str]:
+    """SYMLINK every <ws>/skills/<name> into <ws>/.claude/skills/. Never COPY.
+
+    WHY THIS IS PROVISIONING'S JOB (aegis-atm3 / aegis-qvxd). These links were
+    made BY HAND, once, and nothing created or maintained them. Measured on this
+    deployment 2026-07-24: 8 of 23 crew clones had no .claude/skills directory at
+    all — loading ZERO skills — and 6 more were partial, while every surface said
+    fine. Then a NEW skill landed correctly in git and reached 1 of 24 runtimes,
+    because a new skill needs a new link and nothing makes one; its author paid
+    the fix by hand, twice, and it was still late. That is the same shape as the
+    .mcp.json bug this module was written for: the agent launches, looks healthy,
+    accepts dispatch, and silently lacks what the work assumes.
+
+    So it belongs HERE, next to the capture hook and for the identical reason —
+    provision is re-run on EVERY launch, so a clone converges by construction
+    instead of by somebody remembering. A copy would defeat the whole point: a
+    real copy is byte-identical the day it is made and tracks no fix afterwards
+    (a stale graph-report copy shadowed the source for ~24 days that way). The
+    LINK is what makes a canonical fix reach the runtime.
+
+    IDEMPOTENT and ADDITIVE, safe on a live agent: a correct link is left
+    untouched, and a name with no source twin (a personal skill dropped in by
+    hand) is never touched at all. Only the defect is replaced — a real copy, a
+    link to the wrong place, a dangling link.
+
+    NEVER the reason provisioning fails. A skill that cannot be linked is simply
+    absent from the return value, which is what missing_kit reports on.
+    """
+    ws = Path(ws).expanduser()
+    srcs = _skill_sources(ws)
+    if not srcs:
+        return []                        # this workspace ships no skills: fine
+    dst = ws.joinpath(*SKILLS_RUNTIME)
+    for src in srcs:
+        link = dst / src.name
+        try:
+            if (link.is_symlink() and os.readlink(link) == str(src)
+                    and (link / "SKILL.md").is_file()):
+                continue                                     # already correct
+            dst.mkdir(parents=True, exist_ok=True)
+            if link.is_symlink() or link.exists():
+                if link.is_dir() and not link.is_symlink():
+                    shutil.rmtree(link)                      # a stale COPY
+                else:
+                    link.unlink()                # wrong or dangling symlink
+            link.symlink_to(src)
+        except OSError:
+            continue        # never fatal — the gap report names what is absent
+    return skills_linked(ws)               # verify by listing, not by existence
+
+
 def missing_kit(card: Agent, root) -> list[str]:
     """What this agent's workspace LACKS, by name. Empty = fully equipped.
 
@@ -165,6 +254,17 @@ def missing_kit(card: Agent, root) -> list[str]:
         gaps.append(f"mcp({','.join(sorted(set(want) - set(have))) or 'mismatch'})")
     if not (ws / ".claude" / CONSENT_TEMPLATE).is_file():
         gaps.append("mcp-consent")
+    # SKILLS ARE KIT TOO — and this is the "wire the detector to something that
+    # runs" half of aegis-qvxd. The standing guard for skill drift was a shell
+    # script no hook, timer or CI ever called, so a stale runtime sat unnoticed
+    # for ~24 days; and when it WAS finally run by hand it false-failed off its
+    # own stale checkout. Reporting the gap from the supervision pass fixes both:
+    # tend already runs every cycle, and it runs THIS code, so the detector can
+    # never be older than the fleet it is judging.
+    want = {p.name for p in _skill_sources(ws)}
+    unlinked = sorted(want - set(skills_linked(ws)))
+    if unlinked:
+        gaps.append(f"skills({','.join(unlinked)})")
     return gaps
 
 
@@ -294,6 +394,11 @@ def provision(card: Agent, root, *, secrets=None) -> list[str]:
         raise ProvisionError(
             f"cannot provision {card.name}: workspace {ws} does not exist. "
             f"ensure_workspace runs first, and refuses before this is reached.")
+
+    # SKILLS FIRST, and outside every early return below: a store that defines no
+    # MCP template still has a workspace full of skills the runtime cannot see,
+    # and the skill links depend on nothing but the clone itself.
+    link_skills(ws)
 
     d = provision_dir(root)
     tmpl = d / MCP_TEMPLATE
