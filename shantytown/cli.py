@@ -1031,7 +1031,17 @@ def _cmd_doctor(a) -> int:
         if self_h is not None:
             print(selfcheck.render(self_h))
         print(_render_socket(sock_v, sock_why))
-        return _fold_socket(_doctor_exit(doc, healths, self_h), sock_v, doc)
+        code = _fold_socket(_doctor_exit(doc, healths, self_h), sock_v, doc)
+        # The untracked-hook liveness leg (aegis-06ue4): out-of-band answer to
+        # "has the fail-open governance nudge actually run?" Only on a full run —
+        # `st doctor bobbin` asked about bobbin, not the fleet's hooks.
+        if len(specs) == len(doc.SPECS):
+            from . import untracked_health as uh
+            uh_rows, uh_text = _untracked_health(a)
+            if uh_text is not None:
+                print("\n" + uh_text)
+                code = _fold_generic(code, uh.worst_exit(uh_rows))
+        return code
 
     plans = [doc.plan_install(h) for h in healths]
     print(doc.report(healths, plans=plans))
@@ -1106,6 +1116,79 @@ def _render_socket(verdict, why) -> str:
             doc.SOCKET_WRONG: "  socket     WRONG",
             doc.SOCKET_UNKNOWN: "  socket     unknown"}[verdict]
     return f"\n{mark}   {why}\n"
+
+
+def _untracked_health(a):
+    """Rows + rendered block for `st doctor`'s untracked-hook-liveness leg
+    (aegis-06ue4). Every input is read here and injected into the pure checker.
+
+    All three readers fail toward cannot-tell, never toward a false pass or a
+    false SUSPECT: a launched stamp that cannot be stat'd, a tmux that cannot be
+    reached, a consent file that cannot be read all resolve to `None`, which the
+    checker renders as "could not tell", not as "fine".
+    """
+    from . import untracked_health as uh
+    import time
+    from pathlib import Path
+    try:
+        agents = _registry(a).all()
+    except Exception as e:
+        return [uh.Row("(registry)", uh.CANNOT_TELL, str(e))], None
+
+    root = Path(a.root)
+
+    def launch_time(name):
+        # The launched/ stamp is written atomically AT launch (launched.record),
+        # so the file's own mtime IS the launch time — no new field needed.
+        try:
+            return (root / "launched" / f"{name}.json").stat().st_mtime
+        except OSError:
+            return None
+
+    # pane activity via tmux #{pane_activity} (epoch of last output). One
+    # list-panes call, socket-aware through the same adapter `st crew` uses.
+    # "active" = produced output within the checker's grace window; anything
+    # older is an idle pane, which makes an absent ledger benign. Unreadable ->
+    # None, which the checker treats as cannot-tell rather than guessing.
+    panes = _panes(a)
+    activity = {}
+    try:
+        argv = panes._cmd("list-panes", "-a", "-F",
+                          "#{session_name} #{pane_activity}")
+        import subprocess
+        r = subprocess.run(argv, capture_output=True, text=True, timeout=5)
+        if r.returncode == 0:
+            for line in r.stdout.splitlines():
+                parts = line.split()
+                if len(parts) == 2 and parts[1].isdigit():
+                    activity[parts[0]] = float(parts[1])
+        else:
+            activity = None
+    except Exception:
+        activity = None
+
+    def pane_active(name):
+        if activity is None:
+            return None
+        card = next((c for c in agents if c.name == name), None)
+        pane = getattr(card, "pane", None) if card else None
+        if not pane or pane not in activity:
+            return None
+        return (time.time() - activity[pane]) < uh.GRACE_S
+
+    rows = uh.check(agents, root, now=time.time(),
+                    launch_time=launch_time, pane_active=pane_active)
+    return rows, uh.render(rows)
+
+
+def _fold_generic(code: int, extra: int) -> int:
+    """Fold an extra domain's exit into doctor's. The constants are ordered
+    OK(0) < REFUSED/actionable(1) < CANNOT_TELL(2), and that ordering is exactly
+    the dominance doctor wants — could-not-tell outranks a fault outranks clean —
+    so a plain max is the fold, no special-casing. Same reasoning as _fold_socket,
+    which only needs its own branch because a WRONG socket is REFUSED regardless
+    of the tool rows."""
+    return max(code, extra)
 
 
 def _fold_socket(code: int, verdict, doc) -> int:
