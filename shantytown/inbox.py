@@ -84,6 +84,36 @@ def is_message(title: str) -> bool:
     return t.startswith(PREFIX) or t.startswith(_LEGACY_PREFIX)
 
 
+# Labels that mean a HUMAN DECISION gates this bead's completion — it is not an
+# implementer's to run. The vocabulary is fragmented in the store (all four are
+# in live use), so match the FAMILY, not one spelling; a canonicalization is a
+# separate cleanup, and until it lands under-matching would silently reopen the
+# hole this closes.
+_DECISION_LABELS = frozenset({
+    "decision-needed", "decision-stiwi", "decision", "needs-stiwi-decision",
+})
+
+
+def is_decision(labels) -> bool:
+    """Is this bead gated on a human decision, so NOT implementer work?
+
+    A third kind of thing that must never be auto-fed to a worker with "execute
+    and close" — the same class of mistake as putting a message on a plate, one
+    level up. aegis-2og7d: the haul advance fed two one-way-door forge-token
+    revokes on Stiwi's PERSONAL account (aegis-nmc0 -> weaver, aegis-w4nn ->
+    harding) each with "read it and execute; close it when done", during the
+    live apz9 approval-forging incident. Both agents held; the trap only has to
+    win once. Executing revokes a production credential on a human's identity
+    with no ack; closing-without-executing is marks-done-without-doing.
+
+    Shared by the haul advance (stop_event._assigned_to), the Rule Zero feed
+    (feed_check.hauls) and coordinator dispatch (feed_check.dispatchable) so the
+    three cannot disagree about what a worker may be handed — the same single-
+    predicate discipline as is_message, for the same drift reason."""
+    return any((lbl or "").strip().lower() in _DECISION_LABELS
+               for lbl in (labels or []))
+
+
 def _body_of(title: str) -> str:
     t = (title or "").lstrip()
     for p in (PREFIX, _LEGACY_PREFIX):
