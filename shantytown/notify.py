@@ -783,12 +783,13 @@ class StalledAlerter:
     def _nudge_message(items, mins) -> str:
         one = items[0]
         return (f"⚠ st tend (self-heal) — you are idle holding {', '.join(items)} "
-                f"with no progress for {mins:.0f}m. An assigned in_progress bead "
-                f"DAMS your haul until you close or release it. If it is DONE: "
-                f"`bd close {one}`. If it is blocked or staged: put why on the "
-                f"bead, then `bd update {one} -a \"\"` to release it. If you are "
-                f"mid-something this loop cannot see, ignore this — any activity "
-                f"clears it.")
+                f"with no progress for {mins:.0f}m. An in_progress bead DAMS your "
+                f"haul until you resolve it. If it is DONE: `bd close {one}`. If "
+                f"it is blocked or gated (nobody should work it yet): put why on "
+                f"the bead, then `bd defer {one}` — that takes it OUT of the ready "
+                f"pool (clearing the assignee alone only re-pools it for the next "
+                f"idle agent). If you are mid-something this loop cannot see, "
+                f"ignore this — any activity clears it.")
 
     @staticmethod
     def _escalation_message(name, items, mins) -> str:

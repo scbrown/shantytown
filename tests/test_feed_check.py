@@ -344,9 +344,10 @@ def test_no_root_means_no_ownership_gate(tmp_path):
 def test_haul_feed_message_names_the_release_exit_with_the_actual_id():
     msg = feed_check.haul_feed_message("aegis-9z9z", "some title", 2)
     # the working mechanism, spelled with THIS bead's id so it is copy-pasteable
-    assert 'bd update aegis-9z9z -a ""' in msg
+    assert "bd defer aegis-9z9z" in msg      # the truly-park exit (kelly/vuh33)
+    assert "bd close aegis-9z9z" in msg
     # and the correction that the whole bug turned on
-    assert "status alone" in msg.lower()
+    assert "re-pool" in msg.lower()          # clearing assignee only re-pools
 
 
 def test_haul_feed_message_still_carries_the_core_advance_instruction():

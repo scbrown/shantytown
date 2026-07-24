@@ -328,9 +328,12 @@ def haul_feed_message(nid: str, title: str, rest: int) -> str:
         f"execute; close it when done and the haul advances itself ({rest} more "
         f"after this). If your context is deep, checkpoint + /clear FIRST — the "
         f"haul survives it. The coordinator was not pinged: this queue is yours. "
-        f"Already done with it, or it isn't yours to work? Release it with "
-        f"`bd update {nid} -a \"\"` (clears the assignee) — the haul re-serves an "
-        f"assigned bead until then; setting status alone won't stop it.")
+        f"Not this one? DONE -> `bd close {nid}`. BLOCKED/gated (nobody should "
+        f"work it yet) -> `bd defer {nid}`, which takes it OUT of the ready pool "
+        f"until you undo. Valid work but not yours -> `bd update {nid} -a \"\"` "
+        f"hands it back for another agent. Note: a bare status change won't stop "
+        f"the re-serve, and clearing the assignee only RE-POOLS it — a still-ready "
+        f"bead is grabbed by the next idle agent — so defer or close to truly park.")
 
 
 def haul_handoff_message(context_k: float, line_k: float) -> str:
