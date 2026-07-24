@@ -2826,9 +2826,17 @@ def _tend_once(a, quiet: bool = False) -> int:
         # case: hours parked on a bead whose blocker had already resolved.
         stalled = _sweep("stalled", lambda: notify_mod.StalledAlerter(
             Path(a.root), _registry(a), panes, runtime, log=_log).sweep(agents))
-        if stalled:
-            print(f"  ⚠ alerted the coordinator — {len(stalled)} STALLED "
-                  f"worker(s) parked on held work: {', '.join(stalled)}",
+        # aegis-es1tt: the stalled sweep now REMEDIATES — a self-heal nudge to the
+        # agent first, coordinator escalation only if that goes unanswered. (_sweep
+        # returns [] on crash, a dict on success.)
+        _n = stalled.get("nudged", []) if isinstance(stalled, dict) else []
+        _e = stalled.get("escalated", []) if isinstance(stalled, dict) else []
+        if _n:
+            print(f"  ⚠ self-heal nudged {len(_n)} agent(s) holding a neglected "
+                  f"anchor (close-or-release): {', '.join(_n)}", file=sys.stderr)
+        if _e:
+            print(f"  ⚠ escalated {len(_e)} still-NEGLECTED anchor(s) to the "
+                  f"coordinator (self-heal nudge unanswered): {', '.join(_e)}",
                   file=sys.stderr)
     if not quiet:
         print()
