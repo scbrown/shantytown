@@ -555,6 +555,22 @@ def _parse_args(argv: list[str] | None):
     return ns
 
 
+def _warn_deprecated_alias(old: str, canonical: str) -> None:
+    """Warn (once, on stderr) that a deprecated top-level command spelling was used.
+
+    Called only from the alias dispatch arms (`role`, `project`), so it fires on
+    USE of the old spelling and never for the canonical `roles ...`. stderr keeps
+    stdout clean for callers that pipe command output. The aliases are scheduled
+    for removal after a one-week deprecation window (the step that actually lands
+    the command-count drop); until then this is the migration nudge.
+    """
+    print(
+        f"st: `{old}` is a deprecated spelling — use `{canonical}` instead. "
+        "The alias will be REMOVED after a one-week deprecation window (~2026-07-31).",
+        file=sys.stderr,
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     a = _parse_args(argv)
 
@@ -580,6 +596,7 @@ def main(argv: list[str] | None = None) -> int:
     if a.cmd == "context":
         return _cmd_context(a)
     if a.cmd == "role":
+        _warn_deprecated_alias("role", "roles set")
         return _cmd_role(a)
     if a.cmd == "doctor":
         return _cmd_doctor(a)
@@ -598,6 +615,7 @@ def main(argv: list[str] | None = None) -> int:
     if a.cmd == "new":
         return _cmd_new(a)
     if a.cmd == "project":
+        _warn_deprecated_alias("project", "roles sync")
         return _cmd_project(a)
     if a.cmd == "tend":
         return _cmd_tend(a)
