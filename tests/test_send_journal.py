@@ -52,9 +52,22 @@ def test_text_is_one_line_and_capped(tmp_path, monkeypatch):
     assert len(line.split("text=", 1)[1]) <= 502  # 500 cap + newline slack
 
 
-def test_no_store_elected_means_no_journal_and_no_error(tmp_path, monkeypatch):
+def test_no_store_elected_warns_loudly_and_never_raises(tmp_path, monkeypatch, capsys):
+    """No SHANTY_ROOT = nowhere to journal — but the skip MUST be LOUD, not
+    silent (aegis-tdesp). A silently-unjournaled st send is indistinguishable
+    from a raw tmux injection and manufactures the apz9 'not in sends.log =>
+    injector' signature. So it warns, carries the send's identifying fields as a
+    greppable breadcrumb, and still never raises (delivery is never blocked)."""
     monkeypatch.delenv("SHANTY_ROOT", raising=False)
-    tmux_mod._journal_send("%1", "hello")   # must simply not raise
+    monkeypatch.setenv("SHANTY_AGENT", "gennaro")
+    tmux_mod._journal_send("%1", "Work is on your hook: aegis-XXXX")   # must not raise
+    err = capsys.readouterr().err
+    assert "UNJOURNALED" in err and "SHANTY_ROOT unset" in err
+    assert "pane=%1" in err and f"pid={os.getpid()}" in err
+    assert "sender=gennaro" in err
+    assert "text=Work is on your hook: aegis-XXXX" in err
+    # and it must NOT have guessed a cwd/.shanty location to write into
+    assert not (tmp_path / ".shanty").exists()
 
 
 def test_journal_failure_never_blocks_and_says_so(tmp_path, monkeypatch, capsys):
