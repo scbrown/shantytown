@@ -74,6 +74,31 @@ class SendUnverified(Exception):
         super().__init__(f"sent {item_id} to {pane} but could not confirm it landed")
 
 
+class Closed(Exception):
+    """The item is CLOSED, and closed is terminal for the serve path (aegis-vuh33).
+
+    Maps to exit 1 like every other plan() refusal: nothing written, nothing sent.
+    Serving a closed bead used to sail through — the steal-guard's own
+    `status != "closed"` clause waved it past, and plan() then wrote
+    status=in_progress, RESURRECTING finished work. Measured 2026-07-24: aegis-rqbs
+    / 5vgss / i9ish reverted closed->in_progress at serve time, and the revert was
+    indistinguishable from `bd close` silently losing a write — arnold recorded that
+    false data-plane conclusion in durable memory before dolt_history disproved it.
+
+    Reopening is a SEPARATE, DELIBERATE act (`bd update --status open`), never a
+    silent side effect of a dispatch. --reassign does not bypass this: reassign
+    takes work from a live holder; it does not raise the dead."""
+
+    def __init__(self, item_id: str, requested: str):
+        self.item_id, self.requested = item_id, requested
+        super().__init__(
+            f"{item_id} is CLOSED; refusing to serve it to {requested}. Closed is "
+            f"terminal — serving it would revert it to in_progress and re-do "
+            f"finished work. If it must be worked again, reopen it deliberately "
+            f"(`bd update {item_id} --status open`), then dispatch."
+        )
+
+
 class AlreadyAssigned(Exception):
     """The item is already held by a DIFFERENT agent. Refuse rather than steal.
 
@@ -143,6 +168,13 @@ class Dispatcher:
         if not self.panes.exists(agent.pane):
             raise LookupError(f"pane {agent.pane} for {agent_name} does not exist")
         item = self.tracker.get(item_id)               # 1 tracker read
+        # CLOSED IS TERMINAL (aegis-vuh33). Refuse BEFORE the holder logic and
+        # before composing the payload — a closed bead served is a closed bead
+        # reverted to in_progress, which re-does finished work AND forges a
+        # phantom "bd close lost my write" bug report. Reopening is deliberate,
+        # never a dispatch side effect; --reassign does not raise the dead.
+        if item.status == "closed":
+            raise Closed(item_id, agent_name)
         # Do not STEAL work someone is already doing (aegis-uvw5, the 7yeb shape).
         # plan() used to read the item and overwrite status/assignee unconditionally,
         # so dispatching an item another agent held silently reassigned it and two
@@ -152,8 +184,10 @@ class Dispatcher:
         # Re-dispatching to the SAME holder stays allowed: that is a re-nudge, not a
         # steal, and it is how you recover a dropped send.
         # Checked BEFORE composing the payload: a refusal should do no work at all.
+        # (No `status != "closed"` guard here anymore — a closed item can never
+        # reach this line, so a clause implying it could would be a lie.)
         holder = (item.assignee or "").strip()
-        if not reassign and holder and holder != agent_name and item.status != "closed":
+        if not reassign and holder and holder != agent_name:
             raise AlreadyAssigned(item_id, holder, agent_name)
         text = f"Work is on your hook: {item_id} — {item.title}"
         flat = flatten_note(note) if note else ""
