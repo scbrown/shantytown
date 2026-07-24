@@ -359,10 +359,28 @@ def build_parser() -> argparse.ArgumentParser:
                          "renders, for a status bar. Agents whose busy/idle state "
                          "is unknown are in NEITHER number")
 
-    rl = sub.add_parser("roles", help="the hierarchy, and whether it's real")
+    # aegis-fagvi: the roles/role footgun (plural-vs-singular) is consolidated
+    # into ONE noun with verbs: `st roles {show|set|sync}`. The old `role` and
+    # `project` top-level commands stay as ALIASES below so nothing breaks.
+    rl = sub.add_parser("roles", help="the role hierarchy: show | set | sync")
+    # `roles --check` / bare `roles` == `roles show [--check]` (back-compat).
     rl.add_argument("--check", action="store_true")
+    rl_sub = rl.add_subparsers(dest="roles_sub", required=False)
+    rl_show = rl_sub.add_parser("show", help="the hierarchy, and whether it's real")
+    # SUPPRESS default so `roles show` (no flag) keeps the parent's --check value.
+    rl_show.add_argument("--check", action="store_true", default=argparse.SUPPRESS)
+    rl_set = rl_sub.add_parser("set", help="set <agent> <role> [--reports a,b]")
+    rl_set.add_argument("agent")
+    rl_set.add_argument("role", choices=["worker", "lead", "administrator"])
+    rl_set.add_argument("--reports", default="", help="comma-separated reports for a lead/administrator")
+    rl_set.add_argument("-n", "--dry-run", action="store_true")
+    rl_sync = rl_sub.add_parser("sync", help="materialize the crew cards FROM the graph")
+    rl_sync.add_argument("-n", "--dry-run", action="store_true", help="show the diff, write nothing")
+    rl_sync.add_argument("--force", action="store_true", help="sync even if it restructures LIVE agents")
 
-    rs = sub.add_parser("role", help="role set <agent> <role> [--reports a,b]")
+    # ALIAS (deprecated spelling, kept so nothing breaks): `role set ...` ==
+    # `roles set ...`. Prefer `st roles set`.
+    rs = sub.add_parser("role", help="alias for `roles set` (deprecated spelling)")
     rs.add_argument("set_", metavar="set", choices=["set"])
     rs.add_argument("agent")
     rs.add_argument("role", choices=["worker", "lead", "administrator"])
@@ -430,7 +448,7 @@ def build_parser() -> argparse.ArgumentParser:
     dr.add_argument("--no-latest", action="store_true",
                     help="skip the release check (offline/fast) — detect local state only")
 
-    pj = sub.add_parser("project", help="materialize the crew cards FROM the graph")
+    pj = sub.add_parser("project", help="alias for `roles sync` (deprecated spelling)")
     pj.add_argument("-n", "--dry-run", action="store_true",
                     help="show the diff, write nothing")
     pj.add_argument("--force", action="store_true",
@@ -542,7 +560,14 @@ def main(argv: list[str] | None = None) -> int:
     if a.cmd == "crew":
         return _cmd_crew(a)
     if a.cmd == "roles":
-        return _cmd_roles(a)
+        # aegis-fagvi: one noun, three verbs. `set`/`sync` reuse the same
+        # handlers as the `role`/`project` aliases so behaviour is identical.
+        roles_sub = getattr(a, "roles_sub", None)
+        if roles_sub == "set":
+            return _cmd_role(a)
+        if roles_sub == "sync":
+            return _cmd_project(a)
+        return _cmd_roles(a)  # bare `roles`, `roles --check`, or `roles show`
     if a.cmd == "inbox":
         return _cmd_inbox(a)
     if a.cmd == "task":
