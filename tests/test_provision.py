@@ -228,3 +228,88 @@ def test_st_new_REFUSES_when_the_kit_cannot_be_completed(tmp_path, monkeypatch, 
     assert "HOMELAB_MCP_TOKEN" in capsys.readouterr().err
     assert panes.sent == [], "launched a half-equipped agent"
     assert not panes.exists("p-ellie"), "created a session for one"
+
+
+# --- SKILLS ARE KIT: the runtime loads .claude/skills/, git ships skills/ ----
+#
+# Measured on the aegis deployment 2026-07-24 (aegis-atm3 / aegis-qvxd): 8 of 23
+# crew clones had NO .claude/skills directory at all — loading ZERO skills — and
+# 6 more were partial, because the links were made by hand once and nothing
+# maintained them. Then a new skill landed correctly in git and reached 1 of 24
+# runtimes. These tests pin the by-construction fix: provision links, every
+# launch, and a link is never a copy.
+
+def _skill(ws, name, body="---\nname: x\n---\nbody\n"):
+    d = ws / P.SKILLS_SRC / name; d.mkdir(parents=True)
+    (d / "SKILL.md").write_text(body)
+    return d
+
+
+def test_provision_links_every_skill_into_the_runtime_dir(root, ws):
+    _skill(ws, "bundle"); _skill(ws, "quipu")
+    (ws / P.SKILLS_SRC / "not-a-skill").mkdir()        # no SKILL.md: not a skill
+
+    P.provision(_card(ws), root)
+
+    dst = ws.joinpath(*P.SKILLS_RUNTIME)
+    assert sorted(p.name for p in dst.iterdir()) == ["bundle", "quipu"]
+    for n in ("bundle", "quipu"):
+        assert (dst / n).is_symlink(), f"{n} must be a LINK — a copy tracks no fix"
+        assert (dst / n / "SKILL.md").is_file(), "link must resolve to a real skill"
+    assert P.skills_linked(ws) == ["bundle", "quipu"]
+
+
+def test_a_stale_COPY_is_replaced_by_a_link(root, ws):
+    """The silent-drift generator: byte-identical the day it was made, tracking
+    nothing after. A stale graph-report copy shadowed the source for ~24 days."""
+    _skill(ws, "graph-report", "---\nname: graph-report\n---\nCURRENT\n")
+    stale = ws.joinpath(*P.SKILLS_RUNTIME) / "graph-report"; stale.mkdir(parents=True)
+    (stale / "SKILL.md").write_text("---\nname: graph-report\n---\nSTALE\n")
+
+    P.provision(_card(ws), root)
+
+    assert stale.is_symlink()
+    assert "CURRENT" in (stale / "SKILL.md").read_text()
+
+
+def test_a_correct_link_is_left_alone_and_a_wrong_one_is_repaired(root, ws):
+    _skill(ws, "bundle")
+    dst = ws.joinpath(*P.SKILLS_RUNTIME); dst.mkdir(parents=True)
+    (dst / "bundle").symlink_to(ws / P.SKILLS_SRC / "bundle")
+    before = os.lstat(dst / "bundle").st_ino
+    (dst / "dangling").symlink_to(ws / P.SKILLS_SRC / "gone")   # no source twin
+    _skill(ws, "quipu")
+    (dst / "quipu").symlink_to(ws / "elsewhere")                # points nowhere
+
+    P.provision(_card(ws), root)          # IDEMPOTENT + ADDITIVE: safe on a live agent
+
+    assert os.lstat(dst / "bundle").st_ino == before, "rewrote an already-correct link"
+    assert os.readlink(dst / "quipu") == str(ws / P.SKILLS_SRC / "quipu")
+    assert (dst / "dangling").is_symlink(), "touched a name with no source twin"
+
+
+def test_a_workspace_with_no_skills_is_not_an_error(root, ws):
+    P.provision(_card(ws), root)
+    assert P.link_skills(ws) == [] and P.skills_linked(ws) == []
+    assert not ws.joinpath(*P.SKILLS_RUNTIME).exists(), "made an empty runtime dir"
+
+
+def test_skills_link_even_when_the_store_defines_NO_mcp_template(tmp_path, ws):
+    """A store with no MCP kit still has a workspace full of unreachable skills."""
+    _skill(ws, "bundle")
+    assert P.provision(_card(ws), tmp_path) == []      # no template: no servers
+    assert P.skills_linked(ws) == ["bundle"], "skills rode on the MCP early-return"
+
+
+def test_missing_kit_NAMES_the_unlinked_skills(root, ws):
+    """The 'wire the detector to something that runs' half (aegis-qvxd): tend's
+    supervision pass already calls this, and it runs THIS code — so the detector
+    can never be older than the fleet it judges (a hand-run guard false-failed
+    off its own 124-commit-stale checkout)."""
+    _skill(ws, "bundle"); _skill(ws, "quipu")
+    P.provision(_card(ws), root)
+    assert P.missing_kit(_card(ws), root) == []
+
+    (ws.joinpath(*P.SKILLS_RUNTIME) / "quipu").unlink()        # drift, post-launch
+    gaps = P.missing_kit(_card(ws), root)
+    assert gaps == ["skills(quipu)"], gaps
