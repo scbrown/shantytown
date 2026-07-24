@@ -50,6 +50,7 @@ from pathlib import Path
 from . import triage
 from . import workflow
 from .events import FilesEvents, StopEvent
+from .inbox import is_message
 from .files import FilesRegistry, FilesTracker, plate as files_plate
 from .policy import NullRanker, PolicyRanker
 from .protocols import RankUnavailable
@@ -214,12 +215,31 @@ def _bd_json(args: list[str], cwd: str | None) -> list[dict]:
 
 
 def _assigned_to(me: str, beads: list[dict]) -> list[dict]:
-    """The beads assigned to `me` — trailing-segment match, the same parse
-    feed_check.hauls uses (bd stores crew paths or bare names)."""
+    """The WORK assigned to `me` — trailing-segment match, the same parse
+    feed_check.hauls uses (bd stores crew paths or bare names).
+
+    A MESSAGE IS NOT WORK, and this filter is the reason the haul agrees with
+    the plate instead of contradicting it. Both plate readers already exclude
+    `inbox:`/`mail:` items by this exact predicate (files.plate, beads.plate) —
+    the whole argument of inbox.py is that a message is a third type that must
+    never occupy an agent's plate. The haul advance did NOT, so it handed the
+    agent precisely the items the plate had refused.
+
+    MEASURED 2026-07-24: the advance fed weaver aegis-atc0, titled
+    `inbox: tim: ...`, with "read it and execute; close it when done". The work
+    it described was billy's and already closed; there was nothing for the
+    recipient to execute. The two readers disagreeing is the drift the
+    _PLATE_RANK note in beads.py exists to prevent between the two BACKENDS —
+    nobody had checked the haul against either of them.
+
+    Applied to the in_progress check as well as the ready check, deliberately:
+    an unread message is not an active anchor, and counting one as work-in-hand
+    would silently suppress the advance for a worker that is genuinely free.
+    """
     out = []
     for b in beads:
         assignee = b.get("assignee") or ""
-        if assignee.split("/")[-1] == me:
+        if assignee.split("/")[-1] == me and not is_message(b.get("title", "")):
             out.append(b)
     return out
 
