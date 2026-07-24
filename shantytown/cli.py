@@ -789,6 +789,13 @@ def _cmd_new(a) -> int:
         # tools and looks fine), and a deleted template would restore it.
         print(f"  note: no provisioning template at {prov_mod.provision_dir(a.root)}"
               f" — launching {card.name} with NO MCP kit.")
+    if card.workspace:
+        # Skills, same claim shape as the servers: names read back out of the
+        # links we just made, not "the directory is there". A crew that shipped
+        # 22 correct skills to a runtime loading none had every other signal green.
+        linked = prov_mod.skills_linked(card.workspace)
+        if linked:
+            print(f"  linked {len(linked)} skill(s): {', '.join(linked)}")
     # Clobber guard: never replace a live agent (RAISES if the session exists).
     try:
         panes.new_session(session)
