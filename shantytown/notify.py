@@ -623,7 +623,8 @@ class StalledAlerter:
     """
 
     def __init__(self, root, reg, panes, runtime, *, push=push_to_admin,
-                 bd_in_progress=None, threshold_min=None, now=None, log=None):
+                 bd_in_progress=None, threshold_min=None,
+                 escalate_after_min=None, now=None, log=None):
         self.path = Path(root) / "notify" / "stalled.json"
         self._reg = reg
         self._panes = panes
@@ -635,6 +636,14 @@ class StalledAlerter:
         env = os.environ.get("SHANTY_STALL_MIN")
         self._threshold_s = (threshold_min if threshold_min is not None
                              else float(env) if env else 15.0) * 60.0
+        # After the self-heal nudge (aegis-es1tt), wait this long STILL-frozen
+        # before escalating to the coordinator. Default = one more threshold
+        # window: the agent gets the same grace to act on the nudge that it got
+        # to be noticed at all. SHANTY_STALL_ESCALATE_MIN overrides.
+        eenv = os.environ.get("SHANTY_STALL_ESCALATE_MIN")
+        self._escalate_after_s = (
+            escalate_after_min * 60.0 if escalate_after_min is not None
+            else float(eenv) * 60.0 if eenv else self._threshold_s)
         self._now = now or time.time
         self._log = log or (lambda msg: None)
 
@@ -649,8 +658,48 @@ class StalledAlerter:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         write_json_atomic(self.path, store)
 
-    def sweep(self, agents) -> list[str]:
-        """Returns the workers newly flagged STALLED this pass."""
+    # aegis-es1tt: an anchor waiting on an owner/human DECISION is not a neglected
+    # one — it is correctly parked, and telling its holder to "close it" is the
+    # wrong action (the weaver/0lq5 care note). These label prefixes mark that
+    # class (decision-stiwi, blocked, blocked-on-human, awaiting-…). Matched on
+    # the labels bd already returns with each in_progress item, so it costs nothing.
+    _BLOCKED_LABEL_PREFIXES = ("decision", "blocked", "awaiting", "needs-decision")
+
+    @classmethod
+    def _blocked_on_decision(cls, item: dict) -> bool:
+        return any(
+            any(str(l).lower().startswith(p) for p in cls._BLOCKED_LABEL_PREFIXES)
+            for l in (item.get("labels") or []))
+
+    def sweep(self, agents) -> dict:
+        """REMEDIATE a neglected anchor, do not just report it (aegis-es1tt).
+
+        e01l detected the stall and told the coordinator to go nudge it. This
+        drives the remediation itself, in two stages per unchanged episode:
+
+          1. threshold reached, still frozen -> NUDGE THE AGENT holding the
+             anchor to close-or-release it (self-heal). The nudge names the exit
+             both ways: `bd close <id>` if done, or note-why + `bd update <id>
+             -a ""` to release if blocked/staged (the aegis-tgvtg affordance).
+          2. escalate_after later, STILL frozen (the nudge did not land) -> push
+             the COORDINATOR, the original e01l alert.
+
+        Any progress — pane text, held set, a live shell, a non-idle pane —
+        resets the episode, so an agent that acts on the nudge is never
+        escalated. Each stage fires ONCE per episode.
+
+        CARE (aegis-es1tt): an anchor carrying a decision/blocked label (e.g.
+        decision-stiwi) is EXCLUDED — it is waiting on an owner answer already
+        requested, and 'close it' is the wrong instruction. A worker holding
+        ONLY such anchors is left entirely alone.
+
+        The nudge rides `panes.send` — the SAME journaled tmux path the
+        coordinator pushes use, NOT a raw cron write (aegis-tdesp: the retired
+        cron's unjournaled sends manufactured the apz9 injection signature).
+
+        Returns {"nudged": [names], "escalated": [names]}. FAIL OPEN: any error
+        touches nothing.
+        """
         import hashlib
         from .runtime import asks_a_question, auth_expired
 
@@ -658,20 +707,20 @@ class StalledAlerter:
             held: dict[str, list[str]] = {}
             for b in self._bd_in_progress():
                 w = (b.get("assignee") or "").split("/")[-1]
-                if w:
+                if w and not self._blocked_on_decision(b):
                     held.setdefault(w, []).append(b.get("id", "?"))
         except Exception:
-            return []                          # bd hiccup -> fail open
+            return {"nudged": [], "escalated": []}   # bd hiccup -> fail open
         store = self._load()
         now = self._now()
-        stalled: list[tuple[str, list[str], float]] = []
+        nudged, escalated = [], []
         try:
             for ag in agents:
                 if ag.role != "worker" or not ag.pane:
                     continue
                 items = sorted(held.get(ag.name, []))
                 if not items or not self._panes.exists(ag.pane):
-                    store.pop(ag.name, None)   # nothing held -> NEGLECTED's domain
+                    store.pop(ag.name, None)   # nothing NEGLECTED held -> not ours
                     continue
                 screen = self._panes.capture(ag.pane, attrs=True)
                 plain = triage_mod.strip_attrs(screen)
@@ -687,28 +736,64 @@ class StalledAlerter:
                     (plain + "\n" + "|".join(items)).encode()).hexdigest()
                 ep = store.get(ag.name)
                 if not ep or ep.get("key") != key:
-                    store[ag.name] = {"key": key, "since": now, "alerted": False}
+                    store[ag.name] = {"key": key, "since": now, "stage": None}
                     continue
-                if not ep.get("alerted") and now - ep["since"] >= self._threshold_s:
-                    stalled.append((ag.name, items, (now - ep["since"]) / 60))
-                    ep["alerted"] = True       # once per episode
+                stage = ep.get("stage")
+                mins = (now - ep["since"]) / 60
+                if stage is None and now - ep["since"] >= self._threshold_s:
+                    # STAGE 1: self-heal nudge to the agent's OWN pane.
+                    if self._deliver_agent(ag, self._nudge_message(items, mins)):
+                        ep["stage"] = "nudged"
+                        ep["nudged_at"] = now
+                        nudged.append(ag.name)
+                    else:
+                        self._log(f"stalled: {ag.name} pane unreachable for the "
+                                  f"self-heal nudge — not advanced, will retry")
+                elif stage == "nudged" and (
+                        now - ep.get("nudged_at", ep["since"])
+                        >= self._escalate_after_s):
+                    # STAGE 2: the nudge did not land -> escalate to coordinator.
+                    admin = self._push(
+                        self._reg, self._panes,
+                        self._escalation_message(ag.name, items, mins))
+                    if admin is not None:
+                        ep["stage"] = "escalated"
+                        escalated.append(ag.name)
+                    else:
+                        self._log(f"stalled: coordinator unreachable to escalate "
+                                  f"{ag.name} — not advanced, will retry")
         except Exception:
-            return []                          # tmux/registry hiccup -> fail open
-        if stalled:
-            lines = "; ".join(
-                f"{n} idle {m:.0f}m holding {', '.join(i)}" for n, i, m in stalled)
-            admin = self._push(self._reg, self._panes,
-                               f"⚠ st tend — STALLED: {lines}. No pane, item or "
-                               f"shell progress for the whole window: the agent is "
-                               f"parked on work it is not doing. Look (`st log "
-                               f"<agent>`), then nudge it or reclaim the item — a "
-                               f"held bead nobody is working is invisible starvation.")
-            if admin is None:
-                # Not delivered -> do not burn the episode's one alert.
-                for n, _i, _m in stalled:
-                    store[n]["alerted"] = False
-                self._log("stalled: coordinator pane unreachable — NOT alerted, "
-                          "will retry")
-                stalled = []
+            return {"nudged": [], "escalated": []}   # tmux/registry -> fail open
         self._save(store)
-        return [n for n, _i, _m in stalled]
+        return {"nudged": nudged, "escalated": escalated}
+
+    def _deliver_agent(self, ag, message) -> bool:
+        """Send the self-heal nudge to the agent's own pane over the journaled
+        tmux path (aegis-tdesp). Returns False if the pane is gone, so an
+        undelivered nudge does not burn the episode's one attempt."""
+        try:
+            if not ag.pane or not self._panes.exists(ag.pane):
+                return False
+            self._panes.send(ag.pane, message)
+            return True
+        except Exception:
+            return False
+
+    @staticmethod
+    def _nudge_message(items, mins) -> str:
+        one = items[0]
+        return (f"⚠ st tend (self-heal) — you are idle holding {', '.join(items)} "
+                f"with no progress for {mins:.0f}m. An assigned in_progress bead "
+                f"DAMS your haul until you close or release it. If it is DONE: "
+                f"`bd close {one}`. If it is blocked or staged: put why on the "
+                f"bead, then `bd update {one} -a \"\"` to release it. If you are "
+                f"mid-something this loop cannot see, ignore this — any activity "
+                f"clears it.")
+
+    @staticmethod
+    def _escalation_message(name, items, mins) -> str:
+        return (f"⚠ st tend — NEGLECTED anchor unresolved: {name} has held "
+                f"{', '.join(items)} idle with no progress for {mins:.0f}m and "
+                f"did NOT act on a self-heal nudge. The haul is dammed. Reclaim "
+                f"the item or close it on the agent's behalf — a held bead nobody "
+                f"is working is invisible starvation.")
