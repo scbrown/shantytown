@@ -60,6 +60,7 @@ from . import beads as beads_mod
 from . import harness as harness_mod
 from . import roles as roles_mod
 from . import triage as triage_mod
+from .deployment import deployment_default
 from .dispatch import Dispatcher, TriageRefused, SendUnverified, AlreadyAssigned
 from .events import FilesEvents
 from .inbox import FilesInbox, MessageTooLong, TrackerInbox
@@ -127,16 +128,12 @@ def _deployment_default(a, key: str) -> str | None:
     plain `st anchor` resolved to the files backend and rendered EMPTY, so both
     surfaces were blank, consistently and with exit 0. The deployment needs to
     say "my tracker is beads at <repo>" ONCE; this is where it says it.
+
+    The READ itself now lives in deployment.deployment_default — the same six
+    lines were also in runtime.py twice, and a fourth caller was coming. This
+    stays as the CLI's args-shaped door onto it.
     """
-    root = getattr(a, "root", None)
-    if root is not None:
-        try:
-            loaded = json.loads((Path(root) / "env.json").read_text())
-            if isinstance(loaded, dict) and loaded.get(key):
-                return str(loaded[key])
-        except (OSError, ValueError):
-            pass
-    return os.environ.get(key) or None
+    return deployment_default(getattr(a, "root", None), key)
 
 
 def _backend(a, default="files") -> str:

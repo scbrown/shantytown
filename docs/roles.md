@@ -69,6 +69,45 @@ escalate(item, reason)   # reason ∈ {needs-authority, needs-decision, too-larg
 **"I was busy" is not an escalation reason.** That's a capacity problem, and it should surface as
 one.
 
+## Working without a bead: warn, then escalate
+
+Work that isn't on a bead is invisible to the tier. The lead can't see it, it doesn't survive the
+session, nothing coordinates against it, and nobody can audit it afterwards. This is not
+hypothetical — the night this was scoped, a coordinator dispatched via `st inbox` instead of
+`st go`, and a whole shift of agents worked with empty hooks. Every one looked busy. Nothing in the
+harness noticed, because nothing was looking.
+
+So something looks. A `PreToolUse` hook runs before every **acting** tool call (`Edit`, `Write`,
+`MultiEdit`, `NotebookEdit`, `Bash`) and walks one ladder:
+
+| state | what happens |
+|---|---|
+| hook empty, agent acting | **warn the agent**, in its own context, at most once per 5 min |
+| still empty after 12 acting calls **and** 10 minutes | **escalate once** to `reports_to` (`route_stop` picks it) |
+| something lands on the hook | the record **resets** — a later stretch gets the full ladder again |
+
+Four rules make it a governance signal rather than noise:
+
+- **It is a nudge, never a block.** Untracked work is sometimes legitimate — setup, orientation, a
+  two-command fix. Only *sustained* untracked work is drift. The hook can emit words and nothing
+  else: no `permissionDecision`, ever, in either direction.
+- **The administrator is exempt.** Dispatching, triage and draining with an empty hook *is* the
+  coordinator's job. The exemption is structural — an admin's settings never carry the hook.
+- **Count alone is not drift.** Escalation needs the strike count **and** elapsed time. Thirty tool
+  calls in thirty seconds is an agent orienting itself; escalating on that wakes a lead for setup.
+- **"I could not look" is never a warning.** If the tracker is unreachable the hook is silent and
+  the ladder is neither advanced nor reset. An agent scolded through a store outage learns to ignore
+  the warning, and then it is worth nothing when it is right.
+
+The alert reaches the lead through the **stop-event drain** — the only channel that reaches a
+destination's model — but it is *not* a stop, and the drain says so: it renders in its own section
+(`⚠ N agent(s) WORKING UNTRACKED — they have NOT stopped`) and is never held back by the mid-flight
+defer gate, since "that agent is mid-flight" is the entire content of the alert.
+
+Routing is `route_stop`'s, reused rather than re-derived: `reports_to` first, the administrator for
+a worker with no lead, and a loud rise to the administrator when the lead itself is down (Q3). An
+agent whose tier has no escalation path is told so directly — it is the only party still reachable.
+
 ## Open questions
 
 1. **Can a lead have leads?** Arbitrary depth is tempting and probably wrong. Two tiers solve the

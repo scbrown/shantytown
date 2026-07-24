@@ -15,7 +15,21 @@ import json
 
 import pytest
 
-from shantytown.runtime import claude_settings_for_role
+from shantytown.runtime import _CARRIED_ENV, claude_settings_for_role
+
+
+def _unset_carried(monkeypatch):
+    """Clear EVERY carried name, driven off the constant itself.
+
+    The "absent config -> absent key" tests read the ambient env as their
+    fallback, so any carried name a crew shell exports leaks straight into them.
+    This was hand-listed and went stale twice: SHANTY_ONTO_NS was added, then
+    SHANTY_CANONICAL_SOURCE — and the second one failed both tests on a healthy
+    tree for every agent in this fleet, whose sessions all export it. Reading
+    _CARRIED_ENV means adding a fourth carried name cannot reintroduce it.
+    """
+    for key in _CARRIED_ENV:
+        monkeypatch.delenv(key, raising=False)
 
 
 def test_carries_deployment_env_from_root_config(tmp_path):
@@ -62,8 +76,7 @@ def test_omits_the_key_entirely_when_unconfigured(tmp_path, monkeypatch):
     """The one thing worse than dropping the config is writing a plausible
     placeholder into a live settings file. Absent config -> absent key, so the
     library default applies and nothing pretends to be configured."""
-    monkeypatch.delenv("QUIPU_SERVER", raising=False)
-    monkeypatch.delenv("SHANTY_ONTO_NS", raising=False)
+    _unset_carried(monkeypatch)
 
     env = claude_settings_for_role("worker", root=tmp_path)["env"]
 
@@ -74,11 +87,7 @@ def test_omits_the_key_entirely_when_unconfigured(tmp_path, monkeypatch):
 def test_unreadable_env_json_does_not_crash_the_emit(tmp_path, monkeypatch):
     """A corrupt deployment config must not take the launcher down with it — the
     settings still emit, just without the carry."""
-    monkeypatch.delenv("QUIPU_SERVER", raising=False)
-    # BOTH carried names, not just one: a deployment shell that exports
-    # SHANTY_ONTO_NS (every crew session here does) leaked into the ambient
-    # fallback and failed this test on a healthy tree.
-    monkeypatch.delenv("SHANTY_ONTO_NS", raising=False)
+    _unset_carried(monkeypatch)
     (tmp_path / "env.json").write_text("{ not json")
 
     env = claude_settings_for_role("worker", root=tmp_path)["env"]

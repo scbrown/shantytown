@@ -38,6 +38,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Protocol, runtime_checkable
 
+from .deployment import deployment_default
 from .protocols import Agent
 
 
@@ -268,6 +269,37 @@ def _capture_cmd(root=None) -> dict:
     return {"type": "command", "command": cmd}
 
 
+def _untracked_hook(root=None) -> dict:
+    """The PreToolUse untracked-work nudge (aegis-fv2zc). The COMMAND lives here
+    with the other hook composers — the interpreter and root resolution are this
+    module's job — but the only caller is provision._with_untracked_hook, NOT
+    claude_settings_for_role: see the note in that function for why the consent
+    file is the delivery path and why there must be exactly one.
+
+    Same baked-in --root as _stop_cmd, and for the same measured reason: the
+    agent runs in ITS OWN workspace, which has no .shanty, so an unrooted hook
+    would resolve a registry that is not there and decide nothing — running,
+    wired, and inert.
+
+    MATCHER = the ACTING tools. Read/Grep/Glob are deliberately absent: looking
+    around is exactly what an agent between beads SHOULD be doing, and warning it
+    for orienting itself would fire the nudge at the one moment an empty hook is
+    correct. Bash is in, because `bash` is how most real work on this fleet
+    happens.
+
+    Fail-open lives INSIDE the module (untracked.main catches everything and
+    exits 0), not in a shell wrapper here — the lesson of aegis-w1nd is that
+    laundering somebody else's exit code through `||` is not fail-open, and this
+    hook cannot emit a permission decision at all, so no partial output of its
+    can ever be read as one.
+    """
+    cmd = f"{_hook_interpreter()} -m shantytown.untracked"
+    if root is not None:
+        cmd += f" --root {Path(root).resolve()}"
+    return {"matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash",
+            "hooks": [{"type": "command", "command": cmd, "timeout": 15}]}
+
+
 def _feed_check_cmd(root=None) -> dict:
     """The administrator's Rule Zero feed-check Stop hook (aegis-hfta). Same shape
     and same baked-in --root as _stop_cmd, so it resolves the real store from the
@@ -358,14 +390,7 @@ def bash_guard_command(root=None) -> str | None:
     emitted. The guard contract is Claude Code's: exit 2 blocks, anything
     else allows — a guard that fails open is the deployment's job to write.
     """
-    if root is not None:
-        try:
-            loaded = json.loads((Path(root) / "env.json").read_text())
-            if isinstance(loaded, dict) and loaded.get("SHANTY_BASH_GUARD"):
-                return str(loaded["SHANTY_BASH_GUARD"])
-        except (OSError, ValueError):
-            pass
-    return os.environ.get("SHANTY_BASH_GUARD") or None
+    return deployment_default(root, "SHANTY_BASH_GUARD")
 
 
 def stop_capture_command(root=None) -> str | None:
@@ -386,14 +411,7 @@ def stop_capture_command(root=None) -> str | None:
     solicitation etiquette (block-once, session markers) is the command's own
     responsibility, not the emitter's.
     """
-    if root is not None:
-        try:
-            loaded = json.loads((Path(root) / "env.json").read_text())
-            if isinstance(loaded, dict) and loaded.get("SHANTY_STOP_CAPTURE"):
-                return str(loaded["SHANTY_STOP_CAPTURE"])
-        except (OSError, ValueError):
-            pass
-    return os.environ.get("SHANTY_STOP_CAPTURE") or None
+    return deployment_default(root, "SHANTY_STOP_CAPTURE")
 
 
 def settings_for_role(role: str, root=None, harness_name: str | None = None) -> dict:
@@ -449,6 +467,14 @@ def claude_settings_for_role(role: str, root=None) -> dict:
     if capture_cmd:
         stop.append({"type": "command", "command": capture_cmd})
     pre_tool = [_guard_hook()]
+    # NOTE: the untracked-work nudge (PreToolUse, aegis-fv2zc) is NOT here — it
+    # is delivered via the PROVISION consent settings (provision.
+    # _with_untracked_hook), for the same reason the metrics capture is, and it
+    # is the same measured failure: --settings is written only on `role set`, so
+    # a hook wired here reaches nobody already running. Governance that reaches
+    # nobody is decoration. ONE home also means it cannot fire twice per tool
+    # call (Claude Code merges hooks from every settings source), which would
+    # double every strike and escalate at half the threshold.
     # Deployment Bash guard (aegis-if4d): emitted ONLY when the deployment
     # configures one — see bash_guard_command. Matcher Bash, so every shell
     # command an agent runs passes the host's policy first.
