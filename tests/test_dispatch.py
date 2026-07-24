@@ -213,13 +213,54 @@ def test_reassign_flag_takes_it_deliberately(world):
     assert tracker.get("item-1").assignee == "ellie"
 
 
-def test_a_CLOSED_item_is_not_protected(world):
-    """The guard defends work IN FLIGHT. A closed item's stale assignee must not
-    become a permanent lock on re-dispatching it."""
+def test_serving_a_CLOSED_item_is_REFUSED_not_resurrected(world):
+    """CLOSED IS TERMINAL for the serve path (aegis-vuh33).
+
+    This test used to assert the OPPOSITE — that a closed bead gets dispatched
+    (`panes.sent`), on the theory that its stale assignee "must not become a
+    permanent lock". That theory was right about the assignee and wrong about the
+    outcome: serving the bead reverted it to in_progress, re-doing finished work
+    and forging a phantom "bd close lost my write" bug report (aegis-rqbs / 5vgss
+    / i9ish, measured 2026-07-24 — arnold recorded that false data-plane
+    conclusion in durable memory before dolt_history disproved it). A closed bead
+    is refused for being CLOSED, not passed through to a resurrection.
+    """
     d, tracker, panes = world
     tracker.update("item-1", assignee="kelly", status="closed")
     tracker.updates = 0
 
-    d.go("item-1", "ellie")
+    from shantytown.dispatch import Closed
+    with pytest.raises(Closed):
+        d.go("item-1", "ellie")
 
-    assert panes.sent, "a closed item's stale assignee blocked dispatch"
+    assert not panes.sent, "a closed bead was served — finished work re-dispatched"
+    assert tracker.updates == 0, "a closed bead's status was written (resurrected)"
+    assert tracker.get("item-1").status == "closed", "the bead was reverted from closed"
+
+
+def test_serving_a_closed_item_to_its_OWN_owner_is_still_refused(world):
+    """The specimens reverted their OWN beads (assignee == server), so the fix
+    must not have a same-owner hole — the AlreadyAssigned guard never fired for
+    those, which is exactly how they slipped through before."""
+    d, tracker, panes = world
+    tracker.update("item-1", assignee="ellie", status="closed")
+    tracker.updates = 0
+
+    from shantytown.dispatch import Closed
+    with pytest.raises(Closed):
+        d.go("item-1", "ellie")
+    assert tracker.get("item-1").status == "closed"
+
+
+def test_reassign_does_not_resurrect_a_closed_item(world):
+    """--reassign takes work from a live holder; it does not raise the dead.
+    Closed is refused even with the deliberate-takeover flag — reopening is a
+    separate act."""
+    d, tracker, panes = world
+    tracker.update("item-1", assignee="kelly", status="closed")
+    tracker.updates = 0
+
+    from shantytown.dispatch import Closed
+    with pytest.raises(Closed):
+        d.go("item-1", "ellie", reassign=True)
+    assert tracker.get("item-1").status == "closed"
