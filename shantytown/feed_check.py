@@ -45,6 +45,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from .inbox import is_message
+
 
 def _root(argv: list[str]) -> Path:
     # Same precedence as the stop_event hooks: --root, else $SHANTY_ROOT, else
@@ -219,11 +221,19 @@ def hauls(ready_beads) -> dict[str, list[str]]:
     free list (its next work is already determined; dispatching into it or
     alerting the coordinator about it are both noise). bd's assignee is a crew
     path (beads_aegis/crew/<name>) or a bare name; the trailing segment is the
-    worker name, same parse the old dispatchable used."""
+    worker name, same parse the old dispatchable used.
+
+    MESSAGES ARE NOT A QUEUE, and here that mistake is worse than on the haul.
+    This function decides who is SELF-FEEDING, and a self-feeding worker is
+    EXCLUDED from the Rule Zero feedable list. So an idle worker holding three
+    unread `inbox:` items read as "its next work is already determined" — it
+    vanished from the coordinator's free list and got dispatched nothing, while
+    the gate that exists to stop the fleet going idle counted it as busy. Same
+    predicate as the plate readers and the haul advance (inbox.is_message)."""
     out: dict[str, list[str]] = {}
     for b in ready_beads:
         assignee = b.get("assignee")
-        if not assignee:
+        if not assignee or is_message(b.get("title", "")):
             continue
         name = assignee.split("/")[-1]
         if name:
