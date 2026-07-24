@@ -51,7 +51,7 @@ from . import triage
 from . import workflow
 from .deployment import deployment_default
 from .events import FilesEvents, StopEvent
-from .inbox import is_message
+from .inbox import is_decision, is_message
 from .files import FilesRegistry, FilesTracker, plate as files_plate
 from .policy import NullRanker, PolicyRanker
 from .protocols import RankUnavailable
@@ -264,7 +264,9 @@ def _assigned_to(me: str, beads: list[dict]) -> list[dict]:
     out = []
     for b in beads:
         assignee = b.get("assignee") or ""
-        if assignee.split("/")[-1] == me and not is_message(b.get("title", "")):
+        if (assignee.split("/")[-1] == me
+                and not is_message(b.get("title", ""))
+                and not is_decision(b.get("labels"))):
             out.append(b)
     return out
 

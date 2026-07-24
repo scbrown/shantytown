@@ -45,7 +45,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from .inbox import is_message
+from .inbox import is_decision, is_message
 
 
 def _root(argv: list[str]) -> Path:
@@ -208,7 +208,9 @@ def dispatchable(free: set, ready_beads) -> list[tuple[str, str]]:
     _ = free
     out = []
     for b in ready_beads:
-        if not b.get("assignee"):
+        # A decision-gated bead is not implementer work — the coordinator must
+        # not hand an unassigned one to a worker to "execute" either (aegis-2og7d).
+        if not b.get("assignee") and not is_decision(b.get("labels")):
             out.append((b.get("id", "?"), b.get("title", "")))
     return out
 
@@ -233,7 +235,12 @@ def hauls(ready_beads) -> dict[str, list[str]]:
     out: dict[str, list[str]] = {}
     for b in ready_beads:
         assignee = b.get("assignee")
-        if not assignee or is_message(b.get("title", "")):
+        # A message is not a queue; NEITHER is a decision-gated bead. A worker
+        # whose only ready item is a decision-needed bead has NO real queue, so
+        # it must stay on the coordinator's feedable free list rather than read
+        # as self-feeding (aegis-2og7d) — the same reasoning as messages above.
+        if (not assignee or is_message(b.get("title", ""))
+                or is_decision(b.get("labels"))):
             continue
         name = assignee.split("/")[-1]
         if name:
