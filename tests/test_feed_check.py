@@ -332,3 +332,26 @@ def test_no_root_means_no_ownership_gate(tmp_path):
     panes = _Panes({"shanty-weaver": IDLE},
                    {"shanty-weaver": f"claude --settings {settings}"})
     assert feed_check.free_feedable_workers(reg, panes, _Runtime()) == ["weaver"]
+
+
+# --- haul feed message: the RELEASE affordance (aegis-tgvtg) ------------------
+# The haul re-serves any open+assigned+ready bead until its assignee is cleared,
+# and setting status alone does NOT release it. The trap the bead documents is
+# that the exit is undiscoverable, so the message MUST name it at the moment of
+# the re-serve. These pin that it does, and pin the specific correction (status
+# alone is not enough) so a future edit can't quietly drop the load-bearing half.
+
+def test_haul_feed_message_names_the_release_exit_with_the_actual_id():
+    msg = feed_check.haul_feed_message("aegis-9z9z", "some title", 2)
+    # the working mechanism, spelled with THIS bead's id so it is copy-pasteable
+    assert 'bd update aegis-9z9z -a ""' in msg
+    # and the correction that the whole bug turned on
+    assert "status alone" in msg.lower()
+
+
+def test_haul_feed_message_still_carries_the_core_advance_instruction():
+    # the release line is ADDITIVE — it must not have displaced the advance itself
+    msg = feed_check.haul_feed_message("aegis-9z9z", "t", 0)
+    assert "aegis-9z9z" in msg
+    assert "close it when done" in msg
+    assert "0 more" in msg
