@@ -51,6 +51,8 @@ class _Runtime:
 IDLE = "❯ \n  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents"
 IDLE_WITH_SHELL = IDLE + "\n  main · 2 shells · 120k tokens"
 HELD = [{"id": "aegis-u140", "assignee": "beads_aegis/crew/weaver"}]
+HELD_DECISION = [{"id": "aegis-w3bt.3", "assignee": "beads_aegis/crew/weaver",
+                  "labels": ["bucket", "decision-stiwi"]}]
 
 
 def _world(tmp_path, screen=IDLE, held=HELD):
@@ -65,23 +67,62 @@ def _world(tmp_path, screen=IDLE, held=HELD):
     return reg, panes, clock, mk
 
 
-def test_parked_idle_holding_an_item_past_threshold_STALLS(tmp_path):
+def test_threshold_reached_NUDGES_THE_AGENT_not_the_coordinator(tmp_path):
+    """aegis-es1tt stage 1: the neglected anchor is remediated by nudging the
+    AGENT holding it to close-or-release — NOT by first bothering the coordinator."""
     reg, panes, clock, mk = _world(tmp_path)
-    assert mk().sweep(reg.all()) == []          # first sighting starts the episode
+    assert mk().sweep(reg.all()) == {"nudged": [], "escalated": []}   # episode starts
     clock["t"] += 16 * 60
-    assert mk().sweep(reg.all()) == ["weaver"]  # unchanged past 15m -> STALLED
+    assert mk().sweep(reg.all()) == {"nudged": ["weaver"], "escalated": []}
     (pane, msg), = panes.sent
-    assert pane == "p-admin"
-    assert "STALLED" in msg and "weaver" in msg and "aegis-u140" in msg
+    assert pane == "p-weaver"                    # the AGENT's pane, not p-admin
+    assert "bd close aegis-u140" in msg          # the exit, both ways...
+    assert 'bd update aegis-u140 -a ""' in msg   # ...close if done, release if blocked
+
+
+def test_still_frozen_after_the_nudge_ESCALATES_to_the_coordinator(tmp_path):
+    """Stage 2: the self-heal nudge went unanswered -> the coordinator is pushed."""
+    reg, panes, clock, mk = _world(tmp_path)
+    mk().sweep(reg.all())
+    clock["t"] += 16 * 60
+    assert mk().sweep(reg.all())["nudged"] == ["weaver"]     # nudged the agent
+    clock["t"] += 16 * 60                                    # still frozen a window later
+    assert mk().sweep(reg.all()) == {"nudged": [], "escalated": ["weaver"]}
+    assert panes.sent[0][0] == "p-weaver"        # first the agent
+    assert panes.sent[1][0] == "p-admin"         # then the coordinator
+    assert "NEGLECTED" in panes.sent[1][1]
+
+
+def test_progress_after_the_nudge_PREVENTS_escalation(tmp_path):
+    """The whole point: an agent that acts on the nudge is never escalated."""
+    reg, panes, clock, mk = _world(tmp_path)
+    mk().sweep(reg.all())
+    clock["t"] += 16 * 60
+    assert mk().sweep(reg.all())["nudged"] == ["weaver"]
+    panes.screens["p-weaver"] = IDLE + "\n  (agent acted on the nudge)"  # progress
+    clock["t"] += 16 * 60
+    r = mk().sweep(reg.all())
+    assert r == {"nudged": [], "escalated": []}  # re-armed by progress, no escalation
+    assert len(panes.sent) == 1                  # only the one nudge ever fired
+
+
+def test_a_decision_labeled_anchor_is_NEVER_nudged(tmp_path):
+    """aegis-es1tt care note: a bead waiting on an owner decision (decision-stiwi)
+    is correctly parked — telling its holder to 'close' is wrong. Leave it alone."""
+    reg, panes, clock, mk = _world(tmp_path, held=HELD_DECISION)
+    mk().sweep(reg.all())
+    clock["t"] += 60 * 60                         # an hour frozen
+    assert mk().sweep(reg.all()) == {"nudged": [], "escalated": []}
+    assert panes.sent == []                       # never nudged, never escalated
 
 
 def test_a_live_background_shell_is_progress_not_a_stall(tmp_path):
-    """The negative the bead demands: a 30-min legit task with a live shell
-    (franklin's re-index) must never read STALLED."""
+    """The negative the bead demands: a 30-min legit task with a live shell must
+    never nudge or escalate."""
     reg, panes, clock, mk = _world(tmp_path, screen=IDLE_WITH_SHELL)
-    assert mk().sweep(reg.all()) == []
+    assert mk().sweep(reg.all()) == {"nudged": [], "escalated": []}
     clock["t"] += 40 * 60
-    assert mk().sweep(reg.all()) == []
+    assert mk().sweep(reg.all()) == {"nudged": [], "escalated": []}
     assert panes.sent == []
 
 
@@ -90,29 +131,15 @@ def test_a_changing_pane_is_progress(tmp_path):
     mk().sweep(reg.all())
     clock["t"] += 16 * 60
     panes.screens["p-weaver"] = IDLE + "\n  new output line"
-    assert mk().sweep(reg.all()) == []          # changed -> fresh episode
+    assert mk().sweep(reg.all()) == {"nudged": [], "escalated": []}  # fresh episode
     assert panes.sent == []
-
-
-def test_alerts_once_per_episode_and_rearms_on_progress(tmp_path):
-    reg, panes, clock, mk = _world(tmp_path)
-    mk().sweep(reg.all())
-    clock["t"] += 16 * 60
-    assert mk().sweep(reg.all()) == ["weaver"]
-    clock["t"] += 16 * 60
-    assert mk().sweep(reg.all()) == []          # same episode: no re-spam
-    panes.screens["p-weaver"] = IDLE + "\n  woke up"    # progress...
-    mk().sweep(reg.all())                                # ...new episode starts
-    clock["t"] += 16 * 60
-    assert mk().sweep(reg.all()) == ["weaver"]  # ...and can stall again
-    assert len(panes.sent) == 2
 
 
 def test_holding_nothing_is_neglected_territory_not_stalled(tmp_path):
     reg, panes, clock, mk = _world(tmp_path, held=[])
     mk().sweep(reg.all())
     clock["t"] += 60 * 60
-    assert mk().sweep(reg.all()) == []
+    assert mk().sweep(reg.all()) == {"nudged": [], "escalated": []}
     assert panes.sent == []
 
 
@@ -122,14 +149,18 @@ def test_bd_hiccup_fails_open(tmp_path):
         raise RuntimeError("bd down")
     a = StalledAlerter(tmp_path, reg, panes, _Runtime(), bd_in_progress=boom,
                        threshold_min=15, now=lambda: 0, log=lambda m: None)
-    assert a.sweep(reg.all()) == [] and panes.sent == []
+    assert a.sweep(reg.all()) == {"nudged": [], "escalated": []} and panes.sent == []
 
 
-def test_undelivered_alert_does_not_burn_the_episode(tmp_path):
+def test_undelivered_escalation_does_not_burn_the_stage(tmp_path):
+    """The nudge landed but the COORDINATOR pane is unreachable at escalation
+    time -> do not advance the stage; retry next pass rather than lose the alert."""
     reg, panes, clock, mk = _world(tmp_path)
-    panes._live.discard("p-admin")              # coordinator pane unreachable
     mk().sweep(reg.all())
     clock["t"] += 16 * 60
-    assert mk().sweep(reg.all()) == []          # not delivered -> not claimed
+    assert mk().sweep(reg.all())["nudged"] == ["weaver"]   # stage 1 delivered
+    panes._live.discard("p-admin")                         # coordinator unreachable
+    clock["t"] += 16 * 60
+    assert mk().sweep(reg.all()) == {"nudged": [], "escalated": []}  # not claimed
     panes._live.add("p-admin")
-    assert mk().sweep(reg.all()) == ["weaver"]  # retried and delivered
+    assert mk().sweep(reg.all()) == {"nudged": [], "escalated": ["weaver"]}  # retried
