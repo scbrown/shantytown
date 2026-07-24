@@ -61,7 +61,7 @@ from . import harness as harness_mod
 from . import roles as roles_mod
 from . import triage as triage_mod
 from .deployment import deployment_default
-from .dispatch import Dispatcher, TriageRefused, SendUnverified, AlreadyAssigned
+from .dispatch import Dispatcher, TriageRefused, SendUnverified, AlreadyAssigned, Closed
 from .events import FilesEvents
 from .inbox import FilesInbox, MessageTooLong, TrackerInbox
 from .triage import Action
@@ -1621,6 +1621,9 @@ def _cmd_go(a) -> int:
         try:
             decision = d.triage(a.item, a.agent, note)
             p = d.go(a.item, a.agent, dry_run=True, note=note, reassign=a.reassign)
+        except Closed as e:
+            print(f"  refused: {e}", file=sys.stderr)
+            return REFUSED
         except AlreadyAssigned as e:
             print(f"  refused: {e}", file=sys.stderr)
             return REFUSED
@@ -1671,6 +1674,12 @@ def _cmd_go(a) -> int:
         note = f"{note} — {wtag}" if note else wtag
     try:
         p = d.go(a.item, a.agent, note=note, reassign=a.reassign)
+    except Closed as e:
+        # Closed is terminal (aegis-vuh33). Nothing written, nothing sent — serving
+        # a closed bead reverts it to in_progress and re-does finished work. Reopen
+        # deliberately if it must be worked again.
+        print(f"  refused: {e}", file=sys.stderr)
+        return REFUSED
     except AlreadyAssigned as e:
         # Refuse rather than steal. Nothing written, nothing sent — two agents on
         # one item is duplicated effort no tool ever flags (aegis-uvw5 / 7yeb).
