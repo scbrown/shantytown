@@ -413,3 +413,38 @@ def test_a_waiting_sender_is_DELIVERED_not_deferred(tmp_path, capsys):
     # notice. An rc check here would pass whether or not the event was delivered.
     assert json.loads(out.out)["decision"] == "block"
     assert "held back" not in out.err
+
+
+# --- the drain reads the DEPLOYMENT's backend, not files-only (aegis-tisp) ----
+
+def test_plate_reader_follows_declared_beads_backend(tmp_path, monkeypatch):
+    """On a beads-backed deployment the drain must read plates from beads. A
+    files-only reader named every agent empty -> classify() saw all-IDLE and the
+    coordinator was told to assign work to agents already holding deep hauls,
+    every stop. env.json declares the backend; the reader must honour it."""
+    root = tmp_path / ".shanty"; root.mkdir()
+    (root / "env.json").write_text(json.dumps(
+        {"SHANTY_BACKEND": "beads", "SHANTY_BEADS_REPO": "/some/beads/repo"}))
+
+    seen = {}
+    class _FakeItem:
+        id, status = "aegis-haul1", "open"
+    def _fake_beads_plate(tracker, who):
+        seen["repo"] = tracker.repo; seen["who"] = who
+        return _FakeItem()
+    monkeypatch.setattr("shantytown.beads.plate", _fake_beads_plate)
+
+    reader = stop_event._plate_reader(root)
+    item = reader("billy")
+    assert item is _FakeItem or item.id == "aegis-haul1", "did not read the beads plate"
+    assert seen["repo"] == "/some/beads/repo", "ignored SHANTY_BEADS_REPO from env.json"
+    assert seen["who"] == "billy"
+
+
+def test_plate_reader_defaults_to_files_when_undeclared(tmp_path):
+    """No env.json (or an unset backend) keeps the built-in files default —
+    the fix must not break a files-backed or unconfigured deployment."""
+    root = tmp_path / ".shanty"; root.mkdir()
+    (root / "items").mkdir()
+    reader = stop_event._plate_reader(root)
+    assert reader("nobody") is None            # empty files tracker, honest empty
