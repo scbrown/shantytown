@@ -120,3 +120,24 @@ def test_the_surface_is_nineteen():
         "the command count changed. If that's intended, update the number here and "
         "the cli.py docstring together — and say why the surface grew in docs/cli.md."
     )
+
+
+def test_deprecated_aliases_warn_on_stderr_only(capsys):
+    """The `role`/`project` aliases are kept (count stays 19) but must nudge users
+    to the canonical `roles ...` spelling ahead of their one-week-window deletion.
+
+    Two properties that matter: the warning fires ONLY on the deprecated spelling
+    (never on canonical `roles ...`), and it goes to STDERR so stdout stays clean
+    for callers that pipe command output. Deletion of the alias parsers is the
+    slice that actually moves this count down.
+    """
+    from shantytown.cli import main
+
+    main(["project", "-n"])
+    err = capsys.readouterr().err.lower()
+    assert "deprecated" in err and "roles sync" in err, "project alias did not warn"
+
+    main(["roles", "sync", "-n"])
+    assert "deprecated" not in capsys.readouterr().err.lower(), (
+        "canonical `roles sync` must NOT warn"
+    )
