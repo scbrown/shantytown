@@ -305,13 +305,25 @@ if __name__ == "__main__":
 # claim, same handoff line — built here so the two can never drift.
 
 def haul_feed_message(nid: str, title: str, rest: int) -> str:
-    """The advance instruction: the specific next bead, claimed and named."""
+    """The advance instruction: the specific next bead, claimed and named.
+
+    The last line is the RELEASE affordance (aegis-tgvtg). The haul re-serves any
+    open, assigned, ready bead of yours — that is how it advances — so a bead you
+    have finished with, or that is not yours to work, keeps coming back until its
+    assignee is cleared. Setting status alone does NOT release it: an assigned
+    bead reads as your ready work regardless of status, which is the whole reason
+    a deliberate 'I'm done here' was silently re-claimed. Naming the exit at the
+    exact moment of the re-serve is the fix; clearing the assignee is the exit.
+    """
     t = (title or "")[:80]
     return (
         f"HAUL: next on your haul: {nid} ({t}). Read it (`bd show {nid}`) and "
         f"execute; close it when done and the haul advances itself ({rest} more "
         f"after this). If your context is deep, checkpoint + /clear FIRST — the "
-        f"haul survives it. The coordinator was not pinged: this queue is yours.")
+        f"haul survives it. The coordinator was not pinged: this queue is yours. "
+        f"Already done with it, or it isn't yours to work? Release it with "
+        f"`bd update {nid} -a \"\"` (clears the assignee) — the haul re-serves an "
+        f"assigned bead until then; setting status alone won't stop it.")
 
 
 def haul_handoff_message(context_k: float, line_k: float) -> str:
