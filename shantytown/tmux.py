@@ -41,15 +41,35 @@ def _journal_send(pane: str, text: str) -> None:
     NEVER raises, never blocks a delivery: an audit failure prints a warning
     and the message still goes. The inverse (refusing delivery on a full disk)
     would turn the audit trail into a fleet-messaging outage.
+
+    THE SKIP MUST BE LOUD, NOT SILENT (aegis-tdesp). When SHANTY_ROOT is unset
+    there is no store to journal into — but returning quietly is the exact bug
+    that a `*/3` cron feeder hit: it exported only PATH, so every dispatch it
+    wrote into a pane delivered but never journaled, and an unjournaled send is
+    indistinguishable from a raw tmux injection. That matters because the apz9
+    forensic test is "text NOT in sends.log => it traversed no st channel =>
+    injector": a silently-unjournaled st send both MANUFACTURES that signature
+    and, worse, could MASK a real injection under the same noise. So a rootless
+    send is announced with the same identifying fields a journal line carries —
+    it cannot land in sends.log without a root, but it is no longer silent, and
+    the breadcrumb is greppable off stderr. The durable fix is caller-side: any
+    env/cron/systemd-driven st send must export SHANTY_ROOT (default
+    `$SHANTY/.shanty`). We deliberately do NOT fall back to `cwd/.shanty` here —
+    that guess resolves against whatever directory cron happens to run in and
+    would fragment the journal to random locations (the nipg failure mode).
     """
+    sender = os.environ.get("SHANTY_AGENT") or "-"
+    body = text.replace("\n", "\\n")[:500]
+    root = os.environ.get("SHANTY_ROOT")
+    if not root:
+        # No store elected — cannot journal, but MUST NOT be silent (see above).
+        print(f"  ⚠ send UNJOURNALED (SHANTY_ROOT unset — export it for "
+              f"cron/env-driven st sends): sender={sender} pid={os.getpid()} "
+              f"pane={pane} text={body}", file=sys.stderr)
+        return
     try:
-        root = os.environ.get("SHANTY_ROOT")
-        if not root:
-            return                      # no store elected — nowhere to journal
         logdir = os.path.join(root, "logs")
         os.makedirs(logdir, exist_ok=True)
-        sender = os.environ.get("SHANTY_AGENT") or "-"
-        body = text.replace("\n", "\\n")[:500]
         stamp = time.strftime("%Y-%m-%dT%H:%M:%S%z")
         with open(os.path.join(logdir, "sends.log"), "a", encoding="utf-8") as f:
             f.write(f"{stamp} sender={sender} pid={os.getpid()} "
