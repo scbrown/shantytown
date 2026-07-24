@@ -259,3 +259,22 @@ def test_role_set_then_new_no_longer_refuses_for_missing_settings(tmp_path, monk
     assert panes.sent, "st new should have launched now that settings exist"
     _, launch = panes.sent[-1]
     assert "--settings" in launch and "worker.settings.json" in launch
+
+
+# --- the untracked-work nudge is NOT here, and that is deliberate -------------
+
+def test_settings_does_not_carry_the_untracked_nudge():
+    """It lives in the PROVISION consent settings (tests/test_untracked_wiring.py),
+    because --settings is emitted only on `role set` and a hook wired there never
+    reaches a running fleet (aegis-rcyd). Pinned as an ABSENCE so nobody "fixes"
+    the gap by adding it back here: Claude Code merges hooks from every settings
+    source, so a second home fires it twice per tool call — double strikes, and
+    an escalation at half the threshold.
+    """
+    for role in ("worker", "lead", "administrator"):
+        cmds = [h["command"]
+                for entry in settings_for_role(role)["hooks"].get("PreToolUse", [])
+                for h in entry.get("hooks", [])]
+        assert not [c for c in cmds if "shantytown.untracked" in c], (
+            f"{role}'s --settings carries the untracked hook as well as the "
+            f"provision consent file; it will fire twice per tool call")

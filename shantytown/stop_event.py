@@ -54,7 +54,7 @@ from .files import FilesRegistry, FilesTracker, plate as files_plate
 from .policy import NullRanker, PolicyRanker
 from .protocols import RankUnavailable
 from .runtime import ClaudeRuntime, live_wiring
-from .tier import route_stop
+from .tier import is_governance, route_stop
 from .triage import running_shells, context_tokens_k, CYCLE_THRESHOLD_K
 from .tmux import Tmux
 
@@ -341,6 +341,35 @@ def _item_note(e: StopEvent) -> str:
     return "no open item"
 
 
+def _compose_governance(events: list[StopEvent], now: float) -> str:
+    """The ALERTS-ABOUT-an-agent section. Separate from the stop lines because
+    these events are NOT stops (tier.is_governance), and rendering them under
+    "N agent(s) stopped" would be a plain falsehood about the one fact the
+    coordinator is being woken for — an agent that is very much NOT stopped.
+
+    Latest-per-sender, same collapse as the stop lines: an agent warned three
+    times about the same unhooked stretch is ONE thing to handle, not three.
+    """
+    if not events:
+        return ""
+    latest: dict[str, StopEvent] = {}
+    for e in sorted(events, key=lambda x: (x.ts, x.id)):
+        latest[e.frm] = e
+    lines = [f"⚠ {len(latest)} agent(s) WORKING UNTRACKED — they have NOT stopped. "
+             f"Each has been acting with an EMPTY HOOK (no open bead assigned) and "
+             f"was warned in its own context first. Untracked work is invisible to "
+             f"you and does not survive their session: give each one a bead "
+             f"(`st go <id> <agent>`), or confirm the work is legitimately "
+             f"untracked and say so:"]
+    for name in sorted(latest):
+        e = latest[name]
+        rose = " (ROSE: its lead was unreachable)" if e.rose else ""
+        # _age already carries its own "ago" (and "age unknown" for an unstamped
+        # event, which must NOT get one appended) — do not add a second.
+        lines.append(f"  - {name} — empty hook as of {_age(e.ts, now)}{rose}")
+    return "\n".join(lines)
+
+
 def _compose_reason(events: list[StopEvent], verdicts: dict, now: float,
                     deferred: int = 0) -> str:
     """One line per AGENT, not per event — and every line carries the three facts
@@ -351,13 +380,24 @@ def _compose_reason(events: list[StopEvent], verdicts: dict, now: float,
     stopped" invite two decisions about one agent. The latest event wins; the
     count is still printed, because "this agent turned over 3 times" is itself a
     signal and hiding it would trade one wrong impression for another.
+
+    GOVERNANCE alerts (untracked work) are split OUT to their own section first —
+    they are not stops, and the header below would misdescribe them.
     """
+    gov = [e for e in events if is_governance(e.reason)]
+    events = [e for e in events if not is_governance(e.reason)]
+    head = _compose_governance(gov, now)
+    if not events:
+        # Nothing but alerts. Return the section alone rather than an empty
+        # "0 agent(s) stopped" header over it.
+        return head
     latest: dict[str, StopEvent] = {}
     counts: dict[str, int] = {}
     for e in sorted(events, key=lambda x: (x.ts, x.id)):
         counts[e.frm] = counts.get(e.frm, 0) + 1
         latest[e.frm] = e                          # sorted -> last one wins
-    lines = [f"{len(latest)} agent(s) stopped — handle each (absorb / delegate / "
+    lines = ([head, ""] if head else []) + [
+             f"{len(latest)} agent(s) stopped — handle each (absorb / delegate / "
              f"escalate); they will NOT be redelivered. A stop is a TURN boundary, "
              f"so `now:` is the pane verdict taken just now, and it is the one to "
              f"act on:"]
@@ -418,6 +458,14 @@ def _drain(events: FilesEvents, me: str, reg=None, panes=None,
     if reg is not None and panes is not None and shows_ready_ui is not None:
         def accept(ev: StopEvent) -> bool:            # noqa: F811 — the wired form
             nonlocal deferred
+            if is_governance(ev.reason):
+                # NEVER defer an untracked-work alert. The defer gate exists to
+                # stop a TURN BOUNDARY waking a coordinator for an agent that is
+                # still mid-flight (aegis-w9z1) — but "that agent is mid-flight"
+                # IS this alert's content. Passing it through the same gate would
+                # hold back exactly the events that are true and release only the
+                # ones about agents that had already stopped working untracked.
+                return True
             if ev.frm not in verdicts:
                 verdicts[ev.frm] = _liveness(reg, panes, shows_ready_ui, ev.frm,
                                              awaiting_answer)
@@ -440,7 +488,12 @@ def _drain(events: FilesEvents, me: str, reg=None, panes=None,
     # so a persistently-idle fleet can never re-block the admin every stop. A bare
     # _drain(events, me) is unaffected — the gate is inside _compose_workflow.
     if reg is not None and panes is not None:
-        extra = _compose_workflow(reg, panes, plate, rank, got, me)
+        # Only STOPS feed the workflow. fold_events reads an event as "this agent
+        # stopped" (it will even mint a STOPPED candidate for a sender with no
+        # card), and an untracked-work alert means the opposite — folding one in
+        # would put a working agent in the admin's free-to-dispatch column.
+        extra = _compose_workflow(reg, panes, plate, rank,
+                                  [e for e in got if not is_governance(e.reason)], me)
         if extra:
             reason = reason + "\n\n" + extra
     # Deliver to the MODEL via the block protocol. reason, never systemMessage.

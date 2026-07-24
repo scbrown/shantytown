@@ -182,8 +182,27 @@ class Reason(Enum):
     TOO_LARGE = "too-large"                 # bigger than a lead absorbs
     BLOCKED_ON_HUMAN = "blocked-on-human"
     LEAD_UNREACHABLE = "lead-unreachable"   # Q3: the lead is down, rose to admin
+    UNTRACKED_WORK = "untracked-work"       # a report is ACTING with an empty hook
     # NOTE: "i was busy" is deliberately NOT here. Capacity is a capacity problem
     # and must surface as one (absorb-rate), not be laundered as an escalation.
+
+
+# UNTRACKED_WORK is the one reason that does NOT describe a stop (untracked.py,
+# aegis-fv2zc). It rides the stop-event channel because that channel is the only
+# one that reaches a destination's MODEL — the inbox is a pure read that nothing
+# polls, so an alert left there would be delivered and unread, which is the
+# declared-but-inert failure this harness keeps naming. It is NOT a stop, and the
+# drain must not render it as one: stop_event._compose_reason gives it its own
+# section, and the drain's mid-flight DEFER must never hold it back (the sender
+# being busy is the entire content of the alert).
+GOVERNANCE_REASONS = (Reason.UNTRACKED_WORK.value,)
+
+
+def is_governance(reason: str | None) -> bool:
+    """Is this event an ALERT ABOUT an agent rather than a report that it
+    stopped? One predicate, so the drain's two consumers (the defer gate and the
+    renderer) cannot disagree about which events are which."""
+    return reason in GOVERNANCE_REASONS
 
 
 @dataclass
