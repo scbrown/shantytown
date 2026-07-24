@@ -374,9 +374,17 @@ def build_parser() -> argparse.ArgumentParser:
     rl_set.add_argument("role", choices=["worker", "lead", "administrator"])
     rl_set.add_argument("--reports", default="", help="comma-separated reports for a lead/administrator")
     rl_set.add_argument("-n", "--dry-run", action="store_true")
-    rl_sync = rl_sub.add_parser("sync", help="materialize the crew cards FROM the graph")
+    rl_sync = rl_sub.add_parser("sync", help="materialize the crew cards FROM a source")
     rl_sync.add_argument("-n", "--dry-run", action="store_true", help="show the diff, write nothing")
     rl_sync.add_argument("--force", action="store_true", help="sync even if it restructures LIVE agents")
+    # aegis-t4eve: the tier comes FROM a source, and sync says which one answered.
+    # Omitted => ontology-first, file-fallback. Named => never silently substituted.
+    rl_sync.add_argument("--from", dest="from_source", default=None,
+                         metavar="{quipu|file:<path>}",
+                         help="where the hierarchy comes from: 'quipu' or "
+                              "'file:<path.ttl|yaml|json>'. Default: quipu, "
+                              "falling back to a hierarchy file only if the "
+                              "graph cannot be read (and it tells you)")
 
     # ALIAS (deprecated spelling, kept so nothing breaks): `role set ...` ==
     # `roles set ...`. Prefer `st roles set`.
@@ -2023,11 +2031,27 @@ def _cmd_project(a) -> int:
     right, and a projection that cannot be previewed is a footgun regardless of
     which side of the divergence is correct.
     """
+    # aegis-t4eve: the source is chosen here, not hardcoded, and it is PRINTED.
+    # Ontology-first with file-fallback by default; an explicit --from is never
+    # silently substituted (asking for quipu and getting a stale file without
+    # being told is how the file becomes the authority).
+    from . import hierarchy as hier_mod
     try:
-        agents = QuipuRegistry().all()
+        spec = getattr(a, "from_source", None)
+        # Inject cli's QuipuRegistry rather than letting hierarchy bind its own:
+        # the graph source stays patchable at ONE name (tests/test_project_guard
+        # monkeypatches `cli.QuipuRegistry`), and the seam stays injectable.
+        source, src_info = hier_mod.resolve(
+            spec, file_default=hier_mod.default_file(a.root),
+            quipu_factory=QuipuRegistry)
+        agents = source.all()
+    except ValueError as e:                      # a mistyped --from is usage, not outage
+        print(f"  {e}", file=sys.stderr)
+        return REFUSED
     except Exception as e:
-        print(f"  could not project: quipu unreachable: {e}", file=sys.stderr)
+        print(f"  could not project: {e}", file=sys.stderr)
         return CANNOT_TELL
+    print(f"  {src_info.render()}")
 
     # ZERO agents from a REACHABLE graph is almost never "no crew" — it is a
     # wrong namespace (SHANTY_ONTO_NS unset -> the library's example default,
@@ -2036,9 +2060,11 @@ def _cmd_project(a) -> int:
     # 0 cards match the graph. Nothing to do." — a false pass ellie documented
     # and aegis-wxrm asked to close. Could-not-tell, not success.
     if not agents:
-        print("  could not project: the graph answered but returned ZERO "
-              "CrewMembers — wrong namespace? (SHANTY_ONTO_NS is "
-              f"{'set' if os.environ.get('SHANTY_ONTO_NS') else 'UNSET — using the library example default'})",
+        ns_hint = ("" if src_info.kind != "quipu" else
+                   " — wrong namespace? (SHANTY_ONTO_NS is "
+                   f"{'set' if os.environ.get('SHANTY_ONTO_NS') else 'UNSET — using the library example default'})")
+        print(f"  could not project: {src_info.detail} answered but returned "
+              f"ZERO CrewMembers{ns_hint}",
               file=sys.stderr)
         return CANNOT_TELL
 
