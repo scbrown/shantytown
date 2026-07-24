@@ -49,6 +49,7 @@ from pathlib import Path
 
 from . import triage
 from . import workflow
+from .deployment import deployment_default
 from .events import FilesEvents, StopEvent
 from .inbox import is_message
 from .files import FilesRegistry, FilesTracker, plate as files_plate
@@ -144,6 +145,31 @@ def _my_context_k(reg: FilesRegistry, panes, me: str) -> float | None:
         return None
 
 
+def _plate_reader(root: Path):
+    """A plate reader for the DEPLOYMENT'S declared backend (SHANTY_BACKEND in
+    env.json/env), not a hardcoded one.
+
+    THE BUG THIS FIXES (aegis-tisp, here in the drain). A files-only reader on a
+    beads-backed fleet reads EVERY agent's plate empty — the files tracker
+    (root/items) has nothing, because the work lives in beads. `st anchor` hit
+    exactly this (blank status bar) and was fixed by resolving the backend; the
+    drain was not, so `classify()` saw every agent as IDLE-empty-plate and the
+    coordinator was told to "assign work" to agents already holding deep hauls,
+    every single stop. beads.plate() already puts OPEN-ASSIGNED (haul) items on
+    the plate, so reading the right backend makes a hauled agent read WORKING and
+    drop out of the PRIORITIZE list on its own — the same haul-awareness the
+    feed_check gate already has.
+
+    Unknown/unset backend falls back to files (the built-in default), matching
+    _backend()'s baseline; a beads repo comes from SHANTY_BEADS_REPO.
+    """
+    if (deployment_default(root, "SHANTY_BACKEND") or "files") == "beads":
+        from .beads import BeadsTracker, plate as beads_plate
+        tracker = BeadsTracker(repo=deployment_default(root, "SHANTY_BEADS_REPO"))
+        return lambda who: beads_plate(tracker, who)
+    return lambda who: files_plate(FilesTracker(root / "items"), who)
+
+
 def _plate_of(root: Path, me: str) -> tuple[str | None, str | None]:
     """What `me` held when it stopped: (item_id, status).
 
@@ -153,13 +179,12 @@ def _plate_of(root: Path, me: str) -> tuple[str | None, str | None]:
     as finished work — that is the whole aegis-mt0r lesson, and it is one `except`
     away from happening here.
 
-    Files backend only, deliberately: the emitted hook command carries no --backend
-    (test_role_emit pins it), so a beads path here would be a branch nothing can
-    reach. Never fatal — a stop event that cannot name an item is still worth far
-    more than no stop event.
+    Reads the DEPLOYMENT'S backend (via _plate_reader), not files unconditionally:
+    on a beads fleet a files-only read named no item for any stopped worker, so
+    every stop event said "empty plate" regardless of what the worker held.
     """
     try:
-        item = files_plate(FilesTracker(root / "items"), me)
+        item = _plate_reader(root)(me)
     except Exception:
         return None, "?"
     return (item.id, item.status) if item else (None, None)
@@ -571,7 +596,7 @@ def main(argv: list[str] | None = None) -> int:
     # with a prioritized workflow (a lead's/worker's is unaffected — the gate is
     # inside _compose_workflow). Ranker is opt-in: NullRanker (no backend, the
     # default) unless SHANTY_RANKER=policy asks for Hank/Quipu weighting.
-    plate = lambda who: files_plate(FilesTracker(root / "items"), who)  # noqa: E731
+    plate = _plate_reader(root)   # the DEPLOYMENT's backend, not files-only (aegis-tisp)
     rank = PolicyRanker() if os.environ.get("SHANTY_RANKER") == "policy" else NullRanker()
     return _drain(events, me, reg, panes, runtime.shows_ready_ui,
                   runtime.awaiting_answer, plate=plate, rank=rank)
