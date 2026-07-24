@@ -234,6 +234,52 @@ def _with_capture_hook(text: str, root) -> str:
     return json.dumps(cfg, indent=2) + "\n"
 
 
+def _with_untracked_hook(text: str, role: str, root) -> str:
+    """Inject the untracked-work PreToolUse nudge (aegis-fv2zc) — for NON-ADMIN
+    roles only.
+
+    WHY HERE, and not in --settings, is the SAME finding as _with_capture_hook
+    above, and it is the reason that one moved: this consent file is re-applied
+    on every launch, so it SELF-HEALS; `claude_settings_for_role` is emitted only
+    on `role set`, and 693024d's wiring proved a hook delivered that way never
+    collects fleet-wide because running agents never regenerate it. A governance
+    hook that reaches nobody is not a governance hook. Measured on this
+    deployment 2026-07-24: the capture hook delivered HERE is live in all 8
+    agents' workspaces and collecting, while the --settings files predate it.
+
+    ONE HOME, deliberately: Claude Code merges hooks from every settings source,
+    so wiring the same command in both places fires it TWICE per tool call —
+    double strikes, double warnings, and an escalation at half the threshold.
+
+    ADMIN EXEMPT structurally: an administrator's consent file never carries the
+    hook, so a coordinator cannot be warned for dispatching by a hook that does
+    not exist for it. untracked.check() re-checks the role anyway, for the window
+    where a promoted worker is still running its old settings.
+
+    APPENDS rather than assigns: a template that ships its own PreToolUse entries
+    keeps them. Idempotent even so — any previous untracked entry is dropped
+    first, so re-provisioning cannot stack them.
+
+    Never the reason provisioning fails: a non-JSON / non-dict template passes
+    through verbatim, exactly like the capture injector.
+    """
+    if role == "administrator":
+        return text
+    from .runtime import _untracked_hook  # lazy: provision<->runtime hygiene
+    try:
+        cfg = json.loads(text)
+    except ValueError:
+        return text
+    if not isinstance(cfg, dict):
+        return text
+    hooks = cfg.setdefault("hooks", {})
+    kept = [e for e in hooks.get("PreToolUse", [])
+            if not any("shantytown.untracked" in h.get("command", "")
+                       for h in e.get("hooks", []))]
+    hooks["PreToolUse"] = kept + [_untracked_hook(root)]
+    return json.dumps(cfg, indent=2) + "\n"
+
+
 def provision(card: Agent, root, *, secrets=None) -> list[str]:
     """Equip the agent's workspace. Returns the server names it can now reach.
 
@@ -274,7 +320,9 @@ def provision(card: Agent, root, *, secrets=None) -> list[str]:
         out.mkdir(parents=True, exist_ok=True)
         text = (render(consent.read_text(), {"SERVERS": ""}) if "${SERVERS}"
                 in consent.read_text() else consent.read_text())
-        final = _with_capture_hook(_consent_for_role(text, card.role), root)
+        final = _with_untracked_hook(
+            _with_capture_hook(_consent_for_role(text, card.role), root),
+            card.role, root)
         (out / CONSENT_TEMPLATE).write_text(final)
 
     got = servers_in(target)

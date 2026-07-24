@@ -25,7 +25,7 @@
 
 [![dispatch 3.4s](https://img.shields.io/badge/dispatch-3.4s-brightgreen)](#-measured-against-gas-town)
 [![19 commands](https://img.shields.io/badge/commands-19-blue)](#-the-whole-surface)
-[![tests](https://img.shields.io/badge/tests-764%20passing-blue)](#-principles)
+[![tests](https://img.shields.io/badge/tests-967%20passing-blue)](#-principles)
 [![python](https://img.shields.io/badge/python-3.11%2B-blue)](#-install)
 [![dependencies none](https://img.shields.io/badge/dependencies-none-blue)](#-install)
 [![license MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
