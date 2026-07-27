@@ -86,6 +86,38 @@ class Registry(Protocol):
     def get(self, name: str) -> Agent: ...
     def all(self) -> list[Agent]: ...
 
+    def empty_note(self) -> str | None:
+        """What an EMPTY `all()` means for this registry. None = it means exactly
+        "nobody exists". A string = "it might instead mean I looked in the wrong
+        place", and the string says where to look — it is rendered to the operator.
+
+        THIS EXISTS BECAUSE THE ANSWER IS NOT THE SAME FOR BOTH IMPLS, and the one
+        place that consumes it (roles.check) must stay registry-agnostic.
+
+        FilesRegistry already draws the line correctly and keeps it: an ABSENT
+        directory raises ("I could not look") while a PRESENT-but-empty one returns
+        [] ("nobody exists"). That reasoning is sound there because the directory IS
+        the whole search space — having read all of it and found nothing is a
+        complete observation.
+
+        It does not transfer to quipu, and applying it there is what made
+        `roles --check --registry quipu` print a clean bill of health for a crew of
+        twelve. A graph is never "absent", so there is no second signal to fall back
+        on; and which entities exist is selected by the ONTOLOGY NAMESPACE, which is
+        deployment config the client cannot validate. A well-formed query under the
+        wrong namespace is answered truthfully with zero rows. So for quipu, empty
+        conflates "nobody exists" with "I looked in the wrong place" and nothing
+        downstream can separate them.
+
+        THE DEFAULT IS FAIL-SAFE, and the direction is deliberate (the same
+        asymmetry argument QuipuRegistry makes about `crewStatus`): a registry that
+        does not implement this is treated as NOT vouching for its empty answer.
+        Forgetting to say "my empty is real" costs a loud `cannot tell`; forgetting
+        to say "my empty is suspect" costs a false clean bill of health, which is
+        the bug this whole method is here to prevent.
+        """
+        ...
+
 
 @runtime_checkable
 class Tracker(Protocol):

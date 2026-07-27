@@ -412,6 +412,34 @@ class QuipuRegistry:
         cannot be read — never returns `[]` on failure."""
         return derive_agents(self._query(self._ALL))
 
+    def empty_note(self) -> str | None:
+        """A graph CANNOT vouch for its own empty answer, so this never returns None.
+
+        Every other honesty guard in this client keys on the SERVER being wrong:
+        unreachable raises, a non-quipu answer raises QuipuNotQuipu, a refused query
+        raises QuipuQueryRejected. Zero rows slips past all three because none of
+        them is happening — the server is right, the query is well-formed, and an
+        empty result is the truthful answer to it.
+
+        What the guards cannot see is that the QUESTION may have been asked in the
+        wrong place. Which entities are typed `a:CrewMember` depends entirely on
+        `self.onto`, which is deployment config (resolve_onto). Under a namespace
+        holding none of this fleet's facts the query matches nothing, and there is
+        no "absent" state to fall back on the way FilesRegistry has one: a graph is
+        always present.
+
+        Measured on the live graph: 12 CrewMembers, and `all() -> []` under the
+        library's example namespace — reported by `roles --check` as "0 agents,
+        every one reports somewhere." at exit 0. Naming the namespace is the whole
+        value of this string: it is the one fact that distinguishes the two cases,
+        and the operator has to compare it against the one their facts are keyed
+        under, because nothing here can do it for them.
+        """
+        return (f"an empty crew from a REACHABLE graph is usually the wrong "
+                f"namespace, not an empty fleet: queried <{self.onto}> at "
+                f"{self.server}. Compare that against the namespace this fleet's "
+                f"facts are keyed under (SHANTY_ONTO_NS in <root>/env.json)")
+
     def get(self, name: str) -> Agent:
         """One agent by name. Raises `LookupError` if absent (a real answer),
         `QuipuUnreachable` if quipu can't be read (not an answer)."""

@@ -81,8 +81,16 @@ class Report:
                      f"  BLOCKED: {broken} agents' stop events go nowhere.")
         if unknown:
             # Never let this render as a pass. It is the reason exit 2 exists.
-            L.append(f"  COULD NOT TELL for {unknown}: a card or a hook file was "
-                     "unreadable. This is NOT a clean result.")
+            #
+            # It used to assert the CAUSE here — "a card or a hook file was
+            # unreadable" — which was already wrong for a dangling lead (nothing was
+            # unreadable; the registry answered fine) and is wrong again for an
+            # unvouched-for EMPTY registry. Guessing a cause in the summary is the
+            # small version of the same sin the rest of this module is about: every
+            # row already prints its own note, which is the measured reason. The
+            # summary's whole job is to refuse to be read as a pass.
+            L.append(f"  COULD NOT TELL for {unknown}. This is NOT a clean result "
+                     "— see the reason on each row above.")
         if not broken and not unknown:
             L.append(f"  {len(self.rows)} agents, every one reports somewhere.")
         return "\n".join(L)
@@ -196,6 +204,18 @@ def _hooks_verdict(a: Agent, agents: list[Agent], emitted) -> tuple[str, str]:
     return OK, ""
 
 
+def _no_empty_note() -> str:
+    """The fail-safe default for a registry that does not implement `empty_note`.
+
+    Returning a NOTE (not None) is the point: an unknown registry has not vouched
+    for its empty answer, so its empty answer is not trusted. See
+    Registry.empty_note for why the asymmetry runs this way.
+    """
+    return ("this registry does not say whether an empty answer means 'nobody "
+            "exists' or 'I looked in the wrong place', so it is not read as a "
+            "clean result")
+
+
 def check(registry: Registry, emitted=None, live=None) -> Report:
     """Verify the hierarchy. Never raises for a bad card — that is a verdict.
 
@@ -217,6 +237,31 @@ def check(registry: Registry, emitted=None, live=None) -> Report:
     except Exception as e:
         # The registry itself is unreachable. Not "everyone is fine".
         return Report([Row("(registry)", "—", None, CANNOT_TELL, str(e))])
+
+    # NOBODY IS NOT A CLEAN BILL OF HEALTH unless the registry vouches for it.
+    #
+    # An empty Report's verdict is OK, because "worst wins" over no rows is OK.
+    # That is the empty-Report false pass, and it survived here long after it was
+    # closed elsewhere: test_doctor.py's docstring already cites `roles --check`
+    # printing "0 agents, every one reports somewhere" and exiting 0 as the
+    # canonical example of a checker that can only report health. That instance was
+    # fixed in FilesRegistry.all (absent dir raises). This is the other one, and
+    # `--registry quipu` reached it: 12 real CrewMembers in the graph, zero rows
+    # back under a wrong namespace, exit 0.
+    #
+    # The verdict belongs to the REGISTRY, not here — see Registry.empty_note. For
+    # files, an empty answer is a complete observation and stays OK; for a graph it
+    # cannot be, and says so. This function stays registry-agnostic, which is the
+    # "quipu has not leaked into the core" guarantee.
+    #
+    # getattr, not a direct call: several tests hand this function a minimal
+    # duck-typed registry, and the fail-safe default belongs in ONE place. A
+    # registry that does not answer the question is not treated as having answered
+    # it "no".
+    if not agents:
+        note = getattr(registry, "empty_note", _no_empty_note)()
+        if note is not None:
+            return Report([Row("(registry)", "—", None, CANNOT_TELL, note)])
 
     known = {a.name for a in agents}
     rows: list[Row] = []
