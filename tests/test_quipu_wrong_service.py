@@ -46,7 +46,7 @@ import urllib.request
 
 import pytest
 
-from shantytown.protocols import EventsUnavailable
+from shantytown.protocols import Event, EventsUnavailable
 from shantytown.quipu import (
     QuipuNotQuipu,
     QuipuQueryRejected,
@@ -297,6 +297,125 @@ def test_events_still_reads_real_transactions(monkeypatch):
     )
     evs = QuipuEvents(server="http://test.invalid").transactions_since(0)
     assert [e.id for e in evs] == [7]
+
+
+# --- and so did assigned_workflows, the THIRD instance ----------------------
+#
+# Found by measurement AFTER the two above were fixed (internal-ref): the same
+# `body.get("rows", []) if isinstance(body, dict) else []` survived in
+# `assigned_workflows`, in this same file, under this same commit's subject. Two
+# of three is not a fix, it is a smaller version of the same bug — so these tests
+# exist to make the third one a REGRESSION rather than a rediscovery.
+#
+# It matters more than a duplicate normally would because of WHAT it claims. "the
+# graph assigns no workflows" is a statement ABOUT THE GRAPH, and `st subscribe`
+# acts on it by routing nothing. A subscriber pointed at a stranger would route
+# nothing forever and call each pass a success.
+
+
+def test_assigned_workflows_rejects_a_wrong_service_200(monkeypatch):
+    """THE THIRD INSTANCE. A 200 with no "rows" is not a graph that assigns no
+    workflows — it is not a graph. Before this it returned [], so `st subscribe`
+    routed nothing and reported it as a clean poll."""
+    monkeypatch.setattr("urllib.request.urlopen", _resp(b'{"status": "ok"}'))
+    with pytest.raises(EventsUnavailable) as ei:
+        QuipuEvents(server="http://test.invalid").assigned_workflows()
+    assert "QUIPU_SERVER" in str(ei.value)
+
+
+def test_assigned_workflows_rejects_a_non_dict_200(monkeypatch):
+    """The second route into the same silent empty: `isinstance(body, dict)` was
+    false, so an SPA's JSON or a bare list also became "no workflows"."""
+    monkeypatch.setattr("urllib.request.urlopen", _resp(b'["some", "ui"]'))
+    with pytest.raises(EventsUnavailable):
+        QuipuEvents(server="http://test.invalid").assigned_workflows()
+
+
+def test_assigned_workflows_rejects_a_404_query_endpoint(monkeypatch):
+    """The measured collision case on the POST surface: bobbin has no /query.
+    `_post` had no HTTPError arm before this branch, so this arrived as a plain
+    "unreachable" with no mention of the address that was actually wrong."""
+    monkeypatch.setattr("urllib.request.urlopen", _http_error(404))
+    with pytest.raises(EventsUnavailable) as ei:
+        QuipuEvents(server="http://test.invalid").assigned_workflows()
+    assert "QUIPU_SERVER" in str(ei.value)
+
+
+def test_assigned_workflows_keeps_a_genuinely_empty_assignment(monkeypatch):
+    """A real quipu with no Policy assigning anything answers `rows: []`. That is
+    a REAL finding — routing nothing IS correct — and must stay []."""
+    monkeypatch.setattr("urllib.request.urlopen", _resp(b'{"count": 0, "rows": []}'))
+    assert QuipuEvents(server="http://test.invalid").assigned_workflows() == []
+
+
+def test_assigned_workflows_still_reads_real_workflows(monkeypatch):
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        _resp(
+            json.dumps(
+                {
+                    "count": 1,
+                    "rows": [
+                        {
+                            "wf": "http://aegis.gastown.local/ontology/rotate_keys",
+                            "label": "Rotate keys",
+                            "target": "administrator",
+                        }
+                    ],
+                }
+            ).encode()
+        ),
+    )
+    wfs = QuipuEvents(server="http://test.invalid").assigned_workflows()
+    assert [(w.iri, w.label, w.target) for w in wfs] == [
+        ("rotate_keys", "Rotate keys", "administrator")
+    ]
+
+
+def test_a_query_rejection_on_the_events_surface_carries_the_ENGINE_message(
+    monkeypatch,
+):
+    """Symmetry with `quipu._query`. A 4xx that is ABOUT the query must arrive
+    with quipu's own explanation, not just a bare status — the reason is the only
+    part of a rejection anyone can act on, and the registry client has always
+    surfaced it."""
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        _http_error(400, '{"error": "unsupported FILTER expression"}', "Bad Request"),
+    )
+    with pytest.raises(EventsUnavailable) as ei:
+        QuipuEvents(server="http://test.invalid").assigned_workflows()
+    assert "unsupported FILTER expression" in str(ei.value)
+    # ...and NOT re-labelled wrong-service: a quipu with an opinion is a quipu.
+    assert "QUIPU_SERVER" not in str(ei.value)
+
+
+def test_a_subscriber_pointed_at_a_STRANGER_reports_cannot_tell_not_idle(monkeypatch):
+    """The whole point, at the level `st subscribe` prints. Transactions arrive
+    (so we are past the quiet-graph shortcut), the assignment query hits a
+    non-quipu, and the poll must come back CANNOT TELL with the watermark HELD —
+    never `idle`, and never an advanced watermark that skips a batch nobody
+    routed."""
+    from shantytown.quipu_events import SubscriptionState, poll_and_route
+
+    class _Stranger:
+        def transactions_since(self, since, limit=1000):
+            return [Event(id=9, actor="a", source="episode:x", timestamp="t")]
+
+        def assigned_workflows(self):
+            raise EventsUnavailable(
+                "http://test.invalid/query answered, but not like quipu. "
+                "Check QUIPU_SERVER"
+            )
+
+    state = SubscriptionState(watermark=4)
+    routed: list = []
+    report = poll_and_route(_Stranger(), state, routed.append)
+    assert report.verdict == "cannot tell"
+    assert routed == []
+    assert state.watermark == 4  # HELD — the batch is retried, not dropped
+    assert "QUIPU_SERVER" in report.detail
+    assert "CANNOT TELL" in report.render()
 
 
 # --- where the address comes from ------------------------------------------

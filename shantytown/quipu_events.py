@@ -22,8 +22,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Iterator
 
-from .quipu import (_ENDPOINT_MISSING, _body_shape, not_quipu, request_headers,
-                    resolve_server)
+from .quipu import (_ENDPOINT_MISSING, _body_shape, _http_error_detail,
+                    not_quipu, request_headers, resolve_server)
 from .protocols import Event, EventsUnavailable
 
 
@@ -52,7 +52,13 @@ def _http_detail(server: str, path: str, e) -> str:
     that answered badly. Shared by _get and _post so they cannot disagree."""
     if e.code in _ENDPOINT_MISSING:
         return not_quipu(server, path.split("?")[0], f"HTTP {e.code}")
-    return f"quipu at {server} refused {path}: HTTP {e.code}"
+    # Not the address, then — a quipu that answered badly, and its OWN message is
+    # the only actionable part ("unsupported FILTER expression: ..."). `_query`
+    # has always surfaced it through this very helper; this surface reported a
+    # bare status, so an events-side query rejection handed the operator a number
+    # and nothing they could act on.
+    return (f"quipu at {server} refused {path}: HTTP {e.code}: "
+            f"{_http_error_detail(e)}")
 
 
 class QuipuEvents:
@@ -118,9 +124,32 @@ class QuipuEvents:
                 for t in rows]
 
     def assigned_workflows(self) -> list[Workflow]:
-        """The governed workflows the graph currently assigns. Raises on unreachable."""
+        """The governed workflows the graph currently assigns. Raises on unreachable.
+
+        THE THIRD INSTANCE of the same defect (internal-ref). `transactions_since`
+        above and `quipu._query` both stopped turning a stranger's 200 into zero
+        rows; this method, in this same file under the same commit's subject, kept
+        the line verbatim:
+
+            rows = body.get("rows", []) if isinstance(body, dict) else []
+
+        "the graph assigns no workflows" is a claim ABOUT THE GRAPH, and it must
+        not be available to a client that never reached one. `poll_and_route` acts
+        on the claim by routing nothing — and because it ADVANCES THE WATERMARK on
+        the way past, a subscriber pointed at a stranger routed nothing while
+        marking each batch handled: silent, permanent, and reported as success.
+        Absence of the key is a diagnosis, not a default.
+        """
         body = self._post("/query", {"query": _WORKFLOWS_SPARQL})
-        rows = body.get("rows", []) if isinstance(body, dict) else []
+        if not isinstance(body, dict) or "rows" not in body:
+            raise EventsUnavailable(not_quipu(
+                self.server, "/query",
+                f'a 200 with no "rows" key ({_body_shape(body)})'))
+        rows = body["rows"]
+        if not isinstance(rows, list):
+            raise EventsUnavailable(not_quipu(
+                self.server, "/query",
+                f'"rows" is a {type(rows).__name__}, not a list'))
         out: list[Workflow] = []
         for row in rows:
             iri = _local(str(row.get("wf", "")))
