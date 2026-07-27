@@ -37,14 +37,18 @@ def crew(tmp_path: Path, **agents) -> Path:
 def graph(monkeypatch, *agents):
     """Point `project` at a fake graph. Read-only, so a stub registry is enough."""
     class FakeQuipu:
-        def __init__(self, server=None, timeout=5.0, root=None):
+        def __init__(self, server=None, timeout=5.0, root=None, onto=None):
             # Mirrors the real constructor: the CLI now passes `root=` so the
-            # graph's address comes from the deployment's env.json rather than the
-            # ambient env. A double whose signature drifts from the class it
-            # stands in for turns one wiring change into seven unrelated
-            # failures — and `project`'s broad `except Exception` reported the
-            # resulting TypeError as "could not project", i.e. a backend outage.
+            # graph's address AND its namespace come from the deployment's
+            # env.json rather than the ambient env. A double whose signature
+            # drifts from the class it stands in for turns one wiring change into
+            # seven unrelated failures — and `project`'s broad `except Exception`
+            # reported the resulting TypeError as "could not project", i.e. a
+            # backend outage.
             self.server, self.root = server, root
+            # `.onto` is READ, not merely stored: the zero-crew diagnosis prints
+            # the namespace it actually queried (see cli._cmd_project).
+            self.onto = onto or "https://test.invalid/ontology#"
 
         def all(self):
             return list(agents)
@@ -176,3 +180,9 @@ def test_zero_agents_from_a_reachable_graph_is_could_not_tell(tmp_path, monkeypa
     err = capsys.readouterr().err
     assert rc == cli.CANNOT_TELL
     assert "ZERO CrewMembers" in err and "namespace" in err
+    # And it NAMES the namespace it queried. This used to report whether
+    # $SHANTY_ONTO_NS was set, which says nothing useful now that env.json outranks
+    # the ambient env (quipu.resolve_onto): "set" got printed for an exported value
+    # env.json had overridden, and "UNSET" for a deployment that had declared it in
+    # the correct place. The resolved IRI is the fact an operator can act on.
+    assert "<https://test.invalid/ontology#>" in err

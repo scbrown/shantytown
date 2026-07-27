@@ -87,13 +87,6 @@ def _token_from_file() -> str:
     except OSError:
         return ""
 
-# The ontology IRI base. THIS IS DATA IDENTITY, NOT COSMETICS: every triple in a
-# graph is keyed under it, so a deployment that changes this value stops joining
-# its own existing facts — new entities land beside the old ones instead of on
-# them, and nothing errors. Set SHANTY_ONTO_NS once, per graph, and never again.
-# Read at import time because the SPARQL below is built at class-definition time.
-ONTO = os.environ.get("SHANTY_ONTO_NS") or "http://shantytown.example/ontology/"
-
 
 class QuipuUnreachable(Exception):
     """quipu could not be reached or returned an error. NOT 'nobody exists' —
@@ -162,6 +155,22 @@ class QuipuQueryRejected(Exception):
 # the guess lands on a stranger. See that class: bobbin defaults to 3030 too.
 DEFAULT_SERVER = "http://localhost:3030"
 
+# The ontology IRI base — DATA IDENTITY, NOT COSMETICS. Every triple in a graph is
+# keyed under it, so a client using the wrong one stops joining the deployment's
+# existing facts: reads match nothing and writes land BESIDE the real entities
+# instead of on them, and nothing errors either way. Set SHANTY_ONTO_NS once, per
+# graph, and never again.
+#
+# The default is a documentation namespace, because a public repo carries no
+# deployment's identity. Note what that makes it: unlike DEFAULT_SERVER, this guess
+# is NOT made safe by detection. A wrong ADDRESS either fails to answer or answers
+# unlike a quipu, and QuipuNotQuipu names the remedy. A wrong NAMESPACE is answered
+# by the REAL quipu, correctly, with zero rows — there is no wrong service to
+# detect, and "nobody exists" is a truthful reply to a query about a namespace
+# holding nothing. Resolution (resolve_onto) is therefore the WHOLE of the safety
+# here, not half of it.
+DEFAULT_ONTO = "http://shantytown.example/ontology/"
+
 # Statuses meaning "this server has no such endpoint" rather than "your request
 # was bad". That distinction IS the diagnosis: 404/405 on /query says the thing
 # you are talking to has never heard of SPARQL, while 400/401/500 say you reached
@@ -185,6 +194,43 @@ def resolve_server(server: str | None = None, root=None) -> str:
     """
     from .runtime import deployment_default   # local: keeps this client's imports flat
     return server or deployment_default("QUIPU_SERVER", root) or DEFAULT_SERVER
+
+
+def resolve_onto(onto: str | None = None, root=None) -> str:
+    """The ontology namespace, in the same order and out of the same file as the
+    address — so "where deployment config lives" keeps having ONE answer.
+
+        explicit arg  ->  <root>/env.json  ->  $SHANTY_ONTO_NS  ->  DEFAULT_ONTO
+
+    THIS USED TO BE A MODULE-LEVEL CONSTANT, read once at import from the ambient
+    environment only — sitting a few lines above `resolve_server` and left behind
+    when that grew its env.json reader. So a deployment could write SHANTY_ONTO_NS
+    into the very same env.json the address now comes from and the clients would
+    not see it, while the invocations least likely to have inherited the variable
+    are the usual suspects: a cron entry, a hook the harness re-exec'd outside the
+    settings env, a bare `st` from a non-crew shell.
+
+    And this one fails SILENTLY where the address bug at least fell over. Falling
+    back to DEFAULT_ONTO means asking the REAL graph for
+    `<http://shantytown.example/ontology/CrewMember>`, which nothing in any real
+    fleet is typed as — so quipu answers `{"rows": []}`, honestly, and `all()`
+    reports "nobody exists" at exit 0. `QuipuNotQuipu` cannot help here: the server
+    was right, the query was well-formed, and zero rows is a truthful answer to it.
+    Measured on this fleet's graph before the fix: 12 CrewMembers, `all() -> []`.
+    See DEFAULT_ONTO.
+
+    Resolved PER CLIENT rather than per interpreter, which is the property a
+    constant cannot have: `st` is a library as well as a CLI, so a process-wide
+    namespace means the SECOND workspace a process touches gets read under the
+    FIRST one's identity.
+
+    The value is carried VERBATIM — no separator appended, trimmed or normalised.
+    Hash (`…/ontology#`) and slash (`…/ontology/`) namespaces are both legal RDF,
+    a real deployment uses the hash form, and "helpfully" repairing a namespace is
+    itself a way to stop joining the facts you were pointed at.
+    """
+    from .runtime import deployment_default   # local: keeps this client's imports flat
+    return onto or deployment_default("SHANTY_ONTO_NS", root) or DEFAULT_ONTO
 
 
 def _body_shape(body) -> str:
@@ -269,19 +315,34 @@ class QuipuRegistry:
     to this query against a real quipu before shipping it.
     """
 
-    _ALL = (
-        f"PREFIX a: <{ONTO}> "
+    # The query BODY, namespace-free. Split from its PREFIX because the prefix is
+    # DEPLOYMENT CONFIG while the body is this class's hard-won contract with the
+    # engine: gluing them into one f-string at class-definition time is exactly what
+    # froze the namespace at import (see resolve_onto). The body is still ONE
+    # definition, verbatim — the warning above about editing it stands unchanged.
+    _ALL_BODY = (
         "SELECT ?s ?rt WHERE { ?s a a:CrewMember . "
         "OPTIONAL { ?s a:crewStatus ?cs } FILTER(!bound(?cs)) "
         "OPTIONAL { ?s a:reports_to ?rt } }"
     )
 
-    def __init__(self, server: str | None = None, timeout: float = 5.0, root=None):
+    def __init__(self, server: str | None = None, timeout: float = 5.0, root=None,
+                 onto: str | None = None):
         # QUIPU_SERVER is the variable the crew hooks already use, and env.json is
         # where the deployment writes it down so it survives a shell that exported
         # nothing. ONE resolver, shared with QuipuEvents — see resolve_server.
         self.server = resolve_server(server, root).rstrip("/")
+        # WHICH graph, on the same footing as WHERE it is. Both halves of "who am I
+        # talking to" now come out of the same env.json, because getting either one
+        # wrong produces the same user-visible outcome — an empty crew — and only
+        # one of the two used to be configurable per deployment.
+        self.onto = resolve_onto(onto, root)
         self.timeout = timeout
+
+    @property
+    def _ALL(self) -> str:
+        """The crew query, prefixed with THIS client's resolved namespace."""
+        return f"PREFIX a: <{self.onto}> " + self._ALL_BODY
 
     def _query(self, sparql: str) -> list[dict]:
         """POST a SPARQL query; return its rows.
@@ -412,7 +473,7 @@ class QuipuRegistry:
                     f"refused: {agent.name} -> {agent.reports_to} closes a reporting cycle"
                 )
             triples.append(f"a:{agent.name} a:reports_to a:{agent.reports_to} .")
-        turtle = (f"@prefix a: <{ONTO}> .\n"
+        turtle = (f"@prefix a: <{self.onto}> .\n"
                   '@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n'
                   + "\n".join(triples) + "\n")
         self._knot(turtle)
@@ -423,9 +484,9 @@ class QuipuRegistry:
         req = urllib.request.Request(
             self.server + "/retract",
             data=json.dumps({
-                "entity": ONTO + subject,
-                "predicate": ONTO + predicate,
-                "value": ONTO + obj,
+                "entity": self.onto + subject,
+                "predicate": self.onto + predicate,
+                "value": self.onto + obj,
             }).encode(),
             headers=request_headers(),
         )

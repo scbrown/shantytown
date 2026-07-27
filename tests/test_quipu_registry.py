@@ -10,15 +10,25 @@ import pytest
 
 from shantytown import roles
 from shantytown.protocols import Agent, Registry
-from shantytown.quipu import ONTO, QuipuRegistry, QuipuUnreachable, derive_agents
+from shantytown.quipu import QuipuRegistry, QuipuUnreachable, derive_agents
+
+# PINNED, not read from the module or from the environment. This fixture used to
+# build its IRIs from `quipu.ONTO`, on the reasoning that the namespace should have
+# ONE definition — but that made the test's INPUT deployment config, and the
+# projection it asserts on cannot survive an arbitrary namespace: `_local` splits on
+# "/", so a hash namespace (`…/ontology#hammond`, the form a real deployment uses)
+# projects to "ontology#hammond" and every assertion below KeyErrors. A test whose
+# fixture is deployment config fails on someone's laptop for reasons that have
+# nothing to do with the code under test.
+#
+# Where the namespace comes FROM is now its own concern, tested against the resolver
+# in test_quipu_onto_ns.py rather than inferred from a fixture here.
+ONTO = "https://test.invalid/ontology/"
 
 # A small hierarchy: hammond is the root (has reports, no lead) = administrator;
 # ian has both a lead and a report = lead; malcolm is a leaf = worker; mayor has
 # neither = orphan (no lead, not administrator).
 FIXTURE = [
-    # Built from the module's own ONTO so the namespace has ONE definition. A
-    # second hardcoded copy here would keep passing after a deployment repointed
-    # SHANTY_ONTO_NS, which is the fragmentation this constant exists to control.
     {"s": f"{ONTO}{n}", **({"rt": f"{ONTO}{l}"} if l else {})}
     for n, l in [
         ("hammond", None),
@@ -31,7 +41,7 @@ FIXTURE = [
 
 
 def _reg(rows):
-    r = QuipuRegistry(server="http://test.invalid")
+    r = QuipuRegistry(server="http://test.invalid", onto=ONTO)
     r._query = lambda sparql: rows  # inject fixture rows, no HTTP
     return r
 

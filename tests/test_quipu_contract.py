@@ -32,9 +32,19 @@ label-less write as `conforms:true`; the CrewMember SHACL shape is evidently not
 enforced there. The retract no-op (internal-ref) DOES reproduce here. So the discriminator
 is the write-actually-landed check, which is server-independent, not the label.)
 
-Writes land under the registry's default namespace `http://shantytown.example/…`,
-which holds NO real crew (verified — the live crew is under aegis.gastown.local),
-under pid-unique names, and every entity is entity-retracted in teardown.
+Writes land under `DEFAULT_ONTO` (`http://shantytown.example/…`), which holds NO
+real crew — verified: a real fleet's crew lives under the namespace that fleet
+declares in its own env.json — under pid-unique names, and every entity is
+entity-retracted in teardown.
+
+THE SANDBOX NAMESPACE IS PASSED EXPLICITLY, and that is load-bearing rather than
+tidy. It used to be inherited by being the module default, which stopped being safe
+the moment the namespace became deployment-resolved (quipu.resolve_onto): run these
+tests from a workspace with an env.json — i.e. from a real deployment, which is
+exactly where a reachable QUIPU_CONTRACT_SERVER exists — and every write below
+would land in that fleet's LIVE identity namespace instead, under a name
+`derive_agents` would then project into its crew. Pinning it keeps "this test
+cannot touch real crew" a property of the test rather than of the caller's cwd.
 """
 from __future__ import annotations
 
@@ -45,7 +55,11 @@ import urllib.request
 import pytest
 
 from shantytown.protocols import Agent
-from shantytown.quipu import ONTO, QuipuRegistry, QuipuWriteRejected
+from shantytown.quipu import DEFAULT_ONTO, QuipuRegistry, QuipuWriteRejected
+
+# The sandbox namespace, named once. Per the module docstring this must NOT be
+# whatever resolve_onto would pick up from the cwd's env.json.
+ONTO = DEFAULT_ONTO
 
 _SERVER = os.environ.get("QUIPU_CONTRACT_SERVER")
 
@@ -77,7 +91,7 @@ def reg():
     entity the test created. Names are pid-unique so concurrent runs never collide
     and a failed cleanup can never touch a real name."""
     created: list[str] = []
-    registry = QuipuRegistry(server=_SERVER)
+    registry = QuipuRegistry(server=_SERVER, onto=ONTO)
 
     def track(name: str) -> str:
         created.append(name)

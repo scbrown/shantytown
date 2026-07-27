@@ -1998,8 +1998,9 @@ def _cmd_project(a) -> int:
     right, and a projection that cannot be previewed is a footgun regardless of
     which side of the divergence is correct.
     """
+    registry = QuipuRegistry(root=getattr(a, "root", None))
     try:
-        agents = QuipuRegistry(root=getattr(a, "root", None)).all()
+        agents = registry.all()
     except Exception as e:
         # The message carries the diagnosis now (wrong service vs unreachable vs
         # rejected query), so a fixed "unreachable:" prefix would contradict it.
@@ -2007,16 +2008,24 @@ def _cmd_project(a) -> int:
         return CANNOT_TELL
 
     # ZERO agents from a REACHABLE graph is almost never "no crew" — it is a
-    # wrong namespace (SHANTY_ONTO_NS unset -> the library's example default,
-    # which holds none of any real fleet's facts) answering "nobody exists"
-    # with a straight face. This used to fall through to "already projected:
-    # 0 cards match the graph. Nothing to do." — a false pass ellie documented
-    # and internal-ref asked to close. Could-not-tell, not success.
+    # wrong namespace (resolve_onto falling through to the library's example
+    # default, which holds none of any real fleet's facts) answering "nobody
+    # exists" with a straight face. This used to fall through to "already
+    # projected: 0 cards match the graph. Nothing to do." — a false pass ellie
+    # documented and internal-ref asked to close. Could-not-tell, not success.
+    #
+    # PRINT THE NAMESPACE, not whether an env var is set. This message used to read
+    # `SHANTY_ONTO_NS is {'set' if os.environ.get(...)}`, which is now two kinds of
+    # wrong: it says UNSET for a deployment that declared the value in env.json —
+    # where it BELONGS, since resolve_onto prefers it — and it says "set" for an
+    # exported value that env.json then overrode, which is precisely the case where
+    # the operator needs to be told WHICH of the two won. The resolved IRI is the
+    # only fact worth printing: it is what was actually queried.
     if not agents:
         print("  could not project: the graph answered but returned ZERO "
-              "CrewMembers — wrong namespace? (SHANTY_ONTO_NS is "
-              f"{'set' if os.environ.get('SHANTY_ONTO_NS') else 'UNSET — using the library example default'})",
-              file=sys.stderr)
+              f"CrewMembers — wrong namespace? Queried <{registry.onto}> "
+              "(set SHANTY_ONTO_NS in <root>/env.json to the namespace this "
+              "fleet's facts are keyed under)", file=sys.stderr)
         return CANNOT_TELL
 
     files = FilesRegistry(a.root / "crew")

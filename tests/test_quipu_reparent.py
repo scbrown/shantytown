@@ -16,7 +16,12 @@ import pytest
 
 from shantytown.protocols import Agent
 import json
-from shantytown.quipu import QuipuRegistry, QuipuWriteRejected, ONTO
+from shantytown.quipu import QuipuRegistry, QuipuWriteRejected
+
+# Pinned like the server below, and for the same reason: these tests are about the
+# retract DECISION and the response HANDLING, so neither may pick a namespace up
+# from whatever deployment the suite happens to run beside.
+ONTO = "https://test.invalid/ontology/"
 
 
 class Recorder(QuipuRegistry):
@@ -25,6 +30,9 @@ class Recorder(QuipuRegistry):
     decision is the thing being pinned, not the HTTP."""
 
     def __init__(self, agents):
+        # No super().__init__: this subclass replaces every I/O path. The namespace
+        # is still needed, because set() builds its turtle prefix out of it.
+        self.onto = ONTO
         self._agents = list(agents)
         self.knots: list[str] = []
         self.retracts: list[tuple[str, str, str]] = []
@@ -110,6 +118,8 @@ class Raw(QuipuRegistry):
     def __init__(self, body):
         self._body = body
         self.server = "http://graph.test"
+        # _retract addresses its triple by ABSOLUTE IRI, so it needs a namespace.
+        self.onto = ONTO
         self.timeout = 5
 
 

@@ -15,7 +15,23 @@ import json
 
 import pytest
 
-from shantytown.runtime import claude_settings_for_role
+from shantytown.runtime import _CARRIED_ENV, claude_settings_for_role
+
+
+@pytest.fixture
+def unconfigured(monkeypatch):
+    """No carried deployment config in the ambient environment.
+
+    Iterates `_CARRIED_ENV` rather than naming keys, because naming them is how this
+    broke twice: the "absent config -> absent key" tests hand-listed QUIPU_SERVER
+    and SHANTY_ONTO_NS and were then failed on a healthy tree by
+    SHANTY_CANONICAL_SOURCE — a third carried name, added later, which every crew
+    shell here exports. A test that asserts on "unconfigured" has to derive what
+    that MEANS from the same list the emitter reads, or the next carried name
+    breaks it again.
+    """
+    for key in _CARRIED_ENV:
+        monkeypatch.delenv(key, raising=False)
 
 
 def test_carries_deployment_env_from_root_config(tmp_path):
@@ -58,27 +74,19 @@ def test_root_config_wins_over_ambient(tmp_path, monkeypatch):
     assert env["QUIPU_SERVER"] == "http://deployed.example"
 
 
-def test_omits_the_key_entirely_when_unconfigured(tmp_path, monkeypatch):
+def test_omits_the_key_entirely_when_unconfigured(tmp_path, unconfigured):
     """The one thing worse than dropping the config is writing a plausible
     placeholder into a live settings file. Absent config -> absent key, so the
     library default applies and nothing pretends to be configured."""
-    monkeypatch.delenv("QUIPU_SERVER", raising=False)
-    monkeypatch.delenv("SHANTY_ONTO_NS", raising=False)
-
     env = claude_settings_for_role("worker", root=tmp_path)["env"]
 
-    assert "QUIPU_SERVER" not in env and "SHANTY_ONTO_NS" not in env
+    assert not any(key in env for key in _CARRIED_ENV)
     assert env == {"BOBBIN_ROLE": "worker"}
 
 
-def test_unreadable_env_json_does_not_crash_the_emit(tmp_path, monkeypatch):
+def test_unreadable_env_json_does_not_crash_the_emit(tmp_path, unconfigured):
     """A corrupt deployment config must not take the launcher down with it — the
     settings still emit, just without the carry."""
-    monkeypatch.delenv("QUIPU_SERVER", raising=False)
-    # BOTH carried names, not just one: a deployment shell that exports
-    # SHANTY_ONTO_NS (every crew session here does) leaked into the ambient
-    # fallback and failed this test on a healthy tree.
-    monkeypatch.delenv("SHANTY_ONTO_NS", raising=False)
     (tmp_path / "env.json").write_text("{ not json")
 
     env = claude_settings_for_role("worker", root=tmp_path)["env"]

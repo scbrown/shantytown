@@ -25,7 +25,7 @@
 
 [![dispatch 3.4s](https://img.shields.io/badge/dispatch-3.4s-brightgreen)](#-measured-against-gas-town)
 [![19 commands](https://img.shields.io/badge/commands-19-blue)](#-the-whole-surface)
-[![tests](https://img.shields.io/badge/tests-764%20passing-blue)](#-principles)
+[![tests](https://img.shields.io/badge/tests-956%20passing-blue)](#-principles)
 [![python](https://img.shields.io/badge/python-3.11%2B-blue)](#-install)
 [![dependencies none](https://img.shields.io/badge/dependencies-none-blue)](#-install)
 [![license MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
@@ -329,7 +329,7 @@ set to run the harness on the files tracker.
 | `SHANTY_STALL_MIN` | minutes an idle worker may hold an in_progress item with zero pane/item/shell change before tend flags it STALLED to the coordinator. Default 15 — ~30 consecutive unchanged 30s passes: far above prompt-render lag, far below the measured hours-long parked failure. | `15` |
 | `SHANTY_DARK_AGENTS` | names (space/comma-separated) Rule Zero and tend must never count feedable — panes another orchestrator keeps respawning with this deployment's worker settings, which carry the stop-event wiring but route nothing here. The launch-stamp ownership gate excludes unstamped agents structurally; this list is the explicit override/belt for named ghosts. | the gastown-dark crew |
 | `QUIPU_SERVER` | quipu, for `--registry quipu`, `st project`, or `st subscribe`. **Declare it in `<root>/env.json`, not just your shell** — that is the only source a cron entry or a re-exec'd hook still sees, and the default below is quipu-server's own, which [bobbin also defaults to](#quipu_server-and-the-3030-collision). | `http://localhost:3030` |
-| `SHANTY_ONTO_NS` | the ontology IRI base your graph is keyed under | `http://shantytown.example/ontology/` |
+| `SHANTY_ONTO_NS` | the ontology IRI base your graph is keyed under. **Declare it in `<root>/env.json` beside `QUIPU_SERVER`** — same resolution order, same reason, and see the warning below for why getting this one wrong is quieter than getting the address wrong. | `http://shantytown.example/ontology/` |
 | `BOBBIN_SERVER` | bobbin, for `st context` | `http://localhost:8080` |
 | `SHANTY_RANKER` | `policy` to weight the admin workflow by Hank blast radius; else rule-based | — |
 | `SHANTY_FORGEJO_URL` | a self-hosted forge: `st doctor`'s release checks, and the base URL for `--backend forgejo` (issues as work items; pair with `SHANTY_FORGEJO_TOKEN` and `--repo owner/name`) | `http://localhost:3000` |
@@ -340,6 +340,21 @@ set to run the harness on the files tracker.
 ⚠️ **`SHANTY_ONTO_NS` is data identity, not cosmetics.** Every triple in a graph is keyed under it.
 Pick one per graph, set it before the first write, and never change it — repointing it does not
 error, it just stops new facts from joining the old ones.
+
+Resolution order is the same as the address: **explicit argument → `<root>/env.json` →
+`$SHANTY_ONTO_NS` → the default above** — and declaring it in `env.json` matters *more* here,
+because a wrong namespace is the quieter of the two failures:
+
+| wrong | what happens | how you find out |
+|---|---|---|
+| address | nothing answers, or something answers unlike quipu | `QuipuUnreachable` / `QuipuNotQuipu`, exit 2, naming `QUIPU_SERVER` |
+| namespace | the **real** quipu answers your well-formed query with zero rows | it doesn't. "Nobody exists", exit 0 |
+
+There is no wrong-service signal to catch in the second row, because there is no wrong service:
+nothing in your graph is typed `<http://shantytown.example/ontology/CrewMember>`, so an empty
+answer is the truthful one. `st project` is the one caller that refuses to accept it — zero
+CrewMembers from a reachable graph is `CANNOT_TELL`, and the message prints the namespace it
+actually queried, so you can compare it against the one your facts are keyed under.
 
 ### `QUIPU_SERVER` and the 3030 collision
 

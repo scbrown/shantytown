@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Callable, Iterator
 
 from .quipu import (_ENDPOINT_MISSING, _body_shape, not_quipu, request_headers,
-                    resolve_server)
+                    resolve_onto, resolve_server)
 from .protocols import Event, EventsUnavailable
 
 
@@ -37,13 +37,23 @@ class Workflow:
 
 # Which governed workflows does the graph currently assign? One SPARQL, so the
 # subscriber borrows the record and never re-derives it.
-_WORKFLOWS_SPARQL = (
-    "PREFIX aegis: <http://aegis.gastown.local/ontology/> "
-    "PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#> "
-    "SELECT ?wf ?label ?target WHERE { "
-    "?policy a aegis:Policy ; aegis:assignsWorkflow ?wf ; aegis:targets ?target . "
-    "OPTIONAL { ?wf rdfs:label ?label } }"
-)
+#
+# THE NAMESPACE IS A PARAMETER, not a literal. This query used to open with one
+# deployment's ontology IRI hardcoded, which was two faults with one cause: it was
+# unconfigurable (no other deployment could ever match a row), and it was an
+# internal hostname sitting in a LIVE STRING LITERAL in a public repo — one the
+# scrub ratchet happens not to catch, because its internal-hostname pattern covers
+# `.lan` and `.svc` and that name ended in `.local`. The cause of both: this client
+# was never wired to SHANTY_ONTO_NS at all, where the registry at least read it
+# once at import (quipu.resolve_onto).
+def _workflows_sparql(onto: str) -> str:
+    return (
+        f"PREFIX aegis: <{onto}> "
+        "PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#> "
+        "SELECT ?wf ?label ?target WHERE { "
+        "?policy a aegis:Policy ; aegis:assignsWorkflow ?wf ; aegis:targets ?target . "
+        "OPTIONAL { ?wf rdfs:label ?label } }"
+    )
 
 
 def _http_detail(server: str, path: str, e) -> str:
@@ -59,13 +69,19 @@ class QuipuEvents:
     """EventSource over Quipu's cursored transaction log. Read-only; the two HTTP
     methods are the only seam tests override (mirrors test_reactor's _Fake)."""
 
-    def __init__(self, server: str | None = None, timeout: float = 5.0, root=None):
+    def __init__(self, server: str | None = None, timeout: float = 5.0, root=None,
+                 onto: str | None = None):
         # localhost, NOT an internal hostname: this repo is public, and a real
         # deployment's address is deployment config, never a default baked into
         # source. ONE resolver shared with quipu.py (env.json, then $QUIPU_SERVER,
         # then quipu's own default), so the two clients cannot end up pointed at
         # different servers from the same deployment.
         self.server = resolve_server(server, root).rstrip("/")
+        # ...and the same for WHICH graph, for the same reason and out of the same
+        # file. This client had no namespace resolution at all: it carried one
+        # deployment's ontology IRI as a literal, so the two clients could not even
+        # DISAGREE about the namespace — only one of them had ever been asked.
+        self.onto = resolve_onto(onto, root)
         self.timeout = timeout
 
     def _get(self, path: str) -> dict:
@@ -119,7 +135,7 @@ class QuipuEvents:
 
     def assigned_workflows(self) -> list[Workflow]:
         """The governed workflows the graph currently assigns. Raises on unreachable."""
-        body = self._post("/query", {"query": _WORKFLOWS_SPARQL})
+        body = self._post("/query", {"query": _workflows_sparql(self.onto)})
         rows = body.get("rows", []) if isinstance(body, dict) else []
         out: list[Workflow] = []
         for row in rows:
