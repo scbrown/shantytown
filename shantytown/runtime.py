@@ -479,7 +479,22 @@ def deployment_json(root=None) -> dict:
         loaded = json.loads((Path(root) / "env.json").read_text())
     except (OSError, ValueError):
         return {}
-    return {k: str(v) for k, v in loaded.items()} if isinstance(loaded, dict) else {}
+    if not isinstance(loaded, dict):
+        return {}
+    # A NULL OR NON-SCALAR VALUE IS "SAID NOTHING", not a value. Blanket `str(v)`
+    # turned `{"QUIPU_SERVER": null}` into the STRING "None" — truthy, so it beat
+    # both $QUIPU_SERVER and the default, and the client tried to reach
+    # `None/query`. MEASURED: with a working QUIPU_SERVER exported, that reported
+    # `CANNOT TELL: unknown url type: 'None/query'` — a malformed config silently
+    # overriding a good ambient value, diagnosed with a urllib message that names
+    # neither env.json nor the variable.
+    #
+    # It matters here specifically because env.json now OUTRANKS the environment
+    # (deployment_default), which is what makes a bad entry load-bearing rather
+    # than merely ignored. Env values are scalars; anything else is malformed, and
+    # malformed config is the same as absent — see this function's contract above.
+    return {k: str(v) for k, v in loaded.items()
+            if isinstance(v, (str, int, float)) and not isinstance(v, bool)}
 
 
 def deployment_default(key: str, root=None) -> str | None:

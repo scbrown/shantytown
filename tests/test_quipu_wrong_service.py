@@ -491,6 +491,47 @@ def test_unparseable_env_json_does_not_break_resolution(monkeypatch, tmp_path):
     assert resolve_server(None, tmp_path) == "http://ambient.invalid"
 
 
+def test_a_NULL_in_env_json_does_not_become_the_address(monkeypatch, tmp_path):
+    """A null value is the deployment SAYING NOTHING about that key, and must fall
+    through to the next source.
+
+    `deployment_json` coerced every value with `str(v)`, so `null` became the
+    STRING "None" — truthy, therefore beating both $QUIPU_SERVER and the default.
+    MEASURED: with a working QUIPU_SERVER exported, `roles --check` reported
+    `CANNOT TELL: unknown url type: 'None/query'`. The precedence this branch
+    introduces (env.json over the environment) is what makes a malformed entry
+    load-bearing instead of merely ignored, so the coercion has to be strict about
+    what counts as a value.
+    """
+    (tmp_path / "env.json").write_text(json.dumps({"QUIPU_SERVER": None}))
+    monkeypatch.setenv("QUIPU_SERVER", "http://ambient.invalid")
+    from shantytown.quipu import resolve_server
+    assert resolve_server(None, tmp_path) == "http://ambient.invalid"
+
+
+def test_a_NON_SCALAR_in_env_json_does_not_become_the_address(monkeypatch, tmp_path):
+    """Same rule, the other malformed shapes: an env value is a scalar, and a dict
+    / list / bool stringifies into something that is not an address but IS truthy
+    (`"{'host': ...}"`, `"True"`)."""
+    (tmp_path / "env.json").write_text(
+        json.dumps({"QUIPU_SERVER": {"host": "x"}, "SHANTY_ONTO_NS": ["a"]})
+    )
+    monkeypatch.setenv("QUIPU_SERVER", "http://ambient.invalid")
+    from shantytown.quipu import resolve_server
+    assert resolve_server(None, tmp_path) == "http://ambient.invalid"
+
+
+def test_a_declared_address_with_NO_ambient_fallback_still_reaches_the_default(tmp_path, monkeypatch):
+    """The end of the same chain: a malformed entry and nothing exported must land
+    on DEFAULT_SERVER — never on a stringified null, which would be an address no
+    diagnosis could explain."""
+    (tmp_path / "env.json").write_text(json.dumps({"QUIPU_SERVER": None}))
+    monkeypatch.delenv("QUIPU_SERVER", raising=False)
+    monkeypatch.delenv("SHANTY_ROOT", raising=False)
+    from shantytown.quipu import DEFAULT_SERVER, resolve_server
+    assert resolve_server(None, tmp_path) == DEFAULT_SERVER
+
+
 def test_both_clients_resolve_the_SAME_address(monkeypatch, tmp_path):
     """The registry and the events client must not end up pointed at different
     servers from one deployment — they share the resolver for exactly this."""
