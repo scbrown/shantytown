@@ -687,6 +687,7 @@ def main(argv: list[str] | None = None) -> int:
     # and none of them re-derives one. `how` rides along so a surface that needs
     # to explain an empty or surprising store can say which leg answered.
     a.root, a.root_how = resolve_root(a.root, discover=(a.cmd != "init"))
+    _warn_if_no_store(a)
 
     if a.cmd == "anchor":
         return _cmd_anchor(a)
@@ -768,6 +769,48 @@ def _default_settings(root: Path):
                 return str(p)
         return None
     return resolve
+
+
+def _warn_if_no_store(a) -> bool:
+    """Say NOTHING ANSWERED, once, before the command runs. Returns whether it did.
+
+    THE MEASURED MISDIAGNOSIS (aegis-d94vb). CLAUDE.md tells every crew member to
+    run `st anchor <you>` from their own workspace. There, st refused with:
+
+        refused: no such agent: malcolm
+          (looked in <workspace>/.shanty/crew/malcolm.json)
+
+    which reads as a broken identity or a bad clone — so the natural recovery is to
+    stop using st, one agent at a time. The actual cause is that NOTHING answered
+    the where-is-the-store question: no --root, no $SHANTY_ROOT, no `.shanty` on the
+    way up, and no pointer file. The agent's own name was never the problem.
+
+    WHY THE WALK-UP CANNOT COVER THIS, and why the answer is the pointer: crew
+    workspaces are SIBLINGS of the checkout, not children of it
+    (~/gt/<rig>/crew/<agent> vs ~/gt/shantytown/.shanty). Walking up from a sibling
+    tree never reaches the store, at any depth. The pointer exists for exactly this
+    shape and `st init` writes it — a deployment that predates init has none, which
+    is the state this fires in.
+
+    A WARNING, NOT A REFUSAL, and before the command rather than after: commands
+    that need no store still work, and the ones that do now fail with the cause
+    already on screen instead of an identity error to be misread first.
+    """
+    from .deployment import BY_CWD, pointer_path
+    if getattr(a, "cmd", None) == "init":
+        return False                       # init is how a store comes to exist
+    if a.root_how != BY_CWD or Path(a.root).is_dir():
+        return False
+    print(f"  ⚠ no store found. Nothing answered where it is: no --root, no "
+          f"$SHANTY_ROOT, no .shanty walking up from here, and no pointer at "
+          f"{pointer_path()}. Falling back to {a.root}, which does not exist — so "
+          f"anything needing the crew will say 'no such agent: <name>', and the "
+          f"name is not the problem. Fix with any one of: `st --root "
+          f"<path>/.shanty ...`, `export SHANTY_ROOT=<path>/.shanty`, or write that "
+          f"path into {pointer_path()} (one line). NOTE a crew workspace is a "
+          f"SIBLING of the checkout, so the walk-up can never find it from there.",
+          file=sys.stderr)
+    return True
 
 
 def _catalog(a):
