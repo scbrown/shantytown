@@ -86,6 +86,38 @@ class Registry(Protocol):
     def get(self, name: str) -> Agent: ...
     def all(self) -> list[Agent]: ...
 
+    def empty_note(self) -> str | None:
+        """What an EMPTY `all()` means for this registry. None = it means exactly
+        "nobody exists". A string = "it might instead mean I looked in the wrong
+        place", and the string says where to look — it is rendered to the operator.
+
+        THIS EXISTS BECAUSE THE ANSWER IS NOT THE SAME FOR BOTH IMPLS, and the one
+        place that consumes it (roles.check) must stay registry-agnostic.
+
+        FilesRegistry already draws the line correctly and keeps it: an ABSENT
+        directory raises ("I could not look") while a PRESENT-but-empty one returns
+        [] ("nobody exists"). That reasoning is sound there because the directory IS
+        the whole search space — having read all of it and found nothing is a
+        complete observation.
+
+        It does not transfer to quipu, and applying it there is what made
+        `roles --check --registry quipu` print a clean bill of health for a crew of
+        twelve. A graph is never "absent", so there is no second signal to fall back
+        on; and which entities exist is selected by the ONTOLOGY NAMESPACE, which is
+        deployment config the client cannot validate. A well-formed query under the
+        wrong namespace is answered truthfully with zero rows. So for quipu, empty
+        conflates "nobody exists" with "I looked in the wrong place" and nothing
+        downstream can separate them.
+
+        THE DEFAULT IS FAIL-SAFE, and the direction is deliberate (the same
+        asymmetry argument QuipuRegistry makes about `crewStatus`): a registry that
+        does not implement this is treated as NOT vouching for its empty answer.
+        Forgetting to say "my empty is real" costs a loud `cannot tell`; forgetting
+        to say "my empty is suspect" costs a false clean bill of health, which is
+        the bug this whole method is here to prevent.
+        """
+        ...
+
 
 @runtime_checkable
 class Tracker(Protocol):
@@ -137,7 +169,7 @@ class Panes(Protocol):
     # VERIFY needs: a fast agent scrolls the echoed dispatch off-screen before we
     # can look, so a visible-only check can never confirm a delivery that worked.
     # attrs=True keeps the RENDERING attributes (tmux `-e`), not just the text.
-    # Required by triage.input_state (aegis-x6xh): dim is the only thing that
+    # Required by triage.input_state (internal-ref): dim is the only thing that
     # separates Claude Code's placeholder suggestion from real queued-unsubmitted
     # input, both of which render as `❯ <text>`, and plain capture strips exactly
     # that bit. An adapter that cannot supply attributes returns plain text and
@@ -149,7 +181,7 @@ class Panes(Protocol):
     # handoff) is untouched. Required because "is this lead up" must mean "will
     # it drain", not "does something answer to its name": a pane resurrected by a
     # FOREIGN launcher carries that launcher's wiring, and routing to it on the
-    # strength of the name alone loses every event (aegis-0v97). An adapter that
+    # strength of the name alone loses every event (internal-ref). An adapter that
     # cannot read it returns None, and the caller fails toward RISING.
     def cmdline(self, pane: str) -> str | None: ...
                                                # it to decide, #2 verify reads it
