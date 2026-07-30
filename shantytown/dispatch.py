@@ -57,6 +57,30 @@ class TriageRefused(Exception):
         super().__init__(decision.why)
 
 
+class DispatchedButUntracked(Exception):
+    """The send LANDED and the tracker write did not (GitHub #20).
+
+    Exit 2, and the loudest of the could-not-tells, because it is the only one
+    where the fleet and the tracker actively disagree: the agent has been given
+    work it will start on, and no record says so. A generic "could not tell" here
+    is what left an agent idle holding an unread assignment nobody could find.
+
+    It names the repair rather than describing the state, because the state is not
+    recoverable by retrying `st go` — the work is already delivered, so a re-run
+    would either refuse (already assigned) or send it twice.
+    """
+
+    def __init__(self, item_id: str, agent: str, pane: str, cause: Exception):
+        self.item_id, self.agent, self.pane, self.cause = item_id, agent, pane, cause
+        super().__init__(
+            f"{item_id} WAS DELIVERED to {agent} ({pane}) and verified on the "
+            f"pane, but the tracker write FAILED "
+            f"({type(cause).__name__}: {str(cause)[:120]}). The agent has the work "
+            f"and the tracker does not know it. Do NOT re-run `st go` — that would "
+            f"deliver it twice. Record it by hand instead, then confirm with "
+            f"`st anchor {agent}`.")
+
+
 class SendUnverified(Exception):
     """We sent, but reading the pane back did NOT show the work (#2).
 
@@ -236,7 +260,18 @@ class Dispatcher:
         self.panes.send(p.pane, p.text)                # 1 send
         if not self.verify(p.pane, item_id):
             raise SendUnverified(item_id, p.pane)
-        self.tracker.update(item_id, **p.updates)      # 1 tracker write (last)
+        # THE OTHER HALF OF THE WINDOW (GitHub #20). send-then-update is the right
+        # order — a dropped send must never mark work in_progress — but it leaves
+        # the mirror failure: the agent HAS the work (verified on its pane) and the
+        # tracker write then fails, so nothing in the system knows the item was
+        # assigned and the agent sits holding it. That cannot be eliminated without
+        # a transaction across a pane and a tracker, which we do not have. It CAN
+        # stop being reported as a generic "could not tell": the send is a FACT by
+        # this point, and the operator needs to know it landed and what to repair.
+        try:
+            self.tracker.update(item_id, **p.updates)  # 1 tracker write (last)
+        except Exception as e:                         # noqa: BLE001 — any store failure
+            raise DispatchedButUntracked(item_id, agent_name, p.pane, e) from e
         return p
 
     def verify(self, pane: str, item_id: str) -> bool:

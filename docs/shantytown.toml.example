@@ -98,3 +98,31 @@ crew = ["administrator", "lead"]
 [hibernate]
 enabled = false
 max_quiet_minutes = 60
+
+# ---------------------------------------------------------------------------
+# [fleet] — state Rule Zero must respect.
+#
+# Rule Zero blocks a coordinator's stop while free feedable workers AND
+# dispatchable work both exist, so it cannot go idle with the fleet idle. It could
+# only ever demand MORE dispatch, which meant two states it got wrong:
+#
+#   stood_down         A DELIBERATE quiet period was indistinguishable from
+#                      neglect. Measured: an operator out of usage credits stopped
+#                      nine of eleven crew on instruction, and the gate blocked
+#                      every stop demanding they be re-dispatched. Set this and
+#                      Rule Zero yields — out loud, naming the reason, because a
+#                      gate that goes silent reads as a gate that is broken.
+#                      It is config, not a runtime flag, for the same reason
+#                      retirement lives on a card: a deliberate shutdown must
+#                      survive the session that decided it.
+#
+#   max_load_per_core  The gate compared nothing against the host: it forced
+#                      dispatch to 9 agents on an 8-core box at load 33. Per-core
+#                      so it travels between hosts. 0 disables the check. A load
+#                      we cannot measure never suppresses the gate — refusing to
+#                      dispatch on an unmeasured number would be the mirror of the
+#                      bug.
+# ---------------------------------------------------------------------------
+[fleet]
+stood_down = false
+max_load_per_core = 4.0

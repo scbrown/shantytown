@@ -120,6 +120,28 @@ class Hibernate:
 
 
 @dataclass(frozen=True)
+class Fleet:
+    """Fleet-wide state that Rule Zero must respect (GitHub #29, #23).
+
+    stood_down — THE QUIET STATE Rule Zero did not have. The gate could only ever
+    demand MORE dispatch: there was no state in which standing the fleet down was
+    the right answer, so a deliberate quiet period was indistinguishable from
+    neglect and the gate could not be satisfied by RESTRAINT. Measured: an operator
+    out of usage credits stopped nine of eleven crew on instruction, and the hook
+    then blocked every stop demanding they be re-dispatched.
+
+    It is CONFIG, not a runtime flag, for the same reason retirement lives on a
+    card: a deliberate shutdown must survive the session that decided it.
+
+    max_load — the capacity ceiling. Rule Zero compared nothing against the host:
+    it forced dispatch to 9 agents on an 8-core box at load 33. 0 disables the
+    check; the default is expressed per-core, so it travels between hosts.
+    """
+    stood_down: bool = False
+    max_load_per_core: float = 4.0
+
+
+@dataclass(frozen=True)
 class Config:
     """The whole file, resolved. `path` is None when no file was found — callers
     render that differently from a file that said the same thing by hand, because
@@ -128,6 +150,7 @@ class Config:
     mode: str = DEFAULT_MODE
     modes: dict[str, list[str]] = field(default_factory=lambda: dict(BUILTIN_MODES))
     hibernate: Hibernate = field(default_factory=Hibernate)
+    fleet: Fleet = field(default_factory=Fleet)
     path: Path | None = None
 
     def selectors(self, mode: str | None = None) -> list[str]:
@@ -186,7 +209,7 @@ def load_or_default(root) -> tuple[Config, str | None]:
 
 # --- parsing ----------------------------------------------------------------
 
-_TOP_KEYS = {"startup", "modes", "hibernate"}
+_TOP_KEYS = {"startup", "modes", "hibernate", "fleet"}
 _STARTUP_KEYS = {"mode"}
 _HIB_KEYS = {"enabled", "max_quiet_minutes"}
 
@@ -233,6 +256,7 @@ def _resolve(data: dict, path: Path) -> Config:
 
     return Config(mode=mode, modes=modes,
                   hibernate=_hibernate(path, _table(path, data, "hibernate")),
+                  fleet=_fleet(path, _table(path, data, "fleet")),
                   path=path)
 
 
@@ -267,6 +291,23 @@ def _crew_list(path: Path, mode: str, spec) -> list[str]:
         raise ConfigError(f"{path}: [modes.{mode}] crew is EMPTY — a mode that selects "
                           f"nobody would start nothing and report success")
     return out
+
+
+_FLEET_KEYS = {"stood_down", "max_load_per_core"}
+
+
+def _fleet(path: Path, tbl: dict) -> Fleet:
+    _refuse_unknown(path, "fleet", tbl, _FLEET_KEYS)
+    down = tbl.get("stood_down", Fleet.stood_down)
+    if not isinstance(down, bool):
+        raise ConfigError(f"{path}: fleet.stood_down must be true or false, "
+                          f"got {down!r}")
+    load = tbl.get("max_load_per_core", Fleet.max_load_per_core)
+    if isinstance(load, bool) or not isinstance(load, (int, float)) or load < 0:
+        raise ConfigError(f"{path}: fleet.max_load_per_core must be a "
+                          f"non-negative number (0 disables the check), "
+                          f"got {load!r}")
+    return Fleet(stood_down=down, max_load_per_core=float(load))
 
 
 def _hibernate(path: Path, tbl: dict) -> Hibernate:

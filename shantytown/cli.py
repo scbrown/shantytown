@@ -78,7 +78,8 @@ from . import roles as roles_mod
 from . import scaffold
 from . import triage as triage_mod
 from .deployment import deployment_default, resolve_root, root_note
-from .dispatch import Dispatcher, TriageRefused, SendUnverified, AlreadyAssigned, Closed
+from .dispatch import (Dispatcher, TriageRefused, SendUnverified,
+                       DispatchedButUntracked, AlreadyAssigned, Closed)
 from .events import FilesEvents
 from .inbox import FilesInbox, MessageTooLong, TrackerInbox
 from .triage import Action
@@ -2299,6 +2300,11 @@ def _cmd_go(a) -> int:
                   f"(launcher-relaunch, never handoff — a handoff drops --settings "
                   f"and produces a hookless agent)", file=sys.stderr)
         return REFUSED
+    except DispatchedButUntracked as e:
+        # Exit 2: the send is a fact, the record is not. Never 0 — a caller that
+        # reads 0 here books the dispatch as complete.
+        print(f"  could not tell: {e}", file=sys.stderr)
+        return CANNOT_TELL
     except SendUnverified as e:
         # #2: we sent, but reading the pane back did NOT confirm it landed. Its
         # docstring pins this to exit 2, and go() ran verify BEFORE the tracker
