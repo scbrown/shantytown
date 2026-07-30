@@ -409,7 +409,14 @@ def build_parser() -> argparse.ArgumentParser:
     rl_show.add_argument("--check", action="store_true", default=argparse.SUPPRESS)
     rl_set = rl_sub.add_parser("set", help="set <agent> <role> [--reports a,b]")
     rl_set.add_argument("agent")
-    rl_set.add_argument("role", choices=["worker", "lead", "administrator"])
+    # NO `choices=` (GitHub #37). argparse would reject a deployment-declared role
+    # before any code could look it up, which would make [roles.<name>] decorative:
+    # the file would parse, the role would exist, and the command to use it would
+    # refuse with "invalid choice". The validation lives in tier.plan_role_set,
+    # against the deployment's catalog, and names the roles that DO exist.
+    rl_set.add_argument("role", metavar="ROLE",
+                        help="worker | lead | administrator, or any role this "
+                             "deployment declares under [roles.<name>]")
     rl_set.add_argument("--reports", default="", help="comma-separated reports for a lead/administrator")
     rl_set.add_argument("-n", "--dry-run", action="store_true")
     rl_sync = rl_sub.add_parser("sync", help="materialize the crew cards FROM a source")
@@ -429,7 +436,7 @@ def build_parser() -> argparse.ArgumentParser:
     rs = sub.add_parser("role", help="alias for `roles set` (deprecated spelling)")
     rs.add_argument("set_", metavar="set", choices=["set"])
     rs.add_argument("agent")
-    rs.add_argument("role", choices=["worker", "lead", "administrator"])
+    rs.add_argument("role", metavar="ROLE")      # see `roles set` — no choices=
     rs.add_argument("--reports", default="", help="comma-separated reports for a lead/administrator")
     rs.add_argument("-n", "--dry-run", action="store_true")
 
@@ -754,6 +761,22 @@ def _default_settings(root: Path):
                 return str(p)
         return None
     return resolve
+
+
+def _catalog(a):
+    """The deployment's ROLE CATALOG (traits.py, GitHub #37) — the built-in three
+    plus whatever `[roles.<name>]` declares, with `[precedence.<axis>]`'s ranks.
+
+    load_or_default, not load: this feeds a REFUSAL path (`role set` validating a
+    role), and a config typo must produce the config error at the top of a command,
+    not a role that mysteriously stopped existing. An unreadable file therefore
+    yields the built-in three, which is exactly what a deployment that declares
+    nothing gets — a degradation to the previous behaviour, never to a wider one.
+    """
+    cfg, err = config.load_or_default(getattr(a, "root", None) or ".")
+    if err:
+        print(f"  ⚠ {err} — using the built-in roles", file=sys.stderr)
+    return cfg.catalog()
 
 
 def _stops(a) -> FilesStops:
@@ -1737,7 +1760,8 @@ def _cmd_role(a) -> int:
     reports = [r.strip() for r in a.reports.split(",") if r.strip()]
     try:
         plan = tier.role_set(_registry(a), a.agent, a.role,
-                             reports=reports, dry_run=a.dry_run)
+                             reports=reports, dry_run=a.dry_run,
+                             catalog=_catalog(a))
     except (LookupError, ValueError, CapabilityError) as e:
         # CapabilityError (aegis-w5l9): the new role needs a stop capability the
         # card's harness lacks. role_set raised it BEFORE writing, so this refusal
@@ -2683,7 +2707,8 @@ def _cmd_roles(a) -> int:
     panes = _panes(a)
     rep = roles_mod.check(_registry(a),
                           emitted=lambda role: emitted_stop_directions(a.root, role),
-                          live=lambda pane: live_wiring(pane, panes.cmdline))
+                          live=lambda pane: live_wiring(pane, panes.cmdline),
+                          catalog=_catalog(a))
     print()
     print(rep.render())
     print()

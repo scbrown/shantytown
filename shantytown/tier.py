@@ -36,6 +36,14 @@ from enum import Enum
 
 from .protocols import Agent, Registry
 
+# The three roles the built-in PROCESS is defined for — depth-2, a-lead-absorbs,
+# rise-past-a-dead-lead. It is no longer the list of roles that may EXIST: a
+# deployment declares its own (traits.py, GitHub #37), and what used to be an enum
+# membership test is now "is this role described, and what are its traits?".
+#
+# Kept as a name because plenty of code legitimately means THESE THREE — the tier
+# order `st start` boots in, the modes' role selectors, the capability gate. Those
+# are statements about the built-in process, not about the vocabulary.
 VALID_ROLES = ("worker", "lead", "administrator")
 
 # GENERATED PANE NAMES. A card with no pane names no session, and every surface
@@ -89,18 +97,50 @@ def _reports_of(registry: Registry, lead: str) -> list[Agent]:
 
 
 def plan_role_set(registry: Registry, agent_name: str, role: str,
-                  reports: list[str] | None = None) -> RolePlan:
+                  reports: list[str] | None = None, catalog=None) -> RolePlan:
     """Resolve what role set would do. No writes. Refuses at plan time.
 
     Refusing here (not at write time) means --dry-run shows the refusal too, and
     a bad hierarchy never half-lands.
+
+    `catalog` (traits.Catalog) is what replaced the enum membership test (#37). It
+    answers two questions the enum could only answer for three names: does this
+    role EXIST, and is it in the tree at all? An UNATTACHED role — an advisor, an
+    observer, a relay — is planned as a card and nothing else: no reports_to is
+    required, none is invented, and the depth-2 rules do not apply, because they
+    are rules about a tree this role is not in. That single conditional is what
+    made those roles inexpressible.
+
+    None = the built-in three, behaving exactly as the enum did.
     """
-    if role not in VALID_ROLES:
-        raise ValueError(f"unknown role {role!r}; expected one of {VALID_ROLES}")
+    from . import traits as traits_mod
+    catalog = catalog if catalog is not None else traits_mod.default_catalog()
+    if not catalog.describes(role):
+        raise ValueError(
+            f"unknown role {role!r}; declared roles: "
+            f"{', '.join(catalog.known())}. Declare it as [roles.{role}] in "
+            f"shantytown.toml (or in the graph) — the role list is the "
+            f"deployment's, not st's.")
     agent = registry.get(agent_name)          # LookupError if unknown
     reports = reports or []
 
     plan = RolePlan()
+
+    # NOT IN THE TREE AT ALL. Checked before every tier rule below, because each of
+    # those rules presumes a tree position: an unattached role has no reports_to to
+    # require, no lead to be under, and no escalation path to wire. Giving one
+    # reports is a refusal rather than a silent drop — somebody asked for routing
+    # that this role cannot carry, and quietly writing a card without it is how a
+    # tier comes to be decorative.
+    if catalog.of(role).unattached:
+        if reports:
+            raise ValueError(
+                f"{role!r} is unattached (it is not in the reporting tree), so it "
+                f"cannot take reports {reports}. Point them at a lead or the "
+                f"administrator.")
+        plan.writes.append(Agent(name=agent_name, role=role, reports_to=None,
+                                 pane=pane_for(agent_name, agent.pane)))
+        return plan
 
     if role == "worker":
         # Demotion. Its former reports become orphans unless re-pointed elsewhere
@@ -166,8 +206,9 @@ def plan_role_set(registry: Registry, agent_name: str, role: str,
 
 
 def role_set(registry: MutableRegistry, agent_name: str, role: str,
-             reports: list[str] | None = None, dry_run: bool = False) -> RolePlan:
-    plan = plan_role_set(registry, agent_name, role, reports)
+             reports: list[str] | None = None, dry_run: bool = False,
+             catalog=None) -> RolePlan:
+    plan = plan_role_set(registry, agent_name, role, reports, catalog=catalog)
     # Capability gate (aegis-w5l9). A lead/administrator RECEIVES stop events, so
     # its harness must declare blocking stop hooks; refuse BEFORE any write, so
     # the registry never holds a tier card the fleet can never start (and its

@@ -417,6 +417,11 @@ order, every one of them also settable as an env var:
 | `SHANTY_ONTO_CREW_CLASS` | the class local-name your graph uses for a crew member, resolved under `SHANTY_ONTO_NS`. Point st at your own vocabulary instead of adopting ours. | `CrewMember` |
 | `SHANTY_ONTO_REPORTS_PRED` | the predicate local-name for the supervisor edge. | `reports_to` |
 | `SHANTY_ONTO_STATUS_PRED` | the predicate local-name marking a non-live crew member (its ABSENCE means active, so a forgotten mark leaves a retiree visible rather than hiding a live agent). | `crewStatus` |
+| `SHANTY_ONTO_ROLE_CLASS` | the class local-name for a declared ROLE — a trait preset your deployment defines rather than one st ships. | `CrewRole` |
+| `SHANTY_ONTO_HAS_ROLE_PRED` | the predicate local-name for the member→role edge. Multi-valued: roles STACK on one agent. | `hasRole` |
+| `SHANTY_ONTO_ROLE_NAME_PRED` | the predicate local-name holding a role's own name. | `crewRoleName` |
+| `SHANTY_ONTO_TRAIT_PREFIX` | the shared prefix of the trait-axis predicates (`traitAttachment`, `traitScope`, …). One knob for the convention, not six for the axes. | `trait` |
+| `SHANTY_ONTO_TRAIT_VALUE_CLASS` | the class local-name of the rows that RANK trait values, so a stacked role set with a conflicting single-valued axis resolves from declared data instead of a tie-break in code. | `TraitValue` |
 | `BOBBIN_SERVER` | bobbin, for `st context` | `http://localhost:8080` |
 | `SHANTY_RANKER` | `policy` to weight the admin workflow by Hank blast radius; else rule-based | — |
 | `SHANTY_FORGEJO_URL` | a self-hosted forge: `st doctor`'s release checks, and the base URL for `--backend forgejo` (issues as work items; pair with `SHANTY_FORGEJO_TOKEN` and `--repo owner/name`) | `http://localhost:3000` |
