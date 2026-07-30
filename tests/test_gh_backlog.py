@@ -241,3 +241,140 @@ def test_gh14_read_prints_the_bodies(tmp_path, capsys, monkeypatch):
     assert "the roof needs patching" in out, "the body, not just a count"
     assert "from sattler" in out
     assert "marked 1 message(s) read" in out
+
+
+# --- #36: an absent kit and a DELETED kit are different facts ----------------
+
+def test_gh36_a_deleted_template_REFUSES(tmp_path):
+    """provision.py opens by saying every rule there is 'a refusal rather than a
+    warning'. This was the one path that was not — and it is the one that fires
+    when the whole kit disappears."""
+    from shantytown import provision as prov
+    from shantytown.provision import ProvisionError
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    d = prov.provision_dir(tmp_path)
+    d.mkdir(parents=True)
+    (d / prov.SECRETS).write_text("TOKEN=abc\n")      # the store DOES provision
+    card = Agent(name="kelly", role="worker", workspace=str(ws))
+    with pytest.raises(ProvisionError) as e:
+        prov.provision(card, tmp_path)
+    assert "MISSING" in str(e.value)
+    assert "deleted or renamed" in str(e.value)
+
+
+def test_gh36_no_provision_dir_at_all_still_launches(tmp_path):
+    """A store with no kit describes a fleet that wants no MCP servers. Refusing
+    would break every install that is not ours."""
+    from shantytown import provision as prov
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    card = Agent(name="kelly", role="worker", workspace=str(ws))
+    assert prov.provision(card, tmp_path) == []
+
+
+def test_gh36_an_EMPTY_provision_dir_still_launches(tmp_path):
+    from shantytown import provision as prov
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    prov.provision_dir(tmp_path).mkdir(parents=True)
+    card = Agent(name="kelly", role="worker", workspace=str(ws))
+    assert prov.provision(card, tmp_path) == []
+
+
+# --- #20: a landed send with a failed tracker write is its own outcome --------
+
+def test_gh20_a_failed_tracker_write_after_a_LANDED_send_is_named(tmp_path):
+    from shantytown.dispatch import Dispatcher, DispatchedButUntracked
+
+    class _Tracker:
+        def get(self, i):
+            from shantytown.protocols import WorkItem
+            return WorkItem(id=i, title="fix the roof", status="open")
+
+        def update(self, *a, **k):
+            raise RuntimeError("bd unreachable")
+
+    class _Panes:
+        def exists(self, p):
+            return True
+
+        def capture(self, p, history=0, attrs=False):
+            return "st-1 >"
+
+        def send(self, p, t):
+            pass
+
+    class _Reg:
+        def get(self, n):
+            return Agent(name=n, role="worker", pane="p-kelly")
+
+        def all(self):
+            return [self.get("kelly")]
+
+    d = Dispatcher(_Reg(), _Tracker(), _Panes())
+    with pytest.raises(DispatchedButUntracked) as e:
+        d.go("st-1", "kelly")
+    msg = str(e.value)
+    assert "WAS DELIVERED" in msg
+    assert "Do NOT re-run" in msg, "re-running would deliver it twice"
+    assert "bd unreachable" in msg, "and it names the underlying cause"
+
+
+# --- #29 / #23: Rule Zero must be satisfiable by RESTRAINT --------------------
+
+def test_gh29_a_stood_down_fleet_is_not_re_dispatched():
+    """Measured: an operator out of usage credits stopped nine of eleven crew on
+    instruction, and the gate blocked every stop demanding they come back."""
+    from shantytown import stop_policy as sp
+    from shantytown.config import Fleet
+    v = sp.decide(sp.Inputs(me="sattler", role="administrator",
+                            free_feedable=["bond"], dispatchable=2,
+                            fleet=Fleet(stood_down=True)))
+    assert not v.block and v.by == sp.BY_STOOD_DOWN
+    assert "STOOD DOWN" in v.reason
+    assert "stood_down" in v.reason, "and it says how to resume"
+
+
+def test_gh23_an_over_capacity_host_is_not_asked_for_more():
+    """Forced dispatch to 9 agents on an 8-core box at load 33."""
+    from shantytown import stop_policy as sp
+    from shantytown.config import Fleet
+    v = sp.decide(sp.Inputs(me="sattler", role="administrator",
+                            free_feedable=["bond"], dispatchable=9,
+                            fleet=Fleet(max_load_per_core=4.0),
+                            load_per_core=4.1))
+    assert not v.block and v.by == sp.BY_STOOD_DOWN
+    assert "over the" in v.reason
+
+
+def test_gh23_under_the_ceiling_still_blocks():
+    from shantytown import stop_policy as sp
+    from shantytown.config import Fleet
+    v = sp.decide(sp.Inputs(me="sattler", role="administrator",
+                            free_feedable=["bond"], dispatchable=9,
+                            fleet=Fleet(max_load_per_core=4.0),
+                            load_per_core=1.0))
+    assert v.block and v.by == sp.BY_RULE_ZERO
+
+
+def test_gh23_an_unmeasurable_load_does_not_suppress_the_gate():
+    """Refusing to dispatch on a number we could not measure would be the mirror
+    of the bug."""
+    from shantytown import stop_policy as sp
+    from shantytown.config import Fleet
+    v = sp.decide(sp.Inputs(me="sattler", role="administrator",
+                            free_feedable=["bond"], dispatchable=9,
+                            fleet=Fleet(max_load_per_core=4.0),
+                            load_per_core=None))
+    assert v.block and v.by == sp.BY_RULE_ZERO
+
+
+def test_gh23_zero_disables_the_capacity_check():
+    from shantytown import stop_policy as sp
+    from shantytown.config import Fleet
+    v = sp.decide(sp.Inputs(me="sattler", role="administrator",
+                            free_feedable=["bond"], dispatchable=9,
+                            fleet=Fleet(max_load_per_core=0.0),
+                            load_per_core=99.0))
+    assert v.block and v.by == sp.BY_RULE_ZERO
