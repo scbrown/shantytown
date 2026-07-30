@@ -244,6 +244,12 @@ def config_text(answers: Answers) -> str:
     lines = [
         "# shantytown.toml — written by `st init`.",
         "# The fully annotated reference: docs/shantytown.toml.example",
+        "#",
+        "# THIS IS THE ONE FILE YOU HAND-EDIT. crew/ and settings/ are GENERATED",
+        "# (`st role set`, `st project`, `st new` rewrite them); hierarchy files are",
+        "# an import SOURCE for `st roles sync`; and the ~/.config pointer is a",
+        "# locator, not config. Deployment plumbing that used to live in env.json",
+        "# goes in [env] here.",
         "",
         "[startup]",
         "# lite = the administrator ALONE (it decides who else is needed).",

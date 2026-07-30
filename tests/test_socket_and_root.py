@@ -109,7 +109,9 @@ def test_fleet_visible_ELSEWHERE_is_a_WRONG_SOCKET_fault():
     and `st go` refuses to dispatch to a pane that is right there."""
     v, why = doc.socket_health(18, 0, 18, "shanty")
     assert v == doc.SOCKET_WRONG
-    assert "report the fleet DEAD" in why and "tmux-socket" in why
+    # It must name WHERE to declare the socket. That home moved into the config
+    # file when env.json/tmux-socket were folded in; the requirement did not.
+    assert "report the fleet DEAD" in why and "[tmux]" in why
 
 
 def test_a_wrong_socket_makes_doctor_exit_ACTIONABLE():

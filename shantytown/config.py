@@ -154,6 +154,16 @@ class Config:
     # [crew.<name>] — identity declared IN THIS FILE (GitHub #11). Empty means the
     # file declares no crew, which is the normal case: cards or the graph own it.
     crew: dict[str, Agent] = field(default_factory=dict)
+    # [env] — this deployment's plumbing, folded in from env.json (aegis-8calr).
+    # KEYS ARE NOT VALIDATED, deliberately, and it is the one table here that
+    # isn't: the set is open by construction (a deployment's own guard path, a
+    # server URL, a backend name), and refusing an unrecognised one would make
+    # this table useless for the thing it exists to hold. Values are strings
+    # because every one of them is also settable as an environment variable —
+    # that is what a launcher can carry into a pane.
+    env: dict[str, str] = field(default_factory=dict)
+    # [tmux] socket — folded in from settings/tmux-socket (aegis-8calr).
+    tmux_socket: str | None = None
     path: Path | None = None
 
     def selectors(self, mode: str | None = None) -> list[str]:
@@ -212,9 +222,10 @@ def load_or_default(root) -> tuple[Config, str | None]:
 
 # --- parsing ----------------------------------------------------------------
 
-_TOP_KEYS = {"startup", "modes", "hibernate", "fleet", "crew"}
+_TOP_KEYS = {"startup", "modes", "hibernate", "fleet", "crew", "env", "tmux"}
 _STARTUP_KEYS = {"mode"}
 _HIB_KEYS = {"enabled", "max_quiet_minutes"}
+_TMUX_KEYS = {"socket"}
 
 
 def _refuse_unknown(path: Path, where: str, got, allowed: set[str]) -> None:
@@ -261,7 +272,58 @@ def _resolve(data: dict, path: Path) -> Config:
                   hibernate=_hibernate(path, _table(path, data, "hibernate")),
                   fleet=_fleet(path, _table(path, data, "fleet")),
                   crew=_crew(path, _table(path, data, "crew")),
+                  env=_env(path, _table(path, data, "env")),
+                  tmux_socket=_tmux_socket(path, _table(path, data, "tmux")),
                   path=path)
+
+
+def _env(path: Path, tbl: dict) -> dict[str, str]:
+    """[env] — the plumbing values env.json used to hold (aegis-8calr).
+
+    NO KEY VALIDATION (see Config.env): the set is open. What IS validated is the
+    SHAPE of each value, because the one mistake this table invites is writing a
+    table or a list where a string belongs —
+
+        [env]
+        QUIPU_SERVER = { host = "graph.example", port = 8000 }   # refused
+
+    — and the consumer of that value is `os.environ`-shaped, so it would either
+    stringify into nonsense or blow up far from the file that caused it. Booleans
+    and numbers ARE accepted and stringified: `true` and `1` are what an operator
+    will write, and refusing them would be pedantry about a value that has exactly
+    one honest rendering.
+    """
+    out: dict[str, str] = {}
+    for k, v in tbl.items():
+        if isinstance(v, bool):
+            out[k] = "true" if v else "false"
+        elif isinstance(v, (str, int, float)):
+            out[k] = str(v)
+        else:
+            raise ConfigError(
+                f"{path}: [env] {k} must be a string (or a number/bool), got "
+                f"{type(v).__name__}. Every value here is also settable as an "
+                f"environment variable, so it has to be one string.")
+    return out
+
+
+def _tmux_socket(path: Path, tbl: dict) -> str | None:
+    """[tmux] socket — folded in from `settings/tmux-socket` (aegis-8calr).
+
+    Still DECLARED rather than inferred from the ambient $TMUX, which is the whole
+    argument in tmux.py: an env var is what an operator's shell happens to hold,
+    and a fleet whose identity changes depending on which pane you ran a command
+    from is the bug that made every agent report DOWN. Folding the one-line file
+    into the config changes WHERE it is declared, not that it is.
+    """
+    _refuse_unknown(path, "tmux", tbl, _TMUX_KEYS)
+    v = tbl.get("socket")
+    if v is None:
+        return None
+    if not isinstance(v, str):
+        raise ConfigError(f"{path}: [tmux] socket must be a string, got "
+                          f"{type(v).__name__}")
+    return v.strip() or None
 
 
 def _crew_list(path: Path, mode: str, spec) -> list[str]:
