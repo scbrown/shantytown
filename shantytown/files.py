@@ -130,6 +130,20 @@ class FilesRegistry:
         return [self.get(p.stem) for p in sorted(self.root.glob("*.json"))]
 
 
+    def empty_note(self) -> str | None:
+        """None: an empty answer from HERE really does mean "nobody exists".
+
+        This registry has earned that, and the reason is the paragraph above: the
+        directory is the entire search space, and `all()` already RAISES when the
+        directory is absent. So reaching an empty list means the whole space was
+        read and nothing was in it — a complete observation, not a place a
+        misconfiguration can hide. A fresh install with no cards yet is a real,
+        honest zero.
+
+        Contrast QuipuRegistry.empty_note, which cannot say this.
+        """
+        return None
+
 class FilesTracker:
     """A work item is a json file. That's the whole tracker."""
 

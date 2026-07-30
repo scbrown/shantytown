@@ -124,6 +124,33 @@ class QuipuWriteRejected(Exception):
     path swallowed it and reported success."""
 
 
+class QuipuNotQuipu(QuipuUnreachable):
+    """We REACHED a server, it ANSWERED, and it is not a quipu.
+
+    A SUBCLASS of QuipuUnreachable on purpose. The VERDICT was never wrong — a
+    wrong service is still "I could not look", so every existing
+    `except QuipuUnreachable` arm (roles --check's exit 2, `st project`,
+    `st subscribe`) keeps behaving correctly with no edit. What was wrong is the
+    MESSAGE, and therefore the operator's next move: they were sent to check the
+    network, or to rewrite a perfectly good query, when the remedy is to fix
+    QUIPU_SERVER.
+
+    WHY THIS HAD TO EXIST (measured). quipu-server's own default bind is
+    127.0.0.1:3030, and bobbin's HTTP default is 3030 too; whichever starts first
+    owns the port, so the default below can resolve to an entirely different
+    daemon. Then `_query` ended with
+
+        return body.get("rows", []) if isinstance(body, dict) else []
+
+    which turns ANY 200 that is not a query answer into ZERO ROWS. `all()`
+    returned [], `roles.check` built an empty Report, and an empty Report's
+    verdict is OK — so `st roles --check --registry quipu` printed a clean bill of
+    health for a graph it had never spoken to. That is the "reported CLEAR when it
+    couldn't reach its target" failure this module's docstring is written against,
+    arriving through the one door nobody had nailed shut: a reachable stranger.
+    """
+
+
 class QuipuQueryRejected(Exception):
     """quipu REACHED, understood, and REJECTED the QUERY — a 4xx / error body,
     not a connection failure (aegis-nbtr).
@@ -179,6 +206,107 @@ def derive_agents(rows: list[dict]) -> list[Agent]:
     return agents
 
 
+DEFAULT_SERVER = "http://localhost:3030"
+
+# The ontology IRI base — DATA IDENTITY, NOT COSMETICS. Every triple in a graph is
+# keyed under it, so a client using the wrong one stops joining the deployment's
+# existing facts: reads match nothing and writes land BESIDE the real entities
+# instead of on them, and nothing errors either way. Set SHANTY_ONTO_NS once, per
+# graph, and never again.
+#
+# The default is a documentation namespace, because a public repo carries no
+# deployment's identity. Note what that makes it: unlike DEFAULT_SERVER, this guess
+# is NOT made safe by detection. A wrong ADDRESS either fails to answer or answers
+# unlike a quipu, and QuipuNotQuipu names the remedy. A wrong NAMESPACE is answered
+# by the REAL quipu, correctly, with zero rows — there is no wrong service to
+# detect, and "nobody exists" is a truthful reply to a query about a namespace
+# holding nothing. Resolution (resolve_onto) is therefore the WHOLE of the safety
+# here, not half of it.
+DEFAULT_ONTO = "http://shantytown.example/ontology/"
+
+# Statuses meaning "this server has no such endpoint" rather than "your request
+# was bad". That distinction IS the diagnosis: 404/405 on /query says the thing
+# you are talking to has never heard of SPARQL, while 400/401/500 say you reached
+# a quipu that disliked the query, the caller, or its own day.
+_ENDPOINT_MISSING = (404, 405, 410, 501)
+
+
+def resolve_server(server: str | None = None, root=None) -> str:
+    """The quipu address, in the one order that puts the deployment's answer first.
+
+        explicit arg  ->  <root>/env.json  ->  $QUIPU_SERVER  ->  DEFAULT_SERVER
+
+    Reading env.json is the point. Before this the address came from the ambient
+    environment or nowhere, so the deployed value survived only as long as some
+    shell kept exporting it: a cron entry, a hook the harness re-exec'd outside
+    the settings env, or a bare `st` from a non-crew shell all fell back to
+    DEFAULT_SERVER. On a host where another service owns that port — see
+    `QuipuNotQuipu` — "fell back" meant "silently queried the wrong daemon". The
+    deployment writes its address down ONCE, in the same env.json the settings
+    emitter and the CLI already read, and every entry point inherits it.
+    """
+    from .deployment import deployment_default  # ONE reader (deployment.py)
+    return server or deployment_default(root, "QUIPU_SERVER") or DEFAULT_SERVER
+
+
+def resolve_onto(onto: str | None = None, root=None) -> str:
+    """The ontology namespace, in the same order and out of the same file as the
+    address — so "where deployment config lives" keeps having ONE answer.
+
+        explicit arg  ->  <root>/env.json  ->  $SHANTY_ONTO_NS  ->  DEFAULT_ONTO
+
+    THIS USED TO BE A MODULE-LEVEL CONSTANT, read once at import from the ambient
+    environment only — sitting a few lines above `resolve_server` and left behind
+    when that grew its env.json reader. So a deployment could write SHANTY_ONTO_NS
+    into the very same env.json the address now comes from and the clients would
+    not see it, while the invocations least likely to have inherited the variable
+    are the usual suspects: a cron entry, a hook the harness re-exec'd outside the
+    settings env, a bare `st` from a non-crew shell.
+
+    And this one fails SILENTLY where the address bug at least fell over. Falling
+    back to DEFAULT_ONTO means asking the REAL graph for
+    `<http://shantytown.example/ontology/CrewMember>`, which nothing in any real
+    fleet is typed as — so quipu answers `{"rows": []}`, honestly, and `all()`
+    reports "nobody exists" at exit 0. `QuipuNotQuipu` cannot help here: the server
+    was right, the query was well-formed, and zero rows is a truthful answer to it.
+    Measured on this fleet's graph before the fix: 12 CrewMembers, `all() -> []`.
+    See DEFAULT_ONTO.
+
+    Resolved PER CLIENT rather than per interpreter, which is the property a
+    constant cannot have: `st` is a library as well as a CLI, so a process-wide
+    namespace means the SECOND workspace a process touches gets read under the
+    FIRST one's identity.
+
+    The value is carried VERBATIM — no separator appended, trimmed or normalised.
+    Hash (`…/ontology#`) and slash (`…/ontology/`) namespaces are both legal RDF,
+    a real deployment uses the hash form, and "helpfully" repairing a namespace is
+    itself a way to stop joining the facts you were pointed at.
+    """
+    from .deployment import deployment_default   # local: keeps this client's imports flat
+    return onto or deployment_default(root, "SHANTY_ONTO_NS") or DEFAULT_ONTO
+
+
+def _body_shape(body) -> str:
+    """A SHORT description of a body we are rejecting, so the operator can see
+    WHAT answered instead of only being told that it was wrong."""
+    if isinstance(body, dict):
+        return f"a JSON object with {', '.join(sorted(body)[:6]) or 'no keys'}"
+    return f"a JSON {type(body).__name__}"
+
+
+def not_quipu(server: str, path: str, evidence: str) -> str:
+    """The operator-facing text for "that is not a quipu".
+
+    Shared by both clients (registry + events) so the two cannot drift into
+    describing one misconfiguration two different ways. It names the env var,
+    because the remedy is the only part of a diagnosis anybody acts on, and it
+    names the collision, because that is the cause every time it is not a typo.
+    """
+    return (f"{server}{path} answered, but not like quipu: {evidence}. "
+            f"Check QUIPU_SERVER — another service probably owns that port "
+            f"(quipu-server and bobbin both default to port 3030).")
+
+
 def all_query(onto: str = None, crew_class: str = None,
               reports: str = None, status: str = None) -> str:
     """The roster SPARQL, over a configurable vocabulary (GitHub #10)."""
@@ -219,18 +347,37 @@ class QuipuRegistry:
     # command would be a worse problem than the one this fixes.
     _ALL = None      # set below, from all_query()
 
-    def __init__(self, server: str | None = None, timeout: float = 5.0):
-        # QUIPU_SERVER is the variable the crew hooks already use. The default is
-        # a local quipu-server, not any particular deployment's hostname.
-        self.server = server or os.environ.get("QUIPU_SERVER") or "http://localhost:3030"
+    def __init__(self, server: str | None = None, timeout: float = 5.0,
+                 root=None, onto: str | None = None):
+        # ONE resolver, shared with QuipuEvents: explicit -> <root>/env.json ->
+        # $QUIPU_SERVER -> DEFAULT_SERVER. Reading env.json is the point — the
+        # address survived only as long as some shell kept exporting it, so a cron
+        # entry or a re-exec'd hook fell back to the stock port, which on this host
+        # another service owns. "Fell back" meant "queried a stranger".
+        self.server = resolve_server(server, root).rstrip("/")
         self.timeout = timeout
+        # The NAMESPACE comes from the deployment too. A wrong one cannot be caught
+        # by any wrong-service check: it asks the real quipu about entities that do
+        # not exist, and gets a truthful empty answer.
+        # Stored, not just consumed: the empty_note and the write path both need
+        # to NAME the namespace they used — "queried <this IRI> and got nothing"
+        # is the whole diagnosis for a wrong-namespace read.
+        self.onto = resolve_onto(onto, root)
+        self._all = all_query(onto=self.onto)
 
     def _query(self, sparql: str) -> list[dict]:
-        """POST a SPARQL query; return its rows. Raises `QuipuQueryRejected` when
-        the server ANSWERED but refused the query (a 4xx / error body), and
-        `QuipuUnreachable` only when the server could not be reached (aegis-nbtr).
-        An errored query is NO result either way — but the caller's remedy
-        differs, so the two are different exceptions."""
+        """POST a SPARQL query; return its rows.
+
+        FOUR outcomes, because collapsing any two of them has already cost this
+        repo a bug:
+
+          rows (maybe [])     the graph answered. [] means NOBODY MATCHED — real.
+          QuipuQueryRejected  a quipu refused THIS query (400 / error body / auth
+                              / 5xx).                  Remedy: fix the query.
+          QuipuNotQuipu       something answered and it is not a quipu.
+                                                       Remedy: fix QUIPU_SERVER.
+          QuipuUnreachable    nothing answered.        Remedy: start the service.
+        """
         req = urllib.request.Request(
             self.server + "/query",
             data=json.dumps({"query": sparql}).encode(),
@@ -246,6 +393,14 @@ class QuipuRegistry:
             # a reachable server as unreachable. MUST precede the URLError arm:
             # HTTPError is a subclass of URLError, and catching the parent first
             # is exactly the conflation this fix removes.
+            if e.code in _ENDPOINT_MISSING:
+                # No /query endpoint AT ALL — not a quipu with an opinion about
+                # our SPARQL, but a server that has never heard of SPARQL.
+                # Reporting this as "quipu rejected the query (HTTP 404)" is what
+                # sent an operator to debug a query that was never the problem.
+                raise QuipuNotQuipu(not_quipu(
+                    self.server, "/query",
+                    f"HTTP {e.code} — no query endpoint here")) from e
             detail = _http_error_detail(e)
             raise QuipuQueryRejected(
                 f"quipu rejected the query (HTTP {e.code}): {detail}") from e
@@ -255,12 +410,56 @@ class QuipuRegistry:
             # A 200 carrying an error body is still a query rejection, not
             # unreachability — the server plainly answered.
             raise QuipuQueryRejected(f"quipu rejected the query: {body['error']}")
-        return body.get("rows", []) if isinstance(body, dict) else []
+        # THE ROWS KEY MUST BE PRESENT. This line used to be
+        #     return body.get("rows", []) if isinstance(body, dict) else []
+        # and that `.get(..., [])` is the whole bug: a 200 from any other service
+        # became zero rows, `all()` reported nobody exists, and roles.check built
+        # an empty Report whose verdict is OK. "Nobody matched" and "you are not
+        # talking to quipu" arrived as the SAME VALUE, and the safer-looking one
+        # won. Absence of the key is a diagnosis now, not a default.
+        if not isinstance(body, dict) or "rows" not in body:
+            raise QuipuNotQuipu(not_quipu(
+                self.server, "/query",
+                f'a 200 with no "rows" key ({_body_shape(body)})'))
+        rows = body["rows"]
+        if not isinstance(rows, list):
+            raise QuipuNotQuipu(not_quipu(
+                self.server, "/query",
+                f'"rows" is a {type(rows).__name__}, not a list'))
+        return rows
 
     def all(self) -> list[Agent]:
         """Every crew member, roles derived. RAISES `QuipuUnreachable` if quipu
         cannot be read — never returns `[]` on failure."""
-        return derive_agents(self._query(self._ALL))
+        return derive_agents(self._query(self._all))
+
+    def empty_note(self) -> str | None:
+        """A graph CANNOT vouch for its own empty answer, so this never returns None.
+
+        Every other honesty guard in this client keys on the SERVER being wrong:
+        unreachable raises, a non-quipu answer raises QuipuNotQuipu, a refused query
+        raises QuipuQueryRejected. Zero rows slips past all three because none of
+        them is happening — the server is right, the query is well-formed, and an
+        empty result is the truthful answer to it.
+
+        What the guards cannot see is that the QUESTION may have been asked in the
+        wrong place. Which entities are typed `a:CrewMember` depends entirely on
+        `self.onto`, which is deployment config (resolve_onto). Under a namespace
+        holding none of this fleet's facts the query matches nothing, and there is
+        no "absent" state to fall back on the way FilesRegistry has one: a graph is
+        always present.
+
+        Measured on the live graph: 12 CrewMembers, and `all() -> []` under the
+        library's example namespace — reported by `roles --check` as "0 agents,
+        every one reports somewhere." at exit 0. Naming the namespace is the whole
+        value of this string: it is the one fact that distinguishes the two cases,
+        and the operator has to compare it against the one their facts are keyed
+        under, because nothing here can do it for them.
+        """
+        return (f"an empty crew from a REACHABLE graph is usually the wrong "
+                f"namespace, not an empty fleet: queried <{self.onto}> at "
+                f"{self.server}. Compare that against the namespace this fleet's "
+                f"facts are keyed under (SHANTY_ONTO_NS in <root>/env.json)")
 
     def get(self, name: str) -> Agent:
         """One agent by name. Raises `LookupError` if absent (a real answer),
