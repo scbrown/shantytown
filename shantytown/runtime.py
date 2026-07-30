@@ -300,6 +300,15 @@ def _untracked_hook(root=None) -> dict:
             "hooks": [{"type": "command", "command": cmd, "timeout": 15}]}
 
 
+def _policy_cmd(root=None) -> dict:
+    """The unified Stop decision, with the store's location BAKED IN (same reason
+    as _stop_cmd: the agent runs in its own workspace, which has no .shanty)."""
+    cmd = f"{_hook_interpreter()} -m shantytown.stop_policy"
+    if root is not None:
+        cmd += f" --root {Path(root).resolve()}"
+    return {"type": "command", "command": cmd}
+
+
 def _feed_check_cmd(root=None) -> dict:
     """The administrator's Rule Zero feed-check Stop hook (aegis-hfta). Same shape
     and same baked-in --root as _stop_cmd, so it resolves the real store from the
@@ -452,11 +461,13 @@ def claude_settings_for_role(role: str, root=None) -> dict:
     elif role == "lead":
         stop = [_stop_cmd("send", root), _stop_cmd("drain", root)]
     elif role == "administrator":
-        # The drain delivers received stop events; the feed-check is the Rule Zero
-        # HARD GATE (aegis-hfta) — it BLOCKS the admin's own stop while free
-        # feedable workers AND dispatchable beads coexist, so the coordinator
-        # cannot go idle with the fleet idle. Fail-open, self-terminating when fed.
-        stop = [_stop_cmd("drain", root), _feed_check_cmd(root)]
+        # ONE decision (docs/stop-policy-spec.md). This was [drain, feed_check] —
+        # two commands that could each BLOCK the same stop and neither of which
+        # could see the other's verdict, which is what made a documented hibernate
+        # policy inert and scraped the same panes three times per turn boundary.
+        # stop_policy folds delivery, Rule Zero and hibernate into five ordered
+        # ranks and emits exactly one verdict with one reason.
+        stop = [_policy_cmd(root)]
     else:
         raise ValueError(f"unknown role {role!r}; expected worker/lead/administrator")
     # Deployment session-capture hook (aegis-x84i): emitted ONLY when the
@@ -602,6 +613,14 @@ def stop_directions_in(path) -> set[str] | None:
         for block in data["hooks"]["Stop"]:
             for hook in block["hooks"]:
                 cmd = hook.get("command", "")
+                # The unified entry PROVIDES the drain direction (rank 4 delivers
+                # through the same stop_event drain). Without this line every
+                # administrator on the new chain reads as DEAF to `roles --check`
+                # and `st tend` — a checker that cannot see the thing it is
+                # checking for is the exact defect those surfaces exist to catch.
+                if "shantytown.stop_policy" in cmd:
+                    found.add("drain")
+                    continue
                 if "shantytown.stop_event" not in cmd:
                     continue
                 for mode in ("send", "drain"):

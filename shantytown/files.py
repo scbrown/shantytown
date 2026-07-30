@@ -11,6 +11,10 @@ from pathlib import Path
 
 from .inbox import is_message
 from .protocols import Agent, WorkItem
+# The pane-naming policy lives with the tier that writes cards. Imported under a
+# clear name because this module is the zero-dependency floor and a bare
+# `pane_for` here would read as its own.
+from .tier import pane_for as tier_pane_for
 
 
 def write_json_atomic(path: Path, value) -> None:
@@ -93,6 +97,19 @@ class FilesRegistry:
         # retired is written even when False: un-retiring must be expressible,
         # and a field that can only ever be set is a one-way door.
         existing["retired"] = agent.retired
+        # EVERY CARD LEAVES HERE STARTABLE. A card with no pane names no session,
+        # and launch/attach/stop/tend all resolve an agent THROUGH its pane — so a
+        # pane-less card is an agent that exists and cannot be run. The card
+        # projection carries no pane (the graph does not describe sessions), which
+        # meant a freshly projected crew needed hand-edited JSON before anything
+        # could start it.
+        #
+        # setdefault, never assignment: this fills a GAP and can not overwrite a
+        # pane a card already names. That asymmetry is the whole safety property —
+        # a fleet whose live sessions are `shanty-*` must not have its cards
+        # repointed at `st-*` by a projection, which would leave every card
+        # addressing a session that does not exist while the real ones ran on.
+        existing.setdefault("pane", tier_pane_for(agent.name))
         p.write_text(json.dumps(existing, indent=2, sort_keys=True))
 
     def all(self) -> list[Agent]:

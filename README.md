@@ -24,8 +24,8 @@
 *Create a work item. Tell an agent to go get it. That's the whole idea.*
 
 [![dispatch 3.4s](https://img.shields.io/badge/dispatch-3.4s-brightgreen)](#-measured-against-gas-town)
-[![19 commands](https://img.shields.io/badge/commands-19-blue)](#-the-whole-surface)
-[![tests](https://img.shields.io/badge/tests-967%20passing-blue)](#-principles)
+[![21 commands](https://img.shields.io/badge/commands-21-blue)](#-the-whole-surface)
+[![tests](https://img.shields.io/badge/tests-1140%20passing-blue)](#-principles)
 [![python](https://img.shields.io/badge/python-3.11%2B-blue)](#-install)
 [![dependencies none](https://img.shields.io/badge/dependencies-none-blue)](#-install)
 [![license MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
@@ -127,6 +127,31 @@ $ echo $?
 2
 ```
 
+### Cold start — one command, and only the crew you're paying for
+
+`st start` takes a **mode**, and `lite` — the default — brings up the administrator **alone**: one
+agent's context, one agent's bill, and the one agent that can decide who else is needed.
+
+```text
+$ st start
+  mode 'lite' from the built-in defaults (no config file) — 1 agent(s): sattler
+
+  + sattler      started      launched into 'shanty-sattler', hooks verified
+
+  mode 'lite' · 1 selected · started 1 · 1 up · 0 fault(s)
+
+  attach: `st attach sattler`   ·   roster: `st crew`
+
+$ st attach                          # the admin's pane. starts it first if it's down
+```
+
+`--mode heavy` brings up every card. It is **idempotent** — `already-up` is a success, a live agent is
+never launched over, and a retired one is never resurrected — so it is safe to run when you don't know
+what's already running, which is the only time you need it. Modes are named crew sets in
+[`shantytown.toml`](docs/shantytown.toml.example), where the admin can also be told to
+[**hibernate**](docs/cli.md#hibernate--when-the-administrators-stop-may-stay-stopped): stop waking
+itself at every turn boundary once it has handed the work out.
+
 ## 🤔 Why Shantytown?
 
 Be honest about the alternatives first, because two of them are good.
@@ -172,7 +197,7 @@ stop.* Here is what the gate measured.
 
 | | `gt sling` | `st go` | |
 |---|---:|---:|---|
-| Commands | ~110 | **19** | *a small, deliberate fraction of the surface, by measured use* |
+| Commands | ~110 | **21** | *a small, deliberate fraction of the surface, by measured use* |
 | dispatch (dry-run) | 51.54 s | **0.15 s** | **~344× faster** |
 | dispatch (real) | > 120 s ⏱️ | **3.40 s** | **≥35× faster** |
 | Dolt connections | 63 | **3** | **21× fewer** |
@@ -252,21 +277,23 @@ st anchor                          who am I, what's on my plate      ← the anc
 st crew                           who exists, what state, what role
 st roles [--check]                the hierarchy, and whether it's real
 st role set <agent> <role>        generative: rewrites cards, emits hooks
+st init                           scaffold a NEW deployment: asks, then writes store+cards+config
 st new <agent>                    create an agent from a card
+st start [--mode lite|heavy]      BOOT the town: the admin alone, or every card. idempotent.
 st stop <agent>                   stop it
 st log [agent]                    what happened
 st context <query>                what code should I be looking at?
 st doctor [--install]             what's installed, what's stale, what's missing
 st project                        materialize the crew cards FROM the graph
 st tend                           supervise the crew: respawn what DIED, never what was RETIRED
-st attach <agent>                 attach to a crew member by name (socket + pane resolved; via shanty)
+st attach [agent]                 attach to a crew member — STARTING them if down (socket + pane resolved)
 st dashboard [admin]              live, tier-scoped view: roster/state/work, self-refreshing
 st subscribe                      watch quipu entity events; route governed workflows to the admin
 st worktree <repo> [agent]        provision an agent's isolated worktree off a SHARED project repo
 st stats [agent]                  what the crew actually did: files, skills, tokens (local store)
 ```
 
-Nineteen, and the count is load-bearing: a test pins this block to the parser, so the next command
+Twenty-one, and the count is load-bearing: a test pins this block to the parser, so the next command
 either updates the list or fails CI.
 
 ## 🔀 Workflows & events
@@ -302,20 +329,75 @@ not just advise.
 ```bash
 git clone https://github.com/scbrown/shantytown && cd shantytown
 pip install -e .
-st anchor
+st doctor            # what's installed, what's stale, what's missing
 ```
 
 Python 3.11+ and `tmux`. No third-party dependencies. A tracker backend (Beads) is optional — the
 files tracker needs nothing at all.
 
+### First run — `st init` asks, and you have a town
+
 ```bash
-st doctor            # what's installed, what's stale, what's missing
+st init
 ```
+
+Five questions, each with a default that Enter accepts: the administrator's name, worker names, where
+agents should work, the startup mode, and whether the admin may
+[hibernate](docs/cli.md#hibernate--when-the-administrators-stop-may-stay-stopped). It shows every path
+it would write, waits for a yes, then creates:
+
+```text
+  crew/<name>.json                   one card per agent, each with a generated pane (st-<name>)
+  settings/<role>.settings.json      the role's stop hooks
+  shantytown.toml                    startup mode + hibernate policy
+  events/  launched/                 the ledgers
+```
+
+Then the town runs:
+
+```bash
+st start             # mode lite: the administrator ALONE
+st attach            # its pane (starts it if it's down)
+st crew              # who exists, who's up
+```
+
+Scripted installs skip the questions — `st init -y --admin boss --crew ada,bo`. `-y` is **required**
+when stdin isn't a terminal, so an init inside a script or a hook refuses instead of hanging on a
+prompt. `-n` shows every path and writes nothing.
+
+`st init` refuses a store that already has cards or a config — a second init is far more likely to be
+a mistyped `--root` than an intent. To add one agent to a store that exists, `st roles set <name>
+<role>` writes the card and its hooks in the same operation.
 
 ### Configuration
 
-Everything optional is an environment variable, and every default is local. Nothing here needs to be
-set to run the harness on the files tracker.
+Two files and a table, and every default is local. Nothing here needs to be set to run the harness on
+the files tracker.
+
+**`<root>/shantytown.toml` — what to bring up, and when the admin may sleep.** The one thing that is
+*not* an environment variable, because a mode is a named set of crew plus a policy and that does not
+flatten into `KEY=value` without inventing a syntax nobody can read. Absent → the built-in defaults
+(`lite`, hibernate off). A copy-pasteable, fully commented example is
+[`docs/shantytown.toml.example`](docs/shantytown.toml.example).
+
+```toml
+[startup]
+mode = "lite"                  # lite = the administrator ALONE. heavy = every card.
+
+[modes.night]                  # your own modes MERGE over the built-ins
+crew = ["administrator", "lead"]
+
+[hibernate]                    # when may the admin's stop STAY stopped?
+enabled = false                # it can only go quiet when there is nothing to
+max_quiet_minutes = 60         # dispatch; Rule Zero overrides it, and says so
+```
+
+It is `shantytown.toml`, never `shanty.toml` — `shanty` is a different program on the same PATH, for
+the same reason the binary here is `st`. An unknown key is **refused**, not ignored: a silently
+dropped key is how an operator comes to believe a policy is in force when it is not.
+
+**`<root>/env.json` and the environment — where the plumbing lives.** Flat values, read in that
+order, every one of them also settable as an env var:
 
 | variable | what it points at | default |
 |---|---|---|
@@ -349,7 +431,7 @@ error, it just stops new facts from joining the old ones.
 |---|---|
 | [`docs/vision.md`](docs/vision.md) | what this replaces, and how we'll know it failed |
 | [`docs/design.md`](docs/design.md) | the shape: dispatch, triage, trackers, panes |
-| [`docs/cli.md`](docs/cli.md) | the sixteen commands, and the anchor |
+| [`docs/cli.md`](docs/cli.md) | the twenty-one commands, the boot modes, and the anchor |
 | [`docs/agent-card.md`](docs/agent-card.md) | identity — the graph is the truth, the card is a projection |
 | [`docs/roles.md`](docs/roles.md) | worker / lead / administrator, and why a lead absorbs |
 | [`docs/adapters.md`](docs/adapters.md) | first-class defaults, pluggable everything |

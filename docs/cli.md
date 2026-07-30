@@ -19,7 +19,10 @@ st task <title>               create a work item
 st crew [--count]             who exists, what state, what role, WHO IS FREE
 st roles [--check]            the hierarchy, and whether it's real
 st role set <agent> <role>    generative: rewrites cards, emits hooks
+st init                       scaffold a NEW deployment (wizard): store, cards, hooks, config
 st new <agent>                create an agent from a card
+st start [--mode lite|heavy]  BOOT the town by mode: the admin alone, or every card. idempotent
+st start <agent>...           bring up exactly these agents (already-up is a SUCCESS, not a refusal)
 st stop <agent>               stop it
 st log [agent]                what happened
 st context <query>            what code should I be looking at? (bobbin)
@@ -27,14 +30,15 @@ st doctor [--install]         what's installed, stale, missing (out-of-box)
 st project                    materialize the crew cards FROM the graph
 st tend                       supervise the crew: respawn what DIED, never what was RETIRED
 st tend --reauth              relaunch every AUTH-DEAD agent (run AFTER the operator re-logs in)
-st attach <agent>             attach to a crew member by name (socket + pane resolved; via shanty)
+st attach [agent]             attach to a crew member — STARTING them if down (pane+socket resolved)
+st attach --no-start          attach only if already running; never create a session
 st stats [agent] [--files]    what the crew actually did: files, skills, tokens (local capture store)
 st dashboard [admin]          live, tier-scoped view: roster/state/work, self-refreshing
 st subscribe                  watch quipu entity events; route governed workflows to the admin
 st worktree <repo> [agent]    provision an agent's isolated worktree off a SHARED project repo
 ```
 
-Nineteen. `--dry-run` is on every command that writes, from commit one. The surface grew past the
+Twenty-one. `--dry-run` is on every command that writes, from commit one. The surface grew past the
 original eight by nine, each on a specific ask — not drift: **inbox**/**task** (the dispatch/tracker
 pair, owner-directed), **context** (the bobbin Context protocol), **doctor**
 (out-of-box detect/install, Stiwi's direct ask), **project** (the quipu-registry
@@ -297,6 +301,243 @@ match is never sufficient evidence of **drain**.
 A **down** pane is not a fault: `route_stop` already rises to the administrator when a lead is
 unreachable, loudly and with a reason. The `live:` leg catches what that path cannot see — pane
 **up**, wiring **wrong**, so nothing rises and nothing drains.
+
+## `st init` — the scaffold wizard
+
+A fresh clone could not reach a runnable state without hand-authoring JSON. Four artifacts had four
+different origins — the store directory was a `mkdir`, the crew cards came from a hierarchy file fed to
+`roles sync`, the settings files were a side effect of `roles set`, the config was hand-written — and
+nothing assigned the `pane` field that every launch, attach, stop and supervise path resolves an agent
+through. `st roles set` cannot help: it *refuses* an agent that has no card yet.
+
+```text
+$ st init
+
+  st init — a few questions. Enter accepts the [default].
+
+  Administrator name (the coordinator) [admin]
+  > sattler
+  Worker names, comma-separated (blank for none — the admin can be alone)
+  > arnold, billy
+  Parent directory for agent workspaces, one dir per agent (blank = launch in the current directory)
+  > /srv/crew
+  Startup mode — heavy/lite (lite starts the administrator ALONE) [lite]
+  >
+  Hibernate the administrator? off/idle/schedule/either (off = its stop wakes it at every turn) [off]
+  > idle
+    Wake when this % of the answerable crew is idle [60]
+  > 70
+
+  store    /home/you/project/.shanty
+  dir      crew/
+  card     sattler      administrator  pane st-sattler  workspace /srv/crew/sattler
+  card     arnold       worker         pane st-arnold   workspace /srv/crew/arnold
+  hooks    settings/administrator.settings.json
+  config   /home/you/project/.shanty/shantytown.toml
+
+  3 agent(s) · startup mode 'lite' · hibernate 'idle'
+
+  Write this? [yes]
+```
+
+### It writes through the existing seams, and adds none
+
+Cards go in through the registry — which is where a card gets its generated pane. Roles and stop-hook
+routing go through `tier.role_set`, the same generative operation `st roles set` uses, so a crew's cards
+and its hooks cannot disagree. The settings files come from the same emitter. Nothing here is a second
+way to declare a crew; every artifact is one you would otherwise have written by hand, in the same
+place and format.
+
+That is also why it isn't `roles sync --interactive`: **sync projects an authority that already exists**
+(the graph, or a hierarchy file) onto cards, and is idempotent against it. **init asks and creates the
+authority** — including two artifacts sync has no opinion about at all, the settings files and
+`shantytown.toml`. Hanging "invent a crew" off a flag of a command whose contract is *mirror what is
+already declared* would make sync's most dangerous property — it overwrites cards to match a source —
+reachable from a prompt.
+
+### It never overwrites
+
+- **An existing store is a refusal.** Cards or a config already there → exit 1, nothing written. A
+  second init is far more likely to be a mistyped `--root` than an intent. `--force` says it on
+  purpose, and even then **no existing card is rewritten** — an agent already carrying
+  `pane: shanty-arnold` and a workspace keeps both, and only missing cards are created.
+- **An existing `shantytown.toml` is kept**, never regenerated over.
+- **A bad name is refused before anything is written.** Agent names become both filenames and tmux
+  session names, so they're validated against the intersection (`[a-z0-9][a-z0-9_-]*`) up front rather
+  than at launch. `.` and `:` are tmux address syntax and are rejected.
+
+### It never blocks on a prompt
+
+No terminal and no `-y` is a **refusal**, not an `input()` that hangs. A wizard that blocks forever
+inside a script or a hook is worse than one that says it cannot ask.
+
+```bash
+st init -y --admin boss --crew ada,bo --mode lite     # scripted: asks nothing
+st init -n                                            # every path it would write; writes nothing
+```
+
+A rejected answer is re-asked with the reason, and the rejection goes out on a channel *separate* from
+the asking — routed through the same door it would call `input()` again and eat your next line as the
+answer to a question nobody asked, shifting every later answer by one.
+
+Finally, it **loads the config it just wrote**. A file this command emits but `st start` would refuse is
+the worst possible handoff.
+
+### Generated pane names
+
+Every card written by any path — `init`, `roles set`, `roles sync` — leaves the registry with a pane, so
+it is startable immediately. The default is `st-<name>`: `shanty` is a different program on the same
+PATH (the same reason the binary is `st`), and a pane prefix is how you read *whose* session a tmux row
+is on a host running more than one orchestrator.
+
+This can only ever **fill a gap** — a card that already names a pane keeps it, whatever the convention
+was when it was written. A fleet whose live sessions are `shanty-*` must not have its cards repointed at
+`st-*` by a projection, which would leave every card addressing a session that does not exist while the
+real ones ran on.
+
+## `st start` — booting the town, by mode
+
+One command that takes *"the crew I want tonight"* and makes it true, with an exit code that says
+whether it did.
+
+```
+$ st start
+  mode 'lite' from the built-in defaults (no config file) — 1 agent(s): sattler
+
+  + sattler      started      launched into 'shanty-sattler', hooks verified
+
+  mode 'lite' · 1 selected · started 1 · 1 up · 0 fault(s)
+
+  attach: `st attach sattler`   ·   roster: `st crew`
+```
+
+**Lite is the default, and lite is the administrator alone.** One agent's context, one agent's bill —
+and the admin is the one agent that can decide who else is needed and dispatch to them. `--mode heavy`
+brings up every card. A mode is a *named set* of crew in
+[`shantytown.toml`](shantytown.toml.example), not a `--count`, because "how much fleet" is a decision
+you make once and re-use.
+
+```bash
+st start                      # the configured mode (default: lite = the admin)
+st start --mode heavy         # every non-retired card, admin first
+st start --mode night         # a mode your config defined
+st start billy harding        # exactly these two
+st start --mode heavy -n      # who WOULD start, and who is already up. launches nothing
+```
+
+### It is idempotent, and that is the whole point
+
+`already-up` is a **success**, not a refusal, and a live agent is never launched over. The operator
+who most needs a boot command is the one who does not know what is currently running — so running it
+twice is not an error, and the second run launches nothing.
+
+That is why it is not `st new` in a loop and not a flag on `st tend`. Both of those have a guard that
+is load-bearing where it is and wrong here: `new` **refuses** a live session ("never replace a live
+agent"), which for a boot is exactly backwards; `tend` refuses to respawn an agent it has no launch
+stamp for (another orchestrator's crew), and a cold host has no stamps for anyone.
+
+It launches through the *same* seam as `st new` — workspace ensured, MCP kit provisioned, skills
+linked, stop hooks verified on the live process — so an agent booted this way is not a cheaper agent.
+
+### What it will not do
+
+- **It will not start a `retired` agent** — not under `heavy`, not when a mode names it explicitly.
+  Retirement is a deliberate, durable shutdown; `st tend --unretire` is what undoes it. Every
+  skipped retiree is *reported*, so silence never looks like a config line that was ignored.
+- **It will not call an unverified launch a launch.** An agent whose runtime never appeared in the
+  pane is `unverified`, is not counted in `up`, and the command exits 2.
+- **It will not attach.** A boot that attached would block the shell that ran it, and the
+  systemd/cron caller cannot afford a foreground tmux client. Attaching is `st attach`.
+- **It will not partially boot on a refusal.** A bad mode, a malformed config or a name with no card
+  refuses *before* launching anything: exit 1, nothing created.
+
+Exit codes: **0** every selected agent is up · **1** refused, nothing launched · **2** the pass ran
+and somebody is not known to be up.
+
+## `st attach` — and it starts what is down
+
+```bash
+st attach                     # the administrator (resolved from the registry), started if down
+st attach weaver              # weaver's pane, started if down
+st attach -r weaver           # observe only: no keystroke can land in their work
+st attach weaver --no-start   # attach ONLY if already running; never create a session
+```
+
+*"weaver is down — `st crew` to see who is up"* is true, and an answer to a question nobody asked: the
+operator typing `st attach weaver` has already decided they want weaver's pane. Sending them to a
+second command to get there is the whole cold-start friction, so the cold-start path is one command:
+
+```bash
+st attach                     # brings up the administrator and drops you in its pane
+```
+
+`--no-start` keeps the old behaviour for the caller that needs it — a script attaching to whatever is
+running must be able to promise it creates nothing. A card with **no pane** is still refused rather
+than launched into an invented session: a session absent from the card is invisible to `st crew`,
+`st stop` and `st tend`.
+
+A launch that could not be *verified* still attaches, loudly. The session exists; what could not be
+established is that the runtime came up. Putting your eyes on that pane is the useful next action —
+exiting instead would hide the evidence behind a second command.
+
+## The stop decision — one verdict, five ranks
+
+Every agent's Stop hook is **one command** that returns **one verdict with one
+reason**. It was a chain of independent commands that could each block the same
+stop with no shared answer; the full argument is in
+[`docs/stop-policy-spec.md`](stop-policy-spec.md).
+
+| # | condition | verdict |
+|---|---|---|
+| 0 | route + persist my own stop event upward | *side effect, never blocks* |
+| 1 | a pending event is **urgent** — an untracked-work alert, or one that rose past an unreachable lead | **BLOCK**: deliver |
+| 2 | **Rule Zero**: free feedable workers **and** dispatchable work both exist | **BLOCK**: dispatch |
+| 3 | **hibernate** declines | **ALLOW**, loudly |
+| 4 | a **deliverable** pending event (sender not mid-flight) | **BLOCK**: deliver |
+| 5 | otherwise | **ALLOW** |
+
+Read the order as the answer to *"why did my coordinator not stop?"* — it is
+answerable from this table alone, which is the property the old chain lacked.
+
+**Ranks 1–5 fail open.** Any error — tmux, bd, a config typo — allows the stop; a
+hook that wedges an agent on a transient hiccup is worse than the stall it
+prevents. Rank 0 does not get to fail *silently*: persisting your own stop event is
+survival, not a decision, so a failure there is reported rather than swallowed into
+a clean-looking allow.
+
+### Hibernate
+
+```toml
+[hibernate]
+enabled = false
+max_quiet_minutes = 60     # 0 = only wake when something pushes
+```
+
+An administrator's Stop hook **drains**: it blocks at the end of every turn and
+re-injects whatever arrived. That is what keeps a coordinator awake, and billing,
+all night. In `lite` mode the shape you want is *admin comes up → assigns hauls →
+goes quiet*, and going quiet is exactly what an unconditional drain prevents.
+
+Four properties make this a policy rather than a work-loss bug:
+
+- **Rank 2 sits above it.** Hibernate can only fire when nothing is urgent *and*
+  there is nothing to hand out — and when Rule Zero overrides it, the output says
+  so by name. You cannot accidentally sleep a coordinator that has work to
+  dispatch.
+- **It sleeps through ordinary reports, deliberately.** With nothing dispatchable,
+  a *"kelly stopped"* is informational; there is no decision to make. That is the
+  feature, and it is safe only because —
+- **Nothing is consumed.** Rank 3 allows the stop without reaching the drain that
+  marks events delivered, so the backlog is intact and the next wake sees all of
+  it. Count it without consuming it: `st anchor --events sattler`.
+- **It removes a self-wake, never a wake.** `st tend`'s pushes, an `st inbox`, a
+  dispatch, or you typing in the pane all still reach it.
+
+`max_quiet_minutes` is **not** a schedule to wake on — it bounds how long waiting
+reports may sit unread while nothing pushes. `0` disables the bound, which is a
+legitimate choice: a push is a wake with a *reason*, and that beats a timer.
+
+Leads and workers never hibernate: a lead's drain is how it absorbs its reports.
 
 ## `st doctor` — the out-of-box feature
 

@@ -115,8 +115,38 @@ def test_the_surface_is_nineteen():
     narrative ledger while stats reads the capture store — two stores, two
     reads, and hiding one behind the other's flag would imply they agree.
 
+    Grew to 20 with `start` — BOOT the town, by token-conservation MODE (Stiwi,
+    owner-directed). The declarative launch surface: it takes "the crew I want
+    tonight" and makes it true, with an exit code that says whether it did.
+
+    It is not a flag on either neighbour, and both refusals are about a guard that
+    is load-bearing WHERE IT IS and wrong here. `new`'s clobber guard REFUSES a
+    live session ("never replace a live agent") — correct for one explicit launch,
+    and for a boot exactly backwards, since "already up" is the most common
+    success. `tend` refuses to respawn an agent it has no launch stamp for
+    (aegis-2j2r: another orchestrator's crew), and a cold host has no stamps for
+    anyone — loosening that gate to fit a boot would loosen it for the 5-minute
+    timer too. So `start` is the declarative, idempotent one: it converges the
+    fleet on a named mode, leaves live agents untouched, and never attaches
+    (attaching is `attach`, which now launches on demand — the systemd/cron caller
+    cannot afford a foreground tmux client).
+
+    Grew to 21 with `init` — the scaffold wizard (Stiwi, owner-directed). Nothing
+    created a store: the crew cards came from a hand-authored hierarchy file fed to
+    `roles sync`, the settings files were a side effect of `roles set`, the config
+    was hand-written, and `roles set` REFUSES an agent with no card — so the first
+    instruction to a new user was "edit this JSON".
+
+    It earns a slot rather than becoming `roles sync --interactive` because sync
+    PROJECTS an existing authority (the graph, or a hierarchy file) onto cards and
+    is idempotent against it, while init ASKS and creates the authority — including
+    two artifacts sync has no opinion about at all, the settings files and
+    shantytown.toml. Hanging "invent a crew" off the flag of a command whose
+    contract is "mirror what is already declared" would make sync's most dangerous
+    property (it overwrites cards to match a source) reachable from a prompt.
+
     Each command still earns its slot."""
-    assert len(_actual_subcommands()) == 19, (
+    assert len(_actual_subcommands()) == 21, (
         "the command count changed. If that's intended, update the number here and "
         "the cli.py docstring together — and say why the surface grew in docs/cli.md."
     )

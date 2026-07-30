@@ -49,17 +49,17 @@ def test_lead_settings_send_and_drain():
                     f"{_PY} -m shantytown.stop_event drain"]
 
 
-def test_administrator_settings_drain_and_feed_check():
-    """Root: receives only (no `send`), and its own stop is GATED. Beside the drain
-    that delivers received events sits the Rule Zero feed-check (aegis-hfta): it
-    blocks the admin's stop while free feedable workers and dispatchable beads
-    coexist, so the coordinator cannot go idle with the fleet idle. Fail-open lives
-    inside the module; here we only pin that the hook is EMITTED, in order."""
+def test_administrator_settings_are_ONE_decision():
+    """Root: receives only (no `send`), and its stop is decided ONCE.
+
+    This was [stop_event drain, feed_check] — two commands that could each return
+    decision:block for the same stop, neither able to see the other's verdict.
+    That is what made a documented hibernate policy inert and scraped the same
+    panes three times per turn boundary (docs/stop-policy-spec.md). One entry now
+    weighs delivery, Rule Zero and hibernate as five ordered ranks.
+    """
     cmds = _stop_commands(settings_for_role("administrator"))
-    assert cmds == [
-        f"{_PY} -m shantytown.stop_event drain",
-        f"{_PY} -m shantytown.feed_check",
-    ]
+    assert cmds == [f"{_PY} -m shantytown.stop_policy"]
 
 
 def test_hook_interpreter_actually_exists():

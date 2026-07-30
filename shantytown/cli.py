@@ -1,9 +1,10 @@
-"""st — the CLI. Nineteen commands, and the count is load-bearing: each earns its slot.
+"""st — the CLI. Twenty-one commands, and the count is load-bearing: each earns its slot.
 
     anchor [--short|--events|--harness] · go · inbox [--count] · task
-    · crew [--count] · roles [--check] · role set · new · stop · log · context
-    · doctor [--install] · project · tend [--install|--status|--reauth]
-    · attach [-r] · dashboard [admin] · subscribe · worktree [--gc] · stats
+    · crew [--count] · roles [--check] · role set · init · new · start [--mode]
+    · stop · log · context · doctor [--install] · project
+    · tend [--install|--status|--reauth] · attach [-r|--no-start]
+    · dashboard [admin] · subscribe · worktree [--gc] · stats
 
 Five of those flags are MACHINE-READABLE modes, added for an external status bar
 (anchor --short/--events/--harness, crew --count, inbox --count). They are flags
@@ -43,6 +44,19 @@ grew past the original ten by seven, each on a specific ask — not drift:
   · subscribe — watch quipu entity events and route governed workflows to the
               admin (the events adapter integrations.md sketched, built first-
               class on Quipu's cursored transaction log). Owner-directed.
+  · start   — BOOT the town by mode: `lite` brings up the administrator alone and
+              lets it decide who else is needed, `heavy` brings up every card.
+              Owner-directed, and it is a command for the reason bootstrap.py
+              argues: `new` REFUSES a live session (right for a primitive, wrong
+              for a boot, where "already up" is success) and `tend` is a
+              timer-driven supervisor that will not touch an agent it has no
+              launch stamp for — a cold host has no stamps. Declarative and
+              idempotent: it converges the fleet on a named crew set.
+  · init    — scaffold a NEW deployment by asking: the store, the crew cards (with
+              generated panes), their hooks, and shantytown.toml. It writes through
+              the EXISTING seams — the registry, tier.role_set, the same settings
+              emitter `roles set` uses — so it is not a second way to declare a
+              crew, it is the first way to get one without hand-authoring JSON.
 The count is PINNED by a test (tests/test_command_count.py): the next command
 either updates this number or fails CI. This docstring used to say "ten" while the
 code had eleven (context landed unannounced) — a count nobody enforces is a
@@ -57,10 +71,13 @@ import time
 from pathlib import Path
 
 from . import beads as beads_mod
+from . import bootstrap as boot_mod
+from . import config
 from . import harness as harness_mod
 from . import roles as roles_mod
+from . import scaffold
 from . import triage as triage_mod
-from .deployment import deployment_default
+from .deployment import deployment_default, resolve_root, root_note
 from .dispatch import Dispatcher, TriageRefused, SendUnverified, AlreadyAssigned, Closed
 from .events import FilesEvents
 from .inbox import FilesInbox, MessageTooLong, TrackerInbox
@@ -258,14 +275,13 @@ def _wire(a) -> Dispatcher:
 
 
 def _default_root() -> Path:
-    """Where the store is when nobody said. $SHANTY_ROOT wins over the cwd.
+    """Where the store is when nobody said — the shared discovery chain.
 
     Resolved at CALL time, not at import: a test (and a shell) that sets the env
     after this module is imported must still be honoured, and a module-level
     default would freeze whatever the environment happened to be at import.
     """
-    env = os.environ.get("SHANTY_ROOT")
-    return Path(env) if env else Path.cwd() / ".shanty"
+    return resolve_root()[0]
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -290,7 +306,16 @@ def build_parser() -> argparse.ArgumentParser:
         action="version",
         version=f"st {__version__} ({deployed_sha()})",
     )
-    ap.add_argument("--root", type=Path, default=_default_root())
+    # DEFAULT None, resolved in main() — not computed here. Two commands need
+    # different answers for "nobody said": every read/launch command DISCOVERS a
+    # store (walk up, then the box's pointer), while `init` must answer cwd/.shanty
+    # and never adopt a deployment it merely found. A default baked in at parse
+    # time cannot tell "unset" from "set to the discovered value", so the choice
+    # would be unmakeable.
+    ap.add_argument("--root", type=Path, default=None,
+                    help="the store. Unset: $SHANTY_ROOT, else a .shanty found by "
+                         "walking up from here, else the box's deployment pointer "
+                         "(~/.config/shantytown/root), else ./.shanty")
     ap.add_argument("--backend", choices=["files", "beads", "forgejo"], default=None,
                     help="tracker backend (identity is always files). #3. "
                          "Unset means the deployment's SHANTY_BACKEND "
@@ -396,6 +421,48 @@ def build_parser() -> argparse.ArgumentParser:
     nw.add_argument("agent")
     nw.add_argument("-n", "--dry-run", action="store_true")
 
+    it = sub.add_parser("init",
+                        help="scaffold a NEW deployment: asks a few questions, "
+                             "then writes the store, the crew cards, their hooks "
+                             "and shantytown.toml")
+    it.add_argument("--admin", default=None,
+                    help="the administrator's name (skips that question)")
+    it.add_argument("--crew", default=None,
+                    help="comma-separated worker names (skips that question)")
+    it.add_argument("--workspaces", default=None, metavar="DIR",
+                    help="parent directory for agent workspaces — each agent gets "
+                         "DIR/<name>. Omitted: agents launch in the current dir")
+    it.add_argument("--mode", default=None, choices=["lite", "heavy"],
+                    help="the startup mode to write into the config (default lite)")
+    it.add_argument("--hibernate", action="store_true",
+                    help="let the administrator go quiet when there is nothing "
+                         "to dispatch (default: off)")
+    it.add_argument("-y", "--yes", action="store_true",
+                    help="ask NOTHING: take the flags and the defaults. Required "
+                         "when stdin is not a terminal, so a scripted init can "
+                         "never block on a prompt")
+    it.add_argument("--force", action="store_true",
+                    help="scaffold into a store that already has crew cards or a "
+                         "config (never overwrites a card; only fills gaps)")
+    it.add_argument("-n", "--dry-run", action="store_true",
+                    help="ask the questions, show every path it would write, "
+                         "write nothing")
+
+    sr = sub.add_parser("start",
+                        help="bring the town UP by MODE: lite (the administrator "
+                             "alone) or heavy (every card). Idempotent; never attaches")
+    sr.add_argument("agent", nargs="*",
+                    help="start exactly these agents (a card name each). The "
+                         "mode's crew when omitted.")
+    sr.add_argument("--mode", default=None,
+                    help="which mode's crew to bring up. Unset: startup.mode from "
+                         "<root>/shantytown.toml, else `lite`. Built-in modes are "
+                         "lite (administrator only) and heavy (every non-retired "
+                         "card); a config may define more.")
+    sr.add_argument("-n", "--dry-run", action="store_true",
+                    help="say who WOULD start, and who is already up. Launches "
+                         "nothing, clones nothing.")
+
     st = sub.add_parser("stop", help="stop it")
     st.add_argument("agent")
     st.add_argument("-n", "--dry-run", action="store_true")
@@ -485,12 +552,18 @@ def build_parser() -> argparse.ArgumentParser:
     td.add_argument("-n", "--dry-run", action="store_true",
                     help="say what would be respawned; touch NOTHING")
 
-    at = sub.add_parser("attach", help="attach to a crew member by name "
+    at = sub.add_parser("attach", help="attach to a crew member by name — "
+                                       "STARTING them first if they are down "
                                        "(socket + pane resolved for you)")
     at.add_argument("agent", nargs="?",
                     help="whose pane; defaults to the administrator (the coordinator)")
     at.add_argument("-r", "--read-only", action="store_true",
                     help="observe only — no keystroke can land in their work")
+    at.add_argument("--no-start", action="store_true",
+                    help="do NOT launch a down agent: refuse instead. The pure "
+                         "observer's flag — for a script that wants to attach to "
+                         "whatever is already running and must never create a "
+                         "session as a side effect.")
 
     db = sub.add_parser("dashboard", help="a live, self-refreshing view of an "
                                           "admin's tier (roster/state/work)")
@@ -573,6 +646,10 @@ def _warn_deprecated_alias(old: str, canonical: str) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     a = _parse_args(argv)
+    # RESOLVE THE STORE ONCE, here, so every handler downstream sees a real Path
+    # and none of them re-derives one. `how` rides along so a surface that needs
+    # to explain an empty or surprising store can say which leg answered.
+    a.root, a.root_how = resolve_root(a.root, discover=(a.cmd != "init"))
 
     if a.cmd == "anchor":
         return _cmd_anchor(a)
@@ -614,6 +691,10 @@ def main(argv: list[str] | None = None) -> int:
         return stats_mod.stats_report(a.root, a.agent, since_h=a.since)
     if a.cmd == "new":
         return _cmd_new(a)
+    if a.cmd == "init":
+        return _cmd_init(a)
+    if a.cmd == "start":
+        return _cmd_start(a)
     if a.cmd == "project":
         _warn_deprecated_alias("project", "roles sync")
         return _cmd_project(a)
@@ -737,13 +818,28 @@ def _observe_live(runtime, panes, session) -> bool:
     return False
 
 
+def _session_for(card) -> str:
+    """The session an agent launches into.
+
+    Fallback name when the card names no pane. Deliberately prefixed `st-`: a
+    session st creates must never collide with one somebody else's tooling already
+    launched under a name we'd also pick.
+
+    ONE resolver because THREE surfaces now need the same answer — `new` launches
+    into it, `attach` has to attach to the session it just asked for, and
+    `bootstrap` reports it. Two of those computing it separately is a bug where
+    st launches an agent and then cannot find it.
+    """
+    return card.pane or f"st-{card.name}"
+
+
 def _cmd_new(a) -> int:
     """new <agent> — bring up a HOOKED agent session (#5).
 
-    new_session (empty pane) -> Runtime.start (compose w/ --settings, send) ->
-    verify PROCESS live -> 0/1/2. The order is deliberate: everything that can
-    REFUSE (unknown agent, capability, settings) runs BEFORE any tmux mutation, so
-    a refusal creates nothing (arnold: 'write nothing, launch nothing').
+    The single-agent PRIMITIVE, and it REFUSES a live session (the clobber guard
+    below) — `st new` on a running agent is a mistake, not an idempotent no-op.
+    The boot command that wants "make it so, whatever is currently up" is
+    `st start`; the difference is written up in bootstrap.py.
     """
     panes = _panes(a)
     try:
@@ -752,10 +848,25 @@ def _cmd_new(a) -> int:
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED
     runtime = _runtime(a, panes)
-    # Fallback session name when the card names no pane. Deliberately prefixed
-    # `st-`: a session `st new` creates must never collide with one somebody
-    # else's tooling already launched under a name we'd also pick.
-    session = card.pane or f"st-{card.name}"
+    return _launch(a, card, panes, runtime, dry_run=a.dry_run)
+
+
+def _launch(a, card, panes, runtime, *, dry_run: bool = False) -> int:
+    """LAUNCH ONE AGENT. The whole seam: refuse-first, then workspace, then kit,
+    then session, then verify. Returns 0 (up + hooks verified) / 1 (refused) /
+    2 (launched but not verified).
+
+    new_session (empty pane) -> Runtime.start (compose w/ --settings, send) ->
+    verify PROCESS live -> 0/1/2. The order is deliberate: everything that can
+    REFUSE (unknown agent, capability, settings) runs BEFORE any tmux mutation, so
+    a refusal creates nothing (arnold: 'write nothing, launch nothing').
+
+    ONE launcher, shared by `new`, `start` and `attach`, so none of them can
+    acquire a cheaper version of it: the pre-flight order above, the workspace
+    guard, the equipped-or-not-created refusal and the hooks verification are each
+    load-bearing, and a second launcher would have to re-earn all four.
+    """
+    session = _session_for(card)
     # PRE-FLIGHT: compose refuses capability/settings/unknown-harness BEFORE we
     # touch tmux. UnknownHarness is a REFUSAL by design (harness.py) but was not in
     # this except, so a card naming a harness we cannot host exited with a
@@ -766,7 +877,7 @@ def _cmd_new(a) -> int:
     except (CapabilityError, SettingsError, harness_mod.UnknownHarness) as e:
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED
-    if a.dry_run:
+    if dry_run:
         print(f"  would launch in {session}: {launch}")
         return OK
     # WORKSPACE: the launch string `cd`s into card.workspace, so the
@@ -836,13 +947,13 @@ def _cmd_new(a) -> int:
     # different human actions (live-fire found the consent case).
     final = panes.capture(session)
     if getattr(runtime, "waiting_for_human", None) and runtime.waiting_for_human(final):
-        print(f"  could not tell: {a.agent} ({session}) is WAITING ON A PROMPT "
-              f"(first-run consent), not up yet. Answer it: `st log {a.agent}` to "
-              f"see it, then attach to the pane.", file=sys.stderr)
+        print(f"  could not tell: {card.name} ({session}) is WAITING ON A PROMPT "
+              f"(first-run consent), not up yet. Answer it: `st log {card.name}` to "
+              f"see it, then `st attach {card.name}`.", file=sys.stderr)
         return CANNOT_TELL
-    print(f"  could not tell: launched {a.agent} but the runtime was not observed "
+    print(f"  could not tell: launched {card.name} but the runtime was not observed "
           f"live in {session} within the timeout. It may still be coming up; "
-          f"check `st log {a.agent}`.", file=sys.stderr)
+          f"check `st log {card.name}`.", file=sys.stderr)
     return CANNOT_TELL
 
 
@@ -881,7 +992,7 @@ def _verify_live_hooks(a, card, runtime, panes, session: str) -> int:
         # direction; reporting could-not-tell here would be a false alarm on
         # every leaf agent, and false alarms are what teach an operator to stop
         # reading the output.
-        print(f"  started {a.agent} ({session}) — runtime live; the graph "
+        print(f"  started {card.name} ({session}) — runtime live; the graph "
               f"requires no stop directions of this agent.")
         return OK
     # cmdline is deliberately NOT a Panes protocol method (arnold's non-goal for
@@ -891,7 +1002,7 @@ def _verify_live_hooks(a, card, runtime, panes, session: str) -> int:
     reader = getattr(panes, "cmdline", None)
     wiring = live_wiring(session, reader) if reader else None
     if wiring is None:
-        print(f"  could not tell: {a.agent} ({session}) is live, but its stop "
+        print(f"  could not tell: {card.name} ({session}) is live, but its stop "
               f"hooks could NOT be read from the running process, so it is "
               f"UNVERIFIED — not confirmed hooked. Check `st roles --check`.",
               file=sys.stderr)
@@ -913,17 +1024,329 @@ def _verify_live_hooks(a, card, runtime, panes, session: str) -> int:
                   if wiring.settings_path
                   else ", and its launch line carries NO --settings at all "
                        "(this one IS the hookless-zombie case)")
-        print(f"  FAILED: {a.agent} ({session}) came up WITHOUT the stop hooks "
+        print(f"  FAILED: {card.name} ({session}) came up WITHOUT the stop hooks "
               f"its position requires. The live process carries {carries}"
               f"{whence}, but this agent needs {sorted(need)} — missing "
               f"{sorted(missing)}. It is running and it is broken: remove it "
-              f"with `st stop {a.agent}`, fix the settings it launches with, "
+              f"with `st stop {card.name}`, fix the settings it launches with, "
               f"and start it again.", file=sys.stderr)
         return REFUSED
     verified = sorted(need) if need else "none required by the graph"
-    print(f"  started {a.agent} ({session}) — runtime live, stop hooks VERIFIED "
+    print(f"  started {card.name} ({session}) — runtime live, stop hooks VERIFIED "
           f"on the live process: {verified}.")
     return OK
+
+
+# The mode label `st start <agent>...` reports: agents named on the command line
+# came from no mode, and printing one would credit a config that was never read.
+EXPLICIT = "explicit"
+
+
+def _prompt(prompt: str, default: str) -> str:
+    """One wizard question on a real terminal.
+
+    The QUESTION goes on its own line and the cursor sits on a short `>` below it.
+    Several of these questions carry a clause explaining the choice, and a long
+    question with the answer typed onto its right-hand end wraps into an unreadable
+    paragraph — worse when stdin is piped, where nothing echoes to break the line.
+
+    `default` is shown in brackets; Enter accepts it. EOF (a piped stdin that ran
+    out) takes the default rather than raising: an init that dies on ^D after six
+    answered questions throws away work the operator already did.
+    """
+    suffix = f" [{default}]" if default else ""
+    print(f"  {prompt}{suffix}")
+    try:
+        return input("  > ")
+    except EOFError:
+        print()
+        return ""
+
+
+def _cmd_init(a, *, ask=_prompt, isatty=None) -> int:
+    """init — scaffold a deployment: the store, the cards, the hooks, the config.
+
+    It WRITES THROUGH THE EXISTING SEAMS and adds no new ones: cards go in via the
+    registry (which is where a card gets its generated pane), roles and stop-hook
+    routing via tier.role_set, hook files via the same emitter `roles set` uses.
+    Nothing here is a second way to declare a crew — every artifact is one the
+    operator would otherwise have hand-written, in the same place and format.
+
+    0 wrote it · 1 refused (a bad name, an existing store, no terminal to ask in).
+    """
+    import sys as _sys
+    root = Path(a.root)
+    isatty = isatty if isatty is not None else _sys.stdin.isatty
+    crew_dir = root / "crew"
+
+    # AN EXISTING STORE IS A REFUSAL, not a merge. A second init over a live
+    # deployment is far more likely to be a mistyped --root than an intention, and
+    # the cost of guessing wrong is a crew card set nobody expected. --force is the
+    # way to say it on purpose; even then no existing card is overwritten.
+    existing = sorted(crew_dir.glob("*.json")) if crew_dir.is_dir() else []
+    cfg_exists = config.config_path(root).is_file()
+    if (existing or cfg_exists) and not a.force:
+        what = []
+        if existing:
+            what.append(f"{len(existing)} crew card(s)")
+        if cfg_exists:
+            what.append(config.CONFIG_NAME)
+        print(f"  refused: {root} is already a deployment ({', '.join(what)}). "
+              f"`st crew` to see it. To add an agent to an existing store use "
+              f"`st roles set <name> <role>`; pass --force if you really mean to "
+              f"scaffold over this one (no existing card is overwritten).",
+              file=_sys.stderr)
+        return REFUSED
+
+    # FLAGS PRE-ANSWER QUESTIONS; --yes skips the asking entirely. A non-tty with
+    # no --yes REFUSES rather than calling input() — a wizard that blocks forever
+    # inside a script or a hook is worse than one that says it cannot ask.
+    defaults = scaffold.Answers(
+        admin=a.admin or scaffold.DEFAULT_ADMIN,
+        workers=tuple(w.strip() for w in (a.crew or "").split(",") if w.strip()),
+        workspaces=a.workspaces,
+        mode=a.mode or config.DEFAULT_MODE,
+        hibernate=bool(a.hibernate))
+    try:
+        if a.yes:
+            answers = scaffold.make_answers(
+                admin=defaults.admin, workers=defaults.workers,
+                workspaces=defaults.workspaces, mode=defaults.mode,
+                hibernate=defaults.hibernate)
+        elif not isatty():
+            print(f"  refused: stdin is not a terminal, so `st init` cannot ask "
+                  f"its questions. Pass -y/--yes to take the flags and defaults "
+                  f"(`st init -y --admin <name> --crew a,b`).", file=_sys.stderr)
+            return REFUSED
+        else:
+            print("\n  st init — a few questions. Enter accepts the [default].\n")
+            answers = scaffold.ask_all(ask, defaults=defaults)
+    except scaffold.ScaffoldError as e:
+        print(f"  refused: {e}", file=_sys.stderr)
+        return REFUSED
+
+    plan = scaffold.plan(root, answers)
+    # PREVIEW THEN CONFIRM, but only for the operator who is being asked. Under
+    # --yes the answers came from flags and the write log below says the same
+    # thing with real paths, so a preview there is noise ahead of the truth.
+    if a.dry_run or not a.yes:
+        print()
+        print(plan.render())
+        print()
+    if a.dry_run:
+        print("  --dry-run: nothing written.\n")
+        return OK
+    if not a.yes:
+        if ask("Write this?", "yes").strip().lower() in ("n", "no"):
+            print("  nothing written.")
+            return REFUSED
+        print()
+    return _init_apply(a, root, plan, answers)
+
+
+def _init_apply(a, root: Path, plan, answers) -> int:
+    """Write the plan. Cards first (so role_set has agents to wire), then roles +
+    hooks in ONE generative operation, then the config."""
+    from . import tier
+    from .protocols import Agent
+
+    for d in plan.dirs:
+        (root / d).mkdir(parents=True, exist_ok=True)
+
+    reg = FilesRegistry(root / "crew")
+    for name, _role, _pane in plan.cards:
+        if (root / "crew" / f"{name}.json").is_file():
+            # --force reached an existing card. Leave it EXACTLY as it is: init
+            # scaffolds what is missing and is never a card rewriter.
+            print(f"  kept     {name:<12} (card already exists — not touched)")
+            continue
+        ws = f"{answers.workspaces.rstrip('/')}/{name}" if answers.workspaces else None
+        reg.set(Agent(name=name, role="worker", workspace=ws))
+        print(f"  card     {name:<12} {root / 'crew' / f'{name}.json'}")
+
+    # ROLES + ROUTING through the generative op, so the cards and the stop hooks
+    # cannot disagree — the reason this does not write the hierarchy itself.
+    try:
+        rplan = tier.role_set(reg, answers.admin, "administrator",
+                             reports=list(answers.workers))
+    except (LookupError, ValueError, CapabilityError) as e:
+        print(f"  refused: could not wire the tier: {e}", file=sys.stderr)
+        return REFUSED
+    for ag in rplan.writes:
+        print(f"  role     {ag.name:<12} {ag.role}"
+              f"{f' -> reports_to {ag.reports_to}' if ag.reports_to else ''}")
+
+    for path in _emit_role_settings(root, {ag.role for ag in rplan.writes}):
+        print(f"  hooks    {path}")
+
+    cfg_path = config.config_path(root)
+    if cfg_path.is_file():
+        print(f"  kept     {cfg_path} (already there — not overwritten)")
+    else:
+        cfg_path.write_text(plan.config_text)
+        print(f"  config   {cfg_path}")
+
+    # PROVE IT PARSES. The file was just generated, and a config this command
+    # writes but `st start` would refuse is the worst possible handoff.
+    try:
+        config.load(root)
+    except config.ConfigError as e:
+        print(f"  ⚠ the config just written does NOT parse: {e}", file=sys.stderr)
+        return CANNOT_TELL
+
+    print()
+    print(f"  ready. {len(plan.cards)} card(s), mode {answers.mode!r}.")
+    print(f"    st start          # bring up mode {answers.mode!r}")
+    print(f"    st attach         # the admin's pane (starts it if it is down)")
+    print(f"    st crew           # who exists, who is up")
+    print()
+    return OK
+
+
+def _boot_launcher(a, panes, runtime):
+    """launch(card) -> (bootstrap verdict, why), over the ONE launcher.
+
+    The `why` deliberately POINTS AT the launcher's own output rather than
+    restating it. _launch already prints the specific refusal (a missing settings
+    file, an unequipped workspace, a harness we cannot host) and a summary written
+    here would be a second, shorter account of the same event — which is how a
+    report ends up disagreeing with the lines directly above it.
+    """
+    def launch(card):
+        rc = _launch(a, card, panes, runtime, dry_run=False)
+        if rc == OK:
+            return boot_mod.STARTED, f"launched into {_session_for(card)!r}, hooks verified"
+        if rc == REFUSED:
+            return boot_mod.REFUSED, "launch REFUSED — the reason is printed above"
+        return (boot_mod.UNVERIFIED,
+                f"session {_session_for(card)!r} exists but the runtime was NOT "
+                f"observed live — see above; `st log {card.name}`")
+    return launch
+
+
+def _start_roster(a, cfg, agents) -> tuple[list[str], str, list[str], str | None]:
+    """(names, mode label, skipped-retired, refusal) — WHO `st start` will bring up.
+
+    Pure resolution, separated from the launching so a test can pin the selection
+    rules (retired exclusion, tier order, unknown names) without a runtime. The
+    refusal string is returned rather than printed for the same reason.
+    """
+    if a.agent:
+        # EXPLICIT NAMES WIN, AND THE MODE IS NOT CONSULTED. Naming both is
+        # REFUSED rather than silently resolved: `st start --mode heavy sattler`
+        # has two readings ("heavy, plus sattler" / "sattler, from the heavy set")
+        # and picking one quietly means the operator who meant the other brings up
+        # a fleet they did not ask for. Ambiguity about how many agents to bill is
+        # not the place to guess.
+        if a.mode:
+            return [], "", [], (
+                f"--mode {a.mode!r} and explicit agents ({', '.join(a.agent)}) are "
+                f"two different asks — a mode IS a crew list. Pick one: "
+                f"`st start --mode {a.mode}` for the mode's crew, or "
+                f"`st start {' '.join(a.agent)}` for exactly these.")
+        selectors, label = list(a.agent), EXPLICIT
+    else:
+        try:
+            selectors = cfg.selectors(a.mode)
+        except config.ConfigError as e:
+            return [], "", [], str(e)
+        label = a.mode or cfg.mode
+
+    roster = config.resolve_crew(selectors, agents)
+    if roster.unknown:
+        return [], label, [], (
+            f"no card for: {', '.join(sorted(roster.unknown))}. A selector is `*`, "
+            f"a role ({', '.join(config.ROLE_SELECTORS)}) or an agent name; "
+            f"`st crew` lists the cards that exist.")
+    if not roster.names:
+        # SELECTED NOBODY. The common shape is a `lite` boot on a store with no
+        # administrator card — and the useful message names the store, not the
+        # abstraction, because the fix is `st roles set <agent> administrator`.
+        detail = (f" (the roster has {len(agents)} card(s), and none of them "
+                  f"matched)" if agents else " (the roster is EMPTY — no cards)")
+        retired_note = (f" {len(roster.skipped_retired)} matching card(s) are "
+                        f"RETIRED and are never started: "
+                        f"{', '.join(sorted(roster.skipped_retired))}."
+                        if roster.skipped_retired else "")
+        return [], label, roster.skipped_retired, (
+            f"mode {label!r} selects {selectors} and that matched NO agent to "
+            f"start{detail}.{retired_note} An administrator is what `lite` boots: "
+            f"`st roles set <agent> administrator` writes one.")
+    return roster.names, label, roster.skipped_retired, None
+
+
+def _cmd_start(a) -> int:
+    """start [agent...] [--mode M] — bring the town up. The boot command.
+
+    Why this is a command and not `st new` in a loop, or a flag on `st tend`, is
+    argued in bootstrap.py. Here, the three things the exit code has to mean:
+
+      0  every selected agent is UP (launched now, or already running)
+      1  REFUSED before launching anything — a bad mode, a bad config, a name
+         with no card. A refusal launches NOTHING; it is not a partial boot.
+      2  the pass ran and some agent is NOT known to be up (refused mid-flight,
+         or launched-but-unverified). A boot you cannot script on is not a boot.
+    """
+    panes = _panes(a)
+    try:
+        agents = _registry(a).all()
+    except Exception as e:                       # noqa: BLE001 — registry unreachable
+        print(f"  could not tell: {e}", file=sys.stderr)
+        return CANNOT_TELL
+
+    # CONFIG FIRST, and a malformed file REFUSES (config.load, not
+    # load_or_default): this command launches agents, and starting the wrong SET
+    # because a key was misspelled is worse than starting nothing.
+    try:
+        cfg = config.load(a.root)
+    except config.ConfigError as e:
+        print(f"  refused: {e}", file=sys.stderr)
+        return REFUSED
+
+    names, label, skipped, refusal = _start_roster(a, cfg, agents)
+    if refusal:
+        print(f"  refused: {refusal}", file=sys.stderr)
+        return REFUSED
+
+    reg = _registry(a)
+    cards = [reg.get(n) for n in names]
+    if label == EXPLICIT:
+        print(f"  {len(cards)} agent(s) named on the command line: {', '.join(names)}")
+    else:
+        where = f"{cfg.path}" if cfg.path else "the built-in defaults (no config file)"
+        print(f"  mode {label!r} from {where} — {len(cards)} agent(s): "
+              f"{', '.join(names)}")
+    runtime = _runtime(a, panes)
+    boot = boot_mod.Bootstrapper(
+        panes, launch=_boot_launcher(a, panes, runtime),
+        log=lambda msg: print(f"  {msg}", file=sys.stderr))
+    rep = boot.bring_up(cards, mode="" if label == EXPLICIT else label,
+                        dry_run=a.dry_run, skipped_retired=skipped)
+    print()
+    print(rep.render())
+    print()
+    # WHERE THE OPERATOR GOES NEXT. A boot whose whole point is "start the admin"
+    # should not make them look up how to reach it.
+    if not a.dry_run and rep.up():
+        head = rep.up()[0]
+        print(f"  attach: `st attach {head}`   ·   roster: `st crew`")
+    _report_hibernate(cfg)
+    return OK if rep.healthy() else CANNOT_TELL
+
+
+def _report_hibernate(cfg) -> None:
+    """Say the hibernate policy in force, on the command that just applied the
+    rest of the config. An operator reading `st start` output is holding the
+    config in their head at that exact moment, and a policy that only ever
+    manifests as "the admin went quiet at 3am" is one nobody connects to a file."""
+    h = cfg.hibernate
+    if not h.enabled:
+        return
+    valve = (f", or after {h.max_quiet_minutes} min of quiet"
+             if h.max_quiet_minutes else "")
+    print(f"  hibernate ON: the administrator goes quiet when nothing is urgent "
+          f"and there is nothing to dispatch. Rule Zero still overrides it. It "
+          f"wakes on a push{valve}.")
 
 
 def _cmd_stop(a) -> int:
@@ -2608,12 +3031,26 @@ def _cmd_dashboard(a) -> int:
 
 
 def _cmd_attach(a, *, execer=_exec_attach, which=None) -> int:
-    """attach [agent] [-r] — attach to a crew member by name.
+    """attach [agent] [-r] — attach to a crew member, STARTING them if down.
 
     st already knows the socket (declared_socket) and the pane (the registry), so
     the operator never types `tmux -L gt-ae5f35 attach -t shanty-weaver`. Refuses
-    cleanly on an unknown or down agent — never a raw tmux error — the same
-    discipline as go/stop.
+    cleanly on an unknown agent — never a raw tmux error — the same discipline as
+    go/stop.
+
+    IT LAUNCHES A DOWN AGENT (owner-directed). "weaver is down, run `st crew`" is a
+    true sentence that answers a question nobody asked: the operator typing
+    `st attach weaver` has already decided they want to be in weaver's pane, and
+    making them run a second command to get there is the whole cold-start friction.
+    The launch goes through the same `_launch` seam as `st new`, so an agent
+    attached-into-existence is provisioned, workspace-checked and hook-verified
+    exactly like one `st new` made.
+
+    `--no-start` is for the caller that must promise it creates nothing — a script
+    attaching to whatever is already running. That need is real, so it stays
+    reachable; it is the FLAG rather than the default because the frequent, human
+    case should be the default and the careful, scripted case should be the one
+    that says so.
     """
     import shutil
     which = which or shutil.which
@@ -2652,12 +3089,48 @@ def _cmd_attach(a, *, execer=_exec_attach, which=None) -> int:
     except LookupError as e:
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED
-    if not card.pane or not panes.exists(card.pane):
-        where = f"socket {socket!r}" if socket else "the default tmux server"
-        print(f"  refused: {name} is down — no live pane "
-              f"{card.pane or '(none on card)'} on {where}. `st crew` to see who "
-              f"is up.", file=sys.stderr)
+    if not card.pane:
+        # NO PANE ON THE CARD IS STILL A REFUSAL, even though a down agent is not.
+        # `_launch` would invent an `st-<name>` session, but a session that is not
+        # on the card is invisible to `st crew`, `st stop` and `st tend` — so
+        # attaching into one would create an agent only this command can find.
+        # The fix is the card, and it is one command.
+        print(f"  refused: {name} has NO pane on its card, so there is no session "
+              f"to attach to or start. Add a `pane` to "
+              f"{Path(a.root) / 'crew' / f'{name}.json'} (e.g. "
+              f"\"shanty-{name}\") — the card projection does not assign one.",
+              file=sys.stderr)
         return REFUSED
+
+    if not panes.exists(card.pane):
+        where = f"socket {socket!r}" if socket else "the default tmux server"
+        if a.no_start:
+            print(f"  refused: {name} is down — no live pane {card.pane} on "
+                  f"{where}, and --no-start says do not launch it. `st crew` to "
+                  f"see who is up.", file=sys.stderr)
+            return REFUSED
+        print(f"  {name} is down (no {card.pane} on {where}) — starting it, then "
+              f"attaching.")
+        runtime = _runtime(a, panes)
+        rc = _launch(a, card, panes, runtime, dry_run=False)
+        if rc == REFUSED:
+            # The launcher already said WHY. Do not attach into a session that
+            # either does not exist or came up broken enough to refuse.
+            print(f"  refused: could not start {name} — not attaching.",
+                  file=sys.stderr)
+            return REFUSED
+        if rc == CANNOT_TELL:
+            # LAUNCHED BUT UNVERIFIED -> ATTACH ANYWAY, LOUDLY. The session
+            # exists; what could not be established is that the runtime came up
+            # (or that its hooks are wired). The single most useful next action is
+            # to put the human's eyes on that pane — which is what they asked for.
+            # Exiting instead would hide the evidence behind a second command.
+            print(f"  ⚠ {name} was launched but NOT verified live (see above) — "
+                  f"attaching so you can see the pane itself.", file=sys.stderr)
+        elif not panes.exists(card.pane):
+            print(f"  could not tell: started {name} but {card.pane} still does "
+                  f"not exist — nothing to attach to.", file=sys.stderr)
+            return CANNOT_TELL
 
     argv, env = _attach_argv(card.pane, socket, a.read_only,
                              which("shanty") is not None)

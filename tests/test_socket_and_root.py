@@ -28,13 +28,31 @@ def test_default_root_falls_back_to_the_cwd(monkeypatch, tmp_path):
     assert cli._default_root() == tmp_path / ".shanty"
 
 
-def test_the_parser_resolves_the_root_at_PARSE_time_not_import(monkeypatch, tmp_path):
-    """A module-level default freezes whatever the environment was at import, so
-    a shell that exports the root before running st would still be ignored —
-    which is the bug, one layer deeper."""
+def test_the_root_is_resolved_at_RUN_time_not_import(monkeypatch, tmp_path):
+    """A module-level default freezes whatever the environment was at import, so a
+    shell that exports the root before running st would still be ignored — which is
+    the bug, one layer deeper.
+
+    The seam is main(), not the parser: `--root` defaults to None so that `init`
+    (which must never adopt a store it merely FOUND) can resolve differently from
+    every other command. What must not change is that a late-set environment is
+    still honoured, which is what this pins.
+    """
     monkeypatch.setenv("SHANTY_ROOT", str(tmp_path / "late"))
+    seen = {}
+
+    def spy(a):
+        seen["root"] = a.root
+        return 0
+
+    monkeypatch.setattr(cli, "_cmd_crew", spy)
+    cli.main(["crew"])
+    assert seen["root"] == tmp_path / "late"
+
+
+def test_the_parser_leaves_an_unset_root_as_None_for_main_to_resolve():
     a = cli.build_parser().parse_args(["crew"])
-    assert a.root == tmp_path / "late"
+    assert a.root is None
 
 
 def test_an_explicit_root_still_wins(monkeypatch, tmp_path):
