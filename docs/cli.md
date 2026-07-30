@@ -30,6 +30,7 @@ st doctor [--install]         what's installed, stale, missing (out-of-box)
 st project                    materialize the crew cards FROM the graph
 st tend                       supervise the crew: respawn what DIED, never what was RETIRED
 st tend --reauth              relaunch every AUTH-DEAD agent (run AFTER the operator re-logs in)
+st tend --target N            respawn only toward N LIVE agents (scale UP on loss; never stops a surplus)
 st attach [agent]             attach to a crew member — STARTING them if down (pane+socket resolved)
 st attach --no-start          attach only if already running; never create a session
 st stats [agent] [--files]    what the crew actually did: files, skills, tokens (local capture store)

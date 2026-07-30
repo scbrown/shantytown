@@ -571,6 +571,13 @@ def build_parser() -> argparse.ArgumentParser:
                     help="undo --retire; the agent is tended again")
     td.add_argument("--interval", default="5min",
                     help="with --install: how often a pass runs (default 5min)")
+    td.add_argument("--target", type=int, metavar="N",
+                    help="respawn only toward N LIVE agents instead of the whole "
+                         "roster. Scale-UP on loss and nothing else: it never "
+                         "stops a surplus, because choosing who a fleet should "
+                         "consist of is judgment and belongs to the "
+                         "administrator, not to a supervisor. Fills the tier from "
+                         "the root down, and reports the agents it held back.")
     td.add_argument("--loop", type=int, metavar="SECS",
                     help="run a pass every SECS forever — the blocked-worker "
                          "heartbeat. A blocked worker is pushed to "
@@ -3451,6 +3458,7 @@ def _tend_once(a, quiet: bool = False) -> int:
         crashes=sup_mod.CrashLog(Path(a.root)),
         retire=lambda name: _retire_card(a, name),
         log=lambda msg: print(f"  {msg}", file=sys.stderr),
+        target=getattr(a, "target", None),
     )
     rep = tender.pass_over(agents, dry_run=a.dry_run)
     # DELIVER blocked workers to their coordinator (aegis-w0kk). Not on a dry run
