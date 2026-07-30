@@ -491,7 +491,8 @@ def _compose_reason(events: list[StopEvent], verdicts: dict, now: float,
 
 
 def _drain(events: FilesEvents, me: str, reg=None, panes=None,
-           shows_ready_ui=None, awaiting_answer=None, *, plate=None, rank=None) -> int:
+           shows_ready_ui=None, awaiting_answer=None, *, plate=None, rank=None,
+           stood_down: bool = False) -> int:
     """Deliver MY events — minus the ones whose sender is still working. For an
     administrator, also append a prioritized workflow over fleet state.
 
@@ -503,6 +504,10 @@ def _drain(events: FilesEvents, me: str, reg=None, panes=None,
     HIBERNATE IS NOT HERE. It was, briefly, and that was the bug: a gate inside
     the drain cannot see the second Stop hook that blocks the same stop. The
     decision moved to stop_policy, which weighs every rank at once.
+
+    `stood_down` IS here, and that is not the same mistake: it never decides
+    whether to block, it only stops the enrichment demanding dispatch the operator
+    has already declined (#29). The events themselves are delivered either way.
     """
     now = time.time()
     verdicts: dict[str, str] = {}
@@ -546,7 +551,8 @@ def _drain(events: FilesEvents, me: str, reg=None, panes=None,
         # card), and an untracked-work alert means the opposite — folding one in
         # would put a working agent in the admin's free-to-dispatch column.
         extra = _compose_workflow(reg, panes, plate, rank,
-                                  [e for e in got if not is_governance(e.reason)], me)
+                                  [e for e in got if not is_governance(e.reason)], me,
+                                  stood_down=stood_down)
         if extra:
             reason = reason + "\n\n" + extra
     # Deliver to the MODEL via the block protocol. reason, never systemMessage.
@@ -554,7 +560,8 @@ def _drain(events: FilesEvents, me: str, reg=None, panes=None,
     return 0
 
 
-def _compose_workflow(reg, panes, plate, rank, events, me: str) -> str:
+def _compose_workflow(reg, panes, plate, rank, events, me: str, *,
+                      stood_down: bool = False) -> str:
     """Admin-only: a prioritized workflow over fleet state, appended to the drained
     stop events. Returns '' for a non-admin, or when nothing is actionable. NEVER
     raises — a down ranker degrades to the rule-based order; the hook must idle or
@@ -574,7 +581,7 @@ def _compose_workflow(reg, panes, plate, rank, events, me: str) -> str:
         candidates = (rank or NullRanker()).weigh(candidates)
     except RankUnavailable:
         pass                                      # degrade to the rule-based order
-    return workflow.prioritize(candidates).render()
+    return workflow.prioritize(candidates, stood_down=stood_down).render()
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -607,7 +614,24 @@ def main(argv: list[str] | None = None) -> int:
     plate = _plate_reader(root)   # the DEPLOYMENT's backend, not files-only (aegis-tisp)
     rank = PolicyRanker() if os.environ.get("SHANTY_RANKER") == "policy" else NullRanker()
     return _drain(events, me, reg, panes, runtime.shows_ready_ui,
-                  runtime.awaiting_answer, plate=plate, rank=rank)
+                  runtime.awaiting_answer, plate=plate, rank=rank,
+                  stood_down=_stood_down(root))
+
+
+def _stood_down(root) -> bool:
+    """`[fleet] stood_down`, or False if the file is missing/unreadable.
+
+    FAILS TOWARD THE FULL LIST deliberately: a config we could not read must not
+    silence the admin's workflow. The stand-down suppresses instructions, so an
+    unreadable file suppressing them would be a config typo quietly turning the
+    enrichment off — the failure mode #29 is about, one layer down.
+    """
+    from . import config
+    try:
+        cfg, _err = config.load_or_default(root)
+        return bool(cfg.fleet.stood_down)
+    except Exception:      # noqa: BLE001 — the drain must deliver regardless
+        return False
 
 
 
