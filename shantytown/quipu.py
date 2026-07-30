@@ -106,6 +106,17 @@ ONTO = os.environ.get("SHANTY_ONTO_NS") or "http://shantytown.example/ontology/"
 CREW_CLASS = os.environ.get("SHANTY_ONTO_CREW_CLASS") or "CrewMember"
 REPORTS_PRED = os.environ.get("SHANTY_ONTO_REPORTS_PRED") or "reports_to"
 STATUS_PRED = os.environ.get("SHANTY_ONTO_STATUS_PRED") or "crewStatus"
+# The composable-role vocabulary (GitHub #37). Same seam and the same reason as the
+# three above: a deployment picks its own local names, st does not impose nouns.
+ROLE_CLASS = os.environ.get("SHANTY_ONTO_ROLE_CLASS") or "CrewRole"
+HAS_ROLE_PRED = os.environ.get("SHANTY_ONTO_HAS_ROLE_PRED") or "hasRole"
+ROLE_NAME_PRED = os.environ.get("SHANTY_ONTO_ROLE_NAME_PRED") or "crewRoleName"
+# One predicate per trait axis: `traitAttachment`, `traitWorkIntake`, ... The
+# prefix is configurable as a whole rather than axis-by-axis — six env vars to
+# rename one convention would be a seam nobody could hold in their head.
+TRAIT_PREFIX = os.environ.get("SHANTY_ONTO_TRAIT_PREFIX") or "trait"
+# The precedence rows that make a stacked single-valued axis resolvable.
+TRAIT_VALUE_CLASS = os.environ.get("SHANTY_ONTO_TRAIT_VALUE_CLASS") or "TraitValue"
 
 
 class QuipuUnreachable(Exception):
@@ -307,6 +318,89 @@ def not_quipu(server: str, path: str, evidence: str) -> str:
             f"(quipu-server and bobbin both default to port 3030).")
 
 
+def catalog_query(onto: str = None) -> str:
+    """Every declared role and its trait values (GitHub #37).
+
+    NAMES THE AXIS PREDICATES, generated from traits.AXES. Two rejected shapes,
+    both measured against the live graph (~14k triples) rather than reasoned about:
+
+        FILTER(STRSTARTS(STR(?p), "…trait"))    5.1s — over the client's 5s timeout
+        ?r ?p ?v, filtered in the client        5.1s — the open predicate IS the cost
+        OPTIONAL per named axis (this)          0.1s
+
+    The first two look more general: a deployment could add a seventh axis and be
+    read with no code change. That generality is FALSE — `traits.Traits` has six
+    fields, so a seventh axis has nowhere to land whatever the query returns. So the
+    open form bought extensibility the rest of the code cannot use, at 50x the
+    latency, on the path `st roles set` validates against. Generating from AXES puts
+    the coupling where it already was and says so: to add an axis, add it to AXES.
+    """
+    from .traits import AXES
+    o = onto or ONTO
+    opts = " ".join(
+        f"OPTIONAL {{ ?r a:{TRAIT_PREFIX}{ax[0].upper()}{ax[1:]} ?{ax} }}"
+        for ax in AXES)
+    vs = " ".join(f"?{ax}" for ax in AXES)
+    return (f"PREFIX a: <{o}> "
+            f"SELECT ?n {vs} WHERE {{ ?r a a:{ROLE_CLASS} . "
+            f"?r a:{ROLE_NAME_PRED} ?n . {opts} }}")
+
+
+def precedence_query(onto: str = None) -> str:
+    """The declared rank of each (axis, value). Higher wins.
+
+    Without these a stacked role set with a single-axis conflict REFUSES rather
+    than being resolved by a tie-break in code — see traits.AmbiguousTrait. This
+    query is how a deployment answers the question instead.
+    """
+    o = onto or ONTO
+    return (f"PREFIX a: <{o}> "
+            f"SELECT ?ax ?v ?rank WHERE {{ ?t a a:{TRAIT_VALUE_CLASS} ; "
+            f"a:axis ?ax ; a:traitValue ?v ; a:precedence ?rank }}")
+
+
+def roles_query(onto: str = None, crew_class: str = None,
+                has_role: str = None) -> str:
+    """Which roles each crew member STACKS. `hasRole` is multi-valued — that is the
+    whole difference from the single `role` this supplements."""
+    return (f"PREFIX a: <{onto or ONTO}> "
+            f"SELECT ?s ?r WHERE {{ ?s a a:{crew_class or CREW_CLASS} . "
+            f"?s a:{has_role or HAS_ROLE_PRED} ?r }}")
+
+
+def derive_catalog(rows: list[dict], precedence_rows: list[dict] | None = None):
+    """Project catalog + precedence rows into a traits.Catalog. Pure.
+
+    One row per COMBINATION of the multi-valued axes (that is what OPTIONAL over a
+    multi-valued predicate yields), so values accumulate across rows and repeats are
+    dropped. A role that declares NO value on an axis simply has none — the live
+    `escalation-target` declares a work intake and no attachment, because attachment
+    is not what that role is about. Filling one in would put an agent in the
+    reporting tree on the strength of a role that never mentioned it.
+    """
+    from .traits import AXES, Catalog
+    roles: dict[str, dict[str, list[str]]] = {}
+    for r in rows:
+        name = str(r.get("n") or "")
+        if not name:
+            continue
+        got = roles.setdefault(name, {})
+        for axis in AXES:
+            val = r.get(axis)
+            if val is None or val == "":
+                continue
+            bucket = got.setdefault(axis, [])
+            if str(val) not in bucket:
+                bucket.append(str(val))
+    prec: dict[tuple[str, str], int] = {}
+    for r in precedence_rows or []:
+        try:
+            prec[(str(r["ax"]), str(r["v"]))] = int(r["rank"])
+        except (KeyError, TypeError, ValueError):
+            continue                           # a malformed rank ranks nothing
+    return Catalog(roles, prec)
+
+
 def all_query(onto: str = None, crew_class: str = None,
               reports: str = None, status: str = None) -> str:
     """The roster SPARQL, over a configurable vocabulary (GitHub #10)."""
@@ -432,6 +526,35 @@ class QuipuRegistry:
         """Every crew member, roles derived. RAISES `QuipuUnreachable` if quipu
         cannot be read — never returns `[]` on failure."""
         return derive_agents(self._query(self._all))
+
+    def catalog(self):
+        """The deployment's ROLE CATALOG, from the graph (GitHub #37).
+
+        RAISES QuipuUnreachable rather than degrading to the built-in three. The
+        caller decides what an unreadable graph means, and here the two answers are
+        very different: falling back silently would tell an operator that the
+        advisor they declared "does not exist", which reads as a config error in
+        the file they just wrote rather than as a graph they cannot reach.
+        """
+        return derive_catalog(self._query(catalog_query(self.onto)),
+                              self._query(precedence_query(self.onto)))
+
+    def role_sets(self) -> dict[str, tuple[str, ...]]:
+        """{member: (role, ...)} from `hasRole` — the STACK, where the single
+        derived `role` is only the tree position.
+
+        Members with no `hasRole` are simply absent from the mapping rather than
+        given a one-element default: the migration is deliberately partial (the
+        graph carries the stack for the members that have been migrated and the
+        single role for everyone), and inventing an entry here would make an
+        un-migrated member indistinguishable from a migrated one.
+        """
+        out: dict[str, list[str]] = {}
+        for r in self._query(roles_query(self.onto)):
+            member, role = _local(r.get("s") or ""), _local(r.get("r") or "")
+            if member and role and role not in out.setdefault(member, []):
+                out[member].append(role)
+        return {k: tuple(sorted(v)) for k, v in out.items()}
 
     def empty_note(self) -> str | None:
         """A graph CANNOT vouch for its own empty answer, so this never returns None.

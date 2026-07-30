@@ -179,3 +179,78 @@ max_load_per_core = 4.0
 # ---------------------------------------------------------------------------
 [tmux]
 # socket = "shanty"
+
+# ---------------------------------------------------------------------------
+# [roles.<name>] — YOUR role vocabulary, as traits.
+#
+# st ships three roles because its built-in PROCESS is defined for three: depth-2,
+# a-lead-absorbs, and a stop event rising past an unreachable lead. It does not ship
+# a list of roles that may EXIST. That distinction used to be missing, and it was not
+# a vocabulary problem — `role` WAS tree position, so the reports-to rules applied to
+# every role and anything outside the tree was inexpressible. An advisor (consulted
+# on demand, reporting to nobody, with nobody reporting to it) failed validation for
+# having no lead.
+#
+# SIX AXES. Which are single- vs multi-valued is the whole reason an enum could not
+# express this: a worker is dispatched AND self-directed; a lead absorbs AND
+# dispatches.
+#
+#   attachment    single   rooted | reports-to | unattached
+#   workIntake    MULTI    dispatched | self-directed | consulted | escalations-only | none
+#   coordination  MULTI    absorbs | dispatches | neither
+#   scope         single   fleet-wide | domain-scoped | single-task
+#   lifecycle     single   persistent | ephemeral
+#   authority     single   veto-in-scope | gate | none
+#
+# `work_intake` and `workIntake` are both accepted (snake_case is what an operator
+# writes; camelCase is what the ontology calls it). An unknown AXIS is refused — a
+# dropped `attachement` would leave an advisor silently inside the reporting tree.
+#
+# ATTACHMENT = "unattached" IS THE UNLOCK. Such a role needs no reports_to, is given
+# none, is exempt from the depth-2 rules, cannot take reports (that refuses rather
+# than silently dropping the routing), and `st roles --check` reports it as `ok —
+# unattached by role` instead of ORPHAN.
+#
+# A role may also be declared in the GRAPH (`CrewRole` + `hasRole`; see the
+# SHANTY_ONTO_* table in the README). Same model, and roles STACK on one agent.
+# ---------------------------------------------------------------------------
+
+# [roles.advisor]
+# attachment = "unattached"
+# work_intake = ["consulted"]
+# authority = "none"
+
+# [roles.keeper]
+# attachment = "reports-to"
+# work_intake = ["consulted", "self-directed"]
+# scope = "domain-scoped"
+# authority = "veto-in-scope"
+
+# ---------------------------------------------------------------------------
+# [precedence.<axis>] — which value wins when STACKED roles conflict.
+#
+# An agent may hold several roles at once, and on a single-valued axis they can
+# disagree: {worker, keeper} is scope {single-task, domain-scoped} and authority
+# {none, veto-in-scope} simultaneously. The design prose says "most-specific wins" —
+# but prose is not data, so st does NOT pick. Without a rank, composing that stack is
+# an error naming the axis and the values. A tie-break written into st would be the
+# closed enum reappearing one layer up, and an invisible one.
+#
+# Per axis VALUE, not per role: a role that is specific on one axis and generic on
+# another is misranked by a single per-role number. Higher wins.
+# ---------------------------------------------------------------------------
+
+# [precedence.attachment]
+# rooted = 3
+# "reports-to" = 2
+# unattached = 1
+
+# [precedence.scope]
+# "fleet-wide" = 3
+# "domain-scoped" = 2
+# "single-task" = 1
+
+# [precedence.authority]
+# "veto-in-scope" = 3
+# gate = 2
+# none = 1
