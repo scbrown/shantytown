@@ -414,6 +414,9 @@ order, every one of them also settable as an env var:
 | `SHANTY_DARK_AGENTS` | names (space/comma-separated) Rule Zero and tend must never count feedable — panes another orchestrator keeps respawning with this deployment's worker settings, which carry the stop-event wiring but route nothing here. The launch-stamp ownership gate excludes unstamped agents structurally; this list is the explicit override/belt for named ghosts. | the gastown-dark crew |
 | `QUIPU_SERVER` | quipu, for `--registry quipu`, `st project`, or `st subscribe` | `http://localhost:3030` |
 | `SHANTY_ONTO_NS` | the ontology IRI base your graph is keyed under | `http://shantytown.example/ontology/` |
+| `SHANTY_ONTO_CREW_CLASS` | the class local-name your graph uses for a crew member, resolved under `SHANTY_ONTO_NS`. Point st at your own vocabulary instead of adopting ours. | `CrewMember` |
+| `SHANTY_ONTO_REPORTS_PRED` | the predicate local-name for the supervisor edge. | `reports_to` |
+| `SHANTY_ONTO_STATUS_PRED` | the predicate local-name marking a non-live crew member (its ABSENCE means active, so a forgotten mark leaves a retiree visible rather than hiding a live agent). | `crewStatus` |
 | `BOBBIN_SERVER` | bobbin, for `st context` | `http://localhost:8080` |
 | `SHANTY_RANKER` | `policy` to weight the admin workflow by Hank blast radius; else rule-based | — |
 | `SHANTY_FORGEJO_URL` | a self-hosted forge: `st doctor`'s release checks, and the base URL for `--backend forgejo` (issues as work items; pair with `SHANTY_FORGEJO_TOKEN` and `--repo owner/name`) | `http://localhost:3000` |
