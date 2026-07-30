@@ -1,0 +1,100 @@
+# shantytown.toml — copy to <root>/shantytown.toml (usually .shanty/shantytown.toml)
+#
+# Everything in this file is OPTIONAL. With no file at all you get the built-in
+# defaults, which are deliberately the cheap ones:
+#
+#     mode = "lite"        the administrator alone, and nobody else
+#     hibernate off        no agent is ever put to sleep that you did not ask to be
+#
+# The surprising direction of each knob is the one that costs money or loses work,
+# so the default is the other one.
+#
+# THE FILENAME IS `shantytown.toml`, NOT `shanty.toml`. `shanty` is a different
+# program (a tmux wrapper) that lives on the same PATH and in the same workspaces —
+# the same reason this project's binary is `st`. A config file two tools each
+# believe they own is a config file that gets edited for the wrong reader.
+#
+# AN UNKNOWN KEY IS REFUSED, not ignored. `st start` will not launch anything until
+# the file parses, and it names the file and the key. A silently-dropped key is how
+# an operator comes to believe a policy is in force when it is not.
+
+# ---------------------------------------------------------------------------
+# [startup] — which mode `st start` uses when you do not pass --mode.
+# ---------------------------------------------------------------------------
+[startup]
+mode = "lite"
+
+# ---------------------------------------------------------------------------
+# [modes.<name>] — a mode is a NAMED SET OF CREW. This is the token-conservation
+# dial: "how much fleet tonight" is a decision you make once and re-use, so it
+# gets a name rather than a --count.
+#
+# `crew` entries are selectors, resolved against the cards that exist:
+#
+#     "*"                every non-retired card
+#     "administrator"    | "lead" | "worker"   — every card with that role
+#     "sattler"          — that agent by name
+#
+# A RETIRED card is NEVER selected, not even by "*" and not even by naming it
+# explicitly. Retirement is a deliberate, durable shutdown; `st tend --unretire`
+# is what undoes it. `st start` reports every retiree it skipped, so a skipped
+# line never looks like a config line that was ignored.
+#
+# Your modes MERGE OVER the built-ins: defining `night` below does not remove
+# `lite` or `heavy`. You MAY redefine either one — that is a deliberate override,
+# which is what a config file is for.
+#
+# Built in, and equivalent to:
+#     [modes.lite]
+#     crew = ["administrator"]
+#     [modes.heavy]
+#     crew = ["*"]
+# ---------------------------------------------------------------------------
+
+# A middle gear: the coordinator and its leads, but no workers until the admin
+# decides who is actually needed.
+[modes.night]
+crew = ["administrator", "lead"]
+
+# A named subset for one project's crew.
+# [modes.aegis]
+# crew = ["sattler", "arnold", "billy"]
+
+# ---------------------------------------------------------------------------
+# [hibernate] — may the ADMINISTRATOR's stop decline to wake it?
+#
+# WHAT THIS ACTUALLY GATES: nothing is suspended and no process sleeps. Claude
+# Code's Stop hook fires at the end of every turn, and an administrator's hook
+# DRAINS — it re-injects whatever arrived, which is what keeps a coordinator
+# awake, and billing, all night. Hibernating means that block is skipped while
+# the fleet has nothing for the coordinator to decide, so its turn actually ends.
+#
+# IT CAN ONLY EVER FIRE WHEN QUIET IS CORRECT. The stop decision is one ordered
+# list (docs/stop-policy-spec.md), and hibernate is rank 3 of five:
+#
+#   1  an urgent event (untracked-work alert, or one that rose past a dead lead)
+#   2  RULE ZERO: free feedable workers AND dispatchable work  -> keep working
+#   3  hibernate                                               -> go quiet
+#   4  an ordinary pending report                              -> deliver it
+#
+# So Rule Zero OVERRIDES hibernate, and says so by name when it does. You cannot
+# accidentally sleep a coordinator that has work to hand out.
+#
+# NOTHING IS LOST. Rank 3 allows the stop without consuming anything, so a
+# sleeping admin's backlog is intact and the next wake sees all of it. Count it
+# without consuming it: `st anchor --events <admin>`.
+#
+# IT REMOVES A SELF-WAKE, NEVER A WAKE. `st tend` pushes, an `st inbox`, a
+# dispatch, or you typing in the pane all still reach it.
+#
+#   enabled            false = the stop wakes it at every turn, as it always has.
+#   max_quiet_minutes  NOT a schedule to wake ON — a BOUND on how long waiting
+#                      reports may sit unread while nothing pushes. 0 disables
+#                      the bound, which is legitimate: a push is a wake with a
+#                      REASON, which beats a timer.
+#
+# Leads and workers never hibernate: a lead's drain is how it absorbs its reports.
+# ---------------------------------------------------------------------------
+[hibernate]
+enabled = false
+max_quiet_minutes = 60

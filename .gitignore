@@ -4,3 +4,6 @@ __pycache__/
 .shanty/
 build/
 *.egg-info/
+
+# Carries a bearer token — provisioned per workspace, never committed.
+.mcp.json

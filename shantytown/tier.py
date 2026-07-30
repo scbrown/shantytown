@@ -38,6 +38,27 @@ from .protocols import Agent, Registry
 
 VALID_ROLES = ("worker", "lead", "administrator")
 
+# GENERATED PANE NAMES. A card with no pane names no session, and every surface
+# that launches, attaches, stops or supervises resolves an agent THROUGH its pane —
+# so a pane-less card is an agent that exists and cannot be run, and the only fix
+# used to be hand-editing JSON. Every card write goes through pane_for(), so a
+# projected or role-set card is startable the moment it is written.
+#
+# The `st-` prefix, not `shanty-`: `shanty` is a different program on the same PATH
+# (cli.py's docstring says why the binary is `st`), and a pane prefix is how an
+# operator reads WHOSE session a tmux row is on a host running more than one
+# orchestrator. It matches the launcher's own fallback (cli._session_for).
+#
+# An existing pane is NEVER overwritten — a card that already names one keeps it,
+# whatever the convention was when it was written.
+PANE_PREFIX = "st-"
+
+
+def pane_for(name: str, existing: str | None = None) -> str:
+    """The pane this agent's session lives in: its own if it has one, else a
+    generated `st-<name>`."""
+    return existing or f"{PANE_PREFIX}{name}"
+
 
 # --- role set: generative. Writes the card AND the routing in one operation. ---
 
@@ -91,17 +112,17 @@ def plan_role_set(registry: Registry, agent_name: str, role: str,
                 f"Re-point them first (they need a lead or the administrator)."
             )
         plan.writes.append(Agent(name=agent_name, role="worker",
-                                 reports_to=agent.reports_to, pane=agent.pane))
+                                 reports_to=agent.reports_to, pane=pane_for(agent_name, agent.pane)))
         return plan
 
     if role == "administrator":
         # Q4: an administrator reports to nobody (it is the root).
         plan.writes.append(Agent(name=agent_name, role="administrator",
-                                 reports_to=None, pane=agent.pane))
+                                 reports_to=None, pane=pane_for(agent_name, agent.pane)))
         # reports handed to an administrator are direct (Q4: worker with no lead)
         for r in reports:
             ra = registry.get(r)
-            plan.writes.append(Agent(name=r, role=ra.role, reports_to=agent_name, pane=ra.pane))
+            plan.writes.append(Agent(name=r, role=ra.role, reports_to=agent_name, pane=pane_for(r, ra.pane)))
         return plan
 
     # role == "lead"
@@ -136,10 +157,10 @@ def plan_role_set(registry: Registry, agent_name: str, role: str,
         if admin and admin != agent_name:
             lead_reports_to = admin
     plan.writes.append(Agent(name=agent_name, role="lead",
-                             reports_to=lead_reports_to, pane=agent.pane))
+                             reports_to=lead_reports_to, pane=pane_for(agent_name, agent.pane)))
     for r in reports:
         ra = registry.get(r)
-        plan.writes.append(Agent(name=r, role=ra.role, reports_to=agent_name, pane=ra.pane))
+        plan.writes.append(Agent(name=r, role=ra.role, reports_to=agent_name, pane=pane_for(r, ra.pane)))
         plan.routes.append((r, agent_name))   # emit the stop-hook routing
     return plan
 

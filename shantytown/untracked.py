@@ -313,12 +313,16 @@ def _stranded_text(me: str, strikes: int, elapsed: float, why: str) -> str:
 # --- the hook entry -----------------------------------------------------------
 
 def _root(argv: list[str]) -> Path:
-    """--root <dir>, else $SHANTY_ROOT, else cwd/.shanty — the SAME order
-    stop_event and the CLI resolve it in."""
+    """--root <dir>, else the shared discovery chain (deployment.resolve_root).
+
+    ONE resolver, four callers. This function was written out longhand in the CLI
+    and in each of the three hook entry points, which is the drift deployment.py
+    exists to prevent — and it meant extending discovery would have had to be done
+    four times or be done inconsistently.
+    """
     if "--root" in argv:
         return Path(argv[argv.index("--root") + 1])
-    env = os.environ.get("SHANTY_ROOT")
-    return Path(env) if env else Path.cwd() / ".shanty"
+    return resolve_root()[0]
 
 
 def plate_reader(root: Path):
@@ -335,7 +339,7 @@ def plate_reader(root: Path):
     hook has no way to supply) RAISES, which check() reads as could-not-look and
     stays silent. Refusing to guess is the same rule as everywhere else here.
     """
-    from .deployment import deployment_default
+    from .deployment import deployment_default, resolve_root
     backend = deployment_default(root, "SHANTY_BACKEND") or "files"
     if backend == "beads":
         from .beads import BeadsTracker, plate as beads_plate
