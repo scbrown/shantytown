@@ -94,6 +94,19 @@ def _token_from_file() -> str:
 # Read at import time because the SPARQL below is built at class-definition time.
 ONTO = os.environ.get("SHANTY_ONTO_NS") or "http://shantytown.example/ontology/"
 
+# THE VOCABULARY, and it is a SEAM rather than a constant (GitHub #10). The class
+# local-names below were baked into the SPARQL at class-definition time, so a
+# consumer whose graph says `Agent`/`supervisor` — or any word other than ours —
+# could not point st at their own ontology at all. The IRI base was already
+# configurable; the terms under it were not, which made the configurability
+# half-useful: you could pick your namespace and then had to adopt our nouns.
+#
+# Local names only, never full IRIs: they are resolved under ONTO, which is the
+# one identity decision a deployment must make exactly once.
+CREW_CLASS = os.environ.get("SHANTY_ONTO_CREW_CLASS") or "CrewMember"
+REPORTS_PRED = os.environ.get("SHANTY_ONTO_REPORTS_PRED") or "reports_to"
+STATUS_PRED = os.environ.get("SHANTY_ONTO_STATUS_PRED") or "crewStatus"
+
 
 class QuipuUnreachable(Exception):
     """quipu could not be reached or returned an error. NOT 'nobody exists' —
@@ -166,6 +179,16 @@ def derive_agents(rows: list[dict]) -> list[Agent]:
     return agents
 
 
+def all_query(onto: str = None, crew_class: str = None,
+              reports: str = None, status: str = None) -> str:
+    """The roster SPARQL, over a configurable vocabulary (GitHub #10)."""
+    return (
+        f"PREFIX a: <{onto or ONTO}> "
+        f"SELECT ?s ?rt WHERE {{ ?s a a:{crew_class or CREW_CLASS} . "
+        f"OPTIONAL {{ ?s a:{status or STATUS_PRED} ?cs }} FILTER(!bound(?cs)) "
+        f"OPTIONAL {{ ?s a:{reports or REPORTS_PRED} ?rt }} }}")
+
+
 class QuipuRegistry:
     """Identity from the quipu graph. get / all / set over `aegis:CrewMember`.
 
@@ -188,12 +211,13 @@ class QuipuRegistry:
     to this query against a real quipu before shipping it.
     """
 
-    _ALL = (
-        f"PREFIX a: <{ONTO}> "
-        "SELECT ?s ?rt WHERE { ?s a a:CrewMember . "
-        "OPTIONAL { ?s a:crewStatus ?cs } FILTER(!bound(?cs)) "
-        "OPTIONAL { ?s a:reports_to ?rt } }"
-    )
+    # Built from the vocabulary seam, not from literals — and by a PURE function,
+    # so the seam is testable without reloading this module (a reload swaps the
+    # exception classes out from under every other test holding a reference).
+    # Assembled once here rather than per-call: the terms are process-wide
+    # configuration, and a query that could change shape between two calls in one
+    # command would be a worse problem than the one this fixes.
+    _ALL = None      # set below, from all_query()
 
     def __init__(self, server: str | None = None, timeout: float = 5.0):
         # QUIPU_SERVER is the variable the crew hooks already use. The default is
@@ -288,7 +312,7 @@ class QuipuRegistry:
         # "error" key. The label is the agent's name: that is what the shape asks
         # for and what every hand-written crew episode already carries.
         triples = [
-            f"a:{agent.name} a a:CrewMember .",
+            f"a:{agent.name} a a:{CREW_CLASS} .",
             f'a:{agent.name} rdfs:label "{agent.name}" .',
         ]
         if agent.reports_to is not None:
@@ -298,7 +322,8 @@ class QuipuRegistry:
                 raise ValueError(
                     f"refused: {agent.name} -> {agent.reports_to} closes a reporting cycle"
                 )
-            triples.append(f"a:{agent.name} a:reports_to a:{agent.reports_to} .")
+            triples.append(
+                f"a:{agent.name} a:{REPORTS_PRED} a:{agent.reports_to} .")
         turtle = (f"@prefix a: <{ONTO}> .\n"
                   '@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n'
                   + "\n".join(triples) + "\n")
@@ -386,3 +411,7 @@ class QuipuRegistry:
                 f"{i.get('path', '?')}: {i.get('message', '?')}" for i in issues[:3]
             ) or f"{body.get('violations', '?')} violation(s)"
             raise QuipuWriteRejected(f"quipu refused the write (SHACL): {detail}")
+
+# The vocabulary is process-wide config, so this is resolved once, at import.
+QuipuRegistry._ALL = all_query()
+
