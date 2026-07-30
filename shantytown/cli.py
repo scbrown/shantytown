@@ -129,8 +129,13 @@ def _registry(a):
     an offline invocation still resolves identity locally; --registry quipu reads
     it straight from the graph. Either way the SAME roles.check runs over it.
     """
-    if getattr(a, "registry", "files") == "quipu":
+    chosen = getattr(a, "registry", "files")
+    if chosen == "quipu":
         return QuipuRegistry()
+    if chosen == "toml":
+        # GitHub #11: identity declared by hand, in the same file as the modes,
+        # for a deployment that wants no ontology and no generated cards.
+        return config.TomlRegistry(a.root)
     return FilesRegistry(a.root / "crew")
 
 
@@ -328,9 +333,11 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--repo", default=None,
                     help="bd -C <dir> when --backend beads (unset: deployment's "
                          "SHANTY_BEADS_REPO, else the .beads walk-up)")
-    ap.add_argument("--registry", choices=["files", "quipu"], default="files",
-                    help="identity backend: files (projection/default) or quipu "
-                         "(the graph, the source of truth).")
+    ap.add_argument("--registry", choices=["files", "quipu", "toml"], default="files",
+                    help="identity backend: files (generated cards, the default), "
+                         "quipu (the graph), or toml ([crew.<name>] in "
+                         "<root>/shantytown.toml — hand-authored, read-only, for a "
+                         "deployment that wants no ontology).")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     an = sub.add_parser("anchor", help="who am I, what's on my plate")

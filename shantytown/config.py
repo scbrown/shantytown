@@ -151,6 +151,9 @@ class Config:
     modes: dict[str, list[str]] = field(default_factory=lambda: dict(BUILTIN_MODES))
     hibernate: Hibernate = field(default_factory=Hibernate)
     fleet: Fleet = field(default_factory=Fleet)
+    # [crew.<name>] — identity declared IN THIS FILE (GitHub #11). Empty means the
+    # file declares no crew, which is the normal case: cards or the graph own it.
+    crew: dict[str, Agent] = field(default_factory=dict)
     path: Path | None = None
 
     def selectors(self, mode: str | None = None) -> list[str]:
@@ -209,7 +212,7 @@ def load_or_default(root) -> tuple[Config, str | None]:
 
 # --- parsing ----------------------------------------------------------------
 
-_TOP_KEYS = {"startup", "modes", "hibernate", "fleet"}
+_TOP_KEYS = {"startup", "modes", "hibernate", "fleet", "crew"}
 _STARTUP_KEYS = {"mode"}
 _HIB_KEYS = {"enabled", "max_quiet_minutes"}
 
@@ -257,6 +260,7 @@ def _resolve(data: dict, path: Path) -> Config:
     return Config(mode=mode, modes=modes,
                   hibernate=_hibernate(path, _table(path, data, "hibernate")),
                   fleet=_fleet(path, _table(path, data, "fleet")),
+                  crew=_crew(path, _table(path, data, "crew")),
                   path=path)
 
 
@@ -291,6 +295,99 @@ def _crew_list(path: Path, mode: str, spec) -> list[str]:
         raise ConfigError(f"{path}: [modes.{mode}] crew is EMPTY — a mode that selects "
                           f"nobody would start nothing and report success")
     return out
+
+
+# The card fields a human may DECLARE. `pane` is included but optional — omitted,
+# it is generated (tier.pane_for), which is the whole point of that change.
+_CREW_KEYS = {"role", "reports_to", "pane", "workspace", "workspace_source",
+              "model", "harness", "dangerous", "retired"}
+
+
+def _crew(path: Path, tbl: dict) -> dict:
+    """[crew.<name>] -> Agent, a HUMAN-AUTHORED registry (GitHub #11).
+
+    A legitimate source of truth, not a cache: a deployment with no ontology and
+    no interest in one declares its crew here and is done. That is why the keys
+    are the card's own fields rather than a reduced subset — a source of truth you
+    cannot express your whole fleet in is a projection wearing a different hat.
+
+    Validated the same way everything else in this file is: an unknown key is
+    REFUSED, because a silently-dropped `workspace` is an agent launched in the
+    wrong directory with no error anywhere.
+    """
+    from .tier import VALID_ROLES, pane_for
+    out: dict[str, Agent] = {}
+    for name, spec in tbl.items():
+        if not isinstance(spec, dict):
+            raise ConfigError(f"{path}: [crew.{name}] must be a table, got "
+                              f"{type(spec).__name__}")
+        _refuse_unknown(path, f"crew.{name}", spec, _CREW_KEYS)
+        role = spec.get("role", "worker")
+        if role not in VALID_ROLES:
+            raise ConfigError(f"{path}: [crew.{name}] role = {role!r} is not one "
+                              f"of {', '.join(VALID_ROLES)}")
+        for flag in ("dangerous", "retired"):
+            if flag in spec and not isinstance(spec[flag], bool):
+                raise ConfigError(f"{path}: [crew.{name}] {flag} must be true or "
+                                  f"false, got {spec[flag]!r}")
+        out[name] = Agent(
+            name=name, role=role, reports_to=spec.get("reports_to"),
+            pane=spec.get("pane") or pane_for(name),
+            workspace=spec.get("workspace"),
+            workspace_source=spec.get("workspace_source"),
+            model=spec.get("model"), harness=spec.get("harness"),
+            dangerous=bool(spec.get("dangerous", False)),
+            retired=bool(spec.get("retired", False)))
+    return out
+
+
+class TomlRegistry:
+    """The Registry protocol over [crew.<name>] in shantytown.toml.
+
+    THE THIRD IMPLEMENTATION, and the first one a human writes by hand. files is a
+    projection (generated cards), quipu is a graph (needs a server); this is the
+    deployment that wants neither — identity in the same file as the modes, in a
+    format an operator can read and diff.
+
+    READ-ONLY on purpose. `set` would mean rewriting a hand-authored, commented
+    TOML from a dataclass, which loses every comment and reorders every table —
+    so `roles set` against this registry refuses rather than quietly mangling the
+    file it was pointed at. Edit the file; it is the source of truth.
+    """
+
+    def __init__(self, root):
+        self._root = root
+
+    def _crew(self) -> dict:
+        return load(self._root).crew
+
+    def get(self, name: str) -> Agent:
+        crew = self._crew()
+        if name not in crew:
+            raise LookupError(
+                f"no such agent: {name} (looked in [crew.{name}] of "
+                f"{config_path(self._root)})")
+        return crew[name]
+
+    def all(self) -> list[Agent]:
+        crew = self._crew()
+        if not crew:
+            # EMPTY IS NOT NOBODY. A config with no [crew] table declares no crew
+            # at all, which almost certainly means this registry was selected by
+            # mistake — and returning [] would render an empty roster at exit 0,
+            # the blank-answer failure this repo keeps paying for.
+            raise LookupError(
+                f"{config_path(self._root)} declares no [crew.<name>] tables, so "
+                f"the toml registry has nothing to read. Declare the crew there, "
+                f"or use --registry files/quipu.")
+        return sorted(crew.values(), key=lambda a: a.name)
+
+    def set(self, agent: Agent) -> None:
+        raise LookupError(
+            f"the toml registry is READ-ONLY: {config_path(self._root)} is "
+            f"hand-authored, and rewriting it from a dataclass would drop every "
+            f"comment and reorder every table. Edit it directly — it is the "
+            f"source of truth.")
 
 
 _FLEET_KEYS = {"stood_down", "max_load_per_core"}

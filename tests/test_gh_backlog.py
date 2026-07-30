@@ -517,3 +517,129 @@ def test_gh28_every_bd_list_or_ready_asks_for_everything():
                 offenders.append(f"{py.name}: {m.group(0)[:70]}")
     assert not offenders, (
         "these bd calls can be silently truncated: " + "; ".join(offenders))
+
+
+# --- #10: the graph vocabulary is a SEAM, not a constant ---------------------
+
+def test_gh10_the_crew_class_and_edge_are_configurable():
+    """The IRI base was already configurable and the TERMS under it were not,
+    which made the configurability half-useful: pick your namespace, then adopt
+    our nouns."""
+    from shantytown.quipu import all_query
+    q = all_query(onto="http://example.test/onto/", crew_class="Agent",
+                  reports="supervisor", status="state")
+    assert "a:Agent" in q and "a:supervisor" in q and "a:state" in q
+    assert "CrewMember" not in q and "reports_to" not in q
+    assert "http://example.test/onto/" in q
+
+
+def test_gh10_the_live_query_is_built_from_the_seam():
+    from shantytown.quipu import QuipuRegistry, all_query
+    assert QuipuRegistry._ALL == all_query()
+
+
+def test_gh10_the_defaults_are_unchanged():
+    from shantytown import quipu as q
+    assert (q.CREW_CLASS, q.REPORTS_PRED, q.STATUS_PRED) == (
+        "CrewMember", "reports_to", "crewStatus")
+
+
+# --- #11: a hand-authored TOML crew, as a real source of truth ---------------
+
+def _toml_root(tmp_path, body):
+    from shantytown import config as cfg
+    (tmp_path / cfg.CONFIG_NAME).write_text(body)
+    return tmp_path
+
+
+def test_gh11_crew_declared_in_toml_is_a_registry(tmp_path):
+    from shantytown.config import TomlRegistry
+    root = _toml_root(tmp_path, '''
+[crew.sattler]
+role = "administrator"
+
+[crew.billy]
+role = "worker"
+reports_to = "sattler"
+workspace = "/srv/crew/billy"
+model = "opus"
+dangerous = true
+''')
+    reg = TomlRegistry(root)
+    assert [a.name for a in reg.all()] == ["billy", "sattler"]
+    billy = reg.get("billy")
+    assert billy.role == "worker" and billy.reports_to == "sattler"
+    assert billy.workspace == "/srv/crew/billy"
+    assert billy.model == "opus" and billy.dangerous is True
+
+
+def test_gh11_a_pane_is_generated_when_not_declared(tmp_path):
+    from shantytown.config import TomlRegistry
+    root = _toml_root(tmp_path, '[crew.sattler]\nrole = "administrator"\n')
+    assert TomlRegistry(root).get("sattler").pane == "st-sattler"
+
+
+def test_gh11_a_declared_pane_is_kept(tmp_path):
+    from shantytown.config import TomlRegistry
+    root = _toml_root(tmp_path,
+                      '[crew.sattler]\nrole = "administrator"\npane = "mine"\n')
+    assert TomlRegistry(root).get("sattler").pane == "mine"
+
+
+def test_gh11_every_card_field_is_expressible(tmp_path):
+    """A source of truth you cannot express your whole fleet in is a projection
+    wearing a different hat."""
+    from shantytown import config as cfg
+    assert cfg._CREW_KEYS >= {"role", "reports_to", "pane", "workspace",
+                              "workspace_source", "model", "harness",
+                              "dangerous", "retired"}
+
+
+def test_gh11_an_unknown_crew_key_is_refused(tmp_path):
+    from shantytown import config as cfg
+    root = _toml_root(tmp_path, '[crew.billy]\nworkspce = "/typo"\n')
+    with pytest.raises(cfg.ConfigError) as e:
+        cfg.load(root)
+    assert "workspce" in str(e.value)
+
+
+def test_gh11_a_bad_role_is_refused(tmp_path):
+    from shantytown import config as cfg
+    root = _toml_root(tmp_path, '[crew.billy]\nrole = "boss"\n')
+    with pytest.raises(cfg.ConfigError):
+        cfg.load(root)
+
+
+def test_gh11_an_unknown_agent_names_the_file_it_looked_in(tmp_path):
+    from shantytown.config import TomlRegistry
+    root = _toml_root(tmp_path, '[crew.sattler]\nrole = "administrator"\n')
+    with pytest.raises(LookupError) as e:
+        TomlRegistry(root).get("nobody")
+    assert "shantytown.toml" in str(e.value)
+
+
+def test_gh11_an_empty_crew_table_RAISES_rather_than_rendering_nobody(tmp_path):
+    """Returning [] would render an empty roster at exit 0 — the blank-answer
+    failure this repo keeps paying for."""
+    from shantytown.config import TomlRegistry
+    root = _toml_root(tmp_path, '[startup]\nmode = "lite"\n')
+    with pytest.raises(LookupError) as e:
+        TomlRegistry(root).all()
+    assert "declares no [crew" in str(e.value)
+
+
+def test_gh11_the_toml_registry_is_read_only(tmp_path):
+    """Rewriting a hand-authored, commented TOML from a dataclass drops every
+    comment and reorders every table."""
+    from shantytown.config import TomlRegistry
+    root = _toml_root(tmp_path, '[crew.sattler]\nrole = "administrator"\n')
+    with pytest.raises(LookupError) as e:
+        TomlRegistry(root).set(Agent(name="sattler", role="lead"))
+    assert "READ-ONLY" in str(e.value)
+
+
+def test_gh11_it_satisfies_the_Registry_protocol(tmp_path):
+    from shantytown.config import TomlRegistry
+    from shantytown.protocols import Registry
+    root = _toml_root(tmp_path, '[crew.sattler]\nrole = "administrator"\n')
+    assert isinstance(TomlRegistry(root), Registry)
