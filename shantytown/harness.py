@@ -115,6 +115,13 @@ class ClaudeHarness:
         # card; nobody else inherits it (the pilot, aegis-qdal.5).
         if card.dangerous:
             flags += " --dangerously-skip-permissions"
+        # HONOUR THE CARD'S MODEL AT LAUNCH (GitHub #17, the other half of #9).
+        # The field was persisted so a restart would not silently revert to the
+        # default — and then the launcher never read it, so it reverted anyway.
+        # A card that names a model and an agent that ignores it is worse than no
+        # field: it reads as configured.
+        if card.model:
+            flags += f" --model {card.model}"
         # BOBBIN_ROLE is how hank's policy guard resolves WHICH scope applies
         # (hank#20: tenant is resolved --tenant, then BOBBIN_ROLE; scopes live in
         # .bobbin/config.toml under [hank.policy.scopes.<role>]). Exporting it per
@@ -143,8 +150,14 @@ class ClaudeHarness:
         # naming the live agents it did NOT reach) are still open, and this must not be
         # mistaken for them.
         root_env = f"SHANTY_ROOT={Path(root).resolve()} " if root else ""
+        # BEADS_ACTOR is WHO the tracker records for a create/close/reassign
+        # (GitHub #24). Without it every agent's bd events are written as $USER —
+        # `ubuntu` for the whole fleet — so an assignment that flipped between two
+        # agents could not say who did it. The card already knows the name; the
+        # audit trail just never got told.
         launch = (
             f"{root_env}SHANTY_AGENT={card.name} BOBBIN_ROLE={card.role} "
+            f"BEADS_ACTOR={card.name} "
             f"claude {flags} --settings {settings_path}"
         )
         # Launch IN the agent's workspace so Claude Code auto-loads its .mcp.json +

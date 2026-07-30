@@ -320,7 +320,7 @@ class Tender:
             return Finding(card.name, "up", BUSY, why)
 
         try:
-            self._panes.new_session(card.pane)
+            self._panes.new_session(card.pane, cwd=card.workspace)
             if self._spawn is not None:
                 self._spawn(card, card.pane)
         except Exception as e:

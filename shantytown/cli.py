@@ -720,8 +720,16 @@ def _default_settings(root: Path):
     invariant working — no settings, no launch, never a settings-less fallback.
     """
     def resolve(card):
-        p = Path(root) / "settings" / f"{card.role}.settings.json"
-        return str(p) if p.is_file() else None
+        # PER-AGENT FIRST (GitHub #17). All workers sharing one file meant nothing
+        # could differ per agent — so a card's own model, permissions or hooks had
+        # nowhere to land. An agent file is used when it EXISTS; otherwise the
+        # role file, which is what every card uses today. No file for either is
+        # None, and compose REFUSES: no settings, no launch, never a fallback.
+        for name in (f"agent-{card.name}.settings.json", f"{card.role}.settings.json"):
+            p = Path(root) / "settings" / name
+            if p.is_file():
+                return str(p)
+        return None
     return resolve
 
 
@@ -926,8 +934,11 @@ def _launch(a, card, panes, runtime, *, dry_run: bool = False) -> int:
         if linked:
             print(f"  linked {len(linked)} skill(s): {', '.join(linked)}")
     # Clobber guard: never replace a live agent (RAISES if the session exists).
+    # cwd=card.workspace so the SESSION starts in the agent's own directory, not
+    # the launcher's (GitHub #18) — the launch string also cd's, but a pane whose
+    # own cwd is the checkout misleads every later shell opened in it.
     try:
-        panes.new_session(session)
+        panes.new_session(session, cwd=card.workspace)
     except RuntimeError as e:
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED
@@ -1772,9 +1783,55 @@ def _emit_role_settings(root: Path, roles: set[str]) -> list[Path]:
         p = sdir / f"{role}.settings.json"
         # Pass the root: the hook must reach THIS store, not cwd/.shanty (the
         # agent's own workspace, which has none) — see _stop_cmd.
-        p.write_text(json.dumps(settings_for_role(role, root=root), indent=2, sort_keys=True))
+        emitted = settings_for_role(role, root=root)
+        # MERGE, NEVER CLOBBER (GitHub #15, #16). This was an unconditional full
+        # overwrite, so anything an operator added — a permission, an env var, a
+        # SessionStart self-prime — was silently dropped on the next `roles set`.
+        # cli.md tells the reader to wire their own SessionStart hook; the emitter
+        # then erased it, which made the documented escape hatch unkeepable.
+        #
+        # st OWNS the hook EVENTS it emits and replaces those wholesale (a stale
+        # stop direction must never survive a rewrite); every other key, and every
+        # hook event st does not emit, is the operator's and is preserved.
+        merged = _merge_settings(_read_json(p), emitted)
+        p.write_text(json.dumps(merged, indent=2, sort_keys=True))
         written.append(p)
     return written
+
+
+def _read_json(path: Path) -> dict:
+    try:
+        data = json.loads(Path(path).read_text())
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _merge_settings(existing: dict, emitted: dict) -> dict:
+    """Emitted keys win; everything else the operator wrote survives.
+
+    ONE LEVEL DEEP for dict values, and that depth is the whole rule. Both keys st
+    emits are dicts the operator also has a legitimate claim on:
+
+      hooks   st replaces the EVENTS it emits — a stale stop direction surviving a
+              rewrite is exactly the drift `roles set` exists to remove — but an
+              event st does not emit (a Notification hook, a SessionStart prime) is
+              left as found.
+      env     st sets BOBBIN_ROLE; an operator's own variables beside it are theirs.
+
+    Deeper than one level would start merging st's hook LISTS with an operator's,
+    which is how a removed hook comes back. Shallower is the wholesale clobber this
+    fixes. So: one level, emitted wins per sub-key.
+    """
+    out = dict(existing)
+    for key, value in emitted.items():
+        if isinstance(value, dict) and isinstance(out.get(key), dict):
+            merged = dict(out[key])
+            merged.update(value)
+            out[key] = merged
+        else:
+            out[key] = value
+    return out
 
 
 def _cmd_context(a) -> int:
@@ -1971,9 +2028,19 @@ def _inbox_durable(a, agent, msg: str, panes) -> int:
               f"survive; not downgrading to an ephemeral send.", file=sys.stderr)
         return CANNOT_TELL
     # Persisted. Now best-effort immediacy — never fatal to the durable result.
+    # WRAPPED (GitHub #26): the send was outside the try, so a tmux failure after
+    # a SUCCESSFUL persist exited 1 with a traceback. Every consumer reading the
+    # exit code then concluded the message was lost, when it was durably stored
+    # and would be read. "Best-effort" has to mean it in the code, not only in the
+    # comment.
     if live:
-        panes.send(agent.pane, msg)
-        print(f"  -> {agent.name}    delivered to inbox as {item.id} ({backend}) + live to {agent.pane}")
+        try:
+            panes.send(agent.pane, msg)
+            print(f"  -> {agent.name}    delivered to inbox as {item.id} ({backend}) + live to {agent.pane}")
+        except Exception as e:                    # noqa: BLE001 — never fatal here
+            print(f"  -> {agent.name}    delivered to inbox as {item.id} ({backend}); "
+                  f"the live nudge FAILED ({type(e).__name__}: {str(e)[:80]}) — "
+                  f"the message survives and they read it with `st inbox`.")
     else:
         print(f"  -> {agent.name}    delivered to inbox as {item.id} ({backend}); "
               f"recipient not live — they read it with `st inbox`.")
@@ -2011,7 +2078,17 @@ def _inbox_read(a, me: str) -> int:
 
     if getattr(a, "read", False):
         marked = box.mark_read(me)
-        print(f"  marked {len(marked)} message(s) read for {me}.")
+        # PRINT WHAT IT CONSUMED (GitHub #14). --read is the ACK, and it is the
+        # only thing that consumes a message. A count is not the message: the
+        # bodies are gone from the unread set the instant this returns, so a
+        # surface that prints "marked 3" and discards them has destroyed the only
+        # copy the reader had a right to see.
+        for m in marked:
+            frm = f" from {m.frm}" if getattr(m, "frm", None) else ""
+            print(f"\n  {m.id}{frm}")
+            for line in (m.body or "").splitlines() or [""]:
+                print(f"    {line}")
+        print(f"\n  marked {len(marked)} message(s) read for {me}.")
         return OK
 
     print()
