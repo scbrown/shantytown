@@ -382,6 +382,14 @@ class TomlRegistry:
                 f"or use --registry files/quipu.")
         return sorted(crew.values(), key=lambda a: a.name)
 
+    def empty_note(self) -> str | None:
+        """None — and this registry earns it the same way FilesRegistry does, by
+        making the ambiguous case impossible: `all()` RAISES when no [crew] table
+        is declared, so an empty list can never be returned at all. There is no
+        state in which "nobody exists" and "I looked in the wrong place" could
+        arrive here as the same value."""
+        return None
+
     def set(self, agent: Agent) -> None:
         raise LookupError(
             f"the toml registry is READ-ONLY: {config_path(self._root)} is "

@@ -131,7 +131,13 @@ def _registry(a):
     """
     chosen = getattr(a, "registry", "files")
     if chosen == "quipu":
-        return QuipuRegistry()
+        # Pass the root so the ADDRESS and the NAMESPACE both come from the
+        # deployment's env.json rather than whatever this shell exported. Without
+        # it the client falls back to quipu's stock port — which on a host where
+        # another service owns it means quietly querying a stranger — and to the
+        # stock namespace, which means truthfully querying the real graph for
+        # entities that do not exist. Both used to read as "an empty fleet".
+        return QuipuRegistry(root=getattr(a, "root", None))
     if chosen == "toml":
         # GitHub #11: identity declared by hand, in the same file as the modes,
         # for a deployment that wants no ontology and no generated cards.
