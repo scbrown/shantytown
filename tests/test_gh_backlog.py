@@ -1,0 +1,243 @@
+"""One test per GitHub issue closed in the backlog sweep, named by number.
+
+The issues are individually small; what they share is a genre — a surface that
+answers a question it could not have answered, or destroys something on the way to
+reporting success. Each test below is the specific claim in the issue, so a
+regression is attributable to the report that found it.
+"""
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+
+from shantytown import cli, doctor as doc, harness as harness_mod
+from shantytown.protocols import Agent
+
+
+# --- #24: bd events must be attributable to the agent, not $USER -------------
+
+def test_gh24_launch_carries_BEADS_ACTOR():
+    launch = harness_mod.get("claude").launch(
+        Agent(name="kelly", role="worker"), "/s/worker.json")
+    assert "BEADS_ACTOR=kelly" in launch
+
+
+def test_gh24_the_actor_is_the_card_name_not_the_role():
+    launch = harness_mod.get("claude").launch(
+        Agent(name="sattler", role="administrator"), "/s/administrator.json")
+    assert "BEADS_ACTOR=sattler" in launch
+
+
+# --- #17: the card's model must reach the launch -----------------------------
+
+def test_gh17_card_model_is_honoured_at_launch():
+    """The field was persisted so a restart would not silently revert to the
+    default — and the launcher never read it, so it reverted anyway."""
+    launch = harness_mod.get("claude").launch(
+        Agent(name="kelly", role="worker", model="opus"), "/s/worker.json")
+    assert "--model opus" in launch
+
+
+def test_gh17_no_model_means_no_flag():
+    launch = harness_mod.get("claude").launch(
+        Agent(name="kelly", role="worker"), "/s/worker.json")
+    assert "--model" not in launch
+
+
+def test_gh17_settings_resolve_per_AGENT_before_role(tmp_path):
+    """All workers shared one file, so nothing could differ per agent."""
+    sdir = tmp_path / "settings"
+    sdir.mkdir()
+    (sdir / "worker.settings.json").write_text("{}")
+    resolve = cli._default_settings(tmp_path)
+    card = Agent(name="kelly", role="worker")
+    assert resolve(card).endswith("worker.settings.json")
+
+    (sdir / "agent-kelly.settings.json").write_text("{}")
+    assert resolve(card).endswith("agent-kelly.settings.json")
+
+
+def test_gh17_no_settings_at_all_is_still_None(tmp_path):
+    """compose REFUSES on None. No settings, no launch — never a fallback."""
+    (tmp_path / "settings").mkdir()
+    assert cli._default_settings(tmp_path)(Agent(name="kelly")) is None
+
+
+# --- #15 / #16: emitting settings must not erase the operator's keys ---------
+
+def test_gh15_operator_keys_survive_a_re_emit(tmp_path):
+    sdir = tmp_path / "settings"
+    sdir.mkdir()
+    p = sdir / "worker.settings.json"
+    p.write_text(json.dumps({
+        "permissions": {"allow": ["Bash(ls:*)"]},
+        "env": {"MY_VAR": "1"},
+    }))
+    cli._emit_role_settings(tmp_path, {"worker"})
+    got = json.loads(p.read_text())
+    assert got["permissions"] == {"allow": ["Bash(ls:*)"]}
+    assert got["env"]["MY_VAR"] == "1", "the operator's var survives"
+    assert got["env"]["BOBBIN_ROLE"] == "worker", "and st's own still lands"
+    assert "Stop" in got["hooks"], "and st's own hooks are still emitted"
+
+
+def test_gh16_a_hand_wired_hook_EVENT_survives(tmp_path):
+    """cli.md tells the reader to wire their own SessionStart prime; the emitter
+    erased it, which made the documented escape hatch unkeepable. An event st does
+    NOT emit must be left exactly as found."""
+    sdir = tmp_path / "settings"
+    sdir.mkdir()
+    p = sdir / "worker.settings.json"
+    mine = [{"hooks": [{"type": "command", "command": "/my/notify.sh"}]}]
+    p.write_text(json.dumps({"hooks": {"Notification": mine}}))
+    cli._emit_role_settings(tmp_path, {"worker"})
+    got = json.loads(p.read_text())
+    assert got["hooks"]["Notification"] == mine
+
+
+def test_gh15_a_stale_st_hook_does_NOT_survive(tmp_path):
+    """The other direction, and it is why this is a per-EVENT replace rather than
+    a deep merge: a stale stop direction surviving a rewrite is the drift
+    `roles set` exists to remove."""
+    sdir = tmp_path / "settings"
+    sdir.mkdir()
+    p = sdir / "worker.settings.json"
+    p.write_text(json.dumps({"hooks": {"Stop": [
+        {"hooks": [{"type": "command", "command": "python -m shantytown.stop_event bogus"}]}]}}))
+    cli._emit_role_settings(tmp_path, {"worker"})
+    got = json.loads(p.read_text())
+    assert "bogus" not in json.dumps(got["hooks"]["Stop"])
+
+
+def test_gh15_a_corrupt_existing_file_does_not_block_the_emit(tmp_path):
+    sdir = tmp_path / "settings"
+    sdir.mkdir()
+    p = sdir / "worker.settings.json"
+    p.write_text("{not json")
+    cli._emit_role_settings(tmp_path, {"worker"})
+    assert "Stop" in json.loads(p.read_text())["hooks"]
+
+
+# --- #18: a session must not inherit the launcher's cwd ----------------------
+
+def test_gh18_new_session_starts_in_the_agents_own_directory(tmp_path, monkeypatch):
+    from shantytown.tmux import Tmux
+    calls = []
+
+    class _R:
+        returncode = 0
+        stdout = ""
+
+    def fake_run(argv, **kw):
+        calls.append(argv)
+        return _R()
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    t = Tmux()
+    monkeypatch.setattr(t, "exists", lambda _n: False)
+    t.new_session("st-kelly", cwd=str(tmp_path))
+    created = next(a for a in calls if "new-session" in a)
+    assert "-c" in created and str(tmp_path) in created
+
+
+def test_gh18_a_missing_workspace_does_not_fail_the_launch(tmp_path, monkeypatch):
+    """tmux fails the whole new-session on a missing -c. A launch refused because
+    a directory is not there yet is worse than a session in the wrong cwd —
+    ensure_workspace runs first and reports the real problem."""
+    from shantytown.tmux import Tmux
+    calls = []
+
+    class _R:
+        returncode = 0
+        stdout = ""
+
+    monkeypatch.setattr("subprocess.run", lambda argv, **kw: (calls.append(argv), _R())[1])
+    t = Tmux()
+    monkeypatch.setattr(t, "exists", lambda _n: False)
+    t.new_session("st-kelly", cwd=str(tmp_path / "nope"))
+    created = next(a for a in calls if "new-session" in a)
+    assert "-c" not in created
+
+
+# --- #25: a probe with a side effect is not a probe --------------------------
+
+def test_gh25_the_quipu_version_is_never_probed():
+    """`quipu-server --version` answers by STARTING A SERVER, which binds a port —
+    then doctor rendered the failed probe's own address as if it were quipu's."""
+    spec = next(s for s in doc.SPECS if s.name == "quipu")
+    assert spec.version_unsafe is True
+    ran = []
+    h = doc.detect(spec, which=lambda _n: "/usr/bin/quipu-server",
+                   run=lambda argv: (ran.append(argv), (0, "1.2.3"))[1],
+                   fetch=lambda _r: (None, None), check_latest=False)
+    assert ran == [], "the version probe must not be RUN at all"
+    assert h.version is None
+    assert "side effect" in (h.version_error or "")
+
+
+def test_gh25_a_safe_probe_is_still_read():
+    spec = next(s for s in doc.SPECS if s.name == "beads")
+    assert spec.version_unsafe is False
+    h = doc.detect(spec, which=lambda _n: "/usr/bin/bd",
+                   run=lambda _a: (0, "bd version 1.0.5"),
+                   fetch=lambda _r: (None, None), check_latest=False)
+    assert h.version == "1.0.5"
+
+
+# --- #27: a service is present when it is RUNNING ---------------------------
+
+def test_gh27_a_running_service_is_not_reported_absent():
+    """reactor had been up for 9 days while doctor said 'not installed' and
+    advised an --install that would put a CLI beside the running service."""
+    spec = next(s for s in doc.SPECS if s.name == "reactor")
+    assert spec.service_unit == "reactor"
+    h = doc.detect(spec, which=lambda _n: None,
+                   run=lambda argv: (0, "") if "systemctl" in argv[0] else (1, ""),
+                   fetch=lambda _r: (None, None), check_latest=False,
+                   offpath=lambda *a, **k: None)
+    assert h.present is True
+
+
+def test_gh27_a_dead_service_is_still_absent():
+    spec = next(s for s in doc.SPECS if s.name == "reactor")
+    h = doc.detect(spec, which=lambda _n: None, run=lambda _a: (3, ""),
+                   fetch=lambda _r: (None, None), check_latest=False,
+                   offpath=lambda *a, **k: None)
+    assert h.present is False
+
+
+def test_gh27_no_systemd_is_absent_not_present():
+    """'We could not ask' must never render as 'it is running'."""
+    def boom(_argv):
+        raise FileNotFoundError("systemctl")
+
+    assert doc._service_active("reactor", run=boom) is False
+
+
+# --- #14: --read must show what it consumed ---------------------------------
+
+def test_gh14_read_prints_the_bodies(tmp_path, capsys, monkeypatch):
+    from shantytown.inbox import FilesInbox
+    box = FilesInbox(tmp_path / "inbox")
+    box.deliver("kelly", "the roof needs patching", frm="sattler")
+
+    class _A:
+        root = tmp_path
+        agent = "kelly"
+        registry = "files"
+        backend = "files"
+        repo = None
+        read = True
+        count = False
+        message: list = []
+        durable = False
+        dry_run = False
+
+    monkeypatch.setenv("SHANTY_AGENT", "kelly")
+    assert cli._inbox_read(_A(), "kelly") == cli.OK
+    out = capsys.readouterr().out
+    assert "the roof needs patching" in out, "the body, not just a count"
+    assert "from sattler" in out
+    assert "marked 1 message(s) read" in out
