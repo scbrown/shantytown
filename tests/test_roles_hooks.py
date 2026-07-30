@@ -263,7 +263,8 @@ def test_no_capture_hook_emitted_by_default(tmp_path):
 def test_env_json_capture_hook_is_appended_last_for_every_role(tmp_path):
     (tmp_path / "env.json").write_text(
         '{"SHANTY_STOP_CAPTURE": "/usr/local/lib/hooks/session-capture.sh"}')
-    for role, own_count in (("worker", 2), ("lead", 2), ("administrator", 2)):
+    # the administrator is ONE decision now; worker/lead still have two.
+    for role, own_count in (("worker", 2), ("lead", 2), ("administrator", 1)):
         s = runtime.claude_settings_for_role(role, root=tmp_path)
         hooks = s["hooks"]["Stop"][0]["hooks"]
         # appended, exactly once, LAST — the role's own machinery precedes it

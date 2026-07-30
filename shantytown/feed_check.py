@@ -49,13 +49,16 @@ from .inbox import is_decision, is_message
 
 
 def _root(argv: list[str]) -> Path:
-    # Same precedence as the stop_event hooks: --root, else $SHANTY_ROOT, else
-    # cwd/.shanty. The Stop hook bakes an absolute --root, so this resolves the
-    # real store no matter which workspace the admin was launched in.
+    """--root <dir>, else the shared discovery chain (deployment.resolve_root).
+
+    ONE resolver, four callers. This function was written out longhand in the CLI
+    and in each of the three hook entry points, which is the drift deployment.py
+    exists to prevent — and it meant extending discovery would have had to be done
+    four times or be done inconsistently.
+    """
     if "--root" in argv:
         return Path(argv[argv.index("--root") + 1])
-    env = os.environ.get("SHANTY_ROOT")
-    return Path(env) if env else Path.cwd() / ".shanty"
+    return resolve_root()[0]
 
 
 _DEFAULT_DARK = "arnold dearing ellie goldblum ian malcolm maldoon sentinel"
@@ -257,7 +260,43 @@ def _reason(free: list[str], ready: list[tuple[str, str]]) -> str:
         f"is allowed. Top ready: {top}.")
 
 
+def gate_inputs(root, reg, panes, runtime, me: str | None = None):
+    """(free feedable workers, dispatchable ready beads) — RULE ZERO's two numbers.
+
+    Lifted verbatim out of main() so the unified stop decision (stop_policy, rank
+    2) and this hook compute them ONE way. The logic below is the part of
+    feed_check that was always right; what it should not keep owning is the
+    verdict, because a second independently-blocking Stop hook is what made a
+    documented hibernate policy inert (docs/stop-policy-spec.md).
+
+    Raises rather than fail-opening: the CALLER owns that policy, and both callers
+    do it. Swallowing here would hide a broken gate from both of them.
+    """
+    free = free_feedable_workers(reg, panes, runtime, root=root)
+    if not free:
+        return [], []
+    # bd_cwd, not the ambient cwd, even though the hook usually fires in the
+    # admin's workspace: "usually" is how the tend caller silently never
+    # fired (see bd_cwd). None still falls back to ambient — fail-open.
+    ready_beads = _bd_ready(bd_cwd(reg))
+    # HAULING WORKERS ARE NOT THE COORDINATOR'S TO FEED (aegis-wjgt
+    # groundwork): an idle worker whose queue is already assigned self-feeds
+    # — holding the coordinator's stop hostage over one is the exact inverse
+    # of Rule Zero's purpose. The gate blocks only for (idle unhauled
+    # workers) x (unassigned ready work).
+    free = [w for w in free if w not in hauls(ready_beads)]
+    if not free:
+        return [], []
+    return free, dispatchable(set(free), ready_beads)
+
+
 def main(argv: list[str] | None = None) -> int:
+    """The standalone Rule Zero hook.
+
+    SUPERSEDED as a hook by stop_policy, which folds this into one verdict — but
+    kept invokable so a settings file still naming it keeps working. A
+    half-deployed fleet is then degraded-but-correct rather than broken.
+    """
     argv = list(sys.argv[1:] if argv is None else argv)
     try:
         from .files import FilesRegistry
@@ -269,24 +308,9 @@ def main(argv: list[str] | None = None) -> int:
         panes = Tmux(socket=declared_socket(root))
         runtime = ClaudeRuntime(panes, lambda _c: None, root=root)
 
-        free = free_feedable_workers(reg, panes, runtime, root=root)
-        if not free:
-            return 0                     # nobody free -> allow the stop
-        # bd_cwd, not the ambient cwd, even though the hook usually fires in the
-        # admin's workspace: "usually" is how the tend caller silently never
-        # fired (see bd_cwd). None still falls back to ambient — fail-open.
-        ready_beads = _bd_ready(bd_cwd(reg))
-        # HAULING WORKERS ARE NOT THE COORDINATOR'S TO FEED (aegis-wjgt
-        # groundwork): an idle worker whose queue is already assigned self-feeds
-        # — holding the coordinator's stop hostage over one is the exact inverse
-        # of Rule Zero's purpose. The gate blocks only for (idle unhauled
-        # workers) x (unassigned ready work).
-        free = [w for w in free if w not in hauls(ready_beads)]
-        if not free:
-            return 0                     # everyone idle is self-feeding -> allow
-        ready = dispatchable(set(free), ready_beads)
-        if not ready:
-            return 0                     # no dispatchable work -> allow the stop
+        free, ready = gate_inputs(root, reg, panes, runtime)
+        if not free or not ready:
+            return 0                     # nothing to feed -> allow the stop
 
         # Both conditions hold, and we are certain: BLOCK, with an actionable
         # reason. This is the only path that prints anything.

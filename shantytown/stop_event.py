@@ -49,7 +49,7 @@ from pathlib import Path
 
 from . import triage
 from . import workflow
-from .deployment import deployment_default
+from .deployment import deployment_default, resolve_root
 from .events import FilesEvents, StopEvent
 from .inbox import is_decision, is_message
 from .files import FilesRegistry, FilesTracker, plate as files_plate
@@ -62,14 +62,16 @@ from .tmux import Tmux
 
 
 def _root(argv: list[str]) -> Path:
-    # --root <dir>, else $SHANTY_ROOT, else cwd/.shanty. The CLI now resolves it
-    # the same way (cli._default_root); it did not when this comment was
-    # written, and the comment asserting agreement is what kept the
-    # disagreement invisible.
+    """--root <dir>, else the shared discovery chain (deployment.resolve_root).
+
+    ONE resolver, four callers. This function was written out longhand in the CLI
+    and in each of the three hook entry points, which is the drift deployment.py
+    exists to prevent — and it meant extending discovery would have had to be done
+    four times or be done inconsistently.
+    """
     if "--root" in argv:
         return Path(argv[argv.index("--root") + 1])
-    env = os.environ.get("SHANTY_ROOT")
-    return Path(env) if env else Path.cwd() / ".shanty"
+    return resolve_root()[0]
 
 
 def _lead_is_up(reg: FilesRegistry, panes) -> "callable":
@@ -497,6 +499,10 @@ def _drain(events: FilesEvents, me: str, reg=None, panes=None,
     gets delivery (verdicts read `?`). Without them nothing is deferred: refusing
     to deliver on the strength of a check we did not run would be worse than the
     bug being fixed. plate/rank feed the admin's prioritized workflow.
+
+    HIBERNATE IS NOT HERE. It was, briefly, and that was the bug: a gate inside
+    the drain cannot see the second Stop hook that blocks the same stop. The
+    decision moved to stop_policy, which weighs every rank at once.
     """
     now = time.time()
     verdicts: dict[str, str] = {}
@@ -602,6 +608,7 @@ def main(argv: list[str] | None = None) -> int:
     rank = PolicyRanker() if os.environ.get("SHANTY_RANKER") == "policy" else NullRanker()
     return _drain(events, me, reg, panes, runtime.shows_ready_ui,
                   runtime.awaiting_answer, plate=plate, rank=rank)
+
 
 
 if __name__ == "__main__":
