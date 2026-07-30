@@ -164,7 +164,17 @@ class Config:
     env: dict[str, str] = field(default_factory=dict)
     # [tmux] socket — folded in from settings/tmux-socket (aegis-8calr).
     tmux_socket: str | None = None
+    # [roles.<name>] + [precedence.<axis>] — the deployment's own role vocabulary,
+    # as traits (GitHub #37). Empty means "the built-in three", which is what every
+    # deployment had before there was anywhere to say otherwise.
+    roles: dict[str, dict[str, list[str]]] = field(default_factory=dict)
+    precedence: dict[tuple[str, str], int] = field(default_factory=dict)
     path: Path | None = None
+
+    def catalog(self):
+        """The role catalog this file declares, over the built-in three."""
+        from .traits import Catalog
+        return Catalog(self.roles, self.precedence)
 
     def selectors(self, mode: str | None = None) -> list[str]:
         """The crew selectors for `mode` (default: the configured mode).
@@ -222,7 +232,8 @@ def load_or_default(root) -> tuple[Config, str | None]:
 
 # --- parsing ----------------------------------------------------------------
 
-_TOP_KEYS = {"startup", "modes", "hibernate", "fleet", "crew", "env", "tmux"}
+_TOP_KEYS = {"startup", "modes", "hibernate", "fleet", "crew", "env", "tmux",
+             "roles", "precedence"}
 _STARTUP_KEYS = {"mode"}
 _HIB_KEYS = {"enabled", "max_quiet_minutes"}
 _TMUX_KEYS = {"socket"}
@@ -274,7 +285,80 @@ def _resolve(data: dict, path: Path) -> Config:
                   crew=_crew(path, _table(path, data, "crew")),
                   env=_env(path, _table(path, data, "env")),
                   tmux_socket=_tmux_socket(path, _table(path, data, "tmux")),
+                  roles=_roles(path, _table(path, data, "roles")),
+                  precedence=_precedence(path, _table(path, data, "precedence")),
                   path=path)
+
+
+def _roles(path: Path, tbl: dict) -> dict[str, dict[str, list[str]]]:
+    """[roles.<name>] — a role as its TRAIT VALUES (GitHub #37).
+
+        [roles.advisor]
+        attachment = "unattached"
+        workIntake = ["consulted"]
+
+    AXIS NAMES ARE VALIDATED, unlike [env]'s keys: this table's vocabulary is the
+    ontology's six axes and a seventh is a typo, not an extension. A dropped
+    `attachement` would leave an advisor silently inside the reporting tree — the
+    exact failure the trait model exists to remove — so it refuses and names the
+    axes. VALUES are not validated against a fixed list, because the value sets are
+    the deployment's to extend; an unknown value simply never matches a rule.
+    """
+    from .traits import AXES, canonical_axis
+    out: dict[str, dict[str, list[str]]] = {}
+    for role, axes in tbl.items():
+        if not isinstance(axes, dict):
+            raise ConfigError(f"{path}: [roles.{role}] must be a table of axes, got "
+                              f"{type(axes).__name__}")
+        got: dict[str, list[str]] = {}
+        for axis, val in axes.items():
+            canon = canonical_axis(axis)
+            if canon not in AXES:
+                raise ConfigError(
+                    f"{path}: [roles.{role}] unknown trait axis {axis!r}; the axes "
+                    f"are: {', '.join(sorted(AXES))}")
+            if isinstance(val, str):
+                got[canon] = [val]
+            elif isinstance(val, list) and all(isinstance(v, str) for v in val):
+                got[canon] = list(val)
+            else:
+                raise ConfigError(
+                    f"{path}: [roles.{role}] {axis} must be a string or a list of "
+                    f"strings, got {type(val).__name__}")
+        out[role] = got
+    return out
+
+
+def _precedence(path: Path, tbl: dict) -> dict[tuple[str, str], int]:
+    """[precedence.<axis>] — which value wins when stacked roles conflict.
+
+        [precedence.scope]
+        fleet-wide = 3
+        domain-scoped = 2
+        single-task = 1
+
+    Per AXIS VALUE, not per role: a role that is specific on one axis and generic on
+    another gets misranked by a single per-role number, and this is the form that
+    matches what "most-specific wins" actually means. Declaring it at all is
+    OPTIONAL — with no ranks, a conflicting stack refuses (traits.AmbiguousTrait)
+    rather than st picking a winner, which is the whole point.
+    """
+    from .traits import AXES
+    out: dict[tuple[str, str], int] = {}
+    for axis, values in tbl.items():
+        if axis not in AXES:
+            raise ConfigError(f"{path}: [precedence.{axis}] is not a trait axis; "
+                              f"the axes are: {', '.join(sorted(AXES))}")
+        if not isinstance(values, dict):
+            raise ConfigError(f"{path}: [precedence.{axis}] must be a table of "
+                              f"value = rank, got {type(values).__name__}")
+        for value, rank in values.items():
+            if isinstance(rank, bool) or not isinstance(rank, int):
+                raise ConfigError(
+                    f"{path}: [precedence.{axis}] {value} must be an integer rank "
+                    f"(higher wins), got {type(rank).__name__}")
+            out[(axis, value)] = rank
+    return out
 
 
 def _env(path: Path, tbl: dict) -> dict[str, str]:

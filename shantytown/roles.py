@@ -216,8 +216,16 @@ def _no_empty_note() -> str:
             "clean result")
 
 
-def check(registry: Registry, emitted=None, live=None) -> Report:
+def check(registry: Registry, emitted=None, live=None, catalog=None) -> Report:
     """Verify the hierarchy. Never raises for a bad card — that is a verdict.
+
+    `catalog` (traits.Catalog) is how a role gets to NOT BE IN THE TREE (GitHub
+    #37). Without it, "no reports_to and not the administrator" is an ORPHAN, which
+    is right for a worker and wrong for an advisor: an unattached role has no lead
+    by definition, and reporting it broken would make a declared role permanently
+    fail the deployment's own health check. That is the shape of bug this repo calls
+    exists-not-acts — the feature ships, and the checker says it is wrong.
+    Omitted = the built-in three, where every non-root really does need a lead.
 
     `emitted` is an optional reader `role -> set[str] | None` giving the stop
     directions the role's EMITTED hook artifact actually carries (see
@@ -269,6 +277,11 @@ def check(registry: Registry, emitted=None, live=None) -> Report:
         if a.reports_to is None:
             if a.role == ROOT_ROLE:
                 rows.append(Row(a.name, a.role, None, OK))
+            elif _unattached(catalog, a.role):
+                # Not in the tree, so having no lead is its DEFINITION, not a fault.
+                # Named rather than left blank: a reader scanning for orphans needs
+                # to see why this row is not one.
+                rows.append(Row(a.name, a.role, None, OK, "unattached by role"))
             else:
                 rows.append(Row(a.name, a.role, None, BROKEN, "ORPHAN"))
         elif a.reports_to not in known:
@@ -296,6 +309,24 @@ def check(registry: Registry, emitted=None, live=None) -> Report:
             rows[-1].live = lv
             _fold(rows[-1], lv, note)
     return Report(rows)
+
+
+def _unattached(catalog, role: str) -> bool:
+    """Does the deployment say this role is outside the tree?
+
+    Any failure to answer is FALSE — an undeclared role, a catalog that cannot
+    resolve a stacked conflict, no catalog at all. The safe direction is the strict
+    one: mistakenly calling an advisor an orphan is a noisy false positive an
+    operator can read and dismiss, while mistakenly excusing a real worker with no
+    lead hides an agent whose stop events go nowhere, silently. That is the failure
+    this whole check exists to catch.
+    """
+    if catalog is None:
+        return False
+    try:
+        return catalog.of(role).unattached
+    except Exception:      # noqa: BLE001 — UnknownRole / AmbiguousTrait / anything
+        return False
 
 
 def _fold(row: Row, verdict: str, note: str) -> None:
