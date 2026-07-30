@@ -115,6 +115,14 @@ max_quiet_minutes = 60
 #                      It is config, not a runtime flag, for the same reason
 #                      retirement lives on a card: a deliberate shutdown must
 #                      survive the session that decided it.
+#                      It also quiets the administrator's PRIORITIZE list, which
+#                      read every down pane as a defect and listed all nine of
+#                      those agents as "re-dispatch — STOPPED". Risen escalations
+#                      still surface: standing the fleet down declines to hand out
+#                      work, it does not decline to ANSWER. What was withheld is
+#                      reported on the same line, never silently dropped.
+#                      A RETIRED card (`st tend --retire`) is excluded from that
+#                      list unconditionally, stood down or not — down is the intent.
 #
 #   max_load_per_core  The gate compared nothing against the host: it forced
 #                      dispatch to 9 agents on an 8-core box at load 33. Per-core

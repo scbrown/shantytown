@@ -380,6 +380,106 @@ def test_gh23_zero_disables_the_capacity_check():
     assert v.block and v.by == sp.BY_RULE_ZERO
 
 
+# --- #29 (2): a DELIBERATELY stopped agent is intent, not a fault -------------
+#
+# The gate half of #29 landed in 4cd6125 (`[fleet] stood_down` satisfies Rule
+# Zero). This is the OTHER half, request 2 of the issue: the admin's PRIORITIZE
+# list still read every down pane as a defect, so the same nine `st stop`ed
+# agents came back as "re-dispatch felix — STOPPED" nine times.
+
+class _WfPanes:
+    def __init__(self, up):
+        self._up = set(up)
+
+    def exists(self, pane):
+        return pane in self._up
+
+
+def test_gh29_a_retired_card_is_never_on_the_re_dispatch_list():
+    from shantytown import workflow as wf
+    agents = [Agent(name="felix", role="worker", pane="p-felix", retired=True),
+              Agent(name="arya", role="worker", pane="p-arya")]
+    cands = wf.classify(agents, _WfPanes(set()), None)   # both panes down
+    by = {c.agent: c for c in cands}
+    assert by["felix"].state == wf.AgentState.RETIRED
+    assert by["arya"].state == wf.AgentState.STOPPED, "an unretired one is a fault"
+    steps = wf.prioritize(cands).steps
+    assert [s.candidate.agent for s in steps] == ["arya"]
+
+
+def test_gh29_a_retired_card_is_not_offered_work_even_if_it_is_alive():
+    """Retired AND alive is a fault — `st tend` escalates it as RESURRECTED. The
+    dispatch list must not answer a retirement with 'assign work'."""
+    from shantytown import workflow as wf
+    agents = [Agent(name="felix", role="worker", pane="p-felix", retired=True)]
+    cands = wf.classify(agents, _WfPanes({"p-felix"}), None)
+    assert cands[0].state == wf.AgentState.RETIRED
+    assert wf.prioritize(cands).steps == []
+
+
+def test_gh29_a_retired_agents_RISEN_escalation_still_surfaces():
+    """The agent may be gone; the decision it forced is not."""
+    from shantytown import workflow as wf
+    cands = [wf.Candidate("felix", "worker", wf.AgentState.RETIRED, rose=True,
+                          stop_reason="needs-decision")]
+    steps = wf.prioritize(cands).steps
+    assert [s.action for s in steps] == ["decide"]
+
+
+def test_gh29_a_stood_down_fleet_gets_no_dispatch_instructions():
+    from shantytown import workflow as wf
+    cands = [wf.Candidate("felix", "worker", wf.AgentState.STOPPED),
+             wf.Candidate("goodnight", "worker", wf.AgentState.STOPPED),
+             wf.Candidate("bond", "worker", wf.AgentState.IDLE)]
+    out = wf.prioritize(cands, stood_down=True)
+    assert out.steps == [], "not one re-dispatch, and no 'assign work' either"
+    rendered = out.render()
+    assert "PRIORITIZE" not in rendered, "no numbered instruction list at all"
+    assert "re-dispatch felix" not in rendered
+    assert "assign work" not in rendered
+    # ANNOUNCED, not silent: a block that quietly stops having entries is
+    # indistinguishable from one that is broken.
+    assert "STOOD DOWN" in rendered
+    assert "3 agent(s) left alone (2 down, 1 idle)" in rendered
+    assert "stood_down" in rendered, "and it says how to resume"
+
+
+def test_gh29_a_stood_down_fleet_still_surfaces_an_escalation():
+    from shantytown import workflow as wf
+    cands = [wf.Candidate("felix", "worker", wf.AgentState.STOPPED),
+             wf.Candidate("bond", "worker", wf.AgentState.STOPPED, rose=True,
+                          stop_reason="needs-decision")]
+    out = wf.prioritize(cands, stood_down=True)
+    assert [s.candidate.agent for s in out.steps] == ["bond"]
+    rendered = out.render()
+    assert "decide bond" in rendered
+    assert "STOOD DOWN" in rendered, "and what it held back is still reported"
+
+
+def test_gh29_not_stood_down_is_unchanged():
+    from shantytown import workflow as wf
+    cands = [wf.Candidate("felix", "worker", wf.AgentState.STOPPED),
+             wf.Candidate("bond", "worker", wf.AgentState.IDLE)]
+    out = wf.prioritize(cands)
+    assert [s.action for s in out.steps] == ["re-dispatch", "assign work"]
+    assert "STOOD DOWN" not in out.render()
+
+
+def test_gh29_the_drain_reads_stood_down_from_the_config(tmp_path):
+    from shantytown import stop_event as se
+    (tmp_path / "shantytown.toml").write_text(
+        "[fleet]\nstood_down = true\n")
+    assert se._stood_down(tmp_path) is True
+
+
+def test_gh29_an_unreadable_config_does_NOT_silence_the_workflow(tmp_path):
+    """Failing toward the FULL list: a config typo must not quietly turn the
+    admin's enrichment off — that is this bug one layer down."""
+    from shantytown import stop_event as se
+    (tmp_path / "shantytown.toml").write_text("[fleet]\nstood_down = ohno\n")
+    assert se._stood_down(tmp_path) is False
+
+
 # --- #12: a crash-looping agent must not become a respawn thrasher -----------
 
 class _Crashes:
