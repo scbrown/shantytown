@@ -134,3 +134,48 @@ max_quiet_minutes = 60
 [fleet]
 stood_down = false
 max_load_per_core = 4.0
+
+# ---------------------------------------------------------------------------
+# [env] — this deployment's PLUMBING: where the tracker is, which backend, the
+# address of a graph server, a guard script path. Values that are also settable as
+# environment variables, because that is what a launcher can carry into a pane.
+#
+# This used to be a separate `env.json`. It was folded in here because config lived
+# in SEVEN places — env.json, this file, settings/<role>.settings.json,
+# crew/<name>.json, settings/tmux-socket, hierarchy.*, and the ~/.config pointer —
+# and there was no single answer to "where do I configure this?". Now exactly ONE
+# of those is written by a human: this file. The others are generated (crew/,
+# settings/), an import source (hierarchy.*), or a locator that by definition
+# cannot live inside the deployment it points at (the pointer).
+#
+# PRECEDENCE: this table, then env.json (still read, DEPRECATED — it warns once,
+# on stderr, naming the keys to move), then the ambient environment.
+#
+# THE FILE STILL BEATS THE ENVIRONMENT. Where a value is authored moved; which
+# source wins did not — otherwise a stray shell export would silently override a
+# value a deployment had pinned on purpose.
+#
+# THIS IS THE ONE TABLE WHOSE KEYS ARE NOT VALIDATED. The set is open by
+# construction, so an unrecognised key here is your key, not a typo we can detect.
+# Values must be single strings (numbers and booleans are accepted and stringified);
+# a table or a list is refused, because the consumer is `os.environ`-shaped.
+# ---------------------------------------------------------------------------
+[env]
+# SHANTY_BACKEND = "beads"              # files | beads | forgejo
+# SHANTY_BEADS_REPO = "/path/to/repo"   # where the plates live
+# SHANTY_ONTO_NS = "https://example.invalid/ontology#"
+
+# ---------------------------------------------------------------------------
+# [tmux] socket — the fleet's tmux socket, DECLARED. Was `settings/tmux-socket`
+# (still read, DEPRECATED).
+#
+# Declared and never inferred from the ambient $TMUX: an env var is what an
+# operator's shell happens to hold, and a fleet whose panes are visible or not
+# depending on which pane you ran `st` from is the bug that made every agent report
+# DOWN. `st doctor` cross-checks it — if your registry's panes are alive on some
+# OTHER socket, it says so rather than reporting a dead fleet.
+#
+# Omit it for the default tmux server.
+# ---------------------------------------------------------------------------
+[tmux]
+# socket = "shanty"

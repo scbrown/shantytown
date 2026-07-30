@@ -115,19 +115,45 @@ SOCKET_FILE = "tmux-socket"
 def declared_socket(root) -> str | None:
     """The fleet's socket, per the store. None = the default server.
 
-    Precedence: the store's file, then $SHANTY_TMUX_SOCKET, then None. The FILE
-    wins on purpose — an ambient env var is what an operator's shell happens to
-    hold, and this must not change meaning depending on which pane you ran it
-    from. That ambiguity IS the bug.
+    Precedence: `[tmux] socket` in shantytown.toml, then the legacy
+    `settings/tmux-socket` file (DEPRECATED, aegis-8calr), then
+    $SHANTY_TMUX_SOCKET, then None. A DECLARATION wins over the env on purpose —
+    an ambient env var is what an operator's shell happens to hold, and this must
+    not change meaning depending on which pane you ran it from. That ambiguity IS
+    the bug.
     """
     from pathlib import Path as _P
+    from .config import load_or_default
+    cfg, _err = load_or_default(root)          # never raises: this runs in hooks
+    if cfg.tmux_socket:
+        return cfg.tmux_socket
     try:
         v = (_P(root) / "settings" / SOCKET_FILE).read_text().strip()
         if v:
+            _warn_socket_file_once(_P(root))
             return v
     except OSError:
         pass
     return os.environ.get("SHANTY_TMUX_SOCKET") or None
+
+
+_SOCKET_WARNED: set[str] = set()
+
+
+def _warn_socket_file_once(root) -> None:
+    """Deprecation notice for settings/tmux-socket — stderr, once per process.
+
+    Same two constraints as env.json's (deployment.py): stdout belongs to the hook
+    protocol, and a line an operator sees on every command is a line they stop
+    reading.
+    """
+    marker = str(root)
+    if marker in _SOCKET_WARNED:
+        return
+    _SOCKET_WARNED.add(marker)
+    print(f"  ⚠ {root / 'settings' / SOCKET_FILE} is DEPRECATED — it is still "
+          f"read. Declare it as `socket` under [tmux] in "
+          f"{root / 'shantytown.toml'} instead.", file=sys.stderr)
 
 
 class OwnershipError(RuntimeError):

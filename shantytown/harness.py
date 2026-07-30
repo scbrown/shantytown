@@ -146,9 +146,11 @@ class ClaudeHarness:
         # the env carries it, because the env is read at hook-run time, not baked into
         # a settings snapshot. That is the whole point: this makes the NEXT settings
         # change survivable for agents launched before it. It does not make a stale
-        # settings file detectable — nipg items 1-2 (a doctor check, and role-set
-        # naming the live agents it did NOT reach) are still open, and this must not be
-        # mistaken for them.
+        # settings file DETECTABLE, and must not be mistaken for the parts that do:
+        # nipg items 1-2 are the launch stamp (launched.py, surfaced as the `settings`
+        # column in `st crew`) and `role set` naming the live agents its rewrite did
+        # NOT reach (_report_who_the_rewrite_did_not_reach). Both have since landed —
+        # all three legs of that bead are closed. This one is the belt, not the detector.
         root_env = f"SHANTY_ROOT={Path(root).resolve()} " if root else ""
         # BEADS_ACTOR is WHO the tracker records for a create/close/reassign
         # (GitHub #24). Without it every agent's bd events are written as $USER —
