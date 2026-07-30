@@ -245,8 +245,8 @@ class _ReauthPanes(_Panes):
     new_session hands out a ready pane, the way a real relaunch reads the
     refreshed credential."""
 
-    def new_session(self, name):
-        got = super().new_session(name)
+    def new_session(self, name, cwd=None):
+        got = super().new_session(name, cwd)
         self._screens[name] = IDLE_PANE
         return got
 

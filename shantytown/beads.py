@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+from pathlib import Path
 
 from .inbox import is_message
 from .protocols import WorkItem
@@ -31,7 +32,13 @@ class BeadsTracker:
     _TITLE_MAX = 500
 
     def __init__(self, repo: str | None = None, timeout: int = 30):
-        self.repo = repo          # -C <dir>; None = cwd
+        # RESOLVED TO ABSOLUTE (GitHub #31). `repo` is handed to bd as `-C <dir>`,
+        # so a RELATIVE value silently means "relative to whatever cwd invoked
+        # st" — the same store read from the checkout and from an agent's
+        # workspace are then two different stores, and the narrower read returns
+        # a partial answer at exit 0. Resolve once, here, at the only place the
+        # value enters the adapter.
+        self.repo = str(Path(repo).expanduser().resolve()) if repo else None
         self.timeout = timeout
 
     def _bd(self, *args: str) -> subprocess.CompletedProcess:

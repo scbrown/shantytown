@@ -56,6 +56,16 @@ class ToolSpec:
     leverage: str           # the st feature this tool lights up
     release: str | None = None      # "github:owner/repo" | "forgejo:owner/repo" | None (no releases)
     version_broken: bool = False     # KNOWN upstream: --version fails; do NOT read that as absent
+    # A PROBE WITH A SIDE EFFECT IS NOT A PROBE (GitHub #25). `quipu-server
+    # --version` answers by STARTING A SERVER, which binds a port — on a host
+    # where that port is taken the probe hangs or dies, and doctor then rendered
+    # the failed probe's own address as if it were quipu's. Never run it: presence
+    # comes from PATH, and the version is honestly UNKNOWN.
+    version_unsafe: bool = False
+    # The tool runs as a SERVICE, so a CLI lookup is the wrong question (GitHub
+    # #27): reactor had been up for 9 days while doctor said "not installed" and
+    # advised --install, which would have put a CLI beside the running service.
+    service_unit: str | None = None
 
 
 # Surveyed, not assumed. beads has NO releases → source build; quipu's
@@ -82,6 +92,7 @@ SPECS: tuple[ToolSpec, ...] = (
         leverage="the registry (identity, required) + knowledge (episodes)",
         release="github:scbrown/quipu",
         version_broken=True,
+        version_unsafe=True,
     ),
     ToolSpec(
         "reactor", "reactor", ("reactor", "--version"), r"(\d+\.\d+\.\d+)",
@@ -89,6 +100,7 @@ SPECS: tuple[ToolSpec, ...] = (
         installs_via="no install mechanism yet — upstream has no release",
         leverage="bead-lifecycle events feeding the harness",
         release=None,
+        service_unit="reactor",
     ),
     # dp records FAILED tool calls — the capabilities an agent reached for that did
     # not exist. OPTIONAL: st works whole without it; when present, st reads its
@@ -139,6 +151,21 @@ class Health:
 
 def _which(name: str) -> str | None:
     return shutil.which(name)
+
+
+def _service_active(unit: str, *, run=None) -> bool:
+    """Is this systemd unit active? --user first, then system. Any failure is
+    False: 'we could not ask' must never render as 'it is running'."""
+    runner = run or _run
+    for argv in ((("systemctl", "--user", "is-active", "--quiet", unit)),
+                 (("systemctl", "is-active", "--quiet", unit))):
+        try:
+            rc, _out = runner(argv)
+            if rc == 0:
+                return True
+        except Exception:      # noqa: BLE001 — no systemd, no permission, no answer
+            return False
+    return False
 
 
 def _off_path_location(spec: ToolSpec, *, which, run) -> str | None:
@@ -220,11 +247,23 @@ def detect(spec: ToolSpec, *, which=_which, run=_run, fetch=_fetch_latest,
     """Detect one tool. Reads PATH, runs --version, optionally checks the latest
     release. Mutates NOTHING."""
     present = which(spec.binary) is not None
+    # A SERVICE IS PRESENT WHEN IT IS RUNNING, not when a CLI of the same name is
+    # on PATH (GitHub #27). Asked the wrong way, a service that has been up for
+    # days reads as "not installed" and doctor then advises an --install that
+    # would put a binary beside it.
+    if not present and spec.service_unit:
+        present = _service_active(spec.service_unit, run=run)
     unpathed_at = None
     if not present:
         unpathed_at = offpath(spec, which=which, run=run)
     version = version_error = None
-    if present or unpathed_at:
+    if spec.version_unsafe:
+        # Deliberately UNASKED. Not an error and not a version: doctor renders
+        # this as could-not-tell, which is the truth.
+        version_error = ("version not probed: this tool answers --version by "
+                         "starting a server (binds a port) — a probe with a side "
+                         "effect is not a probe")
+    elif present or unpathed_at:
         # For an off-PATH binary, run it by its absolute path — its version is
         # as knowable as anyone's; only its PATH entry is missing.
         argv = spec.version_argv if present else (unpathed_at,) + spec.version_argv[1:]

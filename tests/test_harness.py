@@ -56,28 +56,36 @@ _CARDS = [
     Agent(name="malcolm", role="lead", workspace="/home/w", dangerous=True),
     Agent(name="arnold", role="administrator", workspace="/x"),
 ]
+# The launch string, pinned BYTE FOR BYTE. It moved once, deliberately, when
+# BEADS_ACTOR was added (GitHub #24): every agent's bd events were written as
+# $USER — `ubuntu` for the whole fleet — so an assignment that flipped between two
+# agents could not say who did it. The card already knew the name; the audit trail
+# just never got told. Any OTHER change to these strings is drift, which is what
+# the test below is for.
 _BEFORE = {
     (None, "ellie"):
-        "SHANTY_AGENT=ellie BOBBIN_ROLE=worker claude --no-chrome "
-        "--remote-control ellie --settings /s/worker.json",
-    (None, "malcolm"):
-        "cd /home/w && SHANTY_AGENT=malcolm BOBBIN_ROLE=lead claude --no-chrome "
-        "--remote-control malcolm --dangerously-skip-permissions "
-        "--settings /s/lead.json",
-    (None, "arnold"):
-        "cd /x && SHANTY_AGENT=arnold BOBBIN_ROLE=administrator claude "
-        "--no-chrome --remote-control arnold --settings /s/administrator.json",
-    ("/tmp/r", "ellie"):
-        "SHANTY_ROOT=/tmp/r SHANTY_AGENT=ellie BOBBIN_ROLE=worker claude "
+        "SHANTY_AGENT=ellie BOBBIN_ROLE=worker BEADS_ACTOR=ellie claude "
         "--no-chrome --remote-control ellie --settings /s/worker.json",
+    (None, "malcolm"):
+        "cd /home/w && SHANTY_AGENT=malcolm BOBBIN_ROLE=lead BEADS_ACTOR=malcolm "
+        "claude --no-chrome --remote-control malcolm "
+        "--dangerously-skip-permissions --settings /s/lead.json",
+    (None, "arnold"):
+        "cd /x && SHANTY_AGENT=arnold BOBBIN_ROLE=administrator "
+        "BEADS_ACTOR=arnold claude --no-chrome --remote-control arnold "
+        "--settings /s/administrator.json",
+    ("/tmp/r", "ellie"):
+        "SHANTY_ROOT=/tmp/r SHANTY_AGENT=ellie BOBBIN_ROLE=worker "
+        "BEADS_ACTOR=ellie claude --no-chrome --remote-control ellie "
+        "--settings /s/worker.json",
     ("/tmp/r", "malcolm"):
         "cd /home/w && SHANTY_ROOT=/tmp/r SHANTY_AGENT=malcolm BOBBIN_ROLE=lead "
-        "claude --no-chrome --remote-control malcolm "
+        "BEADS_ACTOR=malcolm claude --no-chrome --remote-control malcolm "
         "--dangerously-skip-permissions --settings /s/lead.json",
     ("/tmp/r", "arnold"):
         "cd /x && SHANTY_ROOT=/tmp/r SHANTY_AGENT=arnold "
-        "BOBBIN_ROLE=administrator claude --no-chrome --remote-control arnold "
-        "--settings /s/administrator.json",
+        "BOBBIN_ROLE=administrator BEADS_ACTOR=arnold claude --no-chrome "
+        "--remote-control arnold --settings /s/administrator.json",
 }
 
 

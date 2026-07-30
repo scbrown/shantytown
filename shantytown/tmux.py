@@ -22,6 +22,7 @@ into the harness.
 from __future__ import annotations
 import os
 import subprocess
+from pathlib import Path
 import sys
 import time
 
@@ -249,8 +250,15 @@ class Tmux:
         subprocess.run(self._cmd("send-keys", "-t", pane, "-l", text), check=True)
         subprocess.run(self._cmd("send-keys", "-t", pane, "Enter"), check=True)
 
-    def new_session(self, name: str) -> str:
+    def new_session(self, name: str, cwd: str | None = None) -> str:
         """Create a DETACHED, EMPTY session; return its address (the name).
+
+        `cwd` is the session's START DIRECTORY (tmux -c). Without it a session
+        inherits the LAUNCHER's cwd (GitHub #18), so every agent st started from
+        the checkout began life rooted in the checkout rather than in its own
+        workspace — and the launch string's own `cd` is the only thing that had
+        ever hidden it. A shell opened later in that pane, or any tool reading
+        the pane's cwd, saw the wrong project.
 
         RAISES if a session by that name already exists — never silently replace
         a live agent (arnold's #5 ruling: the clobber hazard, same family as
@@ -262,7 +270,14 @@ class Tmux:
         """
         if self.exists(name):
             raise RuntimeError(f"session {name!r} already exists — stop it first")
-        subprocess.run(self._cmd("new-session", "-d", "-s", name), check=True)
+        argv = ["new-session", "-d", "-s", name]
+        if cwd and Path(cwd).is_dir():
+            # Only when it EXISTS: tmux fails the whole new-session on a missing
+            # -c, and a launch refused because a directory is not there yet is a
+            # worse outcome than a session in the wrong cwd (ensure_workspace
+            # runs before this and reports the real problem).
+            argv += ["-c", str(Path(cwd).expanduser().resolve())]
+        subprocess.run(self._cmd(*argv), check=True)
         # Provenance marker: st launched this session, so st may stop
         # it. Set immediately; if it fails, tear the session down rather than
         # leave an un-owned session st created (which its own guard could never
@@ -427,7 +442,7 @@ class NullPanes:
                 return text
         return None
 
-    def new_session(self, name: str) -> str:
+    def new_session(self, name: str, cwd: str | None = None) -> str:
         """RAISES if the name is live; else creates an empty session. Requires
         session-lifecycle mode (live set) — new_session on the ambient default
         would always raise, since everything ambiently exists."""
