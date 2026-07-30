@@ -129,7 +129,7 @@ def plate(tracker: "BeadsTracker", agent: str) -> "WorkItem | None":
     then by id) so two runs agree.
     """
     import json
-    r = tracker._bd("list", "--json")
+    r = tracker._bd("list", "--json", "--limit", "0")
     if r.returncode != 0:
         # could-not-look, not empty-plate. Raise so prime surfaces exit 2 rather
         # than reporting "nothing on your plate" when it simply could not ask.
@@ -172,7 +172,7 @@ def items(tracker: "BeadsTracker") -> list[WorkItem]:
     [] when bd could not answer: an inbox that reports "no messages" because it
     could not look is the could-not-tell-rendered-as-fine bug this repo names in
     every other reader."""
-    r = tracker._bd("list", "--json")
+    r = tracker._bd("list", "--json", "--limit", "0")
     if r.returncode != 0:
         raise RuntimeError(f"bd list failed: {r.stderr.strip()[:120]}")
     rows = json.loads(r.stdout) if r.stdout.strip() else []
