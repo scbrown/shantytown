@@ -300,10 +300,10 @@ def _haul(reg: FilesRegistry, panes, me: str, root: Path) -> int:
         cwd = bd_cwd(reg)
         # An active anchor = mid-work turn boundary. bd list is filtered
         # client-side (same reason as feed_check: assignee formats vary).
-        active = _assigned_to(me, _bd_json(["list", "--status", "in_progress"], cwd))
+        active = _assigned_to(me, _bd_json(["list", "--status", "in_progress", "--limit", "0"], cwd))
         if active:
             return 0
-        mine = _assigned_to(me, _bd_json(["ready"], cwd))
+        mine = _assigned_to(me, _bd_json(["ready", "--limit", "0"], cwd))
         if not mine:
             return 0
 

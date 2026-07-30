@@ -3343,6 +3343,11 @@ def _tend_once(a, quiet: bool = False) -> int:
         spawn=None if a.dry_run else (lambda card, session: runtime.start(card, session)),
         refresh=None if a.dry_run else _refresh_clone,
         gaps=lambda card: prov_mod.missing_kit(card, Path(a.root)),
+        # Backoff + give-up (GitHub #12): a crash-looping agent must cost one
+        # launch per interval, not one per pass, and must eventually be retired
+        # rather than thrashed forever.
+        crashes=sup_mod.CrashLog(Path(a.root)),
+        retire=lambda name: _retire_card(a, name),
         log=lambda msg: print(f"  {msg}", file=sys.stderr),
     )
     rep = tender.pass_over(agents, dry_run=a.dry_run)
@@ -3422,6 +3427,18 @@ def _tend_once(a, quiet: bool = False) -> int:
     if not a.dry_run:
         sup_mod.PassLog(Path(a.root)).record(rep)
     return OK if rep.healthy() else CANNOT_TELL
+
+
+def _retire_card(a, name: str) -> None:
+    """Mark an agent RETIRED on its card — the same durable mechanism
+    `st tend --retire` uses, so a crash-loop retirement is visible to, and
+    reversible by, exactly the commands an operator already knows."""
+    try:
+        reg = _registry(a)
+        card = reg.get(name)
+        reg.set(replace(card, retired=True))
+    except Exception as e:                        # noqa: BLE001 — never fatal
+        print(f"  ⚠ could not retire {name}: {e}", file=sys.stderr)
 
 
 def _tend_reauth(a) -> int:
@@ -3524,6 +3541,11 @@ def _tend_reauth(a) -> int:
         spawn=_spawn,
         refresh=_refresh_clone,
         gaps=lambda card: prov_mod.missing_kit(card, Path(a.root)),
+        # Backoff + give-up (GitHub #12): a crash-looping agent must cost one
+        # launch per interval, not one per pass, and must eventually be retired
+        # rather than thrashed forever.
+        crashes=sup_mod.CrashLog(Path(a.root)),
+        retire=lambda name: _retire_card(a, name),
         log=lambda msg: print(f"  {msg}", file=sys.stderr),
     )
     rep = tender.pass_over(relaunch, dry_run=False)

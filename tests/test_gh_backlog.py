@@ -378,3 +378,142 @@ def test_gh23_zero_disables_the_capacity_check():
                             fleet=Fleet(max_load_per_core=0.0),
                             load_per_core=99.0))
     assert v.block and v.by == sp.BY_RULE_ZERO
+
+
+# --- #12: a crash-looping agent must not become a respawn thrasher -----------
+
+class _Crashes:
+    def __init__(self, rows=None):
+        self.rows = dict(rows or {})
+
+    def get(self, a):
+        return self.rows.get(a, (0, 0.0))
+
+    def died(self, a, now):
+        n, _ = self.get(a)
+        self.rows[a] = (n + 1, now)
+
+    def clear(self, a):
+        self.rows.pop(a, None)
+
+
+def _tender(crashes, now=1000.0, retired=None, spawned=None):
+    from shantytown import tend as tend_mod
+    from shantytown.tmux import NullPanes
+    panes = NullPanes(live=set())
+
+    class _RT:
+        def shows_ready_ui(self, s):
+            return True
+
+        def start(self, card, pane):
+            (spawned if spawned is not None else []).append(card.name)
+
+    return tend_mod.Tender(
+        panes, _RT(), None, spawn=lambda c, p: None, refresh=None,
+        ensure=lambda card: card.workspace, crashes=crashes,
+        retire=(retired.append if retired is not None else None),
+        now=lambda: now, log=lambda m: None)
+
+
+def test_gh12_a_second_death_inside_the_window_BACKS_OFF():
+    from shantytown import tend as tend_mod
+    crashes = _Crashes({"kelly": (1, 990.0)})       # died 10s ago
+    rep = _tender(crashes, now=1000.0).pass_over([Agent(name="kelly", pane="p-kelly")])
+    f = rep.findings[0]
+    assert f.verdict == tend_mod.BACKOFF
+    assert not f.acted, "a backoff must not launch"
+    assert "before retry 2" in f.why
+
+
+def test_gh12_once_the_window_passes_it_retries():
+    from shantytown import tend as tend_mod
+    crashes = _Crashes({"kelly": (1, 0.0)})         # died long ago
+    rep = _tender(crashes, now=100000.0).pass_over([Agent(name="kelly", pane="p-kelly")])
+    assert rep.findings[0].verdict == tend_mod.RESPAWNED
+
+
+def test_gh12_the_window_GROWS():
+    from shantytown import tend as tend_mod
+    # 3 prior deaths -> 60 * 2**2 = 240s. At 100s elapsed it must still wait.
+    crashes = _Crashes({"kelly": (3, 900.0)})
+    rep = _tender(crashes, now=1000.0).pass_over([Agent(name="kelly", pane="p-kelly")])
+    assert rep.findings[0].verdict == tend_mod.BACKOFF
+
+
+def test_gh12_a_persistent_crash_loop_is_RETIRED_not_thrashed():
+    """A supervisor that never gives up hides a broken agent behind infinite
+    optimism."""
+    from shantytown import tend as tend_mod
+    retired = []
+    crashes = _Crashes({"kelly": (tend_mod.BACKOFF_RETRIES, 0.0)})
+    rep = _tender(crashes, now=100000.0, retired=retired).pass_over(
+        [Agent(name="kelly", pane="p-kelly")])
+    f = rep.findings[0]
+    assert f.verdict == tend_mod.CRASH_LOOP
+    assert retired == ["kelly"], "durably, on the card"
+    assert not rep.healthy(), "and it is a FAULT, so the exit code says so"
+    assert "unretire" in f.why, "and it says how to undo it"
+
+
+def test_gh12_seeing_an_agent_ALIVE_clears_the_episode():
+    """An agent that recovers must not be punished for an old episode."""
+    from shantytown import tend as tend_mod
+    from shantytown.tmux import NullPanes
+    crashes = _Crashes({"kelly": (3, 900.0)})
+    panes = NullPanes(live={"p-kelly"}, screen="> ")
+
+    class _RT:
+        def shows_ready_ui(self, s):
+            return True
+
+    tend_mod.Tender(panes, _RT(), None, crashes=crashes, now=lambda: 1000.0,
+                    log=lambda m: None).pass_over([Agent(name="kelly", pane="p-kelly")])
+    assert crashes.get("kelly") == (0, 0.0)
+
+
+def test_gh12_no_crash_store_means_the_old_behaviour():
+    """crashes=None disables the backoff entirely, so every existing caller is
+    unchanged."""
+    from shantytown import tend as tend_mod
+    rep = _tender(None, now=1000.0).pass_over([Agent(name="kelly", pane="p-kelly")])
+    assert rep.findings[0].verdict == tend_mod.RESPAWNED
+
+
+def test_gh12_the_crash_log_survives_a_round_trip(tmp_path):
+    from shantytown.supervisor import CrashLog
+    log = CrashLog(tmp_path)
+    assert log.get("kelly") == (0, 0.0)
+    log.died("kelly", 1000.0)
+    log.died("kelly", 1100.0)
+    assert log.get("kelly") == (2, 1100.0)
+    log.clear("kelly")
+    assert log.get("kelly") == (0, 0.0)
+
+
+def test_gh12_an_unreadable_crash_log_does_not_stop_supervision(tmp_path):
+    from shantytown.supervisor import CrashLog
+    log = CrashLog(tmp_path)
+    log.path.write_text("{not json")
+    assert log.get("kelly") == (0, 0.0)
+
+
+# --- #28: we must not inherit bd's silent truncation -------------------------
+
+def test_gh28_every_bd_list_or_ready_asks_for_everything():
+    """`bd ready --json` returned 10 of 174 and `bd list --json` 50 of 190, with
+    empty stderr and exit 0. Every consumer here reasons about the WHOLE queue, so
+    a silently short list is a wrong answer, not a small one."""
+    import re
+    src = Path("shantytown")
+    offenders = []
+    for py in src.glob("*.py"):
+        text = py.read_text()
+        # bd ONLY. `pipx list --json` and friends are other tools with other
+        # contracts; this guard is about the one that truncates silently.
+        for m in re.finditer(r'(?:"bd"|_bd|\bbd_json)[^\n]{0,120}?"(ready|list)"', text):
+            window = text[m.start():m.start() + 300]
+            if '--limit' not in window:
+                offenders.append(f"{py.name}: {m.group(0)[:70]}")
+    assert not offenders, (
+        "these bd calls can be silently truncated: " + "; ".join(offenders))

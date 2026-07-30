@@ -177,3 +177,56 @@ class PassLog:
         if not rec or not rec.get("at"):
             return None
         return (now or time.time()) - float(rec["at"])
+
+
+class CrashLog:
+    """<root>/crashes.json — consecutive deaths per agent, for tend's backoff.
+
+    Deliberately NOT the launch stamp store: a stamp says "st launched this once",
+    and this says "st has launched this N times and it keeps dying". Conflating
+    them would make a healthy relaunch look like a crash.
+
+    Every read failure is (0, 0.0) and every write failure is swallowed. A
+    supervisor must not stop supervising because a counter file is unreadable —
+    the worst case of a lost counter is one extra launch attempt, and the worst
+    case of a crashed supervisor is an unsupervised fleet.
+    """
+
+    def __init__(self, root) -> None:
+        self.path = Path(root) / "crashes.json"
+
+    def _load(self) -> dict:
+        try:
+            data = json.loads(self.path.read_text())
+            return data if isinstance(data, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    def _save(self, data: dict) -> None:
+        try:
+            from .files import write_json_atomic
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            write_json_atomic(self.path, data)
+        except OSError:
+            pass
+
+    def get(self, agent: str) -> tuple[int, float]:
+        row = self._load().get(agent) or {}
+        try:
+            return int(row.get("deaths") or 0), float(row.get("last") or 0.0)
+        except (TypeError, ValueError):
+            return 0, 0.0
+
+    def died(self, agent: str, now: float) -> None:
+        data = self._load()
+        deaths, _last = self.get(agent)
+        data[agent] = {"deaths": deaths + 1, "last": now}
+        self._save(data)
+
+    def clear(self, agent: str) -> None:
+        """Seen alive: the episode is over. An agent that recovers must not be
+        punished for an old one."""
+        data = self._load()
+        if agent in data:
+            del data[agent]
+            self._save(data)
