@@ -70,13 +70,32 @@ BUSY = "busy"                 # a session appeared and is mid-flight — hands o
 REFUSED = "refused"           # could not act, and said why (workspace, launch)
 UNTENDABLE = "no-pane"        # no pane on the card: nothing to supervise
 UNEQUIPPED = "unequipped"     # alive, but its workspace lacks the tool kit
+BACKOFF = "backoff"           # died again too soon — waiting before the next try
+CRASH_LOOP = "CRASH-LOOP"     # died repeatedly; RETIRED rather than thrashed
 AUTH_DEAD = "auth-dead"       # alive, login expired: every API call fails
                               # (aegis-arma). NOT auto-relaunched on a default
                               # pass — see the rule in _live — `st tend --reauth`
                               # is the explicit one-command recovery.
 
 
-_FAULTS = frozenset({RESURRECTED, DEAF, REFUSED, UNEQUIPPED, AUTH_DEAD})
+_FAULTS = frozenset({RESURRECTED, DEAF, REFUSED, UNEQUIPPED, AUTH_DEAD, CRASH_LOOP})
+
+# RESPAWN BACKOFF (GitHub #12). A crash-looping agent — bad card, broken
+# workspace_source, poisoned settings — turns the supervisor into a respawn
+# thrasher: died -> respawn -> died, forever, at whatever cadence tend runs. The
+# fix has to be self-limiting in BOTH directions:
+#
+#   backoff   each successive death within the window waits longer, so a flapping
+#             agent costs one launch per interval instead of one per pass.
+#   give up   after RETRIES consecutive deaths it is RETIRED — durably, on the
+#             card, the same mechanism a human uses — and reported as a FAULT.
+#             A supervisor that never gives up is a supervisor that hides a
+#             broken agent behind infinite optimism.
+#
+# The counter resets when an agent is seen ALIVE and healthy, so an agent that
+# recovers is not punished for an old episode.
+BACKOFF_BASE_S = 60           # 1st retry waits 1m, then 2m, 4m, 8m...
+BACKOFF_RETRIES = 5           # then retire rather than thrash
 
 
 @dataclass(frozen=True)
@@ -151,7 +170,8 @@ class Tender:
     """
 
     def __init__(self, panes, runtime, launches, *, spawn=None, refresh=None,
-                 ensure=ensure_workspace, log=None, gaps=None):
+                 ensure=ensure_workspace, log=None, gaps=None, crashes=None,
+                 retire=None, now=None):
         self._panes = panes
         self._runtime = runtime
         self._launches = launches
@@ -165,6 +185,12 @@ class Tender:
         # a half-equipped agent — nothing in the tier reported that difference,
         # which is how five agents worked a night without their tools.
         self._gaps = gaps
+        # crashes: a {name: (consecutive_deaths, last_death_ts)} store. Injected so
+        # a test drives the backoff without a clock or a filesystem; None disables
+        # the backoff entirely (every existing caller keeps its old behaviour).
+        self._crashes = crashes
+        self._retire = retire
+        self._now = now or time.time
         self._log = log or (lambda msg: None)
 
     def pass_over(self, agents: list[Agent], *, dry_run: bool = False) -> Report:
@@ -198,6 +224,8 @@ class Tender:
                            "deliberately retired — NOT a fault, NOT respawned")
 
         if up:
+            if self._crashes is not None:
+                self._crashes.clear(card.name)   # alive -> the episode is over
             return self._live(card, agents)
         return self._respawn(card, dry_run)
 
@@ -281,6 +309,28 @@ class Tender:
                    "to respawn (another orchestrator owns it)")
             self._log(f"REFUSED {card.name}: {why}")
             return Finding(card.name, "down", REFUSED, why)
+        # BACKOFF / GIVE-UP, before anything is ensured or launched.
+        if self._crashes is not None and not dry_run:
+            deaths, last = self._crashes.get(card.name)
+            if deaths >= BACKOFF_RETRIES:
+                why = (f"died {deaths} times in a row without staying up — "
+                       f"RETIRED rather than respawned again. Something about this "
+                       f"agent is broken (card, workspace_source, settings), and a "
+                       f"supervisor that keeps relaunching it hides that. "
+                       f"`st tend --unretire {card.name}` when it is fixed.")
+                self._log(f"CRASH-LOOP {card.name}: {why}")
+                if self._retire is not None:
+                    self._retire(card.name)
+                return Finding(card.name, "down", CRASH_LOOP, why)
+            wait = BACKOFF_BASE_S * (2 ** max(0, deaths - 1)) if deaths else 0
+            waited = self._now() - last if last else None
+            if wait and waited is not None and waited < wait:
+                why = (f"died {deaths} time(s) in a row; waiting "
+                       f"{wait - waited:.0f}s more before retry {deaths + 1} of "
+                       f"{BACKOFF_RETRIES}")
+                self._log(f"BACKOFF {card.name}: {why}")
+                return Finding(card.name, "down", BACKOFF, why)
+
         if dry_run:
             return Finding(card.name, "down", WOULD,
                            f"would ensure {card.workspace or 'default cwd'}, "
@@ -327,6 +377,8 @@ class Tender:
             self._log(f"REFUSED {card.name}: launch failed: {e}")
             return Finding(card.name, "down", REFUSED, f"launch failed: {e}")
 
+        if self._crashes is not None:
+            self._crashes.died(card.name, self._now())
         why = f"was DOWN — respawned into {card.pane!r}"
         # LOUD. The whole reason this module exists is that the last thing to do
         # this did it silently.

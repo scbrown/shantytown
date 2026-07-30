@@ -189,7 +189,13 @@ def _bd_ready(cwd: str | None = None) -> list[dict]:
     `cwd` is where bd resolves its store from (see bd_cwd). None falls back to
     the ambient cwd — correct for the stop hook, a coin-flip for anything else;
     a failure propagates to the caller's fail-open."""
-    r = subprocess.run(["bd", "ready", "--json"], capture_output=True, text=True,
+# --limit 0 = UNLIMITED (GitHub #28). bd truncates machine-readable output
+# SILENTLY: `bd ready --json` returned 10 of 174 and `bd list --json` 50 of
+# 190, with empty stderr and exit 0. Every consumer here reasons about the
+# WHOLE queue — Rule Zero asks "is there dispatchable work", the plate asks
+# "what do I hold" — so a silently short list is a wrong answer, not a small
+# one. The upstream bug is bd's; this is the consumer refusing to inherit it.
+    r = subprocess.run(["bd", "ready", "--json", "--limit", "0"], capture_output=True, text=True,
                        timeout=20, cwd=cwd)
     if r.returncode != 0:
         raise RuntimeError(f"bd ready failed: {r.stderr.strip()}")
@@ -372,7 +378,8 @@ def haul_handoff_message(context_k: float, line_k: float) -> str:
 def bd_in_progress(cwd: str | None) -> list[dict]:
     """`bd list --status in_progress --json` — the active-anchor set. Raises;
     callers fail open."""
-    r = subprocess.run(["bd", "list", "--status", "in_progress", "--json"],
+    r = subprocess.run(["bd", "list", "--status", "in_progress", "--json",
+                        "--limit", "0"],
                        capture_output=True, text=True, timeout=20, cwd=cwd)
     if r.returncode != 0:
         raise RuntimeError(f"bd list failed: {r.stderr.strip()}")
