@@ -56,6 +56,7 @@ from .files import FilesRegistry, FilesTracker, plate as files_plate
 from .policy import NullRanker, PolicyRanker
 from .protocols import RankUnavailable
 from .runtime import ClaudeRuntime, live_wiring
+from .stopped import FilesStops
 from .tier import is_governance, route_stop
 from .triage import running_shells, context_tokens_k, CYCLE_THRESHOLD_K
 from .tmux import Tmux
@@ -492,7 +493,7 @@ def _compose_reason(events: list[StopEvent], verdicts: dict, now: float,
 
 def _drain(events: FilesEvents, me: str, reg=None, panes=None,
            shows_ready_ui=None, awaiting_answer=None, *, plate=None, rank=None,
-           stood_down: bool = False) -> int:
+           stood_down: bool = False, stopped=None) -> int:
     """Deliver MY events — minus the ones whose sender is still working. For an
     administrator, also append a prioritized workflow over fleet state.
 
@@ -508,6 +509,7 @@ def _drain(events: FilesEvents, me: str, reg=None, panes=None,
     `stood_down` IS here, and that is not the same mistake: it never decides
     whether to block, it only stops the enrichment demanding dispatch the operator
     has already declined (#29). The events themselves are delivered either way.
+    `stopped` is the same shape, per agent — a `st stop` record reader (stopped.py).
     """
     now = time.time()
     verdicts: dict[str, str] = {}
@@ -552,7 +554,7 @@ def _drain(events: FilesEvents, me: str, reg=None, panes=None,
         # would put a working agent in the admin's free-to-dispatch column.
         extra = _compose_workflow(reg, panes, plate, rank,
                                   [e for e in got if not is_governance(e.reason)], me,
-                                  stood_down=stood_down)
+                                  stood_down=stood_down, stopped=stopped, now=now)
         if extra:
             reason = reason + "\n\n" + extra
     # Deliver to the MODEL via the block protocol. reason, never systemMessage.
@@ -561,7 +563,8 @@ def _drain(events: FilesEvents, me: str, reg=None, panes=None,
 
 
 def _compose_workflow(reg, panes, plate, rank, events, me: str, *,
-                      stood_down: bool = False) -> str:
+                      stood_down: bool = False, stopped=None,
+                      now: float | None = None) -> str:
     """Admin-only: a prioritized workflow over fleet state, appended to the drained
     stop events. Returns '' for a non-admin, or when nothing is actionable. NEVER
     raises — a down ranker degrades to the rule-based order; the hook must idle or
@@ -575,7 +578,8 @@ def _compose_workflow(reg, panes, plate, rank, events, me: str, *,
         agents = [a for a in reg.all() if a.name != me]   # never prioritize itself
     except OSError:
         agents = []                               # no crew dir -> events-only workflow
-    candidates = workflow.classify(agents, panes, plate)
+    candidates = workflow.classify(agents, panes, plate,
+                                   stopped=stopped, now=now)
     candidates = workflow.fold_events(candidates, events)
     try:
         candidates = (rank or NullRanker()).weigh(candidates)
@@ -615,7 +619,8 @@ def main(argv: list[str] | None = None) -> int:
     rank = PolicyRanker() if os.environ.get("SHANTY_RANKER") == "policy" else NullRanker()
     return _drain(events, me, reg, panes, runtime.shows_ready_ui,
                   runtime.awaiting_answer, plate=plate, rank=rank,
-                  stood_down=_stood_down(root))
+                  stood_down=_stood_down(root),
+                  stopped=FilesStops(root / "stopped").at)
 
 
 def _stood_down(root) -> bool:

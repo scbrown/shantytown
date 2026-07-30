@@ -23,7 +23,7 @@ st init                       scaffold a NEW deployment (wizard): store, cards, 
 st new <agent>                create an agent from a card
 st start [--mode lite|heavy]  BOOT the town by mode: the admin alone, or every card. idempotent
 st start <agent>...           bring up exactly these agents (already-up is a SUCCESS, not a refusal)
-st stop <agent>               stop it
+st stop <agent> [--reason]    stop it, and RECORD that it was deliberate
 st log [agent]                what happened
 st context <query>            what code should I be looking at? (bobbin)
 st doctor [--install]         what's installed, stale, missing (out-of-box)
@@ -538,6 +538,32 @@ reports may sit unread while nothing pushes. `0` disables the bound, which is a
 legitimate choice: a push is a wake with a *reason*, and that beats a timer.
 
 Leads and workers never hibernate: a lead's drain is how it absorbs its reports.
+
+### Down on purpose is not a fault
+
+The forcing functions above can only demand **more** dispatch, so every state where
+the right answer is *stop* has to be expressible to them — otherwise the mechanism
+produces the wrong instruction at exactly the moment cost control matters (GitHub
+#29: an operator out of usage credits stopped nine of eleven crew on instruction and
+was told, nine times, to put them back).
+
+Three ways to say it, in increasing strength:
+
+| | what it says | who honours it |
+|---|---|---|
+| `st stop <agent> --reason "…"` | *I stopped this one, now.* Recorded durably; **not** a retirement | `st crew` and the administrator's drain report it as deliberate. `st tend` still respawns it |
+| `st tend --retire <agent>` | *…and do not bring it back.* Lives on the card | `st tend` never respawns it; `st start` skips it; the drain never lists it |
+| `[fleet] stood_down = true` | *the whole fleet is quiet by decision* | Rule Zero yields (rank 2), and the drain withholds every dispatch step |
+
+All three **announce themselves** rather than going quiet. A gate that silently
+stops firing is indistinguishable from a gate that is broken, which would be a worse
+version of the same bug — so the drain prints what it withheld and how to undo it,
+and a risen escalation still surfaces through all three. Standing a fleet down
+declines to hand out work; it does not decline to *answer*.
+
+A stop record is **cleared on relaunch**, beside the launch stamp and for the same
+reason: it describes a stop that is current. One left behind would make the agent's
+next real crash read as somebody's decision.
 
 ## `st doctor` — the out-of-box feature
 
