@@ -462,7 +462,8 @@ def socket_health(registry_panes, seen_on_declared, seen_anywhere, declared):
             f"{'socket ' + repr(declared) if declared else 'the default tmux server'}, "
             f"but {seen_anywhere} of them exist on another socket. Every `st` "
             f"command here will report the fleet DEAD — silently, with exit 0. "
-            f"Declare the right one in <root>/settings/tmux-socket.")
+            f"Declare the right one as `socket` under [tmux] in "
+            f"<root>/shantytown.toml.")
     return SOCKET_UNKNOWN, (
         f"0/{registry_panes} registry panes visible anywhere — the fleet may "
         f"really be down. NOT claiming a socket fault: this check cannot tell "

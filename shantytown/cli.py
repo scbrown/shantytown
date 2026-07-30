@@ -186,8 +186,9 @@ def _backend(a, default="files") -> str:
     if declared:
         if declared not in ("files", "beads", "forgejo"):
             raise SystemExit(f"  refused: SHANTY_BACKEND={declared!r} is not a "
-                             "backend (files|beads|forgejo). Fix env.json/env; "
-                             "a typo must not silently mean files.")
+                             "backend (files|beads|forgejo). Fix [env] in "
+                             "shantytown.toml (or the environment); a typo must "
+                             "not silently mean files.")
         return declared
     return default
 
