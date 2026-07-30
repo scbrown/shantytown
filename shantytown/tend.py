@@ -76,6 +76,9 @@ AUTH_DEAD = "auth-dead"       # alive, login expired: every API call fails
                               # (aegis-arma). NOT auto-relaunched on a default
                               # pass — see the rule in _live — `st tend --reauth`
                               # is the explicit one-command recovery.
+BELOW_TARGET = "at-target"    # down, and NOT respawned because `--target N` is
+                              # already satisfied. A cap, not a fault: the
+                              # operator asked for N live agents and there are N.
 
 
 _FAULTS = frozenset({RESURRECTED, DEAF, REFUSED, UNEQUIPPED, AUTH_DEAD, CRASH_LOOP})
@@ -96,6 +99,13 @@ _FAULTS = frozenset({RESURRECTED, DEAF, REFUSED, UNEQUIPPED, AUTH_DEAD, CRASH_LO
 # recovers is not punished for an old episode.
 BACKOFF_BASE_S = 60           # 1st retry waits 1m, then 2m, 4m, 8m...
 BACKOFF_RETRIES = 5           # then retire rather than thrash
+
+# Who comes up FIRST when `--target N` cannot bring up everyone. A fleet brought up
+# bottom-first is a set of workers whose stop events reach nobody, so the tier is
+# filled from the root down. Unknown roles (a deployment's own, traits.py) sort last:
+# they are not in the built-in reporting process, so nothing in it depends on them
+# being up.
+_TIER_ORDER = {"administrator": 0, "lead": 1, "worker": 2}
 
 
 @dataclass(frozen=True)
@@ -171,7 +181,7 @@ class Tender:
 
     def __init__(self, panes, runtime, launches, *, spawn=None, refresh=None,
                  ensure=ensure_workspace, log=None, gaps=None, crashes=None,
-                 retire=None, now=None):
+                 retire=None, now=None, target=None):
         self._panes = panes
         self._runtime = runtime
         self._launches = launches
@@ -192,16 +202,50 @@ class Tender:
         self._retire = retire
         self._now = now or time.time
         self._log = log or (lambda msg: None)
+        # target: how many agents this fleet should have LIVE. None = every
+        # non-retired card, which is what a pass has always meant.
+        self._target = target
 
     def pass_over(self, agents: list[Agent], *, dry_run: bool = False) -> Report:
         rep = Report(started=time.time(), dry_run=dry_run)
+        allowed = self._respawn_budget(agents)
         for card in sorted(agents, key=lambda a: a.name):
-            rep.findings.append(self._one(card, agents, dry_run))
+            rep.findings.append(self._one(card, agents, dry_run, allowed))
         return rep
+
+    def _respawn_budget(self, agents: list[Agent]) -> set[str] | None:
+        """WHICH down agents this pass may bring up, under `--target N`.
+
+        None = no cap (every non-retired down card, the original behaviour).
+
+        SCALE-UP-ON-LOSS, AND NOTHING ELSE. It respawns toward a count; it never
+        stops a surplus. Deciding WHICH agents a fleet should consist of is
+        judgment, and judgment belongs to the admin — `st` is the mechanism (the
+        st-redesign epic's load-bearing split). A `tend` that could also kill would
+        be a scheduler with a supervisor's permissions.
+
+        The choice of WHO comes up is deterministic and made here, not per agent,
+        because per-agent decisions cannot count: two passes over the same fleet
+        must bring up the same agents, and a report in name order must not depend on
+        which name happened to be reached while budget remained. Tier order, then
+        name — an administrator before a lead before a worker, because a fleet
+        brought up bottom-first has workers whose stop events reach nobody.
+        """
+        if self._target is None:
+            return None
+        tendable = [a for a in agents if a.pane and not is_retired(a)]
+        live = [a for a in tendable if self._panes.exists(a.pane)]
+        room = self._target - len(live)
+        if room <= 0:
+            return set()
+        down = [a for a in tendable if not self._panes.exists(a.pane)]
+        down.sort(key=lambda a: (_TIER_ORDER.get(a.role, len(_TIER_ORDER)), a.name))
+        return {a.name for a in down[:room]}
 
     # --- one agent -----------------------------------------------------------
 
-    def _one(self, card: Agent, agents: list[Agent], dry_run: bool) -> Finding:
+    def _one(self, card: Agent, agents: list[Agent], dry_run: bool,
+             allowed: set[str] | None = None) -> Finding:
         if not card.pane:
             return Finding(card.name, "no pane", UNTENDABLE,
                            "no pane on the card — nothing to supervise")
@@ -227,6 +271,14 @@ class Tender:
             if self._crashes is not None:
                 self._crashes.clear(card.name)   # alive -> the episode is over
             return self._live(card, agents)
+        # THE TARGET CAP, checked after retirement and after liveness, and before
+        # every reason to act. Held back rather than respawned — and reported as a
+        # cap with the number in it, because a down agent that nothing mentions is
+        # indistinguishable from one the supervisor failed to notice.
+        if allowed is not None and card.name not in allowed:
+            return Finding(card.name, "down", BELOW_TARGET,
+                           f"held: --target {self._target} is already met "
+                           f"(not a fault — raise the target to bring it up)")
         return self._respawn(card, dry_run)
 
     def _live(self, card: Agent, agents: list[Agent]) -> Finding:
