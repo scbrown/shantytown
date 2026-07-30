@@ -7,9 +7,10 @@ routed to it with a PRIORITIZED WORKFLOW built from fleet state:
   - an IDLE worker    (pane up, empty plate)      -> has capacity, assign work
   - a risen escalation (rose past a down lead)     -> the admin must decide
 
-A DOWN AGENT IS NOT AUTOMATICALLY A FAULT (GitHub #29). Two states here are
-DELIBERATE and neither belongs on a re-dispatch list: a RETIRED card, and a fleet
-that is STOOD DOWN. The measured bug: an operator out of usage credits stopped
+A DOWN AGENT IS NOT AUTOMATICALLY A FAULT (GitHub #29). Three states here are
+DELIBERATE and none belongs on a re-dispatch list: a RETIRED card, a pane killed by
+`st stop` (stopped.py), and a fleet that is STOOD DOWN. The measured bug: an
+operator out of usage credits stopped
 nine of eleven crew on instruction, and every surface then told them to put all
 nine back — "re-dispatch felix — STOPPED" nine times. A mechanism that can only
 ever say "do more" trains operators to ignore it, which costs the times it is
@@ -46,6 +47,10 @@ class AgentState(Enum):
     WORKING = "working"     # pane up, holding a plate item
     NO_PANE = "no-pane"     # no pane on the card — cannot tell
     RETIRED = "retired"     # the CARD says deliberately stopped — down BY INTENT
+    STOPPED_BY_OPERATOR = "stopped-by-operator"   # `st stop` said so (stopped.py).
+                            # Down by intent, but UNLIKE retired it may come back —
+                            # tend still respawns it. So it is reported as a fact,
+                            # never demanded as a fix.
 
 
 @dataclass
@@ -60,6 +65,7 @@ class Candidate:
     rose: bool = False                # did its stop rise past a down lead?
     weight: float = 0.0               # structural weight (blast radius); 0 = none
     why: str = ""                     # ranker's note
+    stopped_ago: float | None = None  # seconds since `st stop` (STOPPED_BY_OPERATOR)
 
 
 @dataclass
@@ -74,20 +80,19 @@ class PrioritizedWorkflow:
     steps: list[WorkflowStep]
     held: list[Candidate] = field(default_factory=list)   # withheld by stand-down
     stood_down: bool = False
+    deliberate: list[Candidate] = field(default_factory=list)   # `st stop`ped
 
     def render(self) -> str:
         """The block appended into the admin's drain prompt. '' when nothing is
         actionable — an empty workflow adds no lines rather than an empty header."""
-        note = self._stood_down_note()
+        notes = [n for n in (self._stood_down_note(), self._deliberate_note()) if n]
         if not self.steps:
-            return note                    # may itself be '' — then no lines at all
+            return "\n".join(notes)        # may be '' — then no lines at all
         lines = ["  PRIORITIZE"]
         for s in self.steps:
             lines.append(f"    {s.rank}. {s.action} {s.candidate.agent} — "
                          f"{_describe(s.candidate)}")
-        if note:
-            lines.append(note)
-        return "\n".join(lines)
+        return "\n".join(lines + notes)
 
     def _stood_down_note(self) -> str:
         """What the stand-down WITHHELD, said out loud (#29).
@@ -110,11 +115,29 @@ class PrioritizedWorkflow:
                 f"fleet down is the decision. Clear `[fleet] stood_down` to resume "
                 f"dispatch.")
 
+    def _deliberate_note(self) -> str:
+        """The agents an operator stopped, stated as FACT and never as an item.
+
+        Reported rather than omitted, because unlike a retirement an `st stop` is
+        not "and do not bring it back" — the admin should know the fleet is short,
+        and by whose hand. It carries no rank and no imperative verb: the whole
+        defect was a mechanism telling an operator to undo a shutdown they had just
+        been instructed to perform.
+        """
+        if not self.deliberate:
+            return ""
+        who = ", ".join(f"{c.agent}{f' ({_ago(c.stopped_ago)})' if c.stopped_ago else ''}"
+                        for c in self.deliberate)
+        return (f"  {len(self.deliberate)} agent(s) STOPPED BY AN OPERATOR, not "
+                f"faults: {who}. `st new <agent>` if one is wanted back.")
+
 
 def classify(
     agents: list[Agent],
     panes: Panes,
     plate: Callable[[str], WorkItem | None] | None = None,
+    stopped: Callable[[str], float | None] | None = None,
+    now: float | None = None,
 ) -> list[Candidate]:
     """Derive each agent's state from its pane and plate. Reads only — `panes`
     and `plate` are the same readers `crew` and `prime` already use. `plate` may
@@ -125,21 +148,35 @@ def classify(
     `st tend` is the surface that owns it (it escalates RESURRECTED), and the one
     thing the admin's dispatch list must not do with a retirement is answer it with
     "assign work".
+
+    `stopped` (stopped.py, injected — this module does no I/O) answers "was this
+    agent's pane killed BY `st stop`, and when?". A down pane with a record is not a
+    defect. It is only consulted for a pane that is actually DOWN: a record for a
+    live agent describes a stop that has since been undone, and reading it as
+    current would be the launch-stamp mistake — one past fact asserted as a
+    standing property. `now` is passed in for the same purity reason.
     """
     out: list[Candidate] = []
     for a in agents:
         item = plate(a.name) if plate else None
+        ago = None
         if a.retired:
             state = AgentState.RETIRED
         elif a.pane is None:
             state = AgentState.NO_PANE
         elif not panes.exists(a.pane):
             state = AgentState.STOPPED
+            at = stopped(a.name) if stopped else None
+            if at is not None:
+                state = AgentState.STOPPED_BY_OPERATOR
+                if now is not None:
+                    ago = max(0.0, now - at)
         elif item is None:
             state = AgentState.IDLE
         else:
             state = AgentState.WORKING
-        out.append(Candidate(agent=a.name, role=a.role, state=state, item=item))
+        out.append(Candidate(agent=a.name, role=a.role, state=state, item=item,
+                             stopped_ago=ago))
     return out
 
 
@@ -164,7 +201,9 @@ def prioritize(candidates: list[Candidate], *,
                stood_down: bool = False) -> PrioritizedWorkflow:
     """Order the actionable candidates. Rule-based baseline (deterministic):
     risen escalations first, then STOPPED, then IDLE; ties by weight desc then
-    name. WORKING / NO_PANE / RETIRED are not actionable right now and are omitted.
+    name. WORKING / NO_PANE / RETIRED / STOPPED_BY_OPERATOR are not actionable right
+    now and are omitted — the last of those is REPORTED instead (render), because a
+    fleet being deliberately short is worth knowing and is not a defect to fix.
 
     `stood_down` withholds every DISPATCH step — a stood-down fleet is one the
     operator has decided not to feed, and telling them to feed it anyway is the
@@ -173,6 +212,11 @@ def prioritize(candidates: list[Candidate], *,
     (render), never silently dropped.
     """
     actionable = [c for c in candidates if _tier(c) < _OMIT]
+    # Reported, not ranked: a deliberate stop is a fact about the fleet, and a fact
+    # does not belong on a list of things to do. `rose` still wins — see _tier.
+    deliberate = sorted((c for c in candidates
+                         if c.state == AgentState.STOPPED_BY_OPERATOR and not c.rose),
+                        key=lambda c: c.agent)
     held: list[Candidate] = []
     if stood_down:
         held = sorted((c for c in actionable if not c.rose), key=lambda c: c.agent)
@@ -180,7 +224,8 @@ def prioritize(candidates: list[Candidate], *,
     actionable.sort(key=lambda c: (_tier(c), -c.weight, c.agent))
     steps = [WorkflowStep(rank=i + 1, candidate=c, action=_action(c))
              for i, c in enumerate(actionable)]
-    return PrioritizedWorkflow(steps, held=held, stood_down=stood_down)
+    return PrioritizedWorkflow(steps, held=held, stood_down=stood_down,
+                               deliberate=deliberate)
 
 
 _OMIT = 9
@@ -194,7 +239,8 @@ def _tier(c: Candidate) -> int:
         return 1
     if c.state == AgentState.IDLE:
         return 2
-    return _OMIT            # WORKING / NO_PANE / RETIRED — nothing to do now
+    return _OMIT            # WORKING / NO_PANE / RETIRED / STOPPED_BY_OPERATOR —
+                            # nothing to DO about any of them right now
 
 
 def _action(c: Candidate) -> str:
@@ -220,6 +266,26 @@ def _describe(c: Candidate) -> str:
         base = "IDLE, empty plate"
     else:
         base = c.state.value
+    # A step for a deliberately-stopped agent is only reachable via `rose`. The
+    # escalation stays the item — this is CONTEXT appended to it, so the admin is
+    # not left to wonder why the sender has no pane. It must never be the headline:
+    # the stop is not the thing to fix.
+    if c.state == AgentState.STOPPED_BY_OPERATOR:
+        base += " — stopped by an operator"
+        if c.stopped_ago:
+            base += f" {_ago(c.stopped_ago)} ago"
     if c.weight > 0:
         base += f" (blast radius {int(c.weight)})"
     return base
+
+
+def _ago(seconds: float | None) -> str:
+    """A coarse age. Minutes and hours only: the difference between 61s and 74s
+    does not change a decision, and printing it implies a precision the stamp on
+    disk does not have."""
+    if not seconds or seconds < 60:
+        return "just now"
+    mins = int(seconds // 60)
+    if mins < 60:
+        return f"{mins}m"
+    return f"{mins // 60}h{mins % 60:02d}m"
