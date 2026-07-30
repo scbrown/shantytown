@@ -89,6 +89,7 @@ from . import provision as prov_mod
 from . import notify as notify_mod
 from .files import FilesRegistry, FilesTracker, plate as files_plate
 from .launched import FilesLaunches, CURRENT, STALE, UNKNOWN
+from .stopped import FilesStops
 from .quipu import QuipuRegistry
 from . import selfcheck
 from .anchor import Unreachable, anchor as do_anchor
@@ -480,6 +481,13 @@ def build_parser() -> argparse.ArgumentParser:
     st = sub.add_parser("stop", help="stop it")
     st.add_argument("agent")
     st.add_argument("-n", "--dry-run", action="store_true")
+    st.add_argument("--reason", default="", metavar="TEXT",
+                    help="why, recorded with the stop (GitHub #29). A deliberate "
+                         "stop is INTENT, not a fault: `st crew` and the "
+                         "administrator's drain report it as such instead of "
+                         "demanding a re-dispatch. It does NOT retire the card — "
+                         "`st tend` still respawns it; use `st tend --retire` for "
+                         "\"and do not bring it back\".")
 
     ss = sub.add_parser("stats", help="what the crew actually did: files, "
                                       "skills, tokens, activity (local store)")
@@ -747,6 +755,25 @@ def _default_settings(root: Path):
     return resolve
 
 
+def _stops(a) -> FilesStops:
+    """The deliberate-stop store (stopped.py). Beside `launched/` because it is the
+    same KIND of thing: per-launch runtime state, not identity."""
+    return FilesStops(Path(a.root) / "stopped")
+
+
+def _launched_now(a, card_name: str, settings_path=None) -> None:
+    """ONE place that records 'this agent is now running'.
+
+    Both halves must happen together and neither is allowed to be forgotten at a
+    new launch site: stamp what it launched on, and DROP any deliberate-stop record
+    (the stop is over — a record left behind would make its next real crash read as
+    intentional, which is a fabricated decision and worse than no record).
+    """
+    if settings_path:
+        _launches(a).record(card_name, settings_path)
+    _stops(a).forget(card_name)
+
+
 def _launches(a) -> FilesLaunches:
     """The launch-stamp store for this invocation. Beside events/."""
     return FilesLaunches(Path(a.root) / "launched")
@@ -964,7 +991,7 @@ def _launch(a, card, panes, runtime, *, dry_run: bool = False) -> int:
     # rather than silently unapplied. Best-effort on purpose: a stamp that cannot
     # be written leaves the agent reporting `unknown`, which is the truth. It must
     # never turn a successful launch into a failure.
-    _launches(a).record(card.name, _default_settings(a.root)(card))
+    _launched_now(a, card.name, _default_settings(a.root)(card))
     if _observe_live(runtime, panes, session):
         return _verify_live_hooks(a, card, runtime, panes, session)
     # Not observed live. Distinguish "waiting for a human" (a first-run consent
@@ -1437,7 +1464,17 @@ def _cmd_stop(a) -> int:
     # let `st crew` report `current` for the settings of a process that no longer
     # exists — a clean bill of health for nobody.
     _launches(a).forget(a.agent)
-    print(f"  stopped {a.agent} ({session}).")
+    # RECORD THE INTENT (GitHub #29). This is the only place st learns that a pane
+    # went down BECAUSE SOMEBODY DECIDED SO. Without it the drain and the roster
+    # read a deliberate shutdown and a crash identically, and the measured
+    # consequence was nine agents an operator had just been told to stop coming
+    # back as `re-dispatch <agent> — STOPPED`.
+    _stops(a).record(a.agent, time.time(),
+                     by=os.environ.get("SHANTY_AGENT", ""),
+                     reason=getattr(a, "reason", "") or "")
+    print(f"  stopped {a.agent} ({session}) — recorded as DELIBERATE. "
+          f"`st tend` will still respawn it; `st tend --retire {a.agent}` is how "
+          f"you say do not bring it back.")
     return OK
 
 
@@ -2382,8 +2419,10 @@ def _cmd_crew(a) -> int:
         print("  no agents. `st new <agent>`.")
         return OK
     launches = _launches(a)
+    stops = _stops(a)
     runtime = _runtime(a, panes)
     free, busy, queued, shelled = [], [], [], []
+    deliberate = []
     verdicts = []
     waiting = []
     saturated = []
@@ -2414,10 +2453,25 @@ def _cmd_crew(a) -> int:
         # disagree about the same agent.
         verdict = _settings_verdict(launches, ag.name, state == "up")
         verdicts.append((ag.name, verdict))
+        # A DOWN pane with a stop record is down BY DECISION (#29). Collected here
+        # and reported below rather than folded into the state column: `down` is
+        # what the pane says and stays what the pane says — this is why.
+        if state == "down" and (rec := stops.get(ag.name)) is not None:
+            deliberate.append((ag.name, rec))
         print(f"  {ag.name:<11} {ag.role:<14} {state:<8} {verdict:<8} "
               f"{work:<16} {ag.pane or '—'}")
     stale, unknown = _reach_buckets(verdicts)
     print()
+    # Down on purpose is not a roster hole to plug. Said before the free/busy
+    # lines because an operator reading "3 down" needs to know which of those they
+    # did themselves — the whole of GitHub #29 is a mechanism that could not tell.
+    if deliberate:
+        who = ", ".join(
+            f"{n}{f' — {r.reason}' if r.reason else ''}" for n, r in deliberate)
+        print(f"  {len(deliberate)} stopped ON PURPOSE (`st stop`, not faults): "
+              f"{who}")
+        print(f"    `st new <agent>` brings one back. Still respawned by "
+              f"`st tend` — use `st tend --retire` to make it stay down.")
     # The dispatcher's answer, said out loud. A column still makes the operator
     # scan 14 rows; the question is "who can take this", so print the list.
     if free:
@@ -3351,9 +3405,18 @@ def _tend_once(a, quiet: bool = False) -> int:
         print(f"  could not tell: {e}", file=sys.stderr)
         return CANNOT_TELL
     runtime = _runtime(a, panes)
+
+    def _respawn(card, session):
+        runtime.start(card, session)
+        # It is UP again, so the deliberate-stop record is history (#29). tend
+        # respawning an `st stop`ped agent is correct and unchanged — a stop is not
+        # a retirement — but the record must not outlive the stop it describes, or
+        # this agent's NEXT crash reads as somebody's decision.
+        _stops(a).forget(card.name)
+
     tender = tend_mod.Tender(
         panes, runtime, _launches(a),
-        spawn=None if a.dry_run else (lambda card, session: runtime.start(card, session)),
+        spawn=None if a.dry_run else _respawn,
         refresh=None if a.dry_run else _refresh_clone,
         gaps=lambda card: prov_mod.missing_kit(card, Path(a.root)),
         # Backoff + give-up (GitHub #12): a crash-looping agent must cost one
@@ -3544,11 +3607,9 @@ def _tend_reauth(a) -> int:
     # so the relaunched agent's settings verdict is measured, not `unknown`.
     def _spawn(card, session):
         runtime.start(card, session)
-        sp = _default_settings(a.root)(card)
-        if sp:
-            # Best-effort, same contract as `st new`: an unstamped agent reports
-            # `unknown`, which is the state it is in — never fail the launch.
-            _launches(a).record(card.name, sp)
+        # Best-effort, same contract as `st new`: an unstamped agent reports
+        # `unknown`, which is the state it is in — never fail the launch.
+        _launched_now(a, card.name, _default_settings(a.root)(card))
     tender = tend_mod.Tender(
         panes, runtime, _launches(a),
         spawn=_spawn,
