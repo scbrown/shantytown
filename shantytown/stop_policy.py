@@ -55,6 +55,7 @@ from .tmux import Tmux
 
 # Which rank decided. Emitted on stderr, so "went quiet" and "is wedged" are
 # distinguishable without reading this file.
+BY_STOOD_DOWN = "stood-down"
 BY_URGENT = "urgent"
 BY_RULE_ZERO = "rule-zero"
 BY_HIBERNATE = "hibernating"
@@ -85,6 +86,8 @@ class Inputs:
     dispatchable: int = 0
     hibernate: "config.Hibernate | None" = None
     minutes_quiet: float | None = None
+    fleet: "config.Fleet | None" = None
+    load_per_core: float | None = None      # None = could not measure
 
     @property
     def urgent(self) -> list:
@@ -104,6 +107,31 @@ def decide(inp: Inputs) -> Verdict:
         kinds = ", ".join(sorted({e.reason or "escalation" for e in inp.urgent}))
         return Verdict(True, f"{len(inp.urgent)} event(s) that must not wait "
                              f"({kinds}).", BY_URGENT)
+
+    # RULE ZERO'S TWO PRECONDITIONS (GitHub #29, #23). Both make the gate
+    # satisfiable by RESTRAINT, which it was not: it could only ever demand more
+    # dispatch, so a deliberate quiet period was indistinguishable from neglect.
+    stood_down = bool(inp.fleet and inp.fleet.stood_down)
+    over_capacity = False
+    cap = inp.fleet.max_load_per_core if inp.fleet else 0.0
+    if cap and inp.load_per_core is not None:
+        over_capacity = inp.load_per_core > cap
+
+    if inp.free_feedable and inp.dispatchable and stood_down:
+        # The operator has DECLARED quiet. Rule Zero yields, and says so — a gate
+        # that goes silent is indistinguishable from a gate that is broken.
+        return Verdict(False,
+                       f"the fleet is STOOD DOWN ({len(inp.free_feedable)} free "
+                       f"worker(s) and {inp.dispatchable} ready bead(s) left "
+                       f"alone). Clear `[fleet] stood_down` to resume dispatch.",
+                       BY_STOOD_DOWN)
+
+    if inp.free_feedable and inp.dispatchable and over_capacity:
+        return Verdict(False,
+                       f"host load {inp.load_per_core:.1f}/core is over the "
+                       f"{cap:.1f} ceiling — NOT demanding more dispatch onto a "
+                       f"saturated box. {inp.dispatchable} bead(s) wait.",
+                       BY_STOOD_DOWN)
 
     if inp.free_feedable and inp.dispatchable:
         # RULE ZERO (aegis-hfta), and it OVERRIDES hibernate — but says so, which
@@ -198,11 +226,26 @@ def gather(root, me: str, *, reg=None, panes=None, runtime=None,
     cfg, err = config.load_or_default(root)
     if err:
         print(f"stop_policy: {err} — running with hibernate OFF", file=sys.stderr)
+    inp.fleet = cfg.fleet
+    if cfg.fleet.max_load_per_core:
+        inp.load_per_core = _load_per_core()
     if cfg.hibernate.enabled:
         inp.hibernate = cfg.hibernate
         log = wake_log if wake_log is not None else WakeLog(root)
         inp.minutes_quiet = log.minutes_since(me, now or time.time())
     return inp
+
+
+def _load_per_core() -> float | None:
+    """1-minute load average per CPU. None when it cannot be read — and None means
+    the capacity check does not fire, because refusing to dispatch on a number we
+    could not measure would be the mirror of the bug (#23)."""
+    try:
+        import os as _os
+        cores = _os.cpu_count() or 1
+        return _os.getloadavg()[0] / cores
+    except Exception:      # noqa: BLE001 — no /proc/loadavg, no answer
+        return None
 
 
 def run(root, me: str, **kw) -> int:

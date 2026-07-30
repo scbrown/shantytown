@@ -403,12 +403,32 @@ def provision(card: Agent, root, *, secrets=None) -> list[str]:
     d = provision_dir(root)
     tmpl = d / MCP_TEMPLATE
     if not tmpl.is_file():
-        # NO KIT DEFINED is not a HALF kit. This is the line between the two, and
-        # it is deliberate: a store with no template describes a fleet that wants
-        # no MCP servers, and refusing to launch there would break every install
-        # that is not this one. The caller SAYS SO out loud instead — an absent
-        # template must be visible, because deleting it would otherwise silently
-        # restore exactly the bug this module exists for.
+        # NO KIT DEFINED is not a HALF kit, and a DELETED kit is neither (GitHub
+        # #36). Three states, and the old code collapsed the last two into a note:
+        #
+        #   no provision dir at all   -> this store wants no MCP servers. Launch.
+        #                                Refusing here would break every install
+        #                                that is not ours.
+        #   dir exists, is EMPTY      -> same: nothing has ever been configured.
+        #   dir exists WITH content   -> the store DOES provision (secrets, a
+        #                                consent template, anything), and the MCP
+        #                                template is GONE. That is a deletion, and
+        #                                launching produces the half-equipped agent
+        #                                this module's own contract forbids.
+        #
+        # The third case is a REFUSAL. provision.py opens by saying every rule here
+        # is "a refusal rather than a warning"; this was the one path that was not,
+        # and it is the one that fires when the whole kit disappears.
+        siblings = sorted(x.name for x in d.iterdir()) if d.is_dir() else []
+        if siblings:
+            raise ProvisionError(
+                f"cannot provision {card.name}: {d} exists and holds "
+                f"{', '.join(siblings)}, but {MCP_TEMPLATE} is MISSING. This store "
+                f"DOES define a kit, so the template was deleted or renamed rather "
+                f"than never written — and launching now would create a "
+                f"half-equipped agent that looks identical to a healthy one on "
+                f"every surface. Restore {tmpl}, or empty {d} to declare that this "
+                f"fleet wants no MCP servers.")
         return []
 
     rendered = render(tmpl.read_text(), secrets if secrets is not None
