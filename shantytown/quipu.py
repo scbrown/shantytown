@@ -245,7 +245,10 @@ _ENDPOINT_MISSING = (404, 405, 410, 501)
 def resolve_server(server: str | None = None, root=None) -> str:
     """The quipu address, in the one order that puts the deployment's answer first.
 
-        explicit arg  ->  <root>/env.json  ->  $QUIPU_SERVER  ->  DEFAULT_SERVER
+        explicit arg  ->  deployment_default  ->  DEFAULT_SERVER
+
+    (deployment_default is [env] in shantytown.toml, then env.json (deprecated),
+    then $QUIPU_SERVER — one resolver, so this cannot drift from the launcher's.)
 
     Reading env.json is the point. Before this the address came from the ambient
     environment or nowhere, so the deployed value survived only as long as some
@@ -264,7 +267,7 @@ def resolve_onto(onto: str | None = None, root=None) -> str:
     """The ontology namespace, in the same order and out of the same file as the
     address — so "where deployment config lives" keeps having ONE answer.
 
-        explicit arg  ->  <root>/env.json  ->  $SHANTY_ONTO_NS  ->  DEFAULT_ONTO
+        explicit arg  ->  deployment_default  ->  DEFAULT_ONTO
 
     THIS USED TO BE A MODULE-LEVEL CONSTANT, read once at import from the ambient
     environment only — sitting a few lines above `resolve_server` and left behind
@@ -582,7 +585,8 @@ class QuipuRegistry:
         return (f"an empty crew from a REACHABLE graph is usually the wrong "
                 f"namespace, not an empty fleet: queried <{self.onto}> at "
                 f"{self.server}. Compare that against the namespace this fleet's "
-                f"facts are keyed under (SHANTY_ONTO_NS in <root>/env.json)")
+                f"facts are keyed under (SHANTY_ONTO_NS under [env] in "
+                f"<root>/shantytown.toml)")
 
     def get(self, name: str) -> Agent:
         """One agent by name. Raises `LookupError` if absent (a real answer),
