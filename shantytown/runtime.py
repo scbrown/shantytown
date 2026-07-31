@@ -559,22 +559,24 @@ def _settings_env(role: str, root=None) -> dict:
     exists" with a straight face. Carrying the config is what keeps that from
     being a coin flip.
 
-    Source order: <root>/env.json (deployment config, gitignored), then the
-    ambient environment. Absent both, the key is OMITTED and the agent falls back
-    to the library default — never a placeholder written into a live settings file.
+    Source order is `deployment_default`'s: `[env]` in shantytown.toml, then
+    env.json (deprecated), then the ambient environment. Absent all three, the key
+    is OMITTED and the agent falls back to the library default — never a
+    placeholder written into a live settings file.
+
+    THROUGH THE SHARED RESOLVER, not a second reader of env.json. This function had
+    its own copy, and that copy is what made the config fold a half-migration: a
+    deployment could move its keys into shantytown.toml, see every `st` command
+    agree, delete env.json — and silently stop carrying QUIPU_SERVER and
+    SHANTY_ONTO_NS into the agents it launched. By this docstring's own argument
+    that is the worst possible place for it: a launched agent pointed at the
+    default namespace gets "nobody exists" answered with a straight face.
     """
     env = {"BOBBIN_ROLE": role}
-    supplied: dict[str, str] = {}
-    if root is not None:
-        p = Path(root) / "env.json"
-        try:
-            loaded = json.loads(p.read_text())
-            if isinstance(loaded, dict):
-                supplied = {k: str(v) for k, v in loaded.items()}
-        except (OSError, ValueError):
-            supplied = {}
+    from .deployment import deployment_default
     for key in _CARRIED_ENV:
-        val = supplied.get(key) or os.environ.get(key)
+        val = deployment_default(root, key) if root is not None \
+            else os.environ.get(key)
         if val:
             env[key] = val
     return env
