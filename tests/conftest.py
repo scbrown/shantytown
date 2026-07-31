@@ -72,3 +72,28 @@ def _no_real_store(request, monkeypatch):
         )
 
     monkeypatch.setattr(beads_mod.BeadsTracker, "_bd", _refuse)
+
+
+@pytest.fixture(autouse=True)
+def _no_real_pointer(tmp_path_factory, monkeypatch):
+    """No test may see the DEVELOPER'S deployment pointer.
+
+    Same class as the guard above — a test reaching real state outside its
+    tmp_path — and it was latent until somebody's box actually had one. The root
+    resolver's last-but-one leg reads ~/.config/shantytown/root (honouring
+    $XDG_CONFIG_HOME), so on a box with a pointer, every assertion about the
+    cwd fallback answers with that operator's real store instead. Measured the
+    moment one was written: test_default_root_falls_back_to_the_cwd went red on a
+    change that had nothing to do with it.
+
+    That is the worse direction of this bug, not the better one: the test asserts
+    an absent-store path, so a pointer makes it PASS THROUGH a real deployment. It
+    failed here only because the expected value is a tmp_path.
+
+    Pointing $XDG_CONFIG_HOME at an empty tmp dir gives every test the same
+    answer — "this box has no pointer" — whatever the developer's box is like. A
+    test that means to exercise the pointer writes one under this same variable
+    (test_socket_and_root.py does).
+    """
+    monkeypatch.setenv("XDG_CONFIG_HOME",
+                       str(tmp_path_factory.mktemp("xdg-isolated")))
