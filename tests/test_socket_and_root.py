@@ -168,3 +168,88 @@ def test_tend_REFUSES_on_a_wrong_socket_and_respawns_nothing(tmp_path, monkeypat
     err = capsys.readouterr().err
     assert "refused" in err and "respawned onto the wrong server" in err
     assert started == [], "built a runtime — it got past the guard"
+
+
+# --- the POINTER leg: the only one that reaches a store outside the tree ------
+#
+# Measured (aegis-d94vb): CLAUDE.md tells every crew member to run `st anchor
+# <you>` from their own workspace, and it refused with "no such agent: <their own
+# name>". Crew workspaces are SIBLINGS of the checkout (~/gt/<rig>/crew/<agent> vs
+# ~/gt/shantytown/.shanty), so the walk-up cannot reach the store from one at any
+# depth. The pointer is the leg that covers that shape, it was the fix, and it had
+# no test at all until this block.
+
+def _point_at(monkeypatch, tmp_path, store):
+    """Write a pointer in this test's isolated $XDG_CONFIG_HOME (see conftest)."""
+    from shantytown.deployment import write_pointer
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
+    return write_pointer(store)
+
+
+def test_the_pointer_answers_when_nothing_else_does(monkeypatch, tmp_path):
+    """THE case: a directory with no .shanty anywhere above it."""
+    from shantytown.deployment import BY_POINTER, resolve_root
+    store = tmp_path / "deployment" / ".shanty"
+    store.mkdir(parents=True)
+    sibling = tmp_path / "rig" / "crew" / "malcolm"
+    sibling.mkdir(parents=True)
+    _point_at(monkeypatch, tmp_path, store)
+    monkeypatch.delenv("SHANTY_ROOT", raising=False)
+    monkeypatch.chdir(sibling)
+    root, how = resolve_root()
+    assert root == store and how == BY_POINTER
+
+
+def test_the_WALK_UP_still_beats_the_pointer(monkeypatch, tmp_path):
+    """A directory that has its own .shanty keeps it. The pointer is the fallback
+    for boxes where nothing local answered — it must never adopt a deployment out
+    from under a checkout that owns one."""
+    from shantytown.deployment import BY_WALKUP, resolve_root
+    pointed = tmp_path / "elsewhere" / ".shanty"
+    pointed.mkdir(parents=True)
+    here = tmp_path / "checkout"
+    (here / ".shanty").mkdir(parents=True)
+    _point_at(monkeypatch, tmp_path, pointed)
+    monkeypatch.delenv("SHANTY_ROOT", raising=False)
+    monkeypatch.chdir(here)
+    root, how = resolve_root()
+    assert root == here / ".shanty" and how == BY_WALKUP
+
+
+def test_SHANTY_ROOT_still_beats_the_pointer(monkeypatch, tmp_path):
+    from shantytown.deployment import BY_ENV, resolve_root
+    pointed = tmp_path / "elsewhere" / ".shanty"
+    pointed.mkdir(parents=True)
+    _point_at(monkeypatch, tmp_path, pointed)
+    monkeypatch.setenv("SHANTY_ROOT", str(tmp_path / "chosen"))
+    root, how = resolve_root()
+    assert root == tmp_path / "chosen" and how == BY_ENV
+
+
+def test_a_pointer_to_a_MISSING_directory_is_not_an_answer(monkeypatch, tmp_path):
+    """A stale pointer must read as 'keep looking', not as 'your crew is empty' —
+    the second is a store that answers confidently with nobody in it."""
+    from shantytown.deployment import BY_CWD, resolve_root
+    _point_at(monkeypatch, tmp_path, tmp_path / "gone" / ".shanty")
+    monkeypatch.delenv("SHANTY_ROOT", raising=False)
+    here = tmp_path / "somewhere"
+    here.mkdir()
+    monkeypatch.chdir(here)
+    root, how = resolve_root()
+    assert how == BY_CWD and root == here / ".shanty"
+
+
+def test_init_never_adopts_the_pointed_deployment(monkeypatch, tmp_path):
+    """`st init` answers cwd/.shanty even with a pointer set. Creating is not the
+    same act as finding: init in a new project must not resolve to somebody else's
+    deployment and then refuse as 'already a deployment'."""
+    from shantytown.deployment import BY_CWD, resolve_root
+    store = tmp_path / "deployment" / ".shanty"
+    store.mkdir(parents=True)
+    _point_at(monkeypatch, tmp_path, store)
+    monkeypatch.delenv("SHANTY_ROOT", raising=False)
+    fresh = tmp_path / "new-project"
+    fresh.mkdir()
+    monkeypatch.chdir(fresh)
+    root, how = resolve_root(discover=False)
+    assert root == fresh / ".shanty" and how == BY_CWD
