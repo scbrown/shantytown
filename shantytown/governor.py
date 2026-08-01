@@ -89,7 +89,7 @@ import re
 import time
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 # The series this governor consumes, named once, and VERIFIED AGAINST THE LIVE
@@ -228,16 +228,40 @@ class Policy:
     def active(self) -> bool:
         return bool(self.tiers)
 
-    def tier_at(self, level: int) -> Tier | None:
+    def tier_at(self, level: int, window: str = FIVE_HOUR) -> Tier | None:
+        """The tier at `level` IN `window`. Window-qualified since aegis-59hao:
+        `at` alone stopped being a key the moment two budgets could each declare
+        a tier at 80, and a hysteresis hold that resolved to the wrong window's
+        tier would hold the wrong restriction."""
         for t in self.tiers:
-            if t.at == level:
+            if t.at == level and t.window == window:
                 return t
         return None
 
-    def candidate(self, pct: float) -> Tier | None:
-        """The highest tier this reading alone engages. Tiers are stored sorted."""
+    def windows(self) -> tuple[str, ...]:
+        """Every window some tier declares, in a stable order (aegis-59hao).
+
+        Derived from the tiers rather than configured separately: a window with
+        no tier governs nothing, so asking the producer for it would be a read
+        whose answer can never matter, and a tier whose window nobody reads is
+        the bug this bead is about. One list, from the tiers themselves.
+        """
+        seen = [t.window for t in self.tiers]
+        return tuple(sorted(set(seen), key=seen.index))
+
+    def tiers_for(self, window: str) -> tuple[Tier, ...]:
+        return tuple(t for t in self.tiers if t.window == window)
+
+    def candidate(self, pct: float, window: str = FIVE_HOUR) -> Tier | None:
+        """The highest tier THIS WINDOW's reading alone engages.
+
+        Window-scoped since aegis-59hao: comparing a seven-day percentage against
+        a five-hour tier's threshold is comparing two different budgets, and the
+        thresholds are deliberately asymmetric (tighter on the weekly, because it
+        refills in days rather than hours). Tiers are stored sorted.
+        """
         found = None
-        for t in self.tiers:
+        for t in self.tiers_for(window):
             if pct >= t.at:
                 found = t
         return found
@@ -262,7 +286,11 @@ class Policy:
         """
         if top is None:
             return ()
-        return tuple(t for t in self.tiers if t.at <= top.at)
+        # Within ONE window (aegis-59hao). Cumulative means "everything this
+        # budget's climb already engaged"; a five-hour tier is not below a
+        # seven-day one, they are different scales. The union ACROSS windows is
+        # taken by the caller, from each window's own cumulative set.
+        return tuple(t for t in self.tiers_for(top.window) if t.at <= top.at)
 
 
 # --- the reading --------------------------------------------------------------
@@ -389,17 +417,51 @@ def _from_samples(samples, window: str, source: str) -> Reading:
         age    MAX     the OLDEST reading wins. Freshness is only as good as the
                        stalest input to the number being governed by.
     """
-    pct = at = cache_age = None
-    rule_pct = None
+    by_window = _readings_by_window(samples, source)
+    if window in by_window:
+        return by_window[window]
+    # Asked for a window the exposition does not carry. Not a Reading with a
+    # None pct dressed up as fine — say which window, because with two budgets
+    # "no value" without a window name sends the reader to the wrong metric.
+    return Reading(source=source,
+                   error=f"no {USAGE_METRIC} series for window {window!r} — the "
+                         f"exposition carries {sorted(by_window) or 'no windows'}")
+
+
+def _readings_by_window(samples, source: str) -> dict[str, Reading]:
+    """Fold samples into ONE Reading PER WINDOW (aegis-59hao).
+
+    THE TRANSPORT ALREADY CARRIED EVERY WINDOW AND WE THREW THEM AWAY. Both
+    readers fetch the whole `claude_usage_*` family in one call — the Prometheus
+    query is a regex over the family, the textfile is read whole — and then
+    filtered to a single configured window. So the governor could see that the
+    weekly budget was further gone than the five-hour one and did not look. This
+    function is that filter deleted; no reader changed shape to get it.
+
+    WHAT IS PER-WINDOW AND WHAT IS NOT: only the percentage carries a `window`
+    label. The probe's success flag, its timestamp and the published cache age
+    describe the PROBE, not a budget, so they are folded once and shared by every
+    window. Splitting them would invent a per-window staleness the producer never
+    published.
+
+    Every fold stays conservative, for the same reasons as before: pct MAX (an
+    account at 88 and one at 12 is a fleet at 88), ok MIN (any blind account
+    blinds the governor), age MAX (freshness is only as good as the stalest
+    input).
+    """
+    at = cache_age = None
     ok = True
     saw_ok = False
+    pct: dict[str, float] = {}
+    rule_pct: dict[str, float] = {}
     for name, labels, value in samples:
-        if name == USAGE_METRIC and labels.get("window") == window:
+        w = labels.get("window")
+        if name == USAGE_METRIC and w:
             # The recording rule is ALREADY the max across accounts. If Prometheus
             # somehow returned several, max again — it cannot be wrong.
-            rule_pct = value if rule_pct is None else max(rule_pct, value)
-        elif name == ACCOUNT_USAGE_METRIC and labels.get("window") == window:
-            pct = value if pct is None else max(pct, value)
+            rule_pct[w] = value if w not in rule_pct else max(rule_pct[w], value)
+        elif name == ACCOUNT_USAGE_METRIC and w:
+            pct[w] = value if w not in pct else max(pct[w], value)
         elif name == PROBE_OK_METRIC:
             ok, saw_ok = (ok and bool(value)), True
         elif name == PROBE_TS_METRIC:
@@ -409,18 +471,23 @@ def _from_samples(samples, window: str, source: str) -> Reading:
     # The rule wins where it exists (Prometheus); the per-account max is the
     # textfile's equivalent, computed here rather than left to whichever account
     # sorted last.
-    if rule_pct is not None:
-        pct = rule_pct
-    if not saw_ok and pct is not None:
-        # The producer published a value and no success flag. NOT read as ok:
-        # the flag is how staleness is meant to be visible, and inferring "it
-        # must have worked" from the presence of a number is exactly the
-        # assumption the flag exists to remove.
-        return Reading(pct=pct, at=at, ok=True, source=source,
-                       cache_age=cache_age,
-                       error=f"no {PROBE_OK_METRIC} series — the value cannot be "
-                             f"vouched for, so it is not read as a measurement")
-    return Reading(pct=pct, at=at, ok=ok, source=source, cache_age=cache_age)
+    pct.update(rule_pct)
+    out: dict[str, Reading] = {}
+    for w, v in pct.items():
+        if not saw_ok:
+            # The producer published a value and no success flag. NOT read as ok:
+            # the flag is how staleness is meant to be visible, and inferring "it
+            # must have worked" from the presence of a number is exactly the
+            # assumption the flag exists to remove.
+            out[w] = Reading(pct=v, at=at, ok=True, source=source,
+                             cache_age=cache_age,
+                             error=f"no {PROBE_OK_METRIC} series — the value "
+                                   f"cannot be vouched for, so it is not read "
+                                   f"as a measurement")
+        else:
+            out[w] = Reading(pct=v, at=at, ok=ok, source=source,
+                             cache_age=cache_age)
+    return out
 
 
 class StubReader:
@@ -430,14 +497,30 @@ class StubReader:
     be discovered wrong at 95%."""
 
     def __init__(self, pct: float | None = None, at: float | None = None,
-                 ok: bool = True, error: str = "", now=time.time):
+                 ok: bool = True, error: str = "", now=time.time,
+                 window: str = FIVE_HOUR):
+        # pct may be a NUMBER (one window, the original shape) or a
+        # {window: pct} MAP (aegis-59hao). The map is what lets a test express
+        # the case the bug is about — a nearly-empty five-hour budget beside an
+        # exhausted weekly — which a single number cannot say at all.
         self._pct, self._at, self._ok, self._error = pct, at, ok, error
         self._now = now
+        self._window = window
 
     def read(self) -> Reading:
+        return self.read_all().get(
+            self._window,
+            Reading(source="stub", at=self._at,
+                    error=f"the stub declares no window {self._window!r}"))
+
+    def read_all(self) -> dict[str, Reading]:
         at = self._at if self._at is not None else self._now()
-        return Reading(pct=self._pct, at=at, ok=self._ok, error=self._error,
-                       source="stub")
+        if isinstance(self._pct, dict):
+            return {w: Reading(pct=v, at=at, ok=self._ok, error=self._error,
+                               source="stub")
+                    for w, v in self._pct.items()}
+        return {self._window: Reading(pct=self._pct, at=at, ok=self._ok,
+                                      error=self._error, source="stub")}
 
 
 class TextfileReader:
@@ -461,6 +544,15 @@ class TextfileReader:
             return Reading(source="textfile",
                            error=f"cannot read {self.path}: {e}")
         return _from_samples(parse_prom(body), self.window, "textfile")
+
+    def read_all(self) -> dict[str, Reading]:
+        """Every window the file carries. The read was always whole-file; only
+        the filter was single-window (aegis-59hao)."""
+        try:
+            body = self.path.read_text()
+        except OSError as e:
+            return {}
+        return _readings_by_window(parse_prom(body), "textfile")
 
 
 class PrometheusReader:
@@ -503,6 +595,25 @@ class PrometheusReader:
             return r.read().decode()
 
     def read(self) -> Reading:
+        samples, err = self._samples()
+        if err is not None:
+            return err
+        return _from_samples(samples, self.window, "prometheus")
+
+    def read_all(self) -> dict[str, Reading]:
+        """Every window the query returned. QUERY is a regex over the whole
+        `claude_usage_*` family, so both windows were always in this response —
+        the single-window filter was the only thing hiding one (aegis-59hao)."""
+        samples, err = self._samples()
+        if err is not None:
+            # One transport failure is not per-window news. Give every window the
+            # SAME error rather than an empty map, so the caller reports "cannot
+            # see" for each budget instead of silently governing on none of them.
+            return {}
+        return _readings_by_window(samples, "prometheus")
+
+    def _samples(self):
+        """(samples, error_reading) — exactly one is not None."""
         from urllib.parse import quote
         url = f"{self.url}/api/v1/query?query={quote(self.QUERY)}"
         try:
@@ -514,27 +625,27 @@ class PrometheusReader:
             # an operator told "unreachable" goes looking for a Prometheus
             # outage instead of a missing `username`/`password_file`.
             if e.code in (401, 403):
-                return Reading(source="prometheus",
+                return None, Reading(source="prometheus",
                                error=f"{self.url} answered {e.code} "
                                      f"{'UNAUTHORIZED' if e.code == 401 else 'FORBIDDEN'}"
                                      f" — it is up and refusing this query. Set "
                                      f"`username` and `password_file` under "
                                      f"[governor]; this is a credential problem, "
                                      f"not an outage")
-            return Reading(source="prometheus",
+            return None, Reading(source="prometheus",
                            error=f"{self.url} answered HTTP {e.code}")
         except (urllib.error.URLError, OSError, TimeoutError, ValueError) as e:
-            return Reading(source="prometheus",
+            return None, Reading(source="prometheus",
                            error=f"{self.url} unreachable: {e}")
         try:
             data = json.loads(body)
             if data.get("status") != "success":
-                return Reading(source="prometheus",
+                return None, Reading(source="prometheus",
                                error=f"{self.url} answered status="
                                      f"{data.get('status')!r}")
             result = data["data"]["result"]
         except (ValueError, KeyError, TypeError) as e:
-            return Reading(source="prometheus",
+            return None, Reading(source="prometheus",
                            error=f"{self.url} answered something this reader "
                                  f"cannot parse ({type(e).__name__})")
         samples = []
@@ -546,7 +657,7 @@ class PrometheusReader:
             except (KeyError, IndexError, TypeError, ValueError):
                 continue
             samples.append((name, metric, value))
-        return _from_samples(samples, self.window, "prometheus")
+        return samples, None
 
 
 def reader_for(policy: Policy, *, now=time.time):
@@ -596,9 +707,31 @@ class Engaged:
     across a relax would silence the second drain, which is the failure that
     matters — the first drain's agents are gone and the fleet that came back has
     never been asked.
+
+    HYSTERESIS IS PER-WINDOW (aegis-59hao). Two budgets rise and fall on their
+    own clocks — the five-hour refills in hours, the weekly in days — so one
+    remembered `at` cannot describe both. A shared hold would let a relaxing
+    five-hour reading drop a tier the weekly budget still justifies, which is
+    exactly the "spends a budget it does not have" failure hysteresis exists to
+    prevent, arriving through the back door.
+
+    `at`/`since` remain the FIVE_HOUR values so an on-disk state written by the
+    single-window governor still reads correctly — an upgrade must not silently
+    forget an engaged tier.
     """
     at: int | None = None
     since: float = 0.0
+    by_window: dict = field(default_factory=dict)   # window -> {"at":int|None,"since":float}
+
+    def hold(self, window: str) -> tuple[int | None, float]:
+        """(at, since) for one window, falling back to the legacy flat fields."""
+        if window in self.by_window:
+            d = self.by_window[window] or {}
+            at = d.get("at")
+            return (None if at is None else int(at)), float(d.get("since") or 0.0)
+        if window == FIVE_HOUR:
+            return self.at, self.since
+        return None, 0.0
 
 
 class FilesGovernorState:
@@ -616,8 +749,10 @@ class FilesGovernorState:
         try:
             d = json.loads(self.path.read_text())
             at = d.get("at")
+            bw = d.get("by_window")
             return Engaged(at=None if at is None else int(at),
-                           since=float(d.get("since") or 0.0))
+                           since=float(d.get("since") or 0.0),
+                           by_window=bw if isinstance(bw, dict) else {})
         except (OSError, ValueError, TypeError):
             # Unreadable state is NO hold, never an invented one. Fail-open: the
             # governor still engages whatever the live reading says, it just does
@@ -628,8 +763,12 @@ class FilesGovernorState:
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             from .files import write_json_atomic
+            # `at`/`since` stay at top level as the FIVE_HOUR mirror so a
+            # DOWNGRADE reads a sane hold instead of none (aegis-59hao). The
+            # per-window map is the real record.
             write_json_atomic(self.path, {"at": engaged.at,
-                                          "since": engaged.since})
+                                          "since": engaged.since,
+                                          "by_window": engaged.by_window})
         except OSError:
             pass          # best-effort, same rule as the launch stamp
 
@@ -890,14 +1029,78 @@ class Governor:
             return Verdict(reading=Reading(source="none"),
                            why="no [[governor.tier]] declared — the governor is off")
 
+        # transport_error is shared by EVERY window when the read itself failed.
+        # One unreachable Prometheus is not per-window news, and synthesising
+        # "no series for window X" from it would send an operator looking for a
+        # missing metric instead of a dead endpoint.
+        transport_error: Reading | None = None
         try:
-            reading = self.reader.read()
+            if hasattr(self.reader, "read_all"):
+                readings = self.reader.read_all()
+            else:
+                # A reader from before aegis-59hao, or any injected test double
+                # that implements only read(). The seam is the whole design; it
+                # must not require every implementer to grow a second method.
+                readings = {pol.window: self.reader.read()}
         except Exception as e:            # noqa: BLE001 — a reader must never fatal a pass
-            reading = Reading(source=pol.source,
-                              error=f"the {pol.source} reader raised "
-                                    f"{type(e).__name__}: {str(e)[:120]}")
+            readings = {}
+            transport_error = Reading(
+                source=pol.source,
+                error=f"the {pol.source} reader raised "
+                      f"{type(e).__name__}: {str(e)[:120]}")
+        reading = readings.get(pol.window) or transport_error or Reading(
+            source=pol.source,
+            error=f"no usage series for window {pol.window!r} — the "
+                  f"{pol.source} source carries "
+                  f"{sorted(readings) or 'no windows'}")
 
-        lost = reading.lost(now, pol.max_age_seconds)
+        # ---- per-window evaluation (aegis-59hao) ----------------------------
+        # TWO BUDGETS BOTH CONSTRAIN, and the tighter one wins. Each tier is
+        # judged against ITS OWN window's reading and the results are UNIONED —
+        # never averaged, never "the primary window", because an average lets a
+        # freshly-refilled five-hour budget mask an exhausted weekly, which is
+        # the entire bug. Restriction is the union of what every budget says.
+        decided: dict[str, tuple] = {}     # window -> (chosen, held, since, pct)
+        blind: list[tuple[str, str]] = []  # (window, why) — seen but unreadable
+        prior = self.state.get() if self.state is not None else Engaged()
+        for w in pol.windows():
+            r = readings.get(w) or transport_error or Reading(
+                source=pol.source,
+                error=f"no usage series for window {w!r}")
+            why_lost = r.lost(now, pol.max_age_seconds)
+            if why_lost:
+                blind.append((w, why_lost))
+                continue
+            wpct = float(r.pct)
+            cand = pol.candidate(wpct, w)
+            held_at, held_since = prior.hold(w)
+            # THE HOLD, per window. A tier is left only BELOW (threshold -
+            # relax_margin) so a reading oscillating around a threshold does not
+            # flip fleet policy every pass. It can only ever hold a tier HIGHER
+            # than the live reading justifies — never lower.
+            wheld, wchosen = False, cand
+            if held_at is not None and wpct >= held_at - pol.relax_margin:
+                kept = pol.tier_at(held_at, w)
+                if kept is not None and (wchosen is None or kept.at > wchosen.at):
+                    wchosen, wheld = kept, True
+            wsince = held_since
+            if wchosen is None:
+                wsince = 0.0
+            elif held_at != wchosen.at or not wsince:
+                # A NEW tier, or the first pass that engaged this one: start a
+                # new episode. The episode key is what a drain dedupes on.
+                wsince = now
+            decided[w] = (wchosen, wheld, wsince, wpct)
+
+        # EVERY window blind = the old signal-lost path, unchanged. PARTIAL
+        # blindness is different and must NOT stop the crew: govern on what can
+        # be seen and alarm about the rest (never fail INTO drain).
+        if pol.windows() and not decided:
+            lost = "; ".join(f"{w}: {why}" for w, why in blind) or "no usable reading"
+            reading = readings.get(pol.window) or reading
+        else:
+            lost = ""
+
         if lost:
             frozen = pol.on_signal_lost == FREEZE
             # DO NOT clear the engaged tier here. Losing sight of the number is
@@ -919,39 +1122,59 @@ class Governor:
                          "see is indistinguishable from one with nothing to "
                          "report."))
 
-        pct = float(reading.pct)          # lost() proved it is not None
-        candidate = pol.candidate(pct)
-        engaged = self.state.get() if self.state is not None else Engaged()
+        # THE UNION. Verdict derives drains/floor/trait_tiers from `engaged`, so
+        # simply concatenating each window's own cumulative set gives "the most
+        # restrictive across all windows" with no comparison between budgets —
+        # which is right, because two windows' percentages are not comparable.
+        engaged_tiers: list[Tier] = []
+        for w, (wchosen, _, _, _) in decided.items():
+            engaged_tiers.extend(pol.engaged(wchosen))
 
-        # THE HOLD. A tier is left only BELOW (threshold - relax_margin), so a
-        # reading oscillating around a threshold does not flip the fleet's policy
-        # every pass. It can only ever hold a tier HIGHER than the live reading
-        # justifies — never lower — so hysteresis can never be the reason the
-        # governor spends more than it should.
-        held = False
-        chosen = candidate
-        if engaged.at is not None and pct >= engaged.at - pol.relax_margin:
-            kept = pol.tier_at(engaged.at)
-            if kept is not None and (chosen is None or kept.at > chosen.at):
-                chosen, held = kept, True
-
-        since = engaged.since
-        if chosen is None:
-            since = 0.0
-        elif engaged.at != chosen.at or not since:
-            # A NEW tier, or the first pass that engaged this one: start a new
-            # episode. The episode key is what the drain broadcast dedupes on.
-            since = now
+        # A representative tier, for MESSAGING and `held` only — every actual
+        # restriction is read off `engaged`. A drain outranks everything (it is
+        # the loudest thing to name); otherwise the highest threshold, which is
+        # what the single-window governor reported and what the tests below
+        # pin. Comparing `at` across windows is meaningless in general, so this
+        # is deliberately a display choice and nothing reads policy from it.
+        def _restriction(t: Tier):
+            return (t.drains, t.at)
+        chosen = max(engaged_tiers, key=_restriction) if engaged_tiers else None
+        held = any(h for _, (c, h, _, _) in decided.items() if c is chosen)
 
         if persist and self.state is not None:
-            self.state.set(Engaged(at=None if chosen is None else chosen.at,
-                                   since=since))
+            self.state.set(Engaged(
+                # the FIVE_HOUR mirror, so a downgrade still reads a hold
+                at=(decided.get(FIVE_HOUR) or (None,))[0].at
+                   if decided.get(FIVE_HOUR) and decided[FIVE_HOUR][0] else None,
+                since=(decided.get(FIVE_HOUR) or (None, None, 0.0))[2]
+                      if decided.get(FIVE_HOUR) else 0.0,
+                by_window={w: {"at": None if c is None else c.at, "since": s}
+                           for w, (c, _, s, _) in decided.items()}))
 
-        why = (f"usage {pct:.0f}%"
-               + (f" (holding the {chosen.at}% tier; it is left below "
-                  f"{chosen.at - pol.relax_margin}%)" if held else ""))
+        # EVERY refusal names its WINDOW (aegis-59hao). With two budgets, "usage
+        # 72%" without saying which one is worse than useless — it sends the
+        # reader to the wrong number and the wrong recovery time.
+        why = "; ".join(
+            f"{w} {p:.0f}%"
+            + (f" (holding the {c.at}% tier; left below {c.at - pol.relax_margin}%)"
+               if h else "")
+            for w, (c, h, _, p) in decided.items()) or "no window readable"
+
+        alarm = ""
+        if blind:
+            # HALF-BLIND IS STILL BLIND, and it is still not a reason to stop the
+            # crew. Govern on what we can see; say loudly what we cannot.
+            alarm = ("USAGE SIGNAL PARTIALLY LOST: "
+                     + "; ".join(f"{w}: {why_lost}" for w, why_lost in blind)
+                     + f". Governing on {', '.join(sorted(decided))} ONLY — the "
+                       f"unreadable budget could be further gone than the one "
+                       f"being read, and this is the direction that overspends. "
+                       f"No drain is taken from a window we cannot see.")
+
+        pct = decided[pol.window][3] if pol.window in decided else (
+            max((p for _, _, _, p in decided.values()), default=None))
         return Verdict(reading=reading, pct=pct, tier=chosen, held=held, why=why,
-                       engaged=pol.engaged(chosen))
+                       alarm=alarm, engaged=tuple(engaged_tiers))
 
     def episode(self) -> float:
         """The current tier's episode key — what a drain dedupes against."""
@@ -1166,7 +1389,7 @@ def render_drain(rows: list[Drained]) -> str:
 _GOV_KEYS = {"source", "window", "on_signal_lost", "relax_margin",
              "max_age_seconds", "url", "path", "username", "password_file",
              "stub_pct", "tier"}
-_TIER_KEYS = {"at", "min_priority", "traits", "action"}
+_TIER_KEYS = {"at", "min_priority", "traits", "action", "window"}
 
 
 def parse(tbl: dict) -> Policy:
@@ -1277,6 +1500,16 @@ def _tier(spec) -> Tier:
     if action is not None and action not in ACTIONS:
         raise GovernorError(f"[[governor.tier]] at = {at}: action = {action!r} is "
                             f"not one of: {', '.join(ACTIONS)}")
+    # WHICH BUDGET this tier's `at` is read against (aegis-59hao). Defaulting to
+    # five_hour is what makes every pre-existing config keep its exact meaning.
+    window = spec.get("window", FIVE_HOUR)
+    if not isinstance(window, str) or window not in (FIVE_HOUR, SEVEN_DAY):
+        raise GovernorError(
+            f"[[governor.tier]] at = {at}: window = {window!r} is not one of: "
+            f"{FIVE_HOUR}, {SEVEN_DAY}. These are the producer's own labels — a "
+            f"tier on a window nothing publishes would never engage, and a "
+            f"threshold that can never fire reads exactly like one that is "
+            f"simply never reached.")
     if prio is None and not traits and action is None:
         raise GovernorError(
             f"[[governor.tier]] at = {at} restricts NOTHING — no min_priority, no "
@@ -1284,4 +1517,5 @@ def _tier(spec) -> Tier:
             f"would read as a policy in force while the fleet spends exactly as "
             f"it did before.")
     return Tier(at=at, min_priority=prio,
-                traits=tuple(t.strip() for t in traits), action=action)
+                traits=tuple(t.strip() for t in traits), action=action,
+                window=window)
