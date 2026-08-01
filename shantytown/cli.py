@@ -68,6 +68,17 @@ import json
 import os
 import sys
 import time
+# MODULE LEVEL, not function-local. `_retire_card` referenced a bare `replace`
+# while the only import of it sat INSIDE `_tend_retire`, so the crash-loop
+# give-up raised NameError on every call and had never once written a card. It
+# was invisible because the raise landed in that function's `except Exception`,
+# which printed "⚠ could not retire <name>" into the middle of a tend pass —
+# the one place a warning is guaranteed to scroll past unread. tend reported
+# CRASH_LOOP ("RETIRED rather than respawned again") while the card said
+# nothing of the kind: the supervisor's own report and the durable state
+# disagreed, which is the same shape as the bug this bead is about, one caller
+# over. Found by a test written for the provenance work (aegis-6hfmi).
+from dataclasses import replace
 from pathlib import Path
 
 from . import beads as beads_mod
@@ -101,7 +112,7 @@ from .runtime import (asks_a_question, auth_expired, ClaudeRuntime, CapabilityEr
                       live_wiring, settings_for_role)
 from .tmux import Tmux, declared_socket
 from .workspace import (WorkspaceError, cleanup_worktree, ensure_workspace,
-                        ensure_worktree, worktree_for)
+                        ensure_worktree, unlaunchable, worktree_for)
 from .provision import ProvisionError, provision as provision_ws
 
 # `st new` liveness poll: how long to wait for the runtime to appear in the pane
@@ -617,7 +628,13 @@ def build_parser() -> argparse.ArgumentParser:
                     help="mark an agent DELIBERATELY stopped — tend will never "
                          "respawn it (durable: it lives on the card)")
     td.add_argument("--unretire", metavar="AGENT",
-                    help="undo --retire; the agent is tended again")
+                    help="undo --retire; the agent is tended again. REFUSES if "
+                         "the card could not be launched into its own tree — "
+                         "un-retiring arms it for unattended respawn, and this "
+                         "is the last moment anyone is watching")
+    td.add_argument("--force", action="store_true",
+                    help="with --unretire: arm the card anyway, past a "
+                         "launchability refusal. The reason is still printed")
     td.add_argument("--interval", default="5min",
                     help="with --install: how often a pass runs (default 5min)")
     td.add_argument("--target", type=int, metavar="N",
@@ -3799,11 +3816,20 @@ def _governor_episode(a) -> float:
 def _retire_card(a, name: str) -> None:
     """Mark an agent RETIRED on its card — the same durable mechanism
     `st tend --retire` uses, so a crash-loop retirement is visible to, and
-    reversible by, exactly the commands an operator already knows."""
+    reversible by, exactly the commands an operator already knows.
+
+    It names ITSELF as the actor, not $SHANTY_AGENT. This runs inside a tend
+    pass, so the ambient identity is whoever happens to own the supervisor
+    process — which is true and useless: the question a reader has is "what
+    decided this", and the answer is the crash-loop rule, not a person. It also
+    keeps the one automatic retirement path from being mistaken for a
+    deliberate one, which is the distinction `retired` exists to carry.
+    """
     try:
         reg = _registry(a)
         card = reg.get(name)
-        reg.set(replace(card, retired=True))
+        reg.set(replace(card, retired=True, retired_by="st tend (crash-loop)",
+                        retired_at=_now_iso()))
     except Exception as e:                        # noqa: BLE001 — never fatal
         print(f"  ⚠ could not retire {name}: {e}", file=sys.stderr)
 
@@ -3937,11 +3963,51 @@ def _tend_reauth(a) -> int:
     return OK
 
 
+def _actor() -> str:
+    """WHO is running this — best-effort, and honestly labelled about which
+    kind of answer it is.
+
+    A crew session carries $SHANTY_AGENT (the launcher sets it), so that name
+    is the good answer. A human at a shell does not, and their unix login is a
+    DIFFERENT kind of identity — the two namespaces are not guaranteed
+    disjoint, so `braino` alone would be ambiguous between the crew member and
+    the account. The `unix:` prefix costs five characters and removes the
+    ambiguity permanently. `unknown` when neither is readable: this is an audit
+    line, so it must be able to say it does not know rather than guess.
+    """
+    who = os.environ.get("SHANTY_AGENT")
+    if who:
+        return who
+    try:
+        import getpass
+        return f"unix:{getpass.getuser()}"
+    except Exception:
+        return "unknown"
+
+
+def _now_iso() -> str:
+    """UTC ISO-8601, seconds. Sortable, unambiguous, no local-tz guessing."""
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
 def _tend_retire(a) -> int:
     """Retirement is a WRITE to the card, because it has to survive everything
     that could undo it: the supervisor restarting, the host rebooting, this
     process dying. That is the whole lesson of the watchdog that reverted a
-    considered shutdown in under a minute."""
+    considered shutdown in under a minute.
+
+    UN-retirement is the ARMING half, and it is the one that needed a
+    pre-flight (aegis-6hfmi). --retire only ever REMOVES a card from the
+    supervisor's reach, so it cannot make anything launch and is never gated.
+    --unretire hands a card back to a supervisor that will start it unattended,
+    which makes it the last moment a human is present to notice the card cannot
+    actually be started where it claims to live. It had no check at all: it
+    re-armed ian, whose card carried a gt-era pane and NO workspace, and
+    nothing said a word. tend then launched it — into the supervisor's cwd,
+    not into ian's tree — and the fleet had an agent that read defunct in `st
+    crew` and live to the supervisor, which nobody connected for two deaths.
+    """
     name = a.retire or a.unretire
     reg = _registry(a)
     try:
@@ -3954,16 +4020,38 @@ def _tend_retire(a) -> int:
               "durable and it cannot be written here.", file=sys.stderr)
         return REFUSED
     want = bool(a.retire)
+
+    # THE PRE-FLIGHT, BEFORE THE DRY-RUN BRANCH. A dry run that reported "would
+    # mark retired=False" while the real command refuses would be lying about
+    # the thing dry runs exist to answer.
+    if not want:
+        why = unlaunchable(card)
+        if why and not getattr(a, "force", False):
+            print(f"  refused: {why}\n"
+                  f"  Un-retiring re-arms {name} for UNATTENDED respawn, and a "
+                  f"supervisor cannot notice this the way you can right now. "
+                  f"Fix the card and run this again, or `--force` to arm it "
+                  f"anyway (the fault above does not go away — you go away).",
+                  file=sys.stderr)
+            return REFUSED
+        if why:
+            # FORCED IS NOT SILENT. The operator overrode a refusal; the reason
+            # still gets said, and still gets said in full. A --force that
+            # prints nothing trains everyone to pass it by default.
+            print(f"  ⚠ FORCED past a launchability fault: {why}")
+
     if a.dry_run:
-        print(f"  would mark {name} retired={want}")
+        print(f"  would mark {name} retired={want} (by {_actor()})")
         return OK
-    from dataclasses import replace
-    reg.set(replace(card, retired=want))
+    reg.set(replace(card, retired=want, retired_by=_actor(),
+                    retired_at=_now_iso()))
     if want:
         print(f"  {name} is RETIRED. `st tend` will not respawn it, and will "
               f"ESCALATE if it finds it alive.")
     else:
         print(f"  {name} is tended again.")
+    print(f"  recorded on the card: retired_by={_actor()} "
+          f"retired_at={_now_iso()}")
     return OK
 
 

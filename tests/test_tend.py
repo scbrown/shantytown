@@ -333,7 +333,7 @@ class _Args:
         self.root = Path(root)
         self.backend = None; self.repo = None; self.registry = "files"
         self.install = self.uninstall = self.status = False
-        self.retire = self.unretire = None
+        self.retire = self.unretire = None; self.force = False
         self.interval = "5min"; self.dry_run = False
         for k, v in kw.items():
             setattr(self, k, v)
@@ -514,3 +514,168 @@ def test_a_stamped_dead_worker_is_still_respawned(tmp_path):
     rep = _tender(panes, rt, launches=launches).pass_over([dead])
     f, = rep.findings
     assert f.verdict == tend_mod.RESPAWNED and f.acted
+
+
+# --- --unretire is the ARMING moment, and it now has a pre-flight (aegis-6hfmi)
+#
+# THE INCIDENT. `st tend --unretire ian` re-armed a card carrying a gt-era pane
+# and NO workspace. Nothing warned. tend then launched it — into the
+# supervisor's cwd, not into ian's tree — producing an agent that read defunct
+# in `st crew` and live to the supervisor. It died twice before anyone
+# connected the two, because the two facts lived in different tools.
+#
+# --retire is deliberately NOT gated: it only ever removes a card from the
+# supervisor's reach, so it cannot make anything launch. Only the arming
+# direction can, and it is the last moment a human is present to notice.
+
+def test_unretire_REFUSES_a_card_with_no_workspace(tmp_path, monkeypatch, capsys):
+    """THE regression, end to end, on the exact ian card."""
+    root = _roster(tmp_path, {"ian": {"role": "worker", "pane": "aegis-crew-ian",
+                                      "retired": True}})
+    monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: _Panes(live=set()))
+
+    assert cli._cmd_tend(_Args(root, unretire="ian")) == cli.REFUSED
+    assert json.loads((root / "crew" / "ian.json").read_text())["retired"] is True, \
+        "REFUSED still armed the card"
+    err = capsys.readouterr().err
+    assert "workspace" in err and "unattended" in err.lower()
+
+
+def test_the_refusal_survives_the_DRY_RUN_too(tmp_path, monkeypatch, capsys):
+    """A dry run that said 'would mark retired=False' while the real command
+    refuses would be lying about the one thing dry runs exist to answer."""
+    root = _roster(tmp_path, {"ian": {"role": "worker", "pane": "p", "retired": True}})
+    monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: _Panes(live=set()))
+    assert cli._cmd_tend(_Args(root, unretire="ian", dry_run=True)) == cli.REFUSED
+
+
+def test_unretire_ALLOWS_a_card_that_can_actually_be_launched(tmp_path, monkeypatch,
+                                                              capsys):
+    """The negative control. A gate that refused everything would be useless
+    and would be routed around within a day."""
+    ws = tmp_path / "crew-ellie"; ws.mkdir()
+    root = _roster(tmp_path, {"ellie": {"role": "worker", "pane": "p-ellie",
+                                        "retired": True, "workspace": str(ws)}})
+    monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: _Panes(live=set()))
+
+    assert cli._cmd_tend(_Args(root, unretire="ellie")) == cli.OK
+    assert json.loads((root / "crew" / "ellie.json").read_text())["retired"] is False
+
+
+def test_RETIRING_is_never_gated_even_on_an_unlaunchable_card(tmp_path, monkeypatch,
+                                                              capsys):
+    """Retiring only ever REMOVES a card from the supervisor's reach. Gating it
+    would refuse to stop the very agents most in need of stopping."""
+    root = _roster(tmp_path, {"ian": {"role": "worker", "pane": "aegis-crew-ian"}})
+    monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: _Panes(live=set()))
+    assert cli._cmd_tend(_Args(root, retire="ian")) == cli.OK
+    assert json.loads((root / "crew" / "ian.json").read_text())["retired"] is True
+
+
+def test_force_arms_it_anyway_but_STILL_SAYS_WHY(tmp_path, monkeypatch, capsys):
+    """The escape hatch exists because the roster call is not the supervisor's
+    to make. A --force that printed nothing would train everyone to pass it by
+    default, which is how a gate stops being read."""
+    root = _roster(tmp_path, {"ian": {"role": "worker", "pane": "p", "retired": True}})
+    monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: _Panes(live=set()))
+
+    assert cli._cmd_tend(_Args(root, unretire="ian", force=True)) == cli.OK
+    assert json.loads((root / "crew" / "ian.json").read_text())["retired"] is False
+    out = capsys.readouterr().out
+    assert "FORCED" in out and "workspace" in out
+
+
+# --- and it records WHO ------------------------------------------------------
+
+def test_retiring_records_the_actor_from_SHANTY_AGENT(tmp_path, monkeypatch, capsys):
+    root = _roster(tmp_path, {"ellie": {"role": "worker", "pane": "p"}})
+    monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: _Panes(live=set()))
+    monkeypatch.setenv("SHANTY_AGENT", "sattler")
+
+    assert cli._cmd_tend(_Args(root, retire="ellie")) == cli.OK
+    card = json.loads((root / "crew" / "ellie.json").read_text())
+    assert card["retired_by"] == "sattler"
+    assert card["retired_at"].startswith("20") and card["retired_at"].endswith("+00:00")
+
+
+def test_un_retiring_records_the_actor_too(tmp_path, monkeypatch, capsys):
+    """The question this bead could not answer was about an UN-retirement."""
+    ws = tmp_path / "w"; ws.mkdir()
+    root = _roster(tmp_path, {"ian": {"role": "worker", "pane": "p", "retired": True,
+                                      "workspace": str(ws)}})
+    monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: _Panes(live=set()))
+    monkeypatch.setenv("SHANTY_AGENT", "sattler")
+
+    assert cli._cmd_tend(_Args(root, unretire="ian")) == cli.OK
+    assert json.loads((root / "crew" / "ian.json").read_text())["retired_by"] == "sattler"
+
+
+def test_a_human_at_a_shell_is_labelled_as_a_UNIX_login_not_a_crew_name(
+        tmp_path, monkeypatch, capsys):
+    """The two namespaces are not guaranteed disjoint, and an audit line that
+    could not tell 'the crew member' from 'the account' answers the forensic
+    question ambiguously — which is the failure it exists to remove."""
+    root = _roster(tmp_path, {"ellie": {"role": "worker", "pane": "p"}})
+    monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: _Panes(live=set()))
+    monkeypatch.delenv("SHANTY_AGENT", raising=False)
+
+    assert cli._cmd_tend(_Args(root, retire="ellie")) == cli.OK
+    assert json.loads(
+        (root / "crew" / "ellie.json").read_text())["retired_by"].startswith("unix:")
+
+
+def test_a_crash_loop_retirement_names_the_RULE_not_the_ambient_process(
+        tmp_path, monkeypatch):
+    """Inside a tend pass $SHANTY_AGENT is whoever owns the supervisor — true
+    and useless. The reader's question is WHAT DECIDED THIS, and the answer is
+    the crash-loop rule. It also keeps the one automatic retirement path
+    distinguishable from a deliberate one."""
+    root = _roster(tmp_path, {"billy": {"role": "worker", "pane": "p"}})
+    monkeypatch.setenv("SHANTY_AGENT", "sattler")
+    cli._retire_card(_Args(root), "billy")
+    card = json.loads((root / "crew" / "billy.json").read_text())
+    assert card["retired"] is True
+    assert card["retired_by"] == "st tend (crash-loop)"
+
+
+def test_the_verdicts_CARRY_the_provenance(tmp_path):
+    """RESURRECTED is a forensic finding. 'who agreed to stop this, and when'
+    are the two questions it raises, both are on the card, and printing them
+    turns a page into a lead."""
+    card = Agent(name="ian", pane="p-ian", retired=True, retired_by="sattler",
+                 retired_at="2026-08-01T22:53:51+00:00")
+    rep = _tender(_Panes(live={"p-ian"}), _Runtime()).pass_over([card])
+    f, = rep.findings
+    assert f.verdict == tend_mod.RESURRECTED
+    assert "sattler" in f.why and "2026-08-01T22:53:51+00:00" in f.why
+
+
+def test_an_unrecorded_retirement_does_not_pad_the_verdict_with_UNKNOWN(tmp_path):
+    """An old card must not be dressed up as a fresh mystery."""
+    card = Agent(name="goldblum", pane="p-g", retired=True)
+    rep = _tender(_Panes(live=set()), _Runtime()).pass_over([card])
+    f, = rep.findings
+    assert f.verdict == tend_mod.RETIRED and "unrecorded" not in f.why
+
+
+def test_the_crash_loop_retirement_ACTUALLY_WRITES_THE_CARD(tmp_path, monkeypatch,
+                                                            capsys):
+    """A pre-existing NameError, found by the provenance test above and fixed
+    with it (aegis-6hfmi).
+
+    `_retire_card` used a bare `replace` while the only import of it sat inside
+    `_tend_retire`, so this raised on every call and had NEVER written a card.
+    The raise landed in a broad `except Exception` that printed a warning into
+    the middle of a tend pass — so tend went on reporting CRASH_LOOP ("RETIRED
+    rather than respawned again") while the card said nothing of the kind. The
+    supervisor's report and the durable state disagreed, silently, which is the
+    same shape as the bug this bead is about, one caller over.
+
+    Asserting on the CARD, never on the absence of the warning: the warning is
+    what made it invisible for so long.
+    """
+    root = _roster(tmp_path, {"billy": {"role": "worker", "pane": "p"}})
+    cli._retire_card(_Args(root), "billy")
+    card = json.loads((root / "crew" / "billy.json").read_text())
+    assert card["retired"] is True, "the crash-loop give-up wrote nothing"
+    assert "could not retire" not in capsys.readouterr().err

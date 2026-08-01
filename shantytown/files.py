@@ -62,6 +62,12 @@ class FilesRegistry:
             # "nobody said" — so a read/write round-trip cannot invent a
             # retirement decision the card never recorded (aegis-6hfmi).
             retired=d.get("retired"),
+            # Provenance for that decision. Absent = nobody recorded it (a card
+            # written before this existed, or a write that carried no actor) —
+            # never invented, because a manufactured attribution is exactly the
+            # confident wrong answer this pair is here to prevent.
+            retired_by=d.get("retired_by"),
+            retired_at=d.get("retired_at"),
             # The stacked set, mirrored from the graph (GitHub #37). A card that
             # does not carry it reads () — "nobody said" — never (role,), so an
             # un-migrated card is distinguishable from a migrated one whose set
@@ -112,6 +118,24 @@ class FilesRegistry:
         # Now `retired = False` un-retires and `retired = None` preserves.
         if agent.retired is not None:
             existing["retired"] = agent.retired
+            # PROVENANCE MOVES WITH THE DECISION, AND ONLY WITH IT. Written
+            # inside this branch — never beside it — so the two can never
+            # describe different events. `retired` is the ONLY field here whose
+            # neighbours are cleared rather than preserved when not carried,
+            # and the inversion is deliberate: everywhere else "not carried"
+            # means "some other owner set this, keep it", but attribution has
+            # no owner other than the write it describes. A `retired_by` that
+            # outlived its retirement would name the wrong actor with a
+            # straight face, which is worse than naming nobody — and it is the
+            # same shape as the bug that produced this field, one layer up.
+            # Callers that know who they are say so; callers that do not leave
+            # an honest blank.
+            for k, v in (("retired_by", agent.retired_by),
+                         ("retired_at", agent.retired_at)):
+                if v is not None:
+                    existing[k] = v
+                else:
+                    existing.pop(k, None)
         # The stacked role set + its per-member parameter (GitHub #37). Written
         # only when carried, like model/workspace/harness: a `role set` that
         # touches the tree position must not silently erase a set some other
