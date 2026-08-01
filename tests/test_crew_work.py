@@ -119,7 +119,11 @@ def test_a_down_agent_is_never_free(tmp_path, monkeypatch, capsys):
     assert cli._cmd_crew(_Args(root)) == cli.OK
     out = capsys.readouterr().out
     assert "1 free: ellie" in out
-    assert "ian" not in out.split("1 free:")[1]
+    # The FREE LINE, not the rest of the output. `ian` legitimately appears
+    # further down (it is on the roster, and other blocks name it); the claim
+    # under test is that it is not offered as available.
+    free_line = next(l for l in out.splitlines() if "1 free:" in l)
+    assert "ian" not in free_line
 
 
 def test_work_is_answered_for_agents_with_no_launch_stamp(tmp_path, monkeypatch, capsys):
