@@ -203,7 +203,7 @@ def _world(tmp_path: Path) -> Path:
 
 def test_role_set_emits_the_settings_file(tmp_path):
     root = _world(tmp_path)
-    rc = main(["--root", str(root), "role", "set", "ellie", "worker"])
+    rc = main(["--root", str(root), "roles", "set", "ellie", "worker"])
     assert rc == OK
     p = root / "settings" / "worker.settings.json"
     assert p.is_file(), "role set did not emit the role's settings.json"
@@ -224,7 +224,7 @@ def test_emitted_hook_carries_an_absolute_root(tmp_path):
     created. Without an absolute root, send/drain silently route nowhere.
     """
     root = _world(tmp_path)
-    assert main(["--root", str(root), "role", "set", "ellie", "worker"]) == OK
+    assert main(["--root", str(root), "roles", "set", "ellie", "worker"]) == OK
     cmd = _stop_commands(json.loads((root / "settings" / "worker.settings.json").read_text()))[0]
     assert "--root " in cmd, "hook has no --root; it will resolve against the agent's cwd"
     given = cmd.split("--root ", 1)[1].strip()
@@ -234,7 +234,7 @@ def test_emitted_hook_carries_an_absolute_root(tmp_path):
 
 def test_role_set_dry_run_emits_nothing(tmp_path):
     root = _world(tmp_path)
-    rc = main(["--root", str(root), "role", "set", "ellie", "worker", "-n"])
+    rc = main(["--root", str(root), "roles", "set", "ellie", "worker", "-n"])
     assert rc == OK
     assert not (root / "settings").exists(), "dry-run emitted a settings file"
 
@@ -247,7 +247,7 @@ def test_role_set_then_new_no_longer_refuses_for_missing_settings(tmp_path, monk
     verify. We only assert it got PAST the settings refusal — the pane shows the
     ready banner so verify returns 0."""
     root = _world(tmp_path)
-    assert main(["--root", str(root), "role", "set", "ellie", "worker"]) == OK
+    assert main(["--root", str(root), "roles", "set", "ellie", "worker"]) == OK
     # st new: a live pane with the ready banner -> verify 0. If settings were still
     # missing, compose would REFUSE (exit 1) before ever creating a session.
     panes = NullPanes(screen="… Welcome to Claude Code …\n? for shortcuts", live=set())

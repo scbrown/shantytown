@@ -1,9 +1,9 @@
-"""st — the CLI. Twenty-one commands, and the count is load-bearing: each earns its slot.
+"""st — the CLI. Nineteen commands, and the count is load-bearing: each earns its slot.
 
     anchor [--short|--events|--harness] · go · inbox [--count] · task
-    · crew [--count] · roles [--check] · role set · init · new · start [--mode]
-    · stop · log · context · doctor [--install] · project
-    · tend [--install|--status|--reauth] · attach [-r|--no-start]
+    · crew [--count] · roles [--check|set|sync] · init · new · start [--mode]
+    · stop · log · context · doctor [--install]
+    · tend [--install|--status|--reauth|--target] · attach [-r|--no-start]
     · dashboard [admin] · subscribe · worktree [--gc] · stats
 
 Five of those flags are MACHINE-READABLE modes, added for an external status bar
@@ -28,7 +28,6 @@ set we measurably use, and the discipline is the point (docs/cli.md). The surfac
 grew past the original ten by seven, each on a specific ask — not drift:
   · context — the bobbin Context protocol
   · doctor  — out-of-box tool detect/install, Stiwi's direct ask
-  · project — materialize the crew cards from the graph
   · tend    — crew supervision, native. Owner-directed, and it is a COMMAND and
               not a flag on `st crew` for one reason: `crew` is a read, and this
               is the only surface that can create a session and launch an agent.
@@ -431,14 +430,11 @@ def build_parser() -> argparse.ArgumentParser:
                               "falling back to a hierarchy file only if the "
                               "graph cannot be read (and it tells you)")
 
-    # ALIAS (deprecated spelling, kept so nothing breaks): `role set ...` ==
-    # `roles set ...`. Prefer `st roles set`.
-    rs = sub.add_parser("role", help="alias for `roles set` (deprecated spelling)")
-    rs.add_argument("set_", metavar="set", choices=["set"])
-    rs.add_argument("agent")
-    rs.add_argument("role", metavar="ROLE")      # see `roles set` — no choices=
-    rs.add_argument("--reports", default="", help="comma-separated reports for a lead/administrator")
-    rs.add_argument("-n", "--dry-run", action="store_true")
+    # The `role set ...` alias lived here and is GONE (deprecated 2026-07-24,
+    # removed after the one-week window). `st roles set` is the spelling. Deletion
+    # is what lands the count drop: consolidating and keeping an alias held the
+    # surface at 19, because an alias IS a top-level command to argparse and to
+    # anyone reading `st --help`.
 
     nw = sub.add_parser("new", help="create an agent from a card")
     nw.add_argument("agent")
@@ -550,11 +546,8 @@ def build_parser() -> argparse.ArgumentParser:
     dr.add_argument("--no-latest", action="store_true",
                     help="skip the release check (offline/fast) — detect local state only")
 
-    pj = sub.add_parser("project", help="alias for `roles sync` (deprecated spelling)")
-    pj.add_argument("-n", "--dry-run", action="store_true",
-                    help="show the diff, write nothing")
-    pj.add_argument("--force", action="store_true",
-                    help="project even if it restructures LIVE agents")
+    # The `project` alias lived here and is GONE — see the `role` note above.
+    # `st roles sync` is the spelling.
 
     td = sub.add_parser("tend", help="supervise the crew: respawn what DIED, "
                                      "never what was RETIRED")
@@ -665,22 +658,6 @@ def _parse_args(argv: list[str] | None):
     return ns
 
 
-def _warn_deprecated_alias(old: str, canonical: str) -> None:
-    """Warn (once, on stderr) that a deprecated top-level command spelling was used.
-
-    Called only from the alias dispatch arms (`role`, `project`), so it fires on
-    USE of the old spelling and never for the canonical `roles ...`. stderr keeps
-    stdout clean for callers that pipe command output. The aliases are scheduled
-    for removal after a one-week deprecation window (the step that actually lands
-    the command-count drop); until then this is the migration nudge.
-    """
-    print(
-        f"st: `{old}` is a deprecated spelling — use `{canonical}` instead. "
-        "The alias will be REMOVED after a one-week deprecation window (~2026-07-31).",
-        file=sys.stderr,
-    )
-
-
 def main(argv: list[str] | None = None) -> int:
     a = _parse_args(argv)
     # RESOLVE THE STORE ONCE, here, so every handler downstream sees a real Path
@@ -710,9 +687,6 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_task(a)
     if a.cmd == "context":
         return _cmd_context(a)
-    if a.cmd == "role":
-        _warn_deprecated_alias("role", "roles set")
-        return _cmd_role(a)
     if a.cmd == "doctor":
         return _cmd_doctor(a)
     if a.cmd == "stop":
@@ -733,9 +707,6 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_init(a)
     if a.cmd == "start":
         return _cmd_start(a)
-    if a.cmd == "project":
-        _warn_deprecated_alias("project", "roles sync")
-        return _cmd_project(a)
     if a.cmd == "tend":
         return _cmd_tend(a)
     if a.cmd == "attach":
