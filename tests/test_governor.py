@@ -1078,3 +1078,121 @@ survival = "first"
         f"drain order {told} — the coordinator must be asked LAST, and the "
         f"alphabetical names here would give the opposite order if the band "
         f"were being ignored")
+
+
+# --- TWO BUDGETS, NOT ONE (aegis-59hao) ---------------------------------------
+#
+# The governor read exactly one window and every tier was judged against it, so
+# it was blind to whichever budget was actually further gone — and blind in the
+# expensive direction: a five-hour window refills in HOURS, the weekly in DAYS.
+# Governing only the cheap-to-recover budget is backwards.
+#
+# The asymmetry below is deliberate and is this fleet's own judgement, carried
+# over from the deleted corpse-alerts (aegis-0qur): 80/95 on the five-hour,
+# 70/90 on the weekly — TIGHTER on the budget that takes days to come back.
+
+TWO_WINDOW = """
+[governor]
+source = "stub"
+relax_margin = 5
+
+[[governor.tier]]
+at = 80
+traits = ["support"]
+
+[[governor.tier]]
+at = 95
+action = "drain"
+
+[[governor.tier]]
+at = 70
+window = "seven_day"
+traits = ["support"]
+
+[[governor.tier]]
+at = 90
+window = "seven_day"
+action = "drain"
+
+[roles.support]
+attachment = "reports-to"
+survival = "support"
+"""
+
+
+def test_an_EXHAUSTED_WEEKLY_sheds_even_when_the_five_hour_is_nearly_EMPTY(tmp_path):
+    """THE test. This is the case that was wrong, and it is wrong SILENTLY.
+
+    5h=20 is a fleet with plenty of short-term budget; 7d=85 is one that has
+    spent most of a week's. Reading only the five-hour window, the governor sees
+    20% and engages nothing at all — while the budget that takes DAYS to refill
+    is past its threshold.
+    """
+    v = _gov(tmp_path, {"five_hour": 20, "seven_day": 85}, text=TWO_WINDOW).evaluate()
+    assert v.trait_tiers, "the seven_day tier did not engage — the fleet does not shed"
+    assert any(t.window == "seven_day" for t in v.engaged)
+    assert not v.drains, "70 is the shed tier, not the drain tier"
+    assert "seven_day" in v.why, "a refusal that does not name the budget teaches nothing"
+
+
+def test_the_five_hour_still_engages_on_its_own_reading(tmp_path):
+    """Symmetry, proven in the other direction — otherwise the fix could be
+    'always read seven_day', which is the same bug facing the other way."""
+    v = _gov(tmp_path, {"five_hour": 85, "seven_day": 20}, text=TWO_WINDOW).evaluate()
+    assert v.trait_tiers
+    assert any(t.window == "five_hour" for t in v.engaged)
+    assert not any(t.window == "seven_day" for t in v.engaged)
+
+
+def test_the_STRICTER_window_wins_and_they_are_never_averaged(tmp_path):
+    """Two budgets both constrain. An average would let a fresh 5h mask a spent
+    weekly — 20 and 90 average to 55, which engages NOTHING."""
+    v = _gov(tmp_path, {"five_hour": 20, "seven_day": 90}, text=TWO_WINDOW).evaluate()
+    assert v.drains, "the weekly drain tier did not engage"
+
+
+def test_a_MISSING_window_governs_on_what_is_readable_and_ALARMS(tmp_path):
+    """Partial blindness is still blindness — and still not a reason to stop the
+    crew. Never fail INTO drain."""
+    v = _gov(tmp_path, {"five_hour": 85}, text=TWO_WINDOW).evaluate()
+    assert v.trait_tiers, "governed on the window it COULD read"
+    assert any(t.window == "five_hour" for t in v.engaged)
+    assert not v.drains, "a window we cannot see must never drain the fleet"
+    assert "seven_day" in v.alarm and "PARTIALLY LOST" in v.alarm
+
+
+def test_a_config_naming_NO_window_behaves_exactly_as_before(tmp_path):
+    """The compatibility floor. Every shipped config omits `window`, and this
+    change must be inert for all of them."""
+    v = _gov(tmp_path, 85).evaluate()          # SPOKEN: no window anywhere
+    assert [t.at for t in v.engaged] == [50, 70, 80]
+    assert all(t.window == "five_hour" for t in v.engaged)
+    assert not v.drains
+
+
+def test_hysteresis_is_held_PER_WINDOW(tmp_path):
+    """One remembered tier cannot describe two budgets on different clocks: a
+    relaxing five-hour reading must not drop a hold the weekly still justifies."""
+    g = _gov(tmp_path, {"five_hour": 85, "seven_day": 72}, text=TWO_WINDOW)
+    g.evaluate()                                # both windows engage their 80/70
+    # the five-hour falls into its relax band; the weekly does not move
+    v = _gov(tmp_path, {"five_hour": 76, "seven_day": 72}, text=TWO_WINDOW).evaluate()
+    assert any(t.window == "seven_day" for t in v.engaged), \
+        "the weekly hold was dropped by a five-hour relax"
+
+
+def test_a_seven_day_only_config_never_reads_the_five_hour(tmp_path):
+    """windows() is derived from the TIERS: a window nothing governs is a read
+    whose answer could not matter."""
+    text = TWO_WINDOW.replace("at = 80\ntraits", "at = 80\nwindow = \"seven_day\"\ntraits") \
+                     .replace("at = 95\naction", "at = 95\nwindow = \"seven_day\"\naction")
+    pol = _policy(tmp_path, text)
+    assert pol.windows() == ("seven_day",)
+
+
+def test_an_unknown_window_is_REFUSED_not_silently_never_engaged(tmp_path):
+    """A tier on a window nothing publishes would never fire, and a threshold
+    that can never fire reads exactly like one that is simply never reached."""
+    with pytest.raises(Exception) as e:
+        _policy(tmp_path, TWO_WINDOW.replace('window = "seven_day"', 'window = "7d"'))
+    assert "seven_day" in str(e.value)
