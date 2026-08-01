@@ -200,8 +200,12 @@ def test_restriction_is_CUMULATIVE_and_monotone_in_usage(tmp_path):
 
 def test_the_trait_tier_is_a_THRESHOLD_not_an_equality(tmp_path):
     """`traits = ["support"]` means support AND ABOVE. Equality matching would
-    spin down the administrator (survival `critical`) while keeping the watchers
-    — the coordinator gone and the monitors left, which is upside down."""
+    spin down an agent banded `last` while keeping the watchers — the coordinator
+    gone and the monitors left, which is upside down.
+
+    Note WHERE the band comes from: the `coordinator` role declares it, not the
+    `administrator` tree position. An administrator carries no band of its own —
+    see the never-implicitly-protected test below."""
     v, cat = _gov(tmp_path, 85).evaluate(), _catalog(tmp_path)
     admin = Agent(name="sattler", role="administrator",
                   roles=("administrator", "coordinator"))
