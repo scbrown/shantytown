@@ -362,11 +362,32 @@ def _liveness(reg: FilesRegistry, panes, shows_ready_ui, name: str,
         return DOWN
     if not card.pane or not panes.exists(card.pane):
         return DOWN
-    screen = panes.capture(card.pane)
+    # attrs=True IS LOad-BEARING (aegis-c6hli). work_state asks input_state what
+    # is in the box, and input_state can only tell a dim suggestion from typed
+    # text if the capture still carries the attribute. This call did not pass it,
+    # so on THIS path — the one the coordinator is woken by — every pane with
+    # anything in its box returned `?`, suggestion and stranded input alike.
+    #
+    # Measured 2026-08-01, same bytes both ways: with attrs a live ghost line
+    # reads `idle` and a stranded one reads `queued`; without, both read `?`.
+    # That is the whole incident this bead was filed for. billy showed `?`
+    # holding an in_progress bead, its box held a SUGGESTION, and the
+    # stranded-input SOP was run on it — a coordinator turn and an interrupt
+    # into a working agent, spent on a phantom. `st crew` had passed attrs since
+    # aegis-x6xh; this path had not, so the fleet had two classifiers' worth of
+    # answers from one classifier. One capture mode, one verdict.
+    screen = panes.capture(card.pane, attrs=True)
     # awaiting_answer is optional so a caller with no runtime still gets a verdict
     # — one degraded to `?`, exactly as before, rather than a crash.
-    awaiting = bool(awaiting_answer(screen)) if awaiting_answer else False
-    return triage.work_state(screen, shows_ready_ui(screen), awaiting=awaiting)
+    #
+    # shows_ready_ui and awaiting_answer are PLAIN-TEXT matchers and the runtime
+    # emits a colour run per word under -e, so a substring match silently stops
+    # matching. Strip for them; keep the raw screen for work_state, which needs
+    # the attribute. One capture, two views of the same instant — a second
+    # capture-pane would be a different moment.
+    plain = triage.strip_attrs(screen)
+    awaiting = bool(awaiting_answer(plain)) if awaiting_answer else False
+    return triage.work_state(screen, shows_ready_ui(plain), awaiting=awaiting)
 
 
 def _age(ts: float, now: float) -> str:

@@ -234,6 +234,13 @@ class Panes(Protocol):
     # FOREIGN launcher carries that launcher's wiring, and routing to it on the
     # strength of the name alone loses every event (internal-ref). An adapter that
     # cannot read it returns None, and the caller fails toward RISING.
+    # ONE editing key, drawn from the adapter's CONTROL_KEYS allowlist —
+    # cursor moves, deletes, Escape.
+    # Takes no text and the allowlist holds no Enter and no Tab, so it cannot
+    # submit a buffer or ACCEPT a ghost-text suggestion (aegis-c6hli). That
+    # keeps invariant #5 intact: this adds a way to EDIT a pane's input box,
+    # not a way to express a handoff or inject text.
+    def control(self, pane: str, key: str) -> None: ...
     def cmdline(self, pane: str) -> str | None: ...
                                                # it to decide, #2 verify reads it
                                                # to confirm a send landed. Both

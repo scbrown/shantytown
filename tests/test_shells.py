@@ -175,7 +175,7 @@ def test_a_pane_it_could_not_read_records_none_never_zero(tmp_path):
 
     class _Blind:
         def exists(self, pane): return True
-        def capture(self, pane, history=0): raise OSError("tmux is gone")
+        def capture(self, pane, history=0, attrs=False): raise OSError("tmux is gone")
 
     assert stop_event._send(_reg(tmp_path), ev, _Blind(), "ellie") == 0
     assert ev.drain("maldoon")[0].shells is None

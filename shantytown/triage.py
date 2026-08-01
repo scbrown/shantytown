@@ -79,6 +79,44 @@ _DIM = "\x1b[2m"
 # ASCII `>` as well as `❯`: the runtime renders ❯, the tests and older panes `>`.
 _PROMPT_GLYPHS = ("❯", ">")
 
+# Only SGR (`CSI … m`) can turn dim on or off; every other CSI is cursor/erase
+# chrome and must not disturb the state machine below.
+_SGR = re.compile(r"\x1b\[([0-9;]*)m")
+
+
+def _split_dim(segment: str) -> tuple[str, str]:
+    """(undimmed, dimmed) text of an attribute-carrying run. Escapes removed.
+
+    The dim attribute is a MODE, not a wrapper: `\x1b[2m` turns it on and it
+    stays on until something turns it off. So this walks the segment rather than
+    asking whether the dim code appears in it — the difference is the whole
+    aegis-c6hli fix, because a substring test cannot tell "the line is dim" from
+    "part of the line is dim".
+
+    What turns it OFF, measured against the runtime's own output:
+      0   reset-all      — what the runtime actually emits to close a suggestion
+                           (`\x1b[2mhow's franklin…\x1b[0m`)
+      22  normal-intensity — the standard partner of 2; not seen from this
+                           runtime but honoured because it is what the code MEANS
+    `\x1b[39m` (default foreground) does NOT end dim, which matters: it appears
+    mid-line constantly and treating it as a reset would silently reclassify
+    ghost text as typed — the false-positive direction that started this bead.
+    """
+    undimmed, dimmed, dim, pos = [], [], False, 0
+    for m in _SGR.finditer(segment):
+        (dimmed if dim else undimmed).append(segment[pos:m.start()])
+        # An empty parameter list (`\x1b[m`) means 0. Compound forms like
+        # `\x1b[0;2m` are applied left to right, exactly as a terminal would.
+        for p in (m.group(1) or "0").split(";"):
+            if p in ("0", "", "22"):
+                dim = False
+            elif p == "2":
+                dim = True
+        pos = m.end()
+    (dimmed if dim else undimmed).append(segment[pos:])
+    # Any non-SGR escape (cursor moves, OSC hyperlinks) is chrome, not content.
+    return _ANSI.sub("", "".join(undimmed)), _ANSI.sub("", "".join(dimmed))
+
 
 def strip_attrs(screen: str) -> str:
     """The plain-text view of an attribute-carrying capture.
@@ -208,14 +246,53 @@ def input_state(screen: str) -> str:
         # is what the older panes and the tests use. Both are the gutter.
         if plain[1:].strip("\xa0 \t"):
             after = raw[raw.find(plain[0]) + 1:]
-            if _DIM in after:
+            # No escapes at all on this line = attributes were stripped before we
+            # got here, so the ABSENCE of dim proves nothing. Measured: a live
+            # runtime always colours its own prompt glyph.
+            if "\x1b" not in raw:
+                return INPUT_UNKNOWN
+            # UNDIMMED TEXT WINS (aegis-c6hli). This used to be `if _DIM in after:
+            # return INPUT_PLACEHOLDER` — ANY dim run anywhere after the glyph
+            # made the whole line a suggestion. On a line carrying BOTH typed
+            # text and a dim tail that answers "placeholder", which work_state
+            # reads as IDLE: a stranded or INJECTED line would hide behind a
+            # suggestion, re-opening the exact hole aegis-apz9 closed.
+            #
+            # I could not prove the runtime never renders that mixed line —
+            # inducing a suggestion on demand did not reproduce (measured
+            # 2026-08-01: seeded history + a completed turn in an isolated pane
+            # produced typed-with-no-dim and empty-with-dim, never both). So the
+            # classifier is written not to DEPEND on that negative. Judging the
+            # undimmed runs is identical to the old behaviour on every specimen
+            # that does occur, and safe on the one I could not rule out.
+            typed, ghost = _split_dim(after)
+            if typed.strip("\xa0 \t"):
+                return INPUT_QUEUED
+            if ghost.strip("\xa0 \t"):
                 return INPUT_PLACEHOLDER
-            # No dim AND no escapes at all on this line = the attributes were
-            # stripped before we got here, so the absence of dim proves nothing.
-            # Measured: a live runtime always colours its own prompt glyph.
-            return INPUT_QUEUED if "\x1b" in raw else INPUT_UNKNOWN
+            # Escapes present, glyph followed by something `plain` counted as
+            # text, but neither run holds any: chrome only.
+            return INPUT_EMPTY
         return INPUT_EMPTY
     return INPUT_ABSENT
+
+
+def input_evidence(screen: str) -> str:
+    """The SGR run the verdict was made on, for a human to check.
+
+    `st input --show` prints this next to the verdict because a verdict without
+    its evidence is what got us here: a coordinator read plain `capture-pane -p`
+    output, saw text in a box, and ran the stranded-input SOP on a suggestion.
+    Returns the RAW prompt line (escapes intact, safe-rendered by the caller).
+    """
+    lines = screen.splitlines()
+    while lines and not strip_attrs(lines[-1]).strip():
+        lines.pop()
+    for raw in reversed(lines[-_TAIL_LINES:]):
+        plain = strip_attrs(raw).strip()
+        if plain and plain[0] in _PROMPT_GLYPHS:
+            return raw
+    return ""
 
 
 # --- the dispatcher's question: who is FREE? --------------------

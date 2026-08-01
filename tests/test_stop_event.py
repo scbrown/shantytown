@@ -57,7 +57,11 @@ class _Panes:
         # live-but-deaf lead passes cmdlines explicitly.
         self._cmdlines = dict(cmdlines) if cmdlines is not None else None
     def exists(self, pane): return pane in self._up
-    def capture(self, pane, history=0): return self._screens.get(pane, "")
+    # attrs accepted and ignored: these fixtures ARE attribute-carrying
+    # screens, so honouring the flag would mean handing back a stripped one.
+    # The signature must match the Panes protocol or the double diverges from
+    # the thing it stands in for (aegis-c6hli: _liveness now passes attrs=True).
+    def capture(self, pane, history=0, attrs=False): return self._screens.get(pane, "")
     def cmdline(self, pane):
         if self._cmdlines is not None:
             return self._cmdlines.get(pane)
