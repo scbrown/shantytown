@@ -82,6 +82,7 @@ from .dispatch import (Dispatcher, TriageRefused, SendUnverified,
                        DispatchedButUntracked, AlreadyAssigned, Closed,
                        GovernorRefused)
 from . import governor as gov_mod
+from . import guard as guard_mod
 from .events import FilesEvents
 from .inbox import FilesInbox, MessageTooLong, TrackerInbox
 from .triage import Action
@@ -1660,6 +1661,14 @@ def _cmd_doctor(a) -> int:
             if uh_text is not None:
                 print("\n" + uh_text)
                 code = _fold_generic(code, uh.worst_exit(uh_rows))
+            # SHARED-CHECKOUT GUARD COVERAGE (aegis-xig5m). st assists the
+            # worktree protocol; this is the leg that says whether it is also
+            # ENFORCED. Discovered per run, never a constant — a hardcoded repo
+            # list is the failure this check exists to catch (the deployment's
+            # own installer defaulted to ONE repo while twelve were in play).
+            g_rows = guard_mod.survey()
+            print("\n" + guard_mod.render(g_rows))
+            code = _fold_generic(code, guard_mod.worst_exit(g_rows))
         return code
 
     plans = [doc.plan_install(h) for h in healths]
@@ -3004,7 +3013,24 @@ def _cmd_worktree(a) -> int:
             dest = worktree_for(repo, agent)
             print(f"  {'removed' if removed else 'kept (holds work, or absent)'}: {dest}")
             return OK
-        print(ensure_worktree(repo, agent))
+        path = ensure_worktree(repo, agent)
+        # ENFORCE, HAVING JUST ASSISTED (aegis-xig5m). Provisioning a worktree is
+        # the moment st KNOWS this shared checkout is in play — so it is the
+        # moment to install the guard, and it costs nothing. Doing it here is why
+        # there is no new command to remember, which is what left coverage at 4
+        # of 10 repos when it was a script somebody had to run.
+        #
+        # NEVER FATAL TO THE PROVISION. The worktree is the thing the caller
+        # asked for and it already exists by this line; failing the command over
+        # the seatbelt would deny the isolation to punish the absence of the
+        # guard. Loud, then carry on.
+        try:
+            changed, note = guard_mod.install(repo)
+            if changed:
+                print(f"  {note}")
+        except guard_mod.GuardError as e:
+            print(f"  ⚠ guard NOT installed — {e}", file=sys.stderr)
+        print(path)
         return OK
     except WorkspaceError as e:
         print(f"  refused: {e}", file=sys.stderr)
