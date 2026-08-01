@@ -61,6 +61,10 @@ class BeadsTracker:
             title=d.get("title", ""),
             status=d.get("status", "open"),
             assignee=d.get("assignee"),
+            # bd's own numbering, 0 = highest. _priority never invents one: a
+            # bead with no priority arrives as None so a governed dispatch can
+            # say "nobody stated how important this is" instead of guessing.
+            priority=_priority(d),
         )
 
     def create(self, title: str, **fields) -> WorkItem:
@@ -102,6 +106,21 @@ class BeadsTracker:
         r = self._bd(*args)
         if r.returncode != 0:
             raise RuntimeError(f"bd update {item_id} failed: {r.stderr.strip()[:120]}")
+
+
+def _priority(d: dict) -> int | None:
+    """bd's `priority` field, or None if it did not say.
+
+    NEVER a default. `int(d.get("priority", 2))` would be the obvious line and it
+    is the bug: the usage governor refuses an item whose importance nobody
+    stated, and a manufactured 2 would sail through a P2 floor on the strength of
+    a value no human ever chose. A non-integer is also None — a value we cannot
+    compare is a value we did not read.
+    """
+    v = d.get("priority")
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return None
+    return int(v)
 
 
 # Plate precedence, shared verbatim with files.plate so the two backends order a
@@ -162,6 +181,7 @@ def plate(tracker: "BeadsTracker", agent: str) -> "WorkItem | None":
         title=top.get("title", ""),
         status=top.get("status", "open"),
         assignee=top.get("assignee"),
+        priority=_priority(top),
     )
 
 
@@ -177,5 +197,6 @@ def items(tracker: "BeadsTracker") -> list[WorkItem]:
         raise RuntimeError(f"bd list failed: {r.stderr.strip()[:120]}")
     rows = json.loads(r.stdout) if r.stdout.strip() else []
     return [WorkItem(id=x.get("id", ""), title=x.get("title", ""),
-                     status=x.get("status", "open"), assignee=x.get("assignee"))
+                     status=x.get("status", "open"), assignee=x.get("assignee"),
+                     priority=_priority(x))
             for x in rows]

@@ -78,7 +78,9 @@ from . import scaffold
 from . import triage as triage_mod
 from .deployment import deployment_default, resolve_root, root_note
 from .dispatch import (Dispatcher, TriageRefused, SendUnverified,
-                       DispatchedButUntracked, AlreadyAssigned, Closed)
+                       DispatchedButUntracked, AlreadyAssigned, Closed,
+                       GovernorRefused)
+from . import governor as gov_mod
 from .events import FilesEvents
 from .inbox import FilesInbox, MessageTooLong, TrackerInbox
 from .triage import Action
@@ -284,7 +286,59 @@ def _me(a) -> str | None:
 
 
 def _wire(a) -> Dispatcher:
-    return Dispatcher(_registry(a), _tracker(a), _panes(a))
+    return Dispatcher(_registry(a), _tracker(a), _panes(a),
+                      governor=_dispatch_gate(a))
+
+
+def _governor(a):
+    """The usage governor for this invocation, or None if none is configured.
+
+    None means OFF, and off is the default: with no `[[governor.tier]]` in
+    shantytown.toml there is nothing to enforce, and every command behaves
+    exactly as it did before this feature existed.
+
+    A MISCONFIGURED GOVERNOR IS NEVER SILENTLY OFF. `config.load_or_default`
+    already refuses to raise on this path, but a source we cannot wire (a
+    `prometheus` with no url) would leave the fleet running ungoverned at exactly
+    the moment the operator believed they had turned the feature ON. So the
+    failure is printed, every time, on stderr — the same rule the module's
+    fail-safe section applies to a lost signal.
+    """
+    cfg, err = config.load_or_default(Path(a.root))
+    if err:
+        print(f"  ⚠ {err} — running on config DEFAULTS", file=sys.stderr)
+    if not cfg.governor.active:
+        return None
+    try:
+        reader = gov_mod.reader_for(cfg.governor)
+    except gov_mod.GovernorError as e:
+        print(f"  ⚠ usage governor DISABLED — {e}. The fleet is running "
+              f"UNGOVERNED: no tier will engage at any usage level.",
+              file=sys.stderr)
+        return None
+    return gov_mod.Governor(cfg.governor, reader,
+                            gov_mod.FilesGovernorState(Path(a.root)))
+
+
+def _dispatch_gate(a):
+    """The `st go` half of the governor: `item -> "" | refusal`.
+
+    A PURE READ (`persist=False`). Dispatching must not RATCHET fleet policy as a
+    side effect of being run — `st tend` is the pass that already decides who
+    lives and it is the one writer of the engaged tier. A dispatch that extended
+    a hysteresis hold would mean the governor's state depended on how often
+    somebody typed `st go`.
+
+    Evaluated once per invocation and closed over, so a dispatch pays at most one
+    metric read — not one per plan()/triage()/go() call on the same Dispatcher.
+    """
+    gov = _governor(a)
+    if gov is None:
+        return None
+    verdict = gov.evaluate(persist=False)
+    if verdict.alarm:
+        print(f"  ⚠ {verdict.alarm}", file=sys.stderr)
+    return verdict.admits
 
 
 def _default_root() -> Path:
@@ -2325,6 +2379,11 @@ def _cmd_go(a) -> int:
         except AlreadyAssigned as e:
             print(f"  refused: {e}", file=sys.stderr)
             return REFUSED
+        except GovernorRefused as e:
+            # The gate applies to --dry-run TOO. A preview that showed a dispatch
+            # the real command would refuse is a preview of the wrong command.
+            print(f"  refused: {e}", file=sys.stderr)
+            return REFUSED
         except LookupError as e:
             print(f"  refused: {e}", file=sys.stderr)
             return REFUSED
@@ -2381,6 +2440,12 @@ def _cmd_go(a) -> int:
     except AlreadyAssigned as e:
         # Refuse rather than steal. Nothing written, nothing sent — two agents on
         # one item is duplicated effort no tool ever flags (aegis-uvw5 / 7yeb).
+        print(f"  refused: {e}", file=sys.stderr)
+        return REFUSED
+    except GovernorRefused as e:
+        # The usage governor's tier (aegis-hdqej). Nothing written, nothing sent.
+        # The item is untouched and stays dispatchable — this is a NOT NOW, not a
+        # rejection, and the message says on what reading and at what threshold.
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED
     except TriageRefused as e:
@@ -3453,6 +3518,19 @@ def _tend_once(a, quiet: bool = False) -> int:
         return CANNOT_TELL
     runtime = _runtime(a, panes)
 
+    # THE USAGE GOVERNOR (aegis-hdqej). The tend pass is the evaluation point —
+    # it is the pass that already decides who lives — so this is the one caller
+    # that PERSISTS the engaged tier (hysteresis has to survive a process that
+    # exists for five seconds every five minutes). A dry run evaluates and prints
+    # but writes nothing, like everything else on a dry run.
+    gov = _governor(a)
+    verdict = gov.evaluate(persist=not a.dry_run) if gov is not None else None
+    if verdict is not None and verdict.alarm:
+        # EVERY PASS, LOUDLY. A governor that goes quiet when it cannot see the
+        # number is indistinguishable from one with nothing to report, and the
+        # fleet is spending the whole time.
+        print(f"  ⚠ {verdict.alarm}", file=sys.stderr)
+
     def _respawn(card, session):
         runtime.start(card, session)
         # It is UP again, so the deliberate-stop record is history (#29). tend
@@ -3473,6 +3551,8 @@ def _tend_once(a, quiet: bool = False) -> int:
         retire=lambda name: _retire_card(a, name),
         log=lambda msg: print(f"  {msg}", file=sys.stderr),
         target=getattr(a, "target", None),
+        governed=(None if verdict is None
+                  else lambda card: verdict.excludes(card, _catalog(a))),
     )
     rep = tender.pass_over(agents, dry_run=a.dry_run)
     # DELIVER blocked workers to their coordinator (aegis-w0kk). Not on a dry run
@@ -3541,8 +3621,23 @@ def _tend_once(a, quiet: bool = False) -> int:
             print(f"  ⚠ escalated {len(_e)} still-NEGLECTED anchor(s) to the "
                   f"coordinator (self-heal nudge unanswered): {', '.join(_e)}",
                   file=sys.stderr)
+        # THE DRAIN (aegis-hdqej). Ask every live agent the tier excludes to
+        # commit, push, report what went up, and stop itself. Deduped per drain
+        # EPISODE, so a five-minute heartbeat does not re-broadcast every pass —
+        # and re-broadcast in full if the tier relaxes and re-engages, because the
+        # agents told the first time are gone by then.
+        drained = _sweep("drain", lambda: _drain_sweep(a, verdict, agents, panes))
+        if drained:
+            print(gov_mod.render_drain(drained), file=sys.stderr)
     if not quiet:
         print()
+        if verdict is not None:
+            # Printed on EVERY pass a governor is configured for, including the
+            # wide-open one. "No tier engaged" is a finding — an operator who
+            # cannot see the governor working cannot tell it from a governor that
+            # is silently off, which is the whole class of bug this repo keeps
+            # paying for.
+            print(verdict.render())
         print(rep.render())
         print()
     # The health signal, written even on a dry run — "a pass ran" is the fact
@@ -3551,6 +3646,43 @@ def _tend_once(a, quiet: bool = False) -> int:
     if not a.dry_run:
         sup_mod.PassLog(Path(a.root)).record(rep)
     return OK if rep.healthy() else CANNOT_TELL
+
+
+def _drain_sweep(a, verdict, agents, panes):
+    """Broadcast the drain and report it. Returns the report rows (possibly []).
+
+    DURABLE DELIVERY, non-negotiable: the message must survive the recipient's
+    session dying, because at 95% the recipient dying is the intended outcome.
+    `st inbox -d`'s own default backend is used, which on a beads deployment puts
+    the instruction in the store where `st inbox` will find it even if the pane is
+    gone before the agent reads it.
+
+    ONLY LIVE AGENTS ARE TOLD. A down agent has no session to push from, and a
+    durable "stop yourself" waiting for it would fire the moment it next comes
+    up — a self-perpetuating shutdown nobody asked for, arriving long after the
+    tier relaxed.
+    """
+    if verdict is None or not verdict.tier:
+        # Not draining (or no governor). The sweep still runs so the LEDGER gets
+        # cleared when a tier relaxes — otherwise the next episode would be
+        # deduped against a stale one and half the fleet would never be told.
+        gov_mod.DrainLedger(Path(a.root)).clear()
+        return []
+    inbox = _inbox(a, default="beads")
+    me = _me(a) or "st tend"
+    drainer = gov_mod.Drainer(
+        Path(a.root),
+        deliver=lambda who, body: inbox.deliver(who, body, frm=me),
+        stops=_stops(a),
+        log=lambda msg: print(f"  {msg}", file=sys.stderr))
+    return drainer.sweep(agents, verdict, _governor_episode(a),
+                         live=lambda ag: bool(ag.pane) and panes.exists(ag.pane),
+                         catalog=_catalog(a))
+
+
+def _governor_episode(a) -> float:
+    """When the CURRENT tier engaged — the key a drain broadcast dedupes on."""
+    return gov_mod.FilesGovernorState(Path(a.root)).get().since
 
 
 def _retire_card(a, name: str) -> None:
@@ -3748,6 +3880,20 @@ def _tend_status(a) -> int:
         rec = log.last() or {}
         print(f"  last pass   {int(age)}s ago · acted on {len(rec.get('acted') or [])}"
               f" · {len(rec.get('faults') or [])} fault(s)")
+    # THE GOVERNOR, on the status surface an operator already checks (aegis-hdqej).
+    # A pure READ — `persist=False` — because `--status` must never move policy;
+    # the reason this feature has a status line at all is that a governor nobody
+    # can observe is one nobody can tell from a governor that is off.
+    gov = _governor(a)
+    if gov is not None:
+        verdict = gov.evaluate(persist=False)
+        print(verdict.render())
+        if verdict.alarm:
+            print(f"  ⚠ {verdict.alarm}")
+        rows = gov_mod.Drainer(Path(a.root), deliver=None, stops=_stops(a)) \
+            .report(_governor_episode(a))
+        if rows:
+            print(gov_mod.render_drain(rows))
     print()
     return OK if tmr.exists() and age is not None else CANNOT_TELL
 
