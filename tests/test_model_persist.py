@@ -136,3 +136,81 @@ def test_retirement_survives_the_read_write_round_trip(tmp_path: Path):
     (r.root / "ian.json").write_text(json.dumps({"role": "worker", "retired": True}))
     r.set(r.get("ian"))
     assert r.get("ian").retired is True
+
+
+# --- provenance moves WITH the decision, and only with it (aegis-6hfmi) -------
+#
+# The second half of the same bead. When ian's retirement moved, answering
+# "who?" took two agents, a cross-session disagreement, and a stat(1) on the
+# card's mtime to establish that both measurements had been correct on either
+# side of an unrecorded write. mtime proves a write happened; it cannot say
+# whose, or which field.
+#
+# The subtle rule is the CLEAR. `retired_by`/`retired_at` are the only fields
+# here whose absence clears rather than preserves, inverting the only-when-
+# carried rule their neighbours follow — because attribution has no owner other
+# than the write it describes. Provenance that outlived its retirement would
+# name the wrong actor with a straight face: the same-output-two-worlds shape
+# that made the field necessary, rebuilt inside the fix.
+
+
+def test_retirement_records_who_and_when(tmp_path: Path):
+    r = _reg(tmp_path)
+    (r.root / "ian.json").write_text(json.dumps({"role": "worker"}))
+    r.set(Agent(name="ian", role="worker", retired=True,
+                retired_by="sattler", retired_at="2026-08-01T22:53:51+00:00"))
+    after = r.get("ian")
+    assert after.retired is True
+    assert after.retired_by == "sattler"
+    assert after.retired_at == "2026-08-01T22:53:51+00:00"
+
+
+def test_provenance_does_NOT_survive_a_later_retirement_that_names_nobody(tmp_path):
+    """THE regression for the fix's own failure mode. A second write moves the
+    state; stale attribution would answer 'who did this?' confidently and
+    WRONG. Absent reads as 'nobody recorded it', which is true."""
+    r = _reg(tmp_path)
+    (r.root / "ian.json").write_text(json.dumps(
+        {"role": "worker", "retired": True, "retired_by": "sattler",
+         "retired_at": "2026-08-01T22:53:51+00:00"}))
+    r.set(Agent(name="ian", role="worker", retired=False))   # un-retired by ???
+    after = r.get("ian")
+    assert after.retired is False
+    assert after.retired_by is None, "attribution outlived the decision it described"
+    assert after.retired_at is None
+    on_disk = json.loads((r.root / "ian.json").read_text())
+    assert "retired_by" not in on_disk and "retired_at" not in on_disk
+
+
+def test_a_caller_that_never_mentions_retirement_leaves_provenance_ALONE(tmp_path):
+    """The clear is scoped to the retirement branch. A projection that says
+    nothing about retirement must not erase the record of one — that would be
+    the original bug with an extra step."""
+    r = _reg(tmp_path)
+    (r.root / "ian.json").write_text(json.dumps(
+        {"role": "worker", "retired": True, "retired_by": "sattler",
+         "retired_at": "2026-08-01T22:53:51+00:00"}))
+    r.set(Agent(name="ian", role="worker", reports_to="dearing"))
+    after = r.get("ian")
+    assert after.retired is True
+    assert after.retired_by == "sattler", "a silent caller erased the audit line"
+
+
+def test_provenance_survives_the_read_write_round_trip(tmp_path: Path):
+    """get() then set() is how half the CLI edits a card. Lossless, or the
+    audit line evaporates the first time anything else touches the agent."""
+    r = _reg(tmp_path)
+    (r.root / "ian.json").write_text(json.dumps(
+        {"role": "worker", "retired": True, "retired_by": "sattler",
+         "retired_at": "2026-08-01T22:53:51+00:00"}))
+    r.set(r.get("ian"))
+    assert r.get("ian").retired_by == "sattler"
+
+
+def test_an_old_card_with_no_provenance_reads_as_UNRECORDED_not_invented(tmp_path):
+    r = _reg(tmp_path)
+    (r.root / "goldblum.json").write_text(json.dumps(
+        {"role": "worker", "retired": True}))
+    after = r.get("goldblum")
+    assert after.retired is True
+    assert after.retired_by is None and after.retired_at is None
