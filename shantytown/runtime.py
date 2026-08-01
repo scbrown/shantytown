@@ -768,7 +768,21 @@ class ClaudeRuntime:
                      "1. Yes, I trust this folder")
     # An interactive picker BLOCKING the pane (aegis-qxc2). See awaiting_answer().
     # Read off live panes 2026-07-20, both the unanswered and the answered shape.
-    QUESTION_MARKERS = ("Enter to select", "Ready to submit your answers?")
+    # "Do you want to proceed?" is the TOOL-PERMISSION prompt — the commonest
+    # blocking picker there is, and it was MISSING here until 2026-08-01. Its
+    # footer reads "Esc to cancel · Tab to amend · ctrl+e to explain", which
+    # matches neither of the other two markers, so every agent stopped on a
+    # permission prompt reported `?`: honest, unactionable, and the exact defect
+    # aegis-qxc2 added this predicate to fix, still live for the shape that
+    # occurs most. Measured on a live pane (ian, blocked on a `bd show`
+    # approval) while classifying input boxes for aegis-c6hli — the pane read
+    # TYPED "1. Yes", because a picker marks its SELECTED OPTION with the same ❯
+    # glyph an input box uses.
+    #
+    # Tail-only matching is what makes this safe to add: the string is ordinary
+    # English an agent could easily write, and this very comment contains it.
+    QUESTION_MARKERS = ("Enter to select", "Ready to submit your answers?",
+                        "Do you want to proceed?")
     # AUTH EXPIRED (aegis-arma). MEASURED, not guessed: read verbatim off 8 live
     # auth-dead crew panes, 2026-07-22 —
     #     ● Login expired · Please run /login

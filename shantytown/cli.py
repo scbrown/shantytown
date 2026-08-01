@@ -1,7 +1,8 @@
 """st — the CLI. Nineteen commands, and the count is load-bearing: each earns its slot.
 
     anchor [--short|--events|--harness] · go · inbox [--count] · task
-    · crew [--count] · roles [--check|set|sync] · init · new · start [--mode]
+    · crew [--count] · input [--show|--clear|--dismiss]
+    · roles [--check|set|sync] · init · new · start [--mode]
     · stop · log · context · doctor [--install]
     · tend [--install|--status|--reauth|--target] · attach [-r|--no-start]
     · dashboard [admin] · subscribe · worktree [--gc] · stats
@@ -649,6 +650,20 @@ def build_parser() -> argparse.ArgumentParser:
                          "whatever is already running and must never create a "
                          "session as a side effect.")
 
+    ib2 = sub.add_parser("input",
+                         help="what is in an agent's input box: EMPTY | TYPED | "
+                              "GHOST — and clear or dismiss it. NEVER submits.")
+    ib2.add_argument("agent", help="whose input box")
+    ib2_g = ib2.add_mutually_exclusive_group()
+    ib2_g.add_argument("--show", action="store_true",
+                       help="classify the box and print the SGR evidence (default)")
+    ib2_g.add_argument("--clear", action="store_true",
+                       help="clear TYPED text. REFUSES on a ghost-only box — a "
+                            "suggestion's buffer is already empty, and "
+                            "'clearing' one teaches the wrong model")
+    ib2_g.add_argument("--dismiss", action="store_true",
+                       help="dismiss the suggestion (Escape)")
+
     db = sub.add_parser("dashboard", help="a live, self-refreshing view of an "
                                           "admin's tier (roster/state/work)")
     db.add_argument("admin", nargs="?",
@@ -765,6 +780,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_tend(a)
     if a.cmd == "attach":
         return _cmd_attach(a)
+    if a.cmd == "input":
+        return _cmd_input(a)
     if a.cmd == "dashboard":
         return _cmd_dashboard(a)
     if a.cmd == "subscribe":
@@ -3290,6 +3307,74 @@ def _cmd_dashboard(a) -> int:
             time.sleep(a.interval)
     except KeyboardInterrupt:
         return OK
+
+
+def _cmd_input(a) -> int:
+    """input <agent> [--show|--clear|--dismiss] — the input box as a surface.
+
+    THE COORDINATOR'S QUESTION, answered by the tier instead of by eye.
+    `capture-pane -p` strips the one attribute that separates Claude Code's
+    ghost-text suggestion from text somebody typed and never submitted, so a
+    human reading a pane has been guessing — and on 2026-08-01 guessed wrong and
+    ran the stranded-input SOP on a suggestion (aegis-c6hli).
+
+    EVERY VERDICT PRINTS ITS EVIDENCE. The SOP was run on a confident reading of
+    a capture that had thrown the deciding bit away; nothing in that output could
+    have contradicted it. The raw prompt line is shown so a second pair of eyes
+    can check the verdict rather than inherit it.
+
+    NOTHING HERE SUBMITS. Keys go through Panes.control, whose allowlist has no
+    Enter and no Tab — Tab as deliberately as Enter, because Tab ACCEPTS the
+    suggestion and would inject it into the agent's turn.
+    """
+    from . import input_box
+    reg = _registry(a)
+    panes = _panes(a)
+    try:
+        card = reg.get(a.agent)
+    except Exception as e:
+        print(f"  no such agent {a.agent!r}: {e}", file=sys.stderr)
+        return REFUSED
+    if not card.pane or not panes.exists(card.pane):
+        print(f"  {a.agent} has no live pane — nothing to read.", file=sys.stderr)
+        return REFUSED
+
+    # The picker check is the RUNTIME's answer, passed in exactly as work_state
+    # takes `awaiting` — this module knows no runtime's chrome. Without it an
+    # agent blocked on a permission prompt reads TYPED, because the picker marks
+    # its selected option with the same glyph the input box uses.
+    from .runtime import asks_a_question
+    runtime = _runtime(a, panes)
+    plain = triage_mod.strip_attrs(panes.capture(card.pane, attrs=True))
+    awaiting = bool(asks_a_question(runtime, plain))
+
+    if a.clear:
+        rep = input_box.clear(panes, card.pane, awaiting=awaiting)
+    elif a.dismiss:
+        rep = input_box.dismiss(panes, card.pane)
+    else:
+        rep = input_box.show(panes, card.pane, awaiting=awaiting)
+
+    print(f"  {a.agent}: {rep.verdict}")
+    if rep.text:
+        print(f"    text     : {rep.text}")
+    if rep.evidence:
+        # repr() so the escapes are VISIBLE — the bytes are the evidence, and a
+        # terminal rendering them would hide the very attribute in question.
+        print(f"    evidence : {rep.evidence!r}")
+    if rep.detail:
+        print(f"    note     : {rep.detail}")
+    if rep.verdict == input_box.GHOST and not (a.clear or a.dismiss):
+        print("    (a suggestion, not stranded input — the buffer is empty. "
+              "Nothing is stalled; do NOT run the stranded-input SOP on this.)")
+
+    if not rep.changed:
+        return CANNOT_TELL
+    if rep.verdict == input_box.UNKNOWN:
+        return CANNOT_TELL
+    if a.clear and rep.verdict != input_box.EMPTY:
+        return REFUSED
+    return OK
 
 
 def _cmd_attach(a, *, execer=_exec_attach, which=None) -> int:

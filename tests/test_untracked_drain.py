@@ -117,7 +117,7 @@ class _Panes:
     def exists(self, _p):
         return True
 
-    def capture(self, _p, history=None):
+    def capture(self, _p, history=None, attrs=False):
         return BUSY_SCREEN
 
 

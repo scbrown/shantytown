@@ -27,6 +27,24 @@ import sys
 import time
 
 
+# The ONLY keys Tmux.control will send (aegis-c6hli). Cursor moves, deletions
+# and Escape — nothing here can commit a buffer or accept a suggestion.
+#
+# Enter/C-m and Tab/C-i are ABSENT BY CONSTRUCTION and must stay absent. Enter
+# is the submit; Tab ACCEPTS the ghost-text suggestion, which would put text the
+# agent never wrote into its turn — the aegis-apz9 injection, self-inflicted by
+# the tool built to prevent it. Adding either to this set is not a tweak, it is
+# the reintroduction of that hole; test_input_box.py asserts they are missing.
+CONTROL_KEYS = frozenset({
+    "C-u",     # kill to line start — the clear
+    "C-k",     # kill to line end
+    "C-a",     # cursor to start; also a pure no-op nudge to force a repaint
+    "C-e",     # cursor to end
+    "BSpace",  # single delete
+    "Escape",  # dismiss the suggestion
+})
+
+
 def _journal_send(pane: str, text: str) -> None:
     """Append one line per pane send to the send journal: who put what into
     whose pane, when. The forensic record the fleet did not have when three
@@ -276,6 +294,39 @@ class Tmux:
         subprocess.run(self._cmd("send-keys", "-t", pane, "-l", text), check=True)
         subprocess.run(self._cmd("send-keys", "-t", pane, "Enter"), check=True)
 
+    def control(self, pane: str, key: str) -> None:
+        """Send ONE editing key from a fixed allowlist. Cannot submit. Ever.
+
+        `st input --clear` has to reach a pane's input buffer, and send() is the
+        wrong tool: it appends Enter, which is the submit. So this exists — and
+        it is an ALLOWLIST rather than a general key sender on purpose.
+
+        The keys below can only move the cursor, delete, or dismiss. None of
+        them can commit the buffer or accept a suggestion, so no caller of this
+        method — however wrong — can perform the injection this whole area is
+        about. That is a property of the mechanism, not of the caller's care,
+        which is the only kind of guarantee worth having here: the aegis-apz9
+        incident was an injected line laundered into execution by a coordinator
+        pressing Enter, and TAB would be the same act with an extra step (TAB
+        ACCEPTS the suggestion, so a "cleanup" command that typed TAB would
+        inject the suggestion into the agent's turn — self-inflicted, by the
+        very tool built to prevent it).
+        It also takes NO text argument, so it cannot type anything at all.
+
+        Journaled exactly like send(), for the reason recorded there: every
+        keystroke st puts into a pane is an ACTION on the fleet.
+        """
+        if key not in CONTROL_KEYS:
+            # No citation in the MESSAGE: a raised string is a value the program
+            # can emit, and this repo is public. The rationale lives in the
+            # comment on CONTROL_KEYS, where it stays findable and leaks nothing.
+            raise ValueError(
+                f"{key!r} is not an allowed control key. Allowed: "
+                f"{', '.join(sorted(CONTROL_KEYS))}. Enter and Tab are refused "
+                f"BY CONSTRUCTION and must stay that way.")
+        _journal_send(pane, f"<control:{key}>")
+        subprocess.run(self._cmd("send-keys", "-t", pane, key), check=True)
+
     def new_session(self, name: str, cwd: str | None = None) -> str:
         """Create a DETACHED, EMPTY session; return its address (the name).
 
@@ -395,6 +446,10 @@ class NullPanes:
                  live: set | None = None, owned: set | None = None,
                  cmdlines: dict | None = None) -> None:
         self.sent = []
+        # Control keys are recorded SEPARATELY from sent text: a test asserting
+        # "no Enter, no Tab" must be able to see every key that reached the pane,
+        # and folding them into `sent` would hide them among message bodies.
+        self.controls = []
         self.screen = screen
         # pane -> launch command line. Lets a test model the green-and-dead
         # shape: a pane that EXISTS while the process in it carries someone
@@ -435,6 +490,18 @@ class NullPanes:
         # eats every message, which is not a pane. Unless drops=True.
         if not self._drops:
             self.screen += ("\n" if self.screen else "") + text
+
+    def control(self, pane: str, key: str) -> None:
+        """Records the key; enforces the SAME allowlist as Tmux.control.
+
+        The check is duplicated deliberately. A double that accepted keys the
+        real adapter refuses would let a test prove `st input` never sends Enter
+        while the shipped path happily could — the double has to be as strict as
+        the thing it stands in for, or the assertion is theatre.
+        """
+        if key not in CONTROL_KEYS:
+            raise ValueError(f"{key!r} is not an allowed control key")
+        self.controls.append((pane, key))
 
     def cmdline(self, pane: str) -> str | None:
         """The launch line of the "process" in `pane`: the SEED if one was given,
