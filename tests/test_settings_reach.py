@@ -145,7 +145,7 @@ def test_role_set_names_the_live_agents_the_rewrite_did_not_reach(tmp_path, monk
     root = _fixture(tmp_path, live=None)
     monkeypatch.setattr(cli, "Tmux",
                         lambda *a, **k: FakePanes({"p-sattler", "p-ellie", "p-ian"}))
-    rc = main(["--root", str(root), "role", "set", "ellie", "worker"])
+    rc = main(["--root", str(root), "roles", "set", "ellie", "worker"])
     assert rc == OK                      # the report NEVER turns a done mutation into a failure
     out = capsys.readouterr().out
     assert "NOT DEPLOYED" in out
@@ -160,7 +160,7 @@ def test_a_down_agent_is_never_listed(tmp_path, monkeypatch, capsys):
     that buries the agents actually running old hooks."""
     root = _fixture(tmp_path, live=None)
     monkeypatch.setattr(cli, "Tmux", lambda *a, **k: FakePanes({"p-ellie"}))
-    main(["--root", str(root), "role", "set", "ellie", "worker"])
+    main(["--root", str(root), "roles", "set", "ellie", "worker"])
     stale, unknown = _reported(capsys.readouterr().out)
     assert "ellie" in stale
     assert "down" not in (stale | unknown), (
@@ -184,7 +184,7 @@ def test_only_roles_this_rewrite_TOUCHED_are_reported(tmp_path, monkeypatch, cap
     _settings(root, "administrator", body='{"hooks": {"changed": true}}')
     monkeypatch.setattr(cli, "Tmux",
                         lambda *a, **k: FakePanes({"p-sattler", "p-ellie", "p-ian"}))
-    main(["--root", str(root), "role", "set", "ellie", "worker"])
+    main(["--root", str(root), "roles", "set", "ellie", "worker"])
     stale, unknown = _reported(capsys.readouterr().out)
     assert "ellie" in stale
     assert "sattler" not in (stale | unknown), (
@@ -200,10 +200,10 @@ def test_silent_when_every_live_agent_is_current(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(cli, "Tmux", lambda *a, **k: FakePanes({"p-s", "p-e"}))
     # Emit the real settings FIRST, then stamp ellie on them, so the re-emit below
     # is byte-identical and ellie stays CURRENT.
-    main(["--root", str(root), "role", "set", "ellie", "worker"])
+    main(["--root", str(root), "roles", "set", "ellie", "worker"])
     capsys.readouterr()
     _stamp(root, "ellie")
-    main(["--root", str(root), "role", "set", "ellie", "worker"])
+    main(["--root", str(root), "roles", "set", "ellie", "worker"])
     out = capsys.readouterr().out
     assert "NOT DEPLOYED" not in out
 
@@ -219,7 +219,7 @@ def test_report_is_never_fatal_when_it_cannot_look(tmp_path, monkeypatch, capsys
 
     monkeypatch.setattr(cli, "Tmux", lambda *a, **k: Exploding())
     try:
-        rc = main(["--root", str(root), "role", "set", "ellie", "worker"])
+        rc = main(["--root", str(root), "roles", "set", "ellie", "worker"])
     except Exception as e:                                    # pragma: no cover
         pytest.fail(f"the report raised out of a successful role set: {e!r}")
     assert rc == OK

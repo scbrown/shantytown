@@ -45,7 +45,7 @@ line: the hierarchy isn't a new thing to store, it's a query.
     ellie  a aegis:CrewMember ; aegis:reports_to malcolm ; aegis:role "worker"
     malcolm a aegis:CrewMember ; aegis:reports_to arnold  ; aegis:role "lead"
            │
-           │  st project        (materialize — one direction, always)
+           │  st roles sync     (materialize — one direction, always)
            ▼
   card   ── a cache the runtime can read ───────────────────────
     crew/ellie.yaml     # GENERATED. Do not edit. Edits are overwritten.
@@ -64,10 +64,10 @@ single authority** — which is the exact fix u7fo landed on: one authority, no 
 Card-as-truth gives you 14 sources and silent drift. Card-as-projection gives you 1 source and 14
 caches that a query can check. **The difference isn't the copy. It's whether the drift is detectable.**
 
-## `st role set` — writes the graph, then re-projects
+## `st roles set` — writes the graph, then re-projects
 
 ```
-$ st role set malcolm lead --reports ellie,ian --dry-run
+$ st roles set malcolm lead --reports ellie,ian --dry-run
 
   quipu   malcolm  aegis:role     "worker" -> "lead"
   quipu   ellie    aegis:reports_to        -> malcolm
