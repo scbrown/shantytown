@@ -123,6 +123,23 @@ class Closed(Exception):
         )
 
 
+class GovernorRefused(Exception):
+    """The usage governor's current tier does not admit this dispatch (aegis-hdqej).
+
+    Maps to exit 1 like every other plan() refusal: nothing written, nothing sent.
+    It belongs HERE, beside Closed and AlreadyAssigned, for one reason — those are
+    the refusals that happen after the item is read and before anything is
+    composed, and the governor needs exactly the same position: it must see the
+    item's PRIORITY (so it cannot run earlier) and it must stop the dispatch
+    before a single write (so it cannot run later).
+
+    The message is the governor's own, verbatim, because it names the tier AND
+    the reading that engaged it. A refusal an operator cannot trace back to a
+    number is indistinguishable from a bug — the same argument TriageRefused
+    makes for carrying the whole Decision.
+    """
+
+
 class AlreadyAssigned(Exception):
     """The item is already held by a DIFFERENT agent. Refuse rather than steal.
 
@@ -168,10 +185,18 @@ class Plan:
 
 
 class Dispatcher:
-    def __init__(self, registry: Registry, tracker: Tracker, panes: Panes):
+    def __init__(self, registry: Registry, tracker: Tracker, panes: Panes,
+                 governor=None):
         self.registry = registry
         self.tracker = tracker
         self.panes = panes
+        # governor(item) -> "" | a refusal string. INJECTED, and None by default,
+        # so the dispatcher keeps working with no config, no metric and no
+        # Prometheus — the usage governor is a policy this module CONSULTS, never
+        # one it implements. It also costs no extra reads: the gate is handed the
+        # item plan() has already fetched, so the asserted budget (1 registry
+        # read, 1 tracker read, 1 tracker write, 1 send) is unchanged.
+        self.governor = governor
 
     def plan(self, item_id: str, agent_name: str, note: str | None = None,
              reassign: bool = False) -> Plan:
@@ -213,6 +238,17 @@ class Dispatcher:
         holder = (item.assignee or "").strip()
         if not reassign and holder and holder != agent_name:
             raise AlreadyAssigned(item_id, holder, agent_name)
+        # THE USAGE GOVERNOR (aegis-hdqej), last of the precondition refusals and
+        # deliberately last: a CLOSED or STOLEN item is wrong to dispatch at any
+        # usage level, and reporting "the 70% tier refused this" about a bead that
+        # is closed would send the operator to the wrong fix. The governor gets
+        # the final word on work that is otherwise dispatchable, and only that.
+        # --reassign does NOT bypass it: reassignment is still a dispatch, and the
+        # tier is about what the fleet may SPEND, not about who holds what.
+        if self.governor is not None:
+            refusal = self.governor(item)
+            if refusal:
+                raise GovernorRefused(refusal)
         text = f"Work is on your hook: {item_id} — {item.title}"
         flat = flatten_note(note) if note else ""
         if flat:

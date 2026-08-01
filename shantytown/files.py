@@ -180,11 +180,13 @@ class FilesTracker:
 
     def _read(self, p: Path, item_id: str) -> WorkItem:
         d = json.loads(p.read_text())
+        from .beads import _priority          # ONE reading of "priority", shared
         return WorkItem(
             id=item_id,
             title=d.get("title", ""),
             status=d.get("status", "open"),
             assignee=d.get("assignee"),
+            priority=_priority(d),
         )
 
     def update(self, item_id: str, **fields) -> None:

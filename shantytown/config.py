@@ -57,6 +57,8 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from . import governor as governor_mod
+from .governor import Policy as GovernorPolicy
 from .protocols import Agent
 
 CONFIG_NAME = "shantytown.toml"
@@ -169,6 +171,14 @@ class Config:
     # deployment had before there was anywhere to say otherwise.
     roles: dict[str, dict[str, list[str]]] = field(default_factory=dict)
     precedence: dict[tuple[str, str], int] = field(default_factory=dict)
+    # [governor] + [[governor.tier]] — spin the crew down by Claude usage
+    # (aegis-hdqej). The DEFAULT IS OFF and it is off by having no tiers, not by a
+    # boolean: declaring a tier is the enabling act. Same rule as every other
+    # default in this file — the surprising direction is the one that costs
+    # something, so a deployment that has never heard of the governor is
+    # untouched, and one that writes four tiers does not have to discover a fifth
+    # line was required to make them do anything.
+    governor: GovernorPolicy = field(default_factory=GovernorPolicy)
     path: Path | None = None
 
     def catalog(self):
@@ -233,7 +243,7 @@ def load_or_default(root) -> tuple[Config, str | None]:
 # --- parsing ----------------------------------------------------------------
 
 _TOP_KEYS = {"startup", "modes", "hibernate", "fleet", "crew", "env", "tmux",
-             "roles", "precedence"}
+             "roles", "precedence", "governor"}
 _STARTUP_KEYS = {"mode"}
 _HIB_KEYS = {"enabled", "max_quiet_minutes"}
 _TMUX_KEYS = {"socket"}
@@ -287,7 +297,23 @@ def _resolve(data: dict, path: Path) -> Config:
                   tmux_socket=_tmux_socket(path, _table(path, data, "tmux")),
                   roles=_roles(path, _table(path, data, "roles")),
                   precedence=_precedence(path, _table(path, data, "precedence")),
+                  governor=_governor(path, _table(path, data, "governor")),
                   path=path)
+
+
+def _governor(path: Path, tbl: dict) -> GovernorPolicy:
+    """[governor] — the usage tiers (aegis-hdqej).
+
+    The VALIDATION lives in governor.py, next to the thing it describes; this
+    function's whole job is to put the FILE NAME on the error. That split is
+    deliberate: `ConfigError` promises to name where to edit, and a
+    `GovernorError` escaping raw would tell an operator their tier is wrong
+    without telling them which of several possible files it is in.
+    """
+    try:
+        return governor_mod.parse(tbl)
+    except governor_mod.GovernorError as e:
+        raise ConfigError(f"{path}: {e}") from e
 
 
 def _roles(path: Path, tbl: dict) -> dict[str, dict[str, list[str]]]:
@@ -597,6 +623,11 @@ class Roster:
 # administrator with `lead-unreachable` (tier.py Q3), so booting bottom-up
 # manufactures exactly the escalation the tier exists to avoid. Alphabetical
 # within a tier so a boot is reproducible.
+#
+# THE SAME TREE ORDER tend.py uses, and deliberately NOT the throttle's `survival`
+# band — see the long note beside tend.py's copy for why an interim draft merged
+# them and why that was reverted. Bring-up is a reporting-tree question; survival
+# is a shed-order question.
 _TIER_ORDER = {"administrator": 0, "lead": 1, "worker": 2}
 
 

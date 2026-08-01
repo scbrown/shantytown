@@ -79,6 +79,16 @@ AUTH_DEAD = "auth-dead"       # alive, login expired: every API call fails
 BELOW_TARGET = "at-target"    # down, and NOT respawned because `--target N` is
                               # already satisfied. A cap, not a fault: the
                               # operator asked for N live agents and there are N.
+GOVERNED = "governed"         # down, and NOT respawned because the USAGE
+                              # GOVERNOR's current tier excludes it (aegis-hdqej).
+                              # A cap in exactly the same sense as BELOW_TARGET,
+                              # and reported the same way — it comes back on its
+                              # own when usage falls, so it is not a fault and
+                              # must not exit non-zero. It is the ONLY thing the
+                              # governor gets to do to a live fleet from in here:
+                              # tend still never kills, so spinning an agent DOWN
+                              # is the drain protocol asking it to stop itself
+                              # (governor.Drainer), never this module reaping it.
 
 
 _FAULTS = frozenset({RESURRECTED, DEAF, REFUSED, UNEQUIPPED, AUTH_DEAD, CRASH_LOOP})
@@ -102,9 +112,30 @@ BACKOFF_RETRIES = 5           # then retire rather than thrash
 
 # Who comes up FIRST when `--target N` cannot bring up everyone. A fleet brought up
 # bottom-first is a set of workers whose stop events reach nobody, so the tier is
-# filled from the root down. Unknown roles (a deployment's own, traits.py) sort last:
-# they are not in the built-in reporting process, so nothing in it depends on them
-# being up.
+# filled from the root down. Unknown roles (a deployment's own, traits.py) sort
+# last: they are not in the built-in reporting process, so nothing in it depends on
+# them being up.
+#
+# THIS IS A TREE ORDER, AND IT IS NOT THE THROTTLE'S ORDER — the distinction was
+# ruled on the crew-traits design bead (2026-08-01) after an interim draft deleted
+# this map and derived bring-up from the new `survival` axis instead. That would
+# have been wrong twice over:
+#
+#   * survival is DECLARED, never derived, and unset is `normal` — so on today's
+#     fleet (19 cards, none declaring a band) every agent would rank identically
+#     and bring-up would collapse to ALPHABETICAL. "sattler comes up first because
+#     his name sorts early" is exactly the arbitrary ordering the trait model
+#     exists to replace, arriving as a silent regression under a change described
+#     as preserving behaviour.
+#   * the two answer different questions. This one is about the REPORTING TREE
+#     (boot a lead before its reports, or their stop events rise with
+#     `lead-unreachable`). Survival is about who is SHED when usage climbs. An
+#     agent can be structurally central and cheap to lose, or peripheral and the
+#     one thing that must stay up.
+#
+# So they stay separate, and the throttle reads traits.survival_key instead. The
+# sign trap that motivated the merge is handled where it belongs — the bands are
+# NAMES (`first`…`last`), so there is no direction left to remember.
 _TIER_ORDER = {"administrator": 0, "lead": 1, "worker": 2}
 
 
@@ -181,7 +212,8 @@ class Tender:
 
     def __init__(self, panes, runtime, launches, *, spawn=None, refresh=None,
                  ensure=ensure_workspace, log=None, gaps=None, crashes=None,
-                 retire=None, now=None, target=None):
+                 retire=None, now=None, target=None, governed=None,
+                 catalog=None):
         self._panes = panes
         self._runtime = runtime
         self._launches = launches
@@ -205,6 +237,15 @@ class Tender:
         # target: how many agents this fleet should have LIVE. None = every
         # non-retired card, which is what a pass has always meant.
         self._target = target
+        # governed(card) -> "" | why this card must not come up. The usage
+        # governor's tier, injected exactly like every other policy here so a
+        # test drives 45/55/75/85/97 through a whole pass with no Prometheus.
+        # None = ungoverned, which is what every existing caller gets.
+        self._governed = governed
+        # The role catalog, used ONLY to resolve an agent's survival band for the
+        # governor's exclusion check. Bring-up order is the tree order above and
+        # deliberately does not read it.
+        self._catalog = catalog
 
     def pass_over(self, agents: list[Agent], *, dry_run: bool = False) -> Report:
         rep = Report(started=time.time(), dry_run=dry_run)
@@ -233,7 +274,13 @@ class Tender:
         """
         if self._target is None:
             return None
-        tendable = [a for a in agents if a.pane and not is_retired(a)]
+        # A GOVERNED-OUT agent never occupies a slot. Leaving it in `down` would
+        # let it be picked into `allowed`, then refused one line later in _one —
+        # so the fleet would sit BELOW its target with the slot held by an agent
+        # the governor will not let come up, and `--target` would silently mean
+        # something different whenever a tier is engaged.
+        tendable = [a for a in agents
+                    if a.pane and not is_retired(a) and not self._withheld(a)]
         live = [a for a in tendable if self._panes.exists(a.pane)]
         room = self._target - len(live)
         if room <= 0:
@@ -243,6 +290,22 @@ class Tender:
         return {a.name for a in down[:room]}
 
     # --- one agent -----------------------------------------------------------
+
+    def _withheld(self, card: Agent) -> str:
+        """"" if the governor allows this card up, else WHY not.
+
+        FAIL-OPEN on any error, and that direction is the fail-safe the governor
+        states by name: a policy that CANNOT be evaluated must never be the reason
+        a fleet stays down. A broken reader, an unreadable catalog, a raising
+        callable — each one means we do not know, and not-knowing lets the agent
+        run (loudly elsewhere), it does not spin the crew down.
+        """
+        if self._governed is None:
+            return ""
+        try:
+            return self._governed(card) or ""
+        except Exception:                    # noqa: BLE001 — never fatal to a pass
+            return ""
 
     def _one(self, card: Agent, agents: list[Agent], dry_run: bool,
              allowed: set[str] | None = None) -> Finding:
@@ -270,7 +333,22 @@ class Tender:
         if up:
             if self._crashes is not None:
                 self._crashes.clear(card.name)   # alive -> the episode is over
+            # A LIVE agent the governor excludes is NOT reported here and NOT
+            # touched here. tend does not kill (see GOVERNED's note), so the only
+            # honest thing it can do about a running excluded agent is the normal
+            # health check — its spin-down is the drain protocol, which asks, and
+            # which reports separately and by name. Short-circuiting to GOVERNED
+            # would ALSO drop this agent's auth-dead/deaf/unequipped checks on the
+            # floor for as long as the tier holds, which is exactly when a silent
+            # broken agent costs the most.
             return self._live(card, agents)
+        # THE GOVERNOR, checked before the target cap so a withheld agent never
+        # occupies a slot the operator asked to be filled. A cap, not a fault:
+        # it comes back on its own when usage falls.
+        if why := self._withheld(card):
+            return Finding(card.name, "down", GOVERNED,
+                           f"held: {why} (not a fault — it comes back when usage "
+                           f"falls below the tier)")
         # THE TARGET CAP, checked after retirement and after liveness, and before
         # every reason to act. Held back rather than respawned — and reported as a
         # cap with the number in it, because a down agent that nothing mentions is
