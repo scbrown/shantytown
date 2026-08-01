@@ -269,6 +269,77 @@ it try an API call — detection keys on the failed turn, so a freshly-dead quie
 indistinguishable from the banner — accepted: the line anchor already refuses every quoted/grepped
 form actually measured.
 
+## `manual` — permission posture, and the agent that cannot run a command
+
+Measured 2026-08-01: three cards carried no `dangerous`, so their agents launched in **manual
+mode** — a human keystroke to approve **every** bash call. An unattended agent that needs a
+keystroke per command cannot make progress *by construction*, and it reads `up`, `current` and
+`busy` the whole time. One evening of that: six coordinator picker-answers across five agents, two
+agents blocked simultaneously, one agent dead twice, and a permission gauntlet where each approval
+only revealed the next. It was found by capturing pane footers **by hand** — the defect had been
+rendered at the bottom of every one of those panes from the moment they launched.
+
+So `st crew` grows a **posture** column, on the same principle as the settings column beside it:
+
+| | means |
+|---|---|
+| `bypass` | the pane shows `⏵⏵ bypass permissions on` — prompts are off, the agent can act |
+| `MANUAL` | live, ready UI up, **no** bypass line — a human must approve every call |
+| `?` | no ready UI (trust dialog, consent screen, blocking picker). Not rounded to either |
+| `—` | not live. A down pane has no posture; what its *card* lacks is a different block |
+
+Two things it deliberately does **not** do.
+
+- **It reads the PANE, never the card.** `dangerous` is read at *launch*, so a card edited without a
+  relaunch changes nothing about the running process — reporting the card would report a fix as
+  landed while the agent is still stopped dead. This bead's own fix was verified by the footer
+  flipping, and that is the only reason we know it took. Same launch-time rule the `STALE` column
+  exists for, one field over.
+- **It derives `MANUAL` negatively.** Only the bypass footer has been measured; pinning a string for
+  the manual-mode line would be a marker never observed passing, which this repo has already paid
+  for twice in `READY_MARKERS`. Absence of bypass on a live ready pane is the signal, and it stays
+  correct for every other mode the runtime may grow or rename.
+
+### The dormant half: the arming moment now asks about *both* faults
+
+The three bad cards became visible only because they were **un-retired** that day. `retired = true`
+had hidden the defect for as long as it held: a retired card is never launched, so its defect never
+becomes a symptom. Un-retiring is the moment it surfaces — and it surfaced *twice over*, because
+those same cards also had no `workspace` — the fault the arming pre-flight landed for, the same day.
+
+That is not a coincidence, and it is the reason the two checks are one list rather than two gates.
+`retired = true` conceals **any** launch fault, so faults accumulate silently on retired cards and
+arrive together the moment one is re-armed. `launchable.launch_gaps(card)` is that list — the
+workspace half is `workspace.unlaunchable()` unchanged, the permission half is `dangerous`, and the
+next one belongs there too rather than in a third place.
+
+**Only one of them may refuse**, and the asymmetry is deliberate:
+
+| fault | at `--unretire` | why |
+|---|---|---|
+| no/bad `workspace` | **REFUSES** (`--force` overrides; the reason still prints) | nobody *elected* the cwd systemd handed the supervisor |
+| no `dangerous` | **says it loudly, proceeds** | `dangerous` is opt-in *by design* here, and an attended agent that wants a prompt per call is making a real choice |
+
+```
+$ st tend --unretire ian
+  ⚠ ian carries no `dangerous`, so it launches in MANUAL MODE — a human must approve EVERY
+    bash call. […] If that is deliberate, nothing here is wrong. If it is not: `dangerous` on
+    the card AND a relaunch (the mode is read at launch).
+  ian is tended again.
+```
+
+A gate that refused manual mode would override an election the harness deliberately offers, and
+would fire on every card that simply never set the field. The defect here was never that
+manual mode is impossible to *want* — it was that choosing it by accident was impossible to *see*.
+So it is said at the arming moment, when a person is present and can act, and `st crew` goes on
+saying it every time thereafter, which is the durable half. Retiring is never gated or warned —
+only the direction that *starts* something is.
+
+`st crew` names the same cards in its own block, so a trap that is currently harmless (the agent is
+down; nothing is stalling) is still visible **before** someone walks into it. Each `Gap` carries a
+short label for that column and a full sentence for the refusal: the rule is decided once, the
+length is the caller's, and the two surfaces cannot end up talking about different cards.
+
 ## `st roles --check` — the hierarchy, verified
 
 ```

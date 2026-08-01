@@ -94,6 +94,7 @@ from . import beads as beads_mod
 from . import bootstrap as boot_mod
 from . import config
 from . import harness as harness_mod
+from . import launchable
 from . import roles as roles_mod
 from . import scaffold
 from . import triage as triage_mod
@@ -638,9 +639,10 @@ def build_parser() -> argparse.ArgumentParser:
                          "respawn it (durable: it lives on the card)")
     td.add_argument("--unretire", metavar="AGENT",
                     help="undo --retire; the agent is tended again. REFUSES if "
-                         "the card could not be launched into its own tree — "
-                         "un-retiring arms it for unattended respawn, and this "
-                         "is the last moment anyone is watching")
+                         "the card could not be launched into its own tree, or "
+                         "would launch in MANUAL MODE — un-retiring arms it for "
+                         "unattended respawn, and this is the last moment "
+                         "anyone is watching")
     td.add_argument("--force", action="store_true",
                     help="with --unretire: arm the card anyway, past a "
                          "launchability refusal. The reason is still printed")
@@ -2609,8 +2611,10 @@ def _cmd_crew(a) -> int:
     waiting = []
     saturated = []
     authdead = []
+    manual = []
+    bad_cards = []
     print()
-    for ag, state, work in _crew_states(agents, panes, runtime):
+    for ag, state, work, posture in _crew_states(agents, panes, runtime):
         if work.endswith("sh"):
             shelled.append(f"{ag.name}({work.rsplit('+', 1)[1][:-2]})")
         if work.startswith(triage_mod.IDLE):
@@ -2640,8 +2644,16 @@ def _cmd_crew(a) -> int:
         # what the pane says and stays what the pane says — this is why.
         if state == "down" and (rec := stops.get(ag.name)) is not None:
             deliberate.append((ag.name, rec))
+        # OBSERVED posture, and separately what the CARD lacks.
+        # A live agent in manual mode is the running defect; a card with gaps is
+        # the one waiting to be re-armed. Both were invisible; they need
+        # different sentences because they need different fixes.
+        if posture == launchable.MANUAL:
+            manual.append(ag.name)
+        if gaps := launchable.launch_gaps(ag):
+            bad_cards.append((ag.name, gaps))
         print(f"  {ag.name:<11} {ag.role:<14} {state:<8} {verdict:<8} "
-              f"{work:<16} {ag.pane or '—'}")
+              f"{work:<16} {posture:<7} {ag.pane or '—'}")
     stale, unknown = _reach_buckets(verdicts)
     print()
     # Down on purpose is not a roster hole to plug. Said before the free/busy
@@ -2748,7 +2760,25 @@ def _cmd_crew(a) -> int:
         print(f"    auth-dead agent in one command. Their frozen context is lost "
               f"either way — it was already")
         print(f"    unreachable the moment auth died.")
-    if free or busy or queued or waiting or saturated or authdead or shelled:
+    # The incident this state was built for. An agent launched without
+    # `dangerous` needs a human keystroke for EVERY bash call, so it reads `up`,
+    # `current` and `busy` while being unable to advance a single command on its
+    # own. Three agents sat that way through one evening: six coordinator
+    # picker-answers across five agents, two blocked at once, one agent dead
+    # twice. The mode line was at the bottom of the pane the whole time and no
+    # surface read it — this is that read, promoted to the roster.
+    if manual:
+        print(f"  ⚠ {len(manual)} agent(s) in MANUAL MODE — a human must approve "
+              f"EVERY bash call: {', '.join(manual)}")
+        print(f"    Not free and not reliably busy: an unattended agent that "
+              f"needs a keystroke per command cannot")
+        print(f"    make progress by construction, and each approval only "
+              f"reveals the next one. Fix is `dangerous`")
+        print(f"    on the CARD plus a RELAUNCH (`st stop <agent> && st new "
+              f"<agent>`) — the mode is read at launch, so")
+        print(f"    editing the card alone changes nothing. Verify by this "
+              f"column flipping, never by the card.")
+    if free or busy or queued or waiting or saturated or authdead or shelled or manual:
         print()
     # Say the consequence, not just the state. The operator who needs this line is
     # the one who just rewrote a settings file and has no reason to suspect it did
@@ -2764,20 +2794,44 @@ def _cmd_crew(a) -> int:
               f"be answered for them: {', '.join(unknown)}")
         print(f"    Launched before stamping existed, or by something other than "
               f"`st new`. UNKNOWN, not fine.")
-    if stale or unknown:
+    # The CARD half of the same defect, and the one that is dormant rather than
+    # burning: these agents are down, so nothing is stalling right now — but the
+    # card is what `st tend` re-arms, and re-arming one of these manufactures the
+    # incident again. It sat unseen behind `retired=true` for exactly this reason:
+    # a retired card is not launched, so its defect never shows up as a symptom.
+    if bad_cards:
+        print(f"  ⚠ {len(bad_cards)} card(s) would launch an agent that "
+              f"CANNOT WORK: {', '.join(n for n, _ in bad_cards)}")
+        for name, gaps in bad_cards:
+            print(f"      {name}: {', '.join(g.short for g in gaps)}")
+        print(f"    Harmless while they stay down — the card is what `st tend` "
+              f"re-arms, so this is a trap laid for")
+        print(f"    whoever un-retires them next. `st tend --unretire` says the "
+              f"full reason, and REFUSES on a workspace")
+        print(f"    fault (manual mode it only warns about — that one can be "
+              f"deliberate).")
+    if stale or unknown or bad_cards:
         print()
     return OK
 
 
 def _crew_states(agents, panes, runtime):
-    """(agent, pane state, work verdict) per agent, by name. THE code path for the
-    busy/idle judgment — the table renders it and `--count` counts it, so the
-    number a status bar shows can never disagree with the roster a human just
-    read. Reimplementing the verdict for the counter is how the two drift.
+    """(agent, pane state, work verdict, permission posture) per agent, by name.
+    THE code path for the busy/idle judgment — the table renders it and `--count`
+    counts it, so the number a status bar shows can never disagree with the roster
+    a human just read. Reimplementing the verdict for the counter is how the two
+    drift.
 
     WORK: only a live pane has one. A down agent is not idle-and-available, it is
     not there — printing `idle` for it would put it on the free list and send work
     into a session that does not exist. So its verdict is `—`: not looked at.
+
+    POSTURE: read from the SAME capture as the work verdict, never
+    from the card. The card is intent; the running process is truth, and they
+    diverge the moment a card is edited without a relaunch. An agent in manual
+    mode is neither busy nor free — it is a stall waiting to happen, and until
+    this column existed the only way to see it was to capture the pane footer by
+    hand, which is why three agents sat that way for a night.
     """
     for ag in sorted(agents, key=lambda x: x.name):
         if ag.pane:
@@ -2800,10 +2854,12 @@ def _crew_states(agents, panes, runtime):
             # auth_dead: the login-expired banner (aegis-arma). Without it an
             # auth-dead pane prints `idle` — all 9 crew did, through a whole
             # expiry — and lands on the free list.
+            ui_up = runtime.shows_ready_ui(plain)
             work = triage_mod.work_state(
-                screen, runtime.shows_ready_ui(plain),
+                screen, ui_up,
                 awaiting=asks_a_question(runtime, plain),
                 auth_dead=auth_expired(runtime, plain))
+            posture = launchable.observed_posture(plain, ui_up)
             # Background shells outlive the turn. An agent whose turn ended with a
             # build/test/`gh run watch` still live is NOT finished, and every
             # surface the administrator has was silent about it. Shown ON the work
@@ -2822,7 +2878,12 @@ def _crew_states(agents, panes, runtime):
                     work = f"{work}·{int(tokens)}k"
         else:
             work = "—"
-        yield ag, state, work
+            # A down pane has no posture to read. `—` and not MANUAL: the card
+            # may well say dangerous=False, but that is what it WILL launch with,
+            # not what anything is running, and this column only ever reports what
+            # was observed. What the card lacks is launch_gaps()' question.
+            posture = "—"
+        yield ag, state, work, posture
 
 
 def _crew_count(agents, panes, runtime) -> int:
@@ -2837,7 +2898,7 @@ def _crew_count(agents, panes, runtime) -> int:
     CLEAR for a check that could not reach its target).
     """
     busy = idle = 0
-    for _ag, _state, work in _crew_states(agents, panes, runtime):
+    for _ag, _state, work, _posture in _crew_states(agents, panes, runtime):
         if work == triage_mod.BUSY:
             busy += 1
         elif work == triage_mod.IDLE:
@@ -3329,7 +3390,11 @@ def _dashboard_snapshot(a, reg, panes, runtime, now):
         return None, "no administrator in the registry to show a tier for"
     if admin not in {x.name for x in agents}:
         return None, f"no such agent: {admin}"
-    crew_states = list(_crew_states(agents, panes, runtime))
+    # The dashboard renders the tier, not the posture column — hand it the shape
+    # it has always taken rather than widening its contract for a field it does
+    # not draw. One capture still, because it is the same generator.
+    crew_states = [(ag, state, work)
+                   for ag, state, work, _ in _crew_states(agents, panes, runtime)]
     plate = _plate(a)
     last = FilesEvents(Path(a.root) / "events").latest_by_sender()
     return dash_mod.gather(admin, agents, crew_states, plate, last, now), None
@@ -4019,7 +4084,7 @@ def _tend_reauth(a) -> int:
         print(f"  could not tell: {e}", file=sys.stderr)
         return CANNOT_TELL
     runtime = _runtime(a, panes)
-    dead = [ag for ag, state, work in _crew_states(agents, panes, runtime)
+    dead = [ag for ag, state, work, _ in _crew_states(agents, panes, runtime)
             if state == "up" and work.startswith(triage_mod.AUTH_DEAD)]
     if not dead:
         print("  no auth-dead agents — nothing to relaunch.")
@@ -4171,9 +4236,20 @@ def _tend_retire(a) -> int:
     # THE PRE-FLIGHT, BEFORE THE DRY-RUN BRANCH. A dry run that reported "would
     # mark retired=False" while the real command refuses would be lying about
     # the thing dry runs exist to answer.
+    #
+    # TWO FAULTS, ONE GATE — the permission fault joining the workspace one.
+    # The workspace half
+    # is workspace.unlaunchable(); the permission half is `dangerous`, and the
+    # SAME THREE CARDS carried both. That is not a coincidence: it is what
+    # `retired = true` conceals. A retired card is never launched, so nothing it
+    # would get wrong at launch ever becomes a symptom — un-retirement is where a
+    # dormant defect becomes a live one, so it is where every launch fault must
+    # be asked at once, not one per incident.
     if not want:
-        why = unlaunchable(card)
-        if why and not getattr(a, "force", False):
+        gaps = launchable.launch_gaps(card)
+        blocking = [g for g in gaps if g.blocking]
+        if blocking and not getattr(a, "force", False):
+            why = "; ".join(g.why for g in blocking)
             print(f"  refused: {why}\n"
                   f"  Un-retiring re-arms {name} for UNATTENDED respawn, and a "
                   f"supervisor cannot notice this the way you can right now. "
@@ -4181,11 +4257,17 @@ def _tend_retire(a) -> int:
                   f"anyway (the fault above does not go away — you go away).",
                   file=sys.stderr)
             return REFUSED
-        if why:
+        for gap in blocking:
             # FORCED IS NOT SILENT. The operator overrode a refusal; the reason
             # still gets said, and still gets said in full. A --force that
             # prints nothing trains everyone to pass it by default.
-            print(f"  ⚠ FORCED past a launchability fault: {why}")
+            print(f"  ⚠ FORCED past a launchability fault: {gap.why}")
+        # NOT a refusal, and said anyway. Manual mode is a legitimate election
+        # (see launch_gaps) — but choosing it BY ACCIDENT was invisible, and the
+        # arming moment is the last one where a person is looking.
+        for gap in gaps:
+            if not gap.blocking:
+                print(f"  ⚠ {gap.why}")
 
     if a.dry_run:
         print(f"  would mark {name} retired={want} (by {_actor()})")
