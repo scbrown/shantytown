@@ -24,7 +24,7 @@
 *Create a work item. Tell an agent to go get it. That's the whole idea.*
 
 [![dispatch 3.4s](https://img.shields.io/badge/dispatch-3.4s-brightgreen)](#-measured-against-gas-town)
-[![19 commands](https://img.shields.io/badge/commands-19-blue)](#-the-whole-surface)
+[![20 commands](https://img.shields.io/badge/commands-20-blue)](#-the-whole-surface)
 [![tests](https://img.shields.io/badge/tests-1140%20passing-blue)](#-principles)
 [![python](https://img.shields.io/badge/python-3.11%2B-blue)](#-install)
 [![dependencies none](https://img.shields.io/badge/dependencies-none-blue)](#-install)
@@ -197,7 +197,7 @@ stop.* Here is what the gate measured.
 
 | | `gt sling` | `st go` | |
 |---|---:|---:|---|
-| Commands | ~110 | **19** | *a small, deliberate fraction of the surface, by measured use* |
+| Commands | ~110 | **20** | *a small, deliberate fraction of the surface, by measured use* |
 | dispatch (dry-run) | 51.54 s | **0.15 s** | **~344× faster** |
 | dispatch (real) | > 120 s ⏱️ | **3.40 s** | **≥35× faster** |
 | Dolt connections | 63 | **3** | **21× fewer** |
@@ -275,6 +275,7 @@ st inbox <agent> <message>         a message into a pane. send-keys, nothing mor
 st go <item> [agent]              dispatch. the one that matters.
 st anchor                          who am I, what's on my plate      ← the anchor
 st crew                           who exists, what state, what role
+st input <agent>                  what's in their input box: EMPTY | TYPED | GHOST (never submits)
 st roles [--check|set|sync]       the hierarchy: show it, verify it, write it, import it
 st init                           scaffold a NEW deployment: asks, then writes store+cards+config
 st new <agent>                    create an agent from a card
@@ -291,7 +292,7 @@ st worktree <repo> [agent]        provision an agent's isolated worktree off a S
 st stats [agent]                  what the crew actually did: files, skills, tokens (local store)
 ```
 
-Nineteen, and the count is load-bearing: a test pins this block to the parser, so the next command
+Twenty, and the count is load-bearing: a test pins this block to the parser, so the next command
 either updates the list or fails CI.
 
 ## 🔀 Workflows & events
@@ -447,7 +448,7 @@ error, it just stops new facts from joining the old ones.
 |---|---|
 | [`docs/vision.md`](docs/vision.md) | what this replaces, and how we'll know it failed |
 | [`docs/design.md`](docs/design.md) | the shape: dispatch, triage, trackers, panes |
-| [`docs/cli.md`](docs/cli.md) | the nineteen commands, the boot modes, and the anchor |
+| [`docs/cli.md`](docs/cli.md) | the twenty commands, the boot modes, and the anchor |
 | [`docs/agent-card.md`](docs/agent-card.md) | identity — the graph is the truth, the card is a projection |
 | [`docs/roles.md`](docs/roles.md) | worker / lead / administrator, and why a lead absorbs |
 | [`docs/adapters.md`](docs/adapters.md) | first-class defaults, pluggable everything |

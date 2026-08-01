@@ -55,7 +55,7 @@ def test_docstring_and_code_agree_on_the_command_set():
     )
 
 
-def test_the_surface_is_nineteen():
+def test_the_surface_is_twenty():
     """A bare number check too, so 'the docs claim N' is itself pinned.
 
     Grew to 13 with `project` — materialize the crew cards from the graph (the
@@ -69,6 +69,15 @@ def test_the_surface_is_nineteen():
     consequence hidden behind a flag on a read command is a consequence someone
     triggers by running the safe-looking thing. The verb gets its own slot so the
     mutation shows up in shell history, in `--help`, and here.
+
+    Grew to 20 with `input` — the input box as a surface you can ASK. Same
+    argument as `tend` above and it lands the same way: this could have been a
+    flag on `crew`, but `crew` is a READ over the whole roster and `input`
+    targets one agent AND can mutate its buffer (--clear/--dismiss). A
+    consequence hidden behind a flag on a read command is a consequence someone
+    triggers by running the safe-looking thing. It earns its slot for a second
+    reason too: a coordinator about to run the stranded-input SOP needs a verb
+    to type, and "run st crew and read the fourth column" is not one.
 
     Grew to 15 with `attach` — attach to a crew member by name. A tool that
     manages the crew but cannot attach to one is missing its most basic verb, and
@@ -155,7 +164,7 @@ def test_the_surface_is_nineteen():
     not.
 
     Each command still earns its slot."""
-    assert len(_actual_subcommands()) == 19, (
+    assert len(_actual_subcommands()) == 20, (
         "the command count changed. If that's intended, update the number here and "
         "the cli.py docstring together — and say why the surface grew in docs/cli.md."
     )
