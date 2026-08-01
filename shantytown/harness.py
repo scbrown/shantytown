@@ -157,9 +157,23 @@ class ClaudeHarness:
         # `ubuntu` for the whole fleet — so an assignment that flipped between two
         # agents could not say who did it. The card already knows the name; the
         # audit trail just never got told.
+        # THE ROLE SET, CARRIED (GitHub #37). st passes it through OPAQUELY: no
+        # trait logic here, and none anywhere on the launch path. That is the
+        # architectural line the whole trait model rests on — quipu DESCRIBES a
+        # role, st CARRIES the set, the admin INTERPRETS it. The moment st starts
+        # deciding what a role set MEANS in order to launch it, the closed enum
+        # grows back one layer down, in the place hardest to see.
+        #
+        # ST_ROLES is emitted even when the set is just the tree position, so an
+        # agent's own view of itself does not depend on whether its card has been
+        # migrated yet. ST_REPORTS_TO/ST_ROLE_DOMAIN are omitted when absent rather
+        # than emitted empty: an empty env var reads as a declared empty answer.
+        st_roles = f"ST_ROLES={','.join(card.effective_roles())} "
+        st_domain = f"ST_ROLE_DOMAIN={card.domain} " if card.domain else ""
+        st_reports = f"ST_REPORTS_TO={card.reports_to} " if card.reports_to else ""
         launch = (
             f"{root_env}SHANTY_AGENT={card.name} BOBBIN_ROLE={card.role} "
-            f"BEADS_ACTOR={card.name} "
+            f"BEADS_ACTOR={card.name} {st_roles}{st_domain}{st_reports}"
             f"claude {flags} --settings {settings_path}"
         )
         # Launch IN the agent's workspace so Claude Code auto-loads its .mcp.json +
