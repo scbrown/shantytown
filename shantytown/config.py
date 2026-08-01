@@ -509,7 +509,11 @@ def _crew(path: Path, tbl: dict) -> dict:
             workspace_source=spec.get("workspace_source"),
             model=spec.get("model"), harness=spec.get("harness"),
             dangerous=bool(spec.get("dangerous", False)),
-            retired=bool(spec.get("retired", False)))
+            # None when the TOML does not mention it (aegis-6hfmi) — a registry
+            # entry that is silent about retirement must not clear one that the
+            # card records. `retired = false` in the TOML still un-retires.
+            retired=None if spec.get("retired") is None
+            else bool(spec.get("retired")))
     return out
 
 

@@ -74,3 +74,65 @@ def test_absent_pane_and_model_both_preserved_across_a_role_set(tmp_path: Path):
     after = r.get("ellie")
     assert after.pane == "%5"
     assert after.model == "opus-4.8"
+
+
+# --- retirement joins the only-when-carried family (aegis-6hfmi) --------------
+#
+# `retired` was the ONE field written unconditionally while every one of its
+# neighbours above was written only-when-carried. Combined with a False default
+# that meant a caller which had never heard of retirement silently CLEARED one —
+# it did not have to intend it, only to not know. Measured in the live fleet:
+# ian.json was rewritten at 18:53 and came back un-retired, and `retired` is the
+# fleet's only durable, deliberate spin-down.
+#
+# The original comment ("written even when False: un-retiring must be
+# expressible, and a field that can only ever be set is a one-way door") was
+# RIGHT about the requirement and wrong about the mechanism: it made "not
+# expressed" and "expressed False" the same value, so the write could not tell
+# them apart. None restores the distinction without closing the door.
+
+
+def test_a_caller_that_never_mentions_retirement_cannot_clear_one(tmp_path: Path):
+    """THE regression. A projection carries no retirement — it must not un-retire."""
+    r = _reg(tmp_path)
+    (r.root / "ian.json").write_text(json.dumps(
+        {"role": "worker", "pane": "aegis-crew-ian", "retired": True}))
+    r.set(Agent(name="ian", role="worker", reports_to="dearing"))
+    assert r.get("ian").retired is True, \
+        "a caller that does not model retirement silently un-retired the agent"
+
+
+def test_un_retiring_is_STILL_expressible_so_this_is_not_a_one_way_door(tmp_path: Path):
+    """The requirement the old unconditional write existed to protect. Keep it."""
+    r = _reg(tmp_path)
+    (r.root / "ian.json").write_text(json.dumps({"role": "worker", "retired": True}))
+    r.set(Agent(name="ian", role="worker", retired=False))
+    assert r.get("ian").retired is False, "explicit un-retirement stopped working"
+
+
+def test_not_expressed_and_expressed_False_are_DIFFERENT_writes(tmp_path: Path):
+    """The distinction the fix restores — same output for two worlds was the bug."""
+    r = _reg(tmp_path)
+    (r.root / "a.json").write_text(json.dumps({"role": "worker", "retired": True}))
+    (r.root / "b.json").write_text(json.dumps({"role": "worker", "retired": True}))
+    r.set(Agent(name="a", role="worker"))                  # not saying
+    r.set(Agent(name="b", role="worker", retired=False))   # saying not retired
+    assert r.get("a").retired is True
+    assert r.get("b").retired is False
+
+
+def test_a_card_with_no_retired_key_stays_keyless_through_a_round_trip(tmp_path: Path):
+    """Reading must not invent a decision the card never recorded."""
+    r = _reg(tmp_path)
+    (r.root / "ellie.json").write_text(json.dumps({"role": "worker", "pane": "%5"}))
+    assert r.get("ellie").retired is None, "absence read as a decision"
+    r.set(r.get("ellie"))
+    assert "retired" not in json.loads((r.root / "ellie.json").read_text())
+
+
+def test_retirement_survives_the_read_write_round_trip(tmp_path: Path):
+    """get() then set() is how half the CLI edits a card. It must be lossless."""
+    r = _reg(tmp_path)
+    (r.root / "ian.json").write_text(json.dumps({"role": "worker", "retired": True}))
+    r.set(r.get("ian"))
+    assert r.get("ian").retired is True
