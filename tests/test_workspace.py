@@ -13,7 +13,7 @@ import pytest
 
 from shantytown.protocols import Agent
 from shantytown.workspace import (WorkspaceError, ensure_workspace, git_clone,
-                                  git_origin)
+                                  git_origin, unlaunchable)
 
 
 def _fake_clone(marker="cloned"):
@@ -317,3 +317,82 @@ def test_real_clone_of_the_WRONG_repo_is_refused_end_to_end(tmp_path):
     with pytest.raises(WorkspaceError) as e:
         ensure_workspace(card)               # no fakes anywhere in this path
     assert str(right) in str(e.value) and str(wrong) in str(e.value)
+
+
+# --- unlaunchable: the ARMING pre-flight (aegis-6hfmi) ------------------------
+#
+# ensure_workspace above answers "can I launch this NOW", and is allowed to
+# clone to get there. `unlaunchable` answers a different question — "would an
+# UNATTENDED respawn of this card land in its own tree" — and must answer it
+# without touching anything, because it runs in front of an interactive command.
+#
+# The case it exists for: `st tend --unretire` re-armed ian, whose card carried
+# NO workspace, and nothing warned. workspace=None is a legitimate election for
+# a hand launch ("the cwd I am standing in") and a silent gap for a supervisor
+# launch (systemd's cwd, which nobody chose). Same value, two worlds — so the
+# check belongs at the arming call site, not inside ensure_workspace.
+
+def test_no_workspace_is_unlaunchable_for_an_UNATTENDED_respawn(tmp_path: Path):
+    """THE regression. This is the exact ian card, and it must not pass."""
+    why = unlaunchable(Agent(name="ian", pane="aegis-crew-ian", workspace=None))
+    assert why, "the card that caused this bead was reported launchable"
+    assert "ian" in why and "workspace" in why
+
+
+def test_the_refusal_names_the_FIX_not_just_the_fault(tmp_path: Path):
+    """An operator hitting this at 2am needs the next command, not a diagnosis."""
+    why = unlaunchable(Agent(name="ian", workspace=None))
+    assert "st role set" in why, "the refusal does not say how to fix it"
+
+
+def test_an_existing_workspace_is_launchable(tmp_path: Path):
+    d = tmp_path / "crew" / "ellie"; d.mkdir(parents=True)
+    assert unlaunchable(Agent(name="ellie", workspace=str(d))) is None
+
+
+def test_absent_BUT_CLONABLE_is_launchable_because_the_respawn_clones_it(tmp_path):
+    """The designed path — ensure_workspace materializes this at launch.
+
+    Reporting it as a fault would refuse the working case and teach operators
+    to reach for --force, which is how a gate stops being read.
+    """
+    assert unlaunchable(Agent(name="billy", workspace=str(tmp_path / "nope"),
+                              workspace_source="ssh://git@host/x.git")) is None
+
+
+def test_absent_and_NOT_clonable_is_unlaunchable(tmp_path: Path):
+    """No dir and nothing to create it from — the respawn refuses every time."""
+    why = unlaunchable(Agent(name="billy", workspace=str(tmp_path / "nope")))
+    assert why and "workspace_source" in why
+
+
+def test_a_file_where_the_workspace_should_be_is_unlaunchable(tmp_path: Path):
+    f = tmp_path / "notadir"; f.write_text("")
+    why = unlaunchable(Agent(name="billy", workspace=str(f)))
+    assert why and "not a directory" in why
+
+
+def test_it_TOUCHES_NOTHING(tmp_path: Path):
+    """PURE. It runs in front of an interactive command and inside a refusal
+    path; a check that created a directory (or cloned) would make asking
+    'should I arm this?' change the answer."""
+    before = sorted(p.name for p in tmp_path.iterdir())
+    for card in (Agent(name="a", workspace=None),
+                 Agent(name="b", workspace=str(tmp_path / "gone")),
+                 Agent(name="c", workspace=str(tmp_path / "gone"),
+                       workspace_source="ssh://git@host/x.git")):
+        unlaunchable(card)
+    assert sorted(p.name for p in tmp_path.iterdir()) == before
+
+
+def test_it_does_not_claim_to_verify_the_TREE(tmp_path: Path):
+    """None means 'no fault visible without touching the disk', never
+    'verified'. A present directory that is a clone of the WRONG remote still
+    passes here — ensure_workspace makes that call at launch, where it can
+    afford to run git. Documented so nobody later reads None as a guarantee."""
+    d = tmp_path / "w"; d.mkdir()
+    card = Agent(name="e", workspace=str(d),
+                 workspace_source="ssh://git@host/right.git")
+    assert unlaunchable(card) is None
+    with pytest.raises(WorkspaceError):
+        ensure_workspace(card, origin=lambda _p: "ssh://git@host/WRONG.git")

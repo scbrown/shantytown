@@ -204,6 +204,22 @@ def is_retired(card: Agent) -> bool:
     return bool(card.retired)
 
 
+def retirement_provenance(card: Agent) -> str:
+    """" (retired by X at T)" — or "" when the card does not say.
+
+    Carried into the verdicts because RESURRECTED is a forensic finding, and
+    the two questions it immediately raises are "who agreed to stop this" and
+    "was that before or after the thing that is now running started". Both are
+    on the card; printing them turns a page into a lead. Blank when unrecorded:
+    a verdict that padded itself with "retired by unknown" would make an old
+    card look like a fresh mystery.
+    """
+    who, when = card.retired_by, card.retired_at
+    if not who and not when:
+        return ""
+    return f" (retired by {who or 'unrecorded'} at {when or 'unrecorded time'})"
+
+
 class Tender:
     """One supervision pass. Every dependency is injected — the point of this
     class is that a test can run a whole pass with no tmux, no git, no systemd
@@ -319,16 +335,18 @@ class Tender:
         # guarantee: a check that runs after the respawn logic is a check that
         # can be reached too late.
         if is_retired(card):
+            prov = retirement_provenance(card)
             if up:
                 # The alarm. We did not do this, and something did.
                 why = (f"marked RETIRED and yet ALIVE in {card.pane!r} — this "
                        f"supervisor did not start it. Something else is "
                        f"respawning agents we agreed to stop. Find it before "
-                       f"trusting any shutdown.")
+                       f"trusting any shutdown.{prov}")
                 self._log(f"ESCALATE {card.name}: {why}")
                 return Finding(card.name, "up", RESURRECTED, why)
             return Finding(card.name, "down", RETIRED,
-                           "deliberately retired — NOT a fault, NOT respawned")
+                           f"deliberately retired — NOT a fault, NOT "
+                           f"respawned{prov}")
 
         if up:
             if self._crashes is not None:

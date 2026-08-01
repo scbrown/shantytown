@@ -75,6 +75,32 @@ class Agent:
                                   # undoes it. A watchdog that could not express
                                   # this reverted a considered shutdown of eight
                                   # agents in about a minute, silently.
+    retired_by: str | None = None # WHO last moved `retired`, and WHEN. Best-effort
+    retired_at: str | None = None # attribution, honestly labelled — the crew name
+                                  # from $SHANTY_AGENT, else `unix:<login>`, so a
+                                  # reader can always tell which kind of actor it
+                                  # was; `unknown` when neither is readable. The
+                                  # timestamp is UTC ISO-8601.
+                                  #
+                                  # THE COST OF NOT HAVING IT (aegis-6hfmi): ian's
+                                  # retirement moved, and answering "who?" took two
+                                  # agents, a cross-session disagreement, and a
+                                  # stat(1) on the card's mtime to establish that
+                                  # BOTH measurements had been correct on either
+                                  # side of an unrecorded write. mtime says a write
+                                  # happened; it cannot say whose, or which field.
+                                  # One line on the card answers it in one read.
+                                  #
+                                  # PROVENANCE IS WRITTEN AS A UNIT WITH `retired`
+                                  # AND NEVER SURVIVES IT (see files.set). Stale
+                                  # attribution is worse than none: "retired_by:
+                                  # sattler" left sitting on a retirement somebody
+                                  # ELSE made is a confident, greppable, wrong
+                                  # answer to the exact question this field exists
+                                  # to answer — the same-output-two-worlds shape
+                                  # that made the field necessary, rebuilt inside
+                                  # the fix. Absent reads as "nobody recorded it",
+                                  # which is true and leads you to look further.
     dangerous: bool = False       # opt-in --dangerously-skip-permissions for THIS
                                   # agent. Per-agent, never global — a crew worker
                                   # that must act without permission prompts sets

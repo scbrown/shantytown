@@ -158,6 +158,64 @@ def _refuse_wrong_tree(card: Agent, path: Path, origin: OriginReader) -> None:
         )
 
 
+def unlaunchable(card: Agent) -> str | None:
+    """Why an UNATTENDED respawn of this card would not land in its own tree —
+    or None if it would. PURE: no clone, no mkdir, no network, no git.
+
+    THE ASYMMETRY THIS EXISTS FOR (aegis-6hfmi). `ensure_workspace` below is
+    right that `workspace=None` is not a failure: it means "launch in the
+    default cwd", and for a HAND launch that is a real election — the operator
+    is standing in the directory they meant. But a card armed for AUTOMATIC
+    respawn is launched by a supervisor, and the supervisor's cwd is whatever
+    systemd handed it. Nobody elected that. So the same value is a considered
+    choice on one path and an unnoticed gap on the other, and only the caller
+    knows which path it is on. That is why this is a SEPARATE, opt-in check and
+    not a new refusal inside ensure_workspace: making it unconditional would
+    break the legitimate hand launch, and leaving it out is what let ian be
+    re-armed for respawn into a directory it does not live in.
+
+    Consequently this is a question about ARMING, not about launching. It is
+    the check `st tend --unretire` runs, because un-retiring is the moment a
+    card goes from "the supervisor ignores it" to "the supervisor will start
+    it", and that transition had no pre-flight at all: `--unretire` re-armed
+    whatever it was pointed at and nothing warned.
+
+    ABSENT-BUT-CLONABLE IS NOT A FAULT. A card with a workspace_source and no
+    directory yet is exactly the case ensure_workspace was built to handle; it
+    clones at respawn. Reporting that as unlaunchable would refuse the working
+    path and teach operators to reach for --force, which is how a gate stops
+    being read.
+
+    WHAT IT DELIBERATELY DOES NOT CHECK: whether an existing tree is a clone of
+    the RIGHT remote. That answer needs git, and this runs in front of an
+    interactive command that must stay instant and offline. ensure_workspace
+    still makes that call at launch, where it is a refusal that creates
+    nothing. So None here means "no fault visible without touching the disk",
+    never "verified launchable" — the narrower claim is the honest one.
+    """
+    if not card.workspace:
+        return (f"{card.name} carries NO workspace, so a respawn would launch "
+                f"it in whatever directory the supervisor happens to run in — "
+                f"not in its own tree, and not with its own CLAUDE.md or "
+                f".mcp.json. An agent launched there comes up, looks alive in "
+                f"`st crew`, and reads someone else's charter or none at all. "
+                f"Fix: `st role set {card.name} --workspace <dir>`")
+
+    path = Path(card.workspace).expanduser()
+    if path.is_dir():
+        return None                      # present — the launch has a tree to use
+    if path.exists():
+        return (f"{card.name}'s workspace is not a directory: {path}. A "
+                f"respawn would refuse at launch. Fix: point workspace at a "
+                f"directory, or move {path} aside.")
+    if not card.workspace_source:
+        return (f"{card.name}'s workspace does not exist: {path}, and the card "
+                f"carries no workspace_source to clone it from — so a respawn "
+                f"would refuse at launch, every time, forever. Fix: create the "
+                f"directory, or set workspace_source on the card.")
+    return None                          # absent but clonable — the designed path
+
+
 def ensure_workspace(card: Agent, clone: Cloner = git_clone,
                      origin: OriginReader = git_origin) -> str | None:
     """Guarantee card.workspace exists AND IS THE RIGHT TREE; return it as cwd.
