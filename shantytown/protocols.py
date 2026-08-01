@@ -52,7 +52,14 @@ class Agent:
                                   # between them (Stiwi: the harness should be
                                   # mappable, "like claude code" — i.e. Claude Code
                                   # is one harness, not the shape of the world).
-    retired: bool = False         # DELIBERATELY stopped. `st tend` must never
+    # None = NOT EXPRESSED, and it is not the same as False (aegis-6hfmi). A
+    # caller that never mentions retirement must not be able to CLEAR one: the
+    # default used to be False and `set()` wrote it unconditionally, so any
+    # source that did not model retirement silently un-retired every agent it
+    # touched. It did not have to intend it, only to not know. Absence is now
+    # representable, so "I am not saying" and "I say not retired" are different
+    # writes. Every consumer tests truthiness, so None reads as not-retired.
+    retired: bool | None = None   # DELIBERATELY stopped. `st tend` must never
                                   # respawn it, and finding it ALIVE is an
                                   # escalation, not a line in a log. It lives on
                                   # the CARD because a retirement held in a

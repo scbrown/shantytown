@@ -58,7 +58,10 @@ class FilesRegistry:
             workspace_source=d.get("workspace_source"),
             harness=d.get("harness"),
             dangerous=d.get("dangerous", False),
-            retired=d.get("retired", False),
+            # No default: a card that does not carry `retired` reads None —
+            # "nobody said" — so a read/write round-trip cannot invent a
+            # retirement decision the card never recorded (aegis-6hfmi).
+            retired=d.get("retired"),
             # The stacked set, mirrored from the graph (GitHub #37). A card that
             # does not carry it reads () — "nobody said" — never (role,), so an
             # un-migrated card is distinguishable from a migrated one whose set
@@ -100,9 +103,15 @@ class FilesRegistry:
             existing["harness"] = agent.harness
         if agent.dangerous:
             existing["dangerous"] = agent.dangerous
-        # retired is written even when False: un-retiring must be expressible,
-        # and a field that can only ever be set is a one-way door.
-        existing["retired"] = agent.retired
+        # retired is written only when EXPRESSED — but False still writes, so
+        # un-retiring stays expressible and this is not a one-way door. That was
+        # the original intent; the bug was that "not expressed" and "expressed
+        # False" were the same value, so the unconditional write could not tell a
+        # deliberate un-retirement from a caller that had never heard of
+        # retirement (aegis-6hfmi: ian was silently un-retired by a projection).
+        # Now `retired = False` un-retires and `retired = None` preserves.
+        if agent.retired is not None:
+            existing["retired"] = agent.retired
         # The stacked role set + its per-member parameter (GitHub #37). Written
         # only when carried, like model/workspace/harness: a `role set` that
         # touches the tree position must not silently erase a set some other
