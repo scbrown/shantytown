@@ -796,10 +796,11 @@ def carries_any(agent, traits, catalog=None) -> tuple[bool, bool]:
 
       survival (SINGLE, RANKED)  a THRESHOLD, not an equality. `traits =
                                  ["support"]` means "support AND ABOVE" — an
-                                 agent ranked `critical` obviously survives a
-                                 tier that spares `support`, and equality
-                                 matching would spin down the coordinator while
-                                 keeping the watchers, which is upside down.
+                                 agent banded `last` obviously survives a tier
+                                 that spares `support`, and equality matching
+                                 would spin down a coordinator banded `last`
+                                 while keeping the watchers, which is upside
+                                 down.
       everything else            exact membership. A lane is a set you are in or
                                  are not; there is no ordering to threshold on.
 
