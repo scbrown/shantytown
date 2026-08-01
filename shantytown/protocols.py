@@ -7,6 +7,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Iterator, Protocol, runtime_checkable
 
+# The shared ancestor for every "I could not look" in this repo. The three
+# exceptions below grew independently, at three call sites, with three names and
+# the same reasoning written out three times; they keep their names (they are
+# caught by name in several places) but now share a base, so a caller that treats
+# all of them alike can write ONE except clause.
+from shantytown.answer import CouldNotLook
+
 
 @dataclass(frozen=True)
 class Agent:
@@ -275,7 +282,7 @@ class Snippet:
     name: str = ""
 
 
-class ContextUnavailable(Exception):
+class ContextUnavailable(CouldNotLook):
     """I could not look. NOT "there is nothing there".
 
     This exception exists because the designed signature cannot express the
@@ -293,7 +300,7 @@ class ContextUnavailable(Exception):
     """
 
 
-class RankUnavailable(Exception):
+class RankUnavailable(CouldNotLook):
     """A ranker could not compute weights. NOT "nothing to rank" — "I could not
     look". Same shape as ContextUnavailable, and for the same reason: a down
     ranker (Hank/Quipu unreachable) and a ranker that found nothing to weight
@@ -327,7 +334,7 @@ class Event:
     timestamp: str | None = None
 
 
-class EventsUnavailable(Exception):
+class EventsUnavailable(CouldNotLook):
     """Could not reach the event source. NOT "no events" — "I could not look"
     (the same discipline as ContextUnavailable). A subscriber must surface this as
     could-not-tell and KEEP its watermark, never treat it as an empty poll and
