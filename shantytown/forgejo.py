@@ -28,10 +28,33 @@ Forgejo issues have exactly open/closed. WorkItem's richer states map:
 from __future__ import annotations
 import json
 import os
+import re
 import urllib.error
 import urllib.request
 
 from .protocols import WorkItem
+
+# `P1`, `p1`, `priority/P1`, `priority:1` — the shapes a forge label actually
+# takes. Deliberately narrow: a label that does not match leaves the priority
+# UNSTATED (None), which a governed dispatch refuses out loud, rather than a
+# looser pattern that would read a number out of `milestone-2` and dispatch on it.
+_PRIO_LABEL = re.compile(r"^(?:priority[/:-])?p?(\d)$", re.I)
+
+
+def _label_priority(labels) -> int | None:
+    """The LOWEST priority number any label states, or None if none does.
+
+    Lowest wins because 0 is highest: an issue labelled both `P0` and `P2` is a
+    P0 issue that someone also filed under a broader bucket, and rounding it
+    down to the weaker label is the direction that loses urgent work.
+    """
+    found: list[int] = []
+    for label in labels:
+        name = label.get("name", "") if isinstance(label, dict) else str(label)
+        m = _PRIO_LABEL.match(name.strip())
+        if m:
+            found.append(int(m.group(1)))
+    return min(found) if found else None
 
 
 class ForgejoTracker:
@@ -60,8 +83,13 @@ class ForgejoTracker:
     @staticmethod
     def _to_item(d: dict) -> WorkItem:
         assignee = (d.get("assignee") or {}).get("login") if d.get("assignee") else None
+        # A forge issue has LABELS, not a priority field. `priority/P1` (or
+        # `P1`) is the convention that maps; anything else leaves it None, which
+        # a governed dispatch reads as "nobody stated how important this is"
+        # rather than guessing a middle value.
         return WorkItem(id=str(d.get("number")), title=d.get("title", ""),
-                        status=d.get("state", "open"), assignee=assignee)
+                        status=d.get("state", "open"), assignee=assignee,
+                        priority=_label_priority(d.get("labels") or []))
 
     def get(self, item_id: str) -> WorkItem:
         try:

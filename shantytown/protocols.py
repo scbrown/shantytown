@@ -102,6 +102,21 @@ class WorkItem:
     title: str = ""
     status: str = "open"
     assignee: str | None = None
+    priority: int | None = None   # HOW IMPORTANT, in the tracker's own numbering,
+                                  # where 0 is the HIGHEST (bd's convention: P0
+                                  # beats P1). Added for the usage governor
+                                  # (aegis-hdqej): "dispatch only P1 and above"
+                                  # is unanswerable without it, and a dispatch
+                                  # gate that cannot read a priority would have
+                                  # to either admit everything or refuse
+                                  # everything.
+                                  # None is NOT a default priority — it means the
+                                  # tracker did not say. The difference is
+                                  # load-bearing: a governed dispatch REFUSES an
+                                  # item whose importance nobody stated rather
+                                  # than guessing a middle value for it, so
+                                  # "nobody set one" stays visible instead of
+                                  # silently becoming P2.
 
 
 @runtime_checkable

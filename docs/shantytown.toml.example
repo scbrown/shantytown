@@ -254,3 +254,132 @@ max_load_per_core = 4.0
 # "veto-in-scope" = 3
 # gate = 2
 # none = 1
+
+# ---------------------------------------------------------------------------
+# [governor] — SPIN THE CREW DOWN AS CLAUDE USAGE CLIMBS.
+#
+# Stiwi: "i want to be able to spin down the crew at certain configured
+# intervals. like 50% spin down and only work p1+ issues. 70% p0 issues, 80%
+# only support crew and then 95% stop and have all crew ensure work is pushed"
+#
+# THE THRESHOLDS AND THE ACTIONS ARE YOURS, not st's. Every number below is a
+# tier in this file; nothing is hardcoded. Wanting 40/60/85 is a config edit.
+#
+# DECLARING A TIER IS WHAT TURNS IT ON. There is no `enabled` key, deliberately:
+# a separate boolean creates exactly one new failure mode — you write four tiers,
+# nothing happens, and you have to discover a fifth line was required. No tiers =
+# off, which is the default.
+#
+#   source            prometheus | textfile | stub
+#                     `textfile` reads the node_exporter file DIRECTLY and is
+#                     usually the better choice on a host that runs both the
+#                     probe and the crew: no scrape interval of lag, and no
+#                     second service that can be down. `prometheus` is right
+#                     when the crew is not on the probe's host. `stub` is for
+#                     tests and for rehearsing a tier without being at 95%.
+#   window            five_hour | seven_day — which window governs. NOTE the
+#                     label spellings; they are the producer's, not `5h`/`7d`.
+#   url               prometheus only. e.g. "http://prometheus.example"
+#   username          basic auth, if your Prometheus requires it.
+#   password_file     a PATH, never the password. This file is tracked, diffable
+#                     and hand-edited, and it is the table you are most likely to
+#                     paste into a ticket when asking why the governor is blind.
+#   path              textfile only: the .prom file to read.
+#   relax_margin      HYSTERESIS. A tier is left only below (at - margin), so a
+#                     reading oscillating around 70 does not flip the fleet's
+#                     dispatch policy every pass — each flip is a decision an
+#                     agent already acted on. It can only ever hold a tier
+#                     HIGHER than the live reading, never lower.
+#   max_age_seconds   older than this and the reading is SIGNAL LOST, not a
+#                     number. A governor reading a FROZEN value is worse than no
+#                     governor: it holds the fleet wide open at a stale 12%
+#                     forever and reads green the whole time.
+#   on_signal_lost    warn (default) | freeze
+#                     warn    the fleet runs UNGOVERNED and this ALARMS every
+#                             pass. An idled fleet caused by a broken probe is
+#                             its own outage, so the default errs toward running
+#                             — but never quietly.
+#                     freeze  dispatch nothing new. For a deployment that would
+#                             rather stall than overspend.
+#                     NEITHER ONE DRAINS. A probe bug must never be able to stop
+#                     the crew, so the governor never fails INTO a shutdown.
+#
+# WHAT EACH TIER MAY RESTRICT (a tier that restricts nothing is refused — it
+# would read as a policy in force while the fleet spends exactly as before):
+#
+#   min_priority   a dispatch floor in your tracker's numbering, where 0 is the
+#                  HIGHEST. `min_priority = 1` admits P0 and P1 and refuses P2+.
+#                  READ THE SIGN. An item carrying NO priority is refused while a
+#                  floor is in force — above 50% the point is to spend only on
+#                  work whose importance is stated.
+#   traits         only agents whose ROLE SET carries one of these RUN at all.
+#                  See [roles.*] below: `support` is a survival BAND, and the
+#                  match is a THRESHOLD — "support and above", so an agent banded
+#                  `last` also survives a support tier.
+#   action         "drain" — the full stop. Every live agent is asked, DURABLY,
+#                  to commit WIP on its own branch, push, report the SHAs, and
+#                  stop itself. st never kills a pane; tend would just respawn it
+#                  within five minutes. The report names who drained, what went
+#                  up, and who failed — and UNREPORTED IS NOT DRAINED.
+# ---------------------------------------------------------------------------
+
+# [governor]
+# source = "textfile"
+# path = "/var/lib/node_exporter/textfile_collector/claude_usage.prom"
+# window = "five_hour"
+# relax_margin = 5
+# max_age_seconds = 900
+# on_signal_lost = "warn"
+#
+# [[governor.tier]]
+# at = 50
+# min_priority = 1              # P1 and above only
+#
+# [[governor.tier]]
+# at = 70
+# min_priority = 0              # P0 only
+#
+# [[governor.tier]]
+# at = 80
+# traits = ["support"]          # only support crew (and above) runs
+#
+# [[governor.tier]]
+# at = 95
+# action = "drain"              # full stop, work pushed first
+
+# ---------------------------------------------------------------------------
+# survival + lane — the two axes the throttle reads (see [roles.<name>] above).
+#
+#   lane      MULTI    what work this agent may take — monitoring, quipu, infra…
+#   survival  SINGLE   which throttle band it lives in, and the bands are ORDERED:
+#
+#       first    shed FIRST
+#       normal   the default, and what an undeclared fleet is
+#       support  keeps the lights on — survives a `traits = ["support"]` tier
+#       last     shed LAST; the agents that must still be standing to
+#                coordinate a drain
+#
+# THE BANDS ARE NAMES, NOT NUMBERS, and that is the safety property. An integer
+# rank requires everyone to remember which direction survives, and that direction
+# is exactly what went wrong twice while this was designed: written from "low
+# rank dies first" against a role map where administrator was 0, a throttle spins
+# down the COORDINATOR first — the one agent that has to still be up to run the
+# drain. `first` and `last` say which end they are; there is no sign to invert.
+#
+# NEVER DERIVED, ALWAYS DECLARED. Nothing seeds a band from a role name, so an
+# administrator with no declared band is `normal` and sheds with everyone else.
+# That is deliberate: implicit protection is how a fleet acquires agents no
+# throttle can touch, and nobody can grep for a protection nobody wrote down.
+# If your coordinator must outlive the fleet, SAY SO:
+#
+#   [roles.coordinator]
+#   attachment = "rooted"
+#   survival = "last"
+#
+#   [roles.oncall]
+#   attachment = "reports-to"
+#   survival = "support"
+#   lane = ["monitoring", "infra"]
+#
+# Then put it on the card's role stack: roles = ["administrator", "coordinator"]
+# ---------------------------------------------------------------------------
