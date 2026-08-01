@@ -145,29 +145,42 @@ def test_the_surface_is_nineteen():
     contract is "mirror what is already declared" would make sync's most dangerous
     property (it overwrites cards to match a source) reachable from a prompt.
 
+    SHRANK to 19: the `role` and `project` ALIASES are gone (deprecated
+    2026-07-24, deleted after the one-week window). This is the only direction of
+    change this file has ever recorded, and it is worth stating why the earlier
+    consolidation did not achieve it: `roles set`/`roles sync` subsumed the two
+    old spellings while KEEPING them as aliases, and the count stayed put —
+    because an alias is a top-level command to argparse, to `st --help`, and to
+    anyone reading the surface. Deletion is the lever; consolidation alone was
+    not.
+
     Each command still earns its slot."""
-    assert len(_actual_subcommands()) == 21, (
+    assert len(_actual_subcommands()) == 19, (
         "the command count changed. If that's intended, update the number here and "
         "the cli.py docstring together — and say why the surface grew in docs/cli.md."
     )
 
 
-def test_deprecated_aliases_warn_on_stderr_only(capsys):
-    """The `role`/`project` aliases are kept (count stays 19) but must nudge users
-    to the canonical `roles ...` spelling ahead of their one-week-window deletion.
+def test_the_deleted_aliases_are_really_gone():
+    """The negative control for the deletion above.
 
-    Two properties that matter: the warning fires ONLY on the deprecated spelling
-    (never on canonical `roles ...`), and it goes to STDERR so stdout stays clean
-    for callers that pipe command output. Deletion of the alias parsers is the
-    slice that actually moves this count down.
+    Both old spellings must be UNKNOWN COMMANDS, not silently-accepted ones: an
+    alias that still parses keeps the surface at 21 no matter what the docstring
+    claims, and this file exists because a number nobody enforces is a comment.
     """
+    import pytest
     from shantytown.cli import main
 
-    main(["project", "-n"])
-    err = capsys.readouterr().err.lower()
-    assert "deprecated" in err and "roles sync" in err, "project alias did not warn"
+    assert "role" not in _actual_subcommands()
+    assert "project" not in _actual_subcommands()
+    for gone in (["role", "set", "ellie", "worker"], ["project", "-n"]):
+        with pytest.raises(SystemExit) as e:
+            main(gone)
+        assert e.value.code == 2, "argparse refuses an unknown command with 2"
 
-    main(["roles", "sync", "-n"])
-    assert "deprecated" not in capsys.readouterr().err.lower(), (
-        "canonical `roles sync` must NOT warn"
-    )
+
+def test_the_canonical_spellings_still_work():
+    """...and the handlers behind them are UNTOUCHED. Only the alias parsers went;
+    `roles set` / `roles sync` dispatch to the same functions they always did."""
+    assert {"roles"} <= _actual_subcommands()
+    assert cli._cmd_role is not None and cli._cmd_project is not None

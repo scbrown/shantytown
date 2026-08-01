@@ -64,7 +64,7 @@ def test_refuses_when_a_live_agent_would_be_restructured(tmp_path, monkeypatch, 
     graph(monkeypatch, Agent(name="sattler", role="worker"))
     panes(monkeypatch, "shanty-sattler")
 
-    rc = main(["--root", str(root), "project"])
+    rc = main(["--root", str(root), "roles", "sync"])
 
     assert rc == REFUSED
     assert role_of(root, "sattler") == "administrator", "refusal must write NOTHING"
@@ -79,7 +79,7 @@ def test_same_change_is_allowed_when_the_agent_is_not_live(tmp_path, monkeypatch
     graph(monkeypatch, Agent(name="sattler", role="worker"))
     panes(monkeypatch)  # nothing live
 
-    rc = main(["--root", str(root), "project"])
+    rc = main(["--root", str(root), "roles", "sync"])
 
     assert rc == OK
     assert role_of(root, "sattler") == "worker"
@@ -90,7 +90,7 @@ def test_force_overrides_the_refusal(tmp_path, monkeypatch):
     graph(monkeypatch, Agent(name="sattler", role="worker"))
     panes(monkeypatch, "shanty-sattler")
 
-    rc = main(["--root", str(root), "project", "--force"])
+    rc = main(["--root", str(root), "roles", "sync", "--force"])
 
     assert rc == OK
     assert role_of(root, "sattler") == "worker"
@@ -103,7 +103,7 @@ def test_dry_run_writes_nothing_and_creates_no_ghost_cards(tmp_path, monkeypatch
           Agent(name="a-backup-host", role="worker")) # a HOST, per the live graph
     panes(monkeypatch, "shanty-sattler")
 
-    rc = main(["--root", str(root), "project", "-n"])
+    rc = main(["--root", str(root), "roles", "sync", "-n"])
 
     assert rc == OK
     assert role_of(root, "sattler") == "administrator"
@@ -120,7 +120,7 @@ def test_dangling_supervisor_is_surfaced(tmp_path, monkeypatch, capsys):
     graph(monkeypatch, Agent(name="sattler", role="worker"))
     panes(monkeypatch, "shanty-sattler", "shanty-tim")
 
-    main(["--root", str(root), "project", "-n"])
+    main(["--root", str(root), "roles", "sync", "-n"])
 
     out = capsys.readouterr().out
     assert "demoted supervisor" in out
@@ -137,7 +137,7 @@ def test_no_dangling_report_when_supervisor_keeps_rank(tmp_path, monkeypatch, ca
     graph(monkeypatch, Agent(name="sattler", role="administrator", reports_to="x"))
     panes(monkeypatch, "shanty-sattler", "shanty-tim")
 
-    main(["--root", str(root), "project", "-n"])
+    main(["--root", str(root), "roles", "sync", "-n"])
 
     assert "demoted supervisor" not in capsys.readouterr().out
 
@@ -147,7 +147,7 @@ def test_clean_projection_is_idempotent_and_quiet(tmp_path, monkeypatch, capsys)
     graph(monkeypatch, Agent(name="sattler", role="worker"))
     panes(monkeypatch, "shanty-sattler")
 
-    rc = main(["--root", str(root), "project"])
+    rc = main(["--root", str(root), "roles", "sync"])
 
     assert rc == OK
     assert "Nothing to do" in capsys.readouterr().out

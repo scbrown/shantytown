@@ -24,7 +24,7 @@
 *Create a work item. Tell an agent to go get it. That's the whole idea.*
 
 [![dispatch 3.4s](https://img.shields.io/badge/dispatch-3.4s-brightgreen)](#-measured-against-gas-town)
-[![21 commands](https://img.shields.io/badge/commands-21-blue)](#-the-whole-surface)
+[![19 commands](https://img.shields.io/badge/commands-19-blue)](#-the-whole-surface)
 [![tests](https://img.shields.io/badge/tests-1140%20passing-blue)](#-principles)
 [![python](https://img.shields.io/badge/python-3.11%2B-blue)](#-install)
 [![dependencies none](https://img.shields.io/badge/dependencies-none-blue)](#-install)
@@ -197,7 +197,7 @@ stop.* Here is what the gate measured.
 
 | | `gt sling` | `st go` | |
 |---|---:|---:|---|
-| Commands | ~110 | **21** | *a small, deliberate fraction of the surface, by measured use* |
+| Commands | ~110 | **19** | *a small, deliberate fraction of the surface, by measured use* |
 | dispatch (dry-run) | 51.54 s | **0.15 s** | **~344× faster** |
 | dispatch (real) | > 120 s ⏱️ | **3.40 s** | **≥35× faster** |
 | Dolt connections | 63 | **3** | **21× fewer** |
@@ -275,8 +275,7 @@ st inbox <agent> <message>         a message into a pane. send-keys, nothing mor
 st go <item> [agent]              dispatch. the one that matters.
 st anchor                          who am I, what's on my plate      ← the anchor
 st crew                           who exists, what state, what role
-st roles [--check]                the hierarchy, and whether it's real
-st role set <agent> <role>        generative: rewrites cards, emits hooks
+st roles [--check|set|sync]       the hierarchy: show it, verify it, write it, import it
 st init                           scaffold a NEW deployment: asks, then writes store+cards+config
 st new <agent>                    create an agent from a card
 st start [--mode lite|heavy]      BOOT the town: the admin alone, or every card. idempotent.
@@ -284,7 +283,6 @@ st stop <agent>                   stop it
 st log [agent]                    what happened
 st context <query>                what code should I be looking at?
 st doctor [--install]             what's installed, what's stale, what's missing
-st project                        materialize the crew cards FROM the graph
 st tend                           supervise the crew: respawn what DIED, never what was RETIRED
 st attach [agent]                 attach to a crew member — STARTING them if down (socket + pane resolved)
 st dashboard [admin]              live, tier-scoped view: roster/state/work, self-refreshing
@@ -293,7 +291,7 @@ st worktree <repo> [agent]        provision an agent's isolated worktree off a S
 st stats [agent]                  what the crew actually did: files, skills, tokens (local store)
 ```
 
-Twenty-one, and the count is load-bearing: a test pins this block to the parser, so the next command
+Nineteen, and the count is load-bearing: a test pins this block to the parser, so the next command
 either updates the list or fails CI.
 
 ## 🔀 Workflows & events
@@ -412,7 +410,7 @@ order, every one of them also settable as an env var:
 | `SHANTY_STALL_MIN` | minutes an idle worker may hold an in_progress item with zero pane/item/shell change before tend acts on the neglected anchor. At this threshold tend NUDGES the agent itself to close-or-release it (self-heal); the coordinator is only escalated to if that goes unanswered. Default 15 — ~30 consecutive unchanged 30s passes: far above prompt-render lag, far below the measured hours-long parked failure. | `15` |
 | `SHANTY_STALL_ESCALATE_MIN` | minutes a still-frozen anchor waits AFTER the self-heal nudge before tend escalates it to the coordinator (aegis-es1tt). Default = `SHANTY_STALL_MIN`: the agent gets the same grace to act on the nudge that it got to be noticed. Any progress in the window re-arms the episode, so an agent that acts is never escalated; a decision/blocked-labelled anchor is never nudged or escalated at all. | `SHANTY_STALL_MIN` |
 | `SHANTY_DARK_AGENTS` | names (space/comma-separated) Rule Zero and tend must never count feedable — panes another orchestrator keeps respawning with this deployment's worker settings, which carry the stop-event wiring but route nothing here. The launch-stamp ownership gate excludes unstamped agents structurally; this list is the explicit override/belt for named ghosts. | the gastown-dark crew |
-| `QUIPU_SERVER` | quipu, for `--registry quipu`, `st project`, or `st subscribe` | `http://localhost:3030` |
+| `QUIPU_SERVER` | quipu, for `--registry quipu`, `st roles sync`, or `st subscribe` | `http://localhost:3030` |
 | `SHANTY_ONTO_NS` | the ontology IRI base your graph is keyed under | `http://shantytown.example/ontology/` |
 | `SHANTY_ONTO_CREW_CLASS` | the class local-name your graph uses for a crew member, resolved under `SHANTY_ONTO_NS`. Point st at your own vocabulary instead of adopting ours. | `CrewMember` |
 | `SHANTY_ONTO_REPORTS_PRED` | the predicate local-name for the supervisor edge. | `reports_to` |
@@ -439,7 +437,7 @@ error, it just stops new facts from joining the old ones.
 |---|---|
 | [`docs/vision.md`](docs/vision.md) | what this replaces, and how we'll know it failed |
 | [`docs/design.md`](docs/design.md) | the shape: dispatch, triage, trackers, panes |
-| [`docs/cli.md`](docs/cli.md) | the twenty-one commands, the boot modes, and the anchor |
+| [`docs/cli.md`](docs/cli.md) | the nineteen commands, the boot modes, and the anchor |
 | [`docs/agent-card.md`](docs/agent-card.md) | identity — the graph is the truth, the card is a projection |
 | [`docs/roles.md`](docs/roles.md) | worker / lead / administrator, and why a lead absorbs |
 | [`docs/adapters.md`](docs/adapters.md) | first-class defaults, pluggable everything |

@@ -17,8 +17,7 @@ st inbox <agent> <message>    put a message in an agent's inbox (send-keys; -d p
 st inbox [--count|--read]     read your own inbox
 st task <title>               create a work item
 st crew [--count]             who exists, what state, what role, WHO IS FREE
-st roles [--check]            the hierarchy, and whether it's real
-st role set <agent> <role>    generative: rewrites cards, emits hooks
+st roles [--check|set|sync]   the hierarchy: show it, verify it, write it, import it
 st init                       scaffold a NEW deployment (wizard): store, cards, hooks, config
 st new <agent>                create an agent from a card
 st start [--mode lite|heavy]  BOOT the town by mode: the admin alone, or every card. idempotent
@@ -27,7 +26,6 @@ st stop <agent> [--reason]    stop it, and RECORD that it was deliberate
 st log [agent]                what happened
 st context <query>            what code should I be looking at? (bobbin)
 st doctor [--install]         what's installed, stale, missing (out-of-box)
-st project                    materialize the crew cards FROM the graph
 st tend                       supervise the crew: respawn what DIED, never what was RETIRED
 st tend --reauth              relaunch every AUTH-DEAD agent (run AFTER the operator re-logs in)
 st tend --target N            respawn only toward N LIVE agents (scale UP on loss; never stops a surplus)
@@ -39,12 +37,11 @@ st subscribe                  watch quipu entity events; route governed workflow
 st worktree <repo> [agent]    provision an agent's isolated worktree off a SHARED project repo
 ```
 
-Twenty-one. `--dry-run` is on every command that writes, from commit one. The surface grew past the
+Nineteen. `--dry-run` is on every command that writes, from commit one. The surface grew past the
 original eight by nine, each on a specific ask — not drift: **inbox**/**task** (the dispatch/tracker
 pair, owner-directed), **context** (the bobbin Context protocol), **doctor**
-(out-of-box detect/install, Stiwi's direct ask), **project** (the quipu-registry
-projection), and **subscribe** (the quipu events adapter, routing governed workflows to the
-admin). Each is named on purpose: this doc once
+(out-of-box detect/install, Stiwi's direct ask), and **subscribe** (the quipu events adapter,
+routing governed workflows to the admin). Each is named on purpose: this doc once
 said "eight" while the code had twelve, and a count nobody enforces is a comment — in the one repo
 whose whole pitch is the exact count, that was the bug.
 

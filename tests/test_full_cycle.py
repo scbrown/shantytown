@@ -64,7 +64,7 @@ def test_full_crew_cycle_on_st_zero_gt(workspace, monkeypatch, capsys):
         return rc
 
     # 1. role set — emits the per-role settings.json (the hooks st new reads)
-    assert run("role", "set", "ellie", "worker") == OK
+    assert run("roles", "set", "ellie", "worker") == OK
     assert (root / "settings" / "worker.settings.json").is_file()
 
     # 2. prime — identity + EMPTY plate
