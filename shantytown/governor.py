@@ -155,14 +155,25 @@ class Tier:
     a tier may carry more than one — they compose, they do not exclude.
 
         at            engage while usage >= this percent
+        window        WHICH budget `at` is read against (aegis-59hao)
         min_priority  a DISPATCH floor (see admits below — read the sign)
         traits        only agents whose role set carries one of these RUN at all
         action        "drain" — the full stop, with the push protocol
+
+    THERE ARE TWO BUDGETS AND THEY EXHAUST INDEPENDENTLY (aegis-59hao). The
+    producer publishes both windows and the governor used to read exactly one, so
+    it was blind to whichever budget was actually further gone — and blind in the
+    expensive direction, because a five-hour window refills in HOURS while the
+    weekly does not refill for DAYS. Governing only the cheap-to-recover budget is
+    backwards. `window` lives on the TIER rather than in a second config table so
+    that a seven-day rule is just another tier row: nothing new to learn, and a
+    config that never mentions a window keeps its exact current meaning.
     """
     at: int
     min_priority: int | None = None
     traits: tuple[str, ...] = ()
     action: str | None = None
+    window: str = FIVE_HOUR
 
     @property
     def drains(self) -> bool:
@@ -170,7 +181,10 @@ class Tier:
 
     def label(self) -> str:
         """What this tier does, in one clause, for a refusal message. A refusal
-        that names only a number teaches nothing."""
+        that names only a number teaches nothing — and with two budgets, one that
+        names only a NUMBER is worse than useless: "usage 72%" sends an operator
+        to look at the wrong budget. Every label names its window.
+        """
         bits = []
         if self.min_priority is not None:
             bits.append(f"dispatch only P{self.min_priority} and above")
@@ -178,7 +192,8 @@ class Tier:
             bits.append(f"only {'/'.join(self.traits)} crew runs")
         if self.drains:
             bits.append("FULL STOP — every agent pushes its work, then stops")
-        return "; ".join(bits) or "no restriction declared"
+        what = "; ".join(bits) or "no restriction declared"
+        return f"{what} [{self.window} >= {self.at}%]"
 
 
 @dataclass(frozen=True)
