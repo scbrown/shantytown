@@ -24,6 +24,9 @@ import urllib.error
 import urllib.request
 from dataclasses import replace
 
+# Shared ancestor for every "I could not look" (see shantytown/answer.py).
+from shantytown.answer import CouldNotLook
+
 from .protocols import Agent
 
 
@@ -120,7 +123,7 @@ TRAIT_PREFIX = os.environ.get("SHANTY_ONTO_TRAIT_PREFIX") or "trait"
 TRAIT_VALUE_CLASS = os.environ.get("SHANTY_ONTO_TRAIT_VALUE_CLASS") or "TraitValue"
 
 
-class QuipuUnreachable(Exception):
+class QuipuUnreachable(CouldNotLook):
     """quipu could not be reached or returned an error. NOT 'nobody exists' —
     'I could not look'. Callers must surface this as cannot-tell / exit 2, never
     swallow it into an empty registry."""
