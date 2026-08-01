@@ -22,6 +22,7 @@ import json
 import os
 import urllib.error
 import urllib.request
+from dataclasses import replace
 
 from .protocols import Agent
 
@@ -527,8 +528,31 @@ class QuipuRegistry:
 
     def all(self) -> list[Agent]:
         """Every crew member, roles derived. RAISES `QuipuUnreachable` if quipu
-        cannot be read — never returns `[]` on failure."""
-        return derive_agents(self._query(self._all))
+        cannot be read — never returns `[]` on failure.
+
+        Each member also carries its STACKED role set from `hasRole` when the graph
+        declares one (GitHub #37). Two properties, both deliberate:
+
+        A MEMBER WITH NO `hasRole` KEEPS AN EMPTY SET, not a one-element one. The
+        migration is partial by design — st had to read the field BEFORE members
+        were bulk-migrated to it, or the migration would write data no consumer
+        used — so "declared a set" and "has not been migrated" must stay
+        distinguishable. Agent.effective_roles() is where the fallback lives.
+
+        A FAILED ROLE-SET READ DOES NOT FAIL THE ROSTER. The tree position is what
+        every existing surface needs; the stack is an enrichment. Losing the
+        enrichment costs a capability, while losing the roster costs the fleet —
+        so this degrades in the direction that keeps `crew`, `tend` and the drain
+        working on a graph that has not been migrated at all.
+        """
+        agents = derive_agents(self._query(self._all))
+        try:
+            stacks = self.role_sets()
+        except QuipuUnreachable:
+            return agents
+        if not stacks:
+            return agents
+        return [replace(a, roles=stacks.get(a.name, ())) for a in agents]
 
     def catalog(self):
         """The deployment's ROLE CATALOG, from the graph (GitHub #37).
