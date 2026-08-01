@@ -65,6 +65,35 @@ class Agent:
                                   # agent. Per-agent, never global — a crew worker
                                   # that must act without permission prompts sets
                                   # it on its card; nobody else is affected.
+    roles: tuple[str, ...] = ()   # the STACKED role set (GitHub #37). `role` above
+                                  # is this agent's TREE POSITION and stays the
+                                  # field the built-in process reads; this is the
+                                  # full set of trait-presets it holds, which the
+                                  # tree position cannot express — one agent runs
+                                  # {worker, keeper:security, escalation-target}
+                                  # and the enum could say only "worker", leaving
+                                  # three of its four behaviours invisible to
+                                  # every routing and scaling decision.
+                                  # EMPTY IS NOT (role,). Empty means NOBODY SAID,
+                                  # and the difference is the migration: a card
+                                  # that has not been given a set must be
+                                  # distinguishable from one whose set happens to
+                                  # be its tree position, or "has this been
+                                  # migrated?" becomes unanswerable. Consumers
+                                  # that want a usable set call effective_roles().
+    domain: str | None = None     # WHICH domain a domain-scoped role owns — a
+                                  # per-MEMBER parameter, not a property of the
+                                  # role, so `keeper` stays reusable and the
+                                  # member supplies what it keeps.
+
+    def effective_roles(self) -> tuple[str, ...]:
+        """The role set to ACT on: the declared stack, or the tree position alone.
+
+        The fallback lives here rather than at each call site so "an un-migrated
+        card behaves exactly as it always did" is one line that cannot drift —
+        while `roles` itself stays honest about whether anything was declared.
+        """
+        return self.roles or (self.role,)
 
 
 @dataclass(frozen=True)

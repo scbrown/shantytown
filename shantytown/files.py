@@ -59,6 +59,12 @@ class FilesRegistry:
             harness=d.get("harness"),
             dangerous=d.get("dangerous", False),
             retired=d.get("retired", False),
+            # The stacked set, mirrored from the graph (GitHub #37). A card that
+            # does not carry it reads () — "nobody said" — never (role,), so an
+            # un-migrated card is distinguishable from a migrated one whose set
+            # happens to equal its tree position.
+            roles=tuple(d.get("roles", ()) or ()),
+            domain=d.get("domain"),
         )
 
     def set(self, agent: Agent) -> None:
@@ -97,6 +103,14 @@ class FilesRegistry:
         # retired is written even when False: un-retiring must be expressible,
         # and a field that can only ever be set is a one-way door.
         existing["retired"] = agent.retired
+        # The stacked role set + its per-member parameter (GitHub #37). Written
+        # only when carried, like model/workspace/harness: a `role set` that
+        # touches the tree position must not silently erase a set some other
+        # source (the graph) declared — the tier does not own this field.
+        if agent.roles:
+            existing["roles"] = list(agent.roles)
+        if agent.domain is not None:
+            existing["domain"] = agent.domain
         # EVERY CARD LEAVES HERE STARTABLE. A card with no pane names no session,
         # and launch/attach/stop/tend all resolve an agent THROUGH its pane — so a
         # pane-less card is an agent that exists and cannot be run. The card
