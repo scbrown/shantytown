@@ -975,7 +975,22 @@ class BlockedStaleAlerter:
             del ledger[bid]
 
         surfaced = []
-        due.sort(key=lambda x: -x[2])          # oldest first — most forgotten, most urgent
+        # PRIORITY FIRST, THEN AGE — and this was WRONG on the first deploy, caught
+        # only by watching a real pass. Sorted on age alone, the live store put
+        # four 36-40d P2s ahead of the 17-day P1 SECURITY bead this whole feature
+        # exists for; it came SIXTH and was held back by the per-pass cap. An
+        # alarm whose ordering buries its own headline case is not an alarm.
+        # Missing/unparseable priority sorts LAST rather than first: an unknown
+        # is not an emergency, and treating it as one would let a malformed row
+        # displace a real P1.
+        def _rank(item):
+            _bid, row, age = item
+            try:
+                prio = int(row.get("priority"))
+            except (TypeError, ValueError):
+                prio = 99
+            return (prio, -age)
+        due.sort(key=_rank)
         held_back = max(0, len(due) - BLOCKED_MAX_PER_PASS)
         for i, (bid, r, age) in enumerate(due[:BLOCKED_MAX_PER_PASS]):
             who = (r.get("assignee") or "").split("/")[-1] or "nobody"

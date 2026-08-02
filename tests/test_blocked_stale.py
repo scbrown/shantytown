@@ -133,3 +133,34 @@ def test_it_FAILS_OPEN_when_the_store_cannot_be_read(tmp_path):
     a = BlockedStaleAlerter(tmp_path, reg=None, panes=None, push=_Push(),
                               bd_blocked=boom, now=NOW)
     assert a.sweep() == []
+
+
+# --- ordering: the headline case must not be buried (found in production) -----
+#
+# The first deploy sorted on AGE alone. On the live store that put four 36-40d
+# P2s ahead of the 17-day P1 SECURITY bead the whole feature exists for — it came
+# SIXTH and was held back by the per-pass cap. Simulation did not show this;
+# watching a real pass did.
+
+def test_a_P1_outranks_an_OLDER_P2(tmp_path):
+    push = _Push()
+    rows = [_row("old_p2", 40, prio=2), _row("degd", 17, prio=1)]
+    got = _alerter(tmp_path, rows, push).sweep()
+    assert got[0] == "degd", f"buried the P1 behind an older P2: {got}"
+
+
+def test_age_still_breaks_ties_within_a_priority(tmp_path):
+    """The control: priority must not flatten age, or every P2 becomes equal and
+    the genuinely forgotten ones stop rising."""
+    push = _Push()
+    rows = [_row("newer", 10, prio=2), _row("older", 40, prio=2)]
+    assert _alerter(tmp_path, rows, push).sweep() == ["older", "newer"]
+
+
+def test_an_unparseable_priority_sorts_LAST_not_first(tmp_path):
+    """A malformed row must not displace a real P1 — an unknown is not an
+    emergency."""
+    push = _Push()
+    bad = _row("bad", 40, prio=None); bad["priority"] = "not-a-number"
+    rows = [bad, _row("degd", 17, prio=1)]
+    assert _alerter(tmp_path, rows, push).sweep()[0] == "degd"
