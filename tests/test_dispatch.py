@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -327,3 +328,73 @@ def test_an_OPEN_item_is_still_served(world):
     p = d.go("item-1", "ellie")
     assert p is not None and panes.sent, "the guard refused a workable item"
     assert tracker.get("item-1").status == "in_progress"
+
+
+# --- an UNMET BLOCKER is the third variant of the same hole (internal-ref) ----
+#
+# plan() refused CLOSED, then BLOCKED, on one sentence: serving writes
+# status=in_progress, so a dispatch must not put work on a plate nobody can
+# advance. An item whose `blocks` dependency is still open is exactly that.
+#
+# MEASURED: a P1 was dispatched to an agent while `bd ready` correctly EXCLUDED
+# it, because its blocker — a filed, open telemetry gap — was unmet. The tracker
+# had the right answer and the dispatch path never asked.
+#
+# These use a tracker that CAN express blockers. The files backend has no
+# dependency model at all, which is exactly why `open_blockers` empty must mean
+# "none known" and never "ready" — see the control at the end.
+
+class _BlockedTracker(CountingTracker):
+    """A tracker that reports open blockers, the way the beads backend does."""
+
+    def __init__(self, root, blockers=()):
+        super().__init__(root)
+        self._blockers = tuple(blockers)
+
+    def get(self, item_id):
+        item = super().get(item_id)
+        return replace(item, open_blockers=self._blockers)
+
+
+def _blocked_world(tmp_path, blockers, *, assignee="", status="open"):
+    reg_dir = tmp_path / "crew2"; reg_dir.mkdir()
+    (reg_dir / "ellie.json").write_text(json.dumps(
+        {"role": "worker", "reports_to": "malcolm", "pane": "%5"}))
+    trk = _BlockedTracker(tmp_path / "items2", blockers)
+    trk.update("item-1", title="t", status=status, assignee=assignee)
+    trk.updates = 0
+    panes = NullPanes()
+    d = Dispatcher(FilesRegistry(reg_dir), trk, panes)
+    return d, trk, panes
+
+
+def test_an_item_with_an_UNMET_blocker_is_refused(tmp_path):
+    d, trk, panes = _blocked_world(tmp_path, ("item-blocker",))
+
+    from shantytown.dispatch import HasOpenBlocker
+    with pytest.raises(HasOpenBlocker) as ei:
+        d.go("item-1", "ellie")
+
+    assert "item-blocker" in str(ei.value), "the refusal must NAME what is blocking"
+    assert not panes.sent, "served work that cannot be advanced"
+    assert trk.updates == 0, "wrote status on an unservable item"
+
+
+def test_reassign_does_not_bypass_an_unmet_blocker(tmp_path):
+    """reassign takes work from a live holder; it does not make blocked work
+    workable."""
+    d, trk, panes = _blocked_world(tmp_path, ("item-blocker",), assignee="kelly")
+
+    from shantytown.dispatch import HasOpenBlocker
+    with pytest.raises(HasOpenBlocker):
+        d.go("item-1", "ellie", reassign=True)
+
+
+def test_NO_blockers_is_served_normally(tmp_path):
+    """The discrimination control. An empty list means "none known" — for the
+    files backend it is the ONLY possible value — so it must never refuse.
+    Without this the guard could refuse everything and both tests above pass."""
+    d, trk, panes = _blocked_world(tmp_path, ())
+    p = d.go("item-1", "ellie")
+    assert p is not None and panes.sent, "an item with no blockers was refused"
+    assert trk.get("item-1").status == "in_progress"
