@@ -772,6 +772,15 @@ $ st anchor --events
 $ st crew --count
 3/9
 
+$ st crew --governor
+ok 45 24
+# both budgets (five_hour, seven_day) — they exhaust independently.
+# A tier in force is NAMED after the numbers:
+#   ok 70 24 dispatch only P0 and above [five_hour >= 70%]
+# Blind cases carry NO digits, so a bar cannot scrape a stale reading:
+#   lost   the signal could not be read
+#   off    no governor configured
+
 $ st anchor --harness
 claude
 
