@@ -128,3 +128,106 @@ class ForgejoTracker:
 def _bare(assignee: str) -> str:
     """Crew-path assignees ('rig/crew/name') become the bare forge login."""
     return assignee.split("/")[-1]
+
+
+# --- OPEN PULL REQUESTS on a repo (aegis-ib65p decision 4) -------------------
+#
+# THE CASE THIS EXISTS FOR, and why branch-tip currency is not enough. The
+# coordinator rebuilt a status-bar fix from scratch; PR #3 had already fixed the
+# same bug and had been an open DRAFT for a week. Being perfectly current with
+# main would NOT have prevented it — the duplicated work was never on main at
+# all. So a dispatch that says only "your tree is current" is confidently
+# answering the wrong question. Unmerged work is exactly the work you cannot see
+# from your own tree, which is precisely why it must be carried TO you.
+#
+# The two forges the fleet actually uses are handled, and NEITHER is guessed at:
+# a github host goes through `gh` (already authenticated for the operator), and
+# anything else is treated as Forgejo over its REST API. When we cannot tell, we
+# say we cannot tell — see the return contract.
+
+_GH_HOSTS = ("github.com", "www.github.com")
+
+
+def parse_remote(url: str) -> "tuple[str, str, str] | None":
+    """(host, owner, name) from a git remote URL, or None if it is not one we
+    can address. Handles ssh://git@h/o/n.git, git@h:o/n.git, https://h/o/n."""
+    u = (url or "").strip()
+    if not u:
+        return None
+    m = re.match(r"^[a-z+]+://(?:[^@/]+@)?([^/:]+)(?::\d+)?/(.+)$", u)
+    if not m:
+        m = re.match(r"^(?:[^@]+@)?([^:/]+):(.+)$", u)      # scp-like
+    if not m:
+        return None
+    host, path = m.group(1), m.group(2)
+    path = path[:-4] if path.endswith(".git") else path
+    parts = [p for p in path.strip("/").split("/") if p]
+    if len(parts) < 2:
+        return None
+    return host, parts[-2], parts[-1]
+
+
+def open_pulls(remote_url: str, gh_run=None, http_get=None,
+               env=None) -> "tuple[list[str] | None, str | None]":
+    """(summaries, error). EXACTLY ONE is None.
+
+    `summaries` is a list like ["#3 status-bar/crew-identity (draft)"].
+    An EMPTY LIST is a real answer — "we looked, there are none". `None` with an
+    error is "we could not look", and the two must never be conflated: a dispatch
+    that prints nothing because the forge was down looks identical to one where
+    the repo genuinely has no open PRs, and the whole value here is knowing which.
+    That is the same distinction `git_origin` keeps between MISMATCH and CANNOT
+    TELL, for the same reason.
+    """
+    import os as _os
+    import subprocess
+    env = _os.environ if env is None else env
+    parsed = parse_remote(remote_url)
+    if not parsed:
+        return None, f"could not parse a forge out of the remote {remote_url!r}"
+    host, owner, name = parsed
+
+    if host in _GH_HOSTS:
+        run = gh_run or (lambda argv: subprocess.run(
+            argv, capture_output=True, text=True, timeout=30))
+        try:
+            r = run(["gh", "pr", "list", "--repo", f"{owner}/{name}", "--state",
+                     "open", "--json", "number,title,isDraft", "--limit", "20"])
+        except Exception as e:                              # gh absent, timeout
+            return None, f"could not reach github for {owner}/{name}: {e}"
+        if getattr(r, "returncode", 1) != 0:
+            first = ((r.stderr or r.stdout) or "").strip().splitlines()
+            return None, (f"could not list PRs for {owner}/{name}: "
+                          f"{first[0] if first else 'gh failed'}")
+        try:
+            rows = json.loads(r.stdout or "[]")
+        except ValueError:
+            return None, f"unreadable gh output for {owner}/{name}"
+        return [f"#{x['number']} {x.get('title','')}"
+                f"{' (draft)' if x.get('isDraft') else ''}" for x in rows], None
+
+    base = (env.get("SHANTY_FORGEJO_URL") or f"http://{host}").rstrip("/")
+    token = env.get("SHANTY_FORGEJO_TOKEN")
+    url = f"{base}/api/v1/repos/{owner}/{name}/pulls?state=open&limit=20"
+    get = http_get or _http_get_json
+    try:
+        rows = get(url, token)
+    except Exception as e:
+        # NAME THE FIX. Anonymous Forgejo API access is refused by default
+        # ("Only signed in user is allowed to call APIs"), which is a
+        # configuration gap and not an outage — an operator reading "could not
+        # reach" would go looking for a dead server.
+        return None, (f"could not list PRs for {owner}/{name} at {base}: {e}"
+                      f"{'' if token else ' (no SHANTY_FORGEJO_TOKEN set — the Forgejo API refuses anonymous callers)'}")
+    if not isinstance(rows, list):
+        return None, f"unexpected PR payload from {base}"
+    return [f"#{x.get('number')} {x.get('title','')}"
+            f"{' (draft)' if x.get('draft') else ''}" for x in rows], None
+
+
+def _http_get_json(url: str, token: str | None):
+    req = urllib.request.Request(url, headers={"Accept": "application/json"})
+    if token:
+        req.add_header("Authorization", f"token {token}")
+    with urllib.request.urlopen(req, timeout=20) as r:
+        return json.loads(r.read().decode())

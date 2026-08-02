@@ -38,6 +38,7 @@ BOTH SIDES reported success. Present means present. That is the whole check.
 from __future__ import annotations
 import shutil
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
@@ -416,6 +417,203 @@ def worktree_for(repo: Path | str, agent: str) -> Path:
     """Where agent's isolated worktree of <repo> lives: <repo>-wt/<agent>."""
     shared = _shared_repo(repo)
     return shared.parent / f"{shared.name}-wt" / agent
+
+
+# Running git is INJECTED here for the same reason cloning and origin-reading are
+# above: the refusal has to be testable without a network. Returns (rc, stdout).
+GitRunner = Callable[..., "tuple[int, str]"]
+
+MAIN_CANDIDATES = ("main", "master")
+
+
+def _git(dest: Path | str, *args: str) -> "tuple[int, str]":
+    r = subprocess.run(["git", "-C", str(dest), *args],
+                       capture_output=True, text=True, timeout=60)
+    return r.returncode, (r.stdout or "").strip()
+
+
+def upstream_ref(dest: Path | str, run: GitRunner = _git
+                 ) -> "tuple[str | None, str | None]":
+    """WHICH REF DOES "current" MEAN FOR THIS REPO? Returns (ref, note).
+
+    `ref` is None when we cannot tell, and then `note` is the refusal. Otherwise
+    `note` is None, or a WARNING that some OTHER remote is ahead of the ref we
+    chose — which the caller must surface, never swallow.
+
+    WHY THIS IS NOT JUST "origin/main" (aegis-ib65p). Every worktree entry point
+    here defaulted to the literal string `origin/main`, and on the repo this was
+    written for that is the WRONG TREE:
+
+        forge   ssh://.../shantytown.git    <- what `main` actually tracks
+        origin  git@github.com:...          <- a public mirror
+
+    Measured twice, three hours apart, and the answer INVERTED between them: the
+    mirror was 1 commit BEHIND, then 1 commit AHEAD. Both remotes take real
+    pushes, so there is no static answer, and a guard that rebased every worktree
+    onto `origin/main` would at one of those two moments have moved twelve
+    worktrees BACKWARD relative to the authority while printing "current". That
+    is the staleness this is meant to remove, reintroduced by the remedy and
+    dressed as a success line.
+
+    So the ref is RESOLVED FROM CONFIGURATION, never from a remote's name:
+
+      1. `<main>@{upstream}` — what the repo itself says its main branch tracks.
+         The only defensible automatic answer, and per-repo correct.
+      2. Exactly one remote and no upstream config -> use it. Unambiguous.
+      3. Two or more remotes and nothing configured -> REFUSE, naming them.
+
+    Step 3 is the same doctrine `normalize_source` already states for clone
+    sources — "a guessed remote is how an agent gets launched into the wrong
+    repo" — and the cost asymmetry is identical. A false refusal is loud, names
+    both remotes, and a human fixes it in one `git branch --set-upstream-to`. A
+    wrong ref is undetectable: the tree looks current, the agent works, and it
+    rebuilds something that already exists. Not a close call.
+
+    THE `note` IS THE POINT OF THE WHOLE FUNCTION, not a decoration. The bug this
+    serves is an agent not knowing what it does not have. Picking one remote and
+    staying SILENT about a second one that is ahead is that same bug with a
+    tidier surface, so a divergence is always reported even though it is never
+    acted on automatically.
+    """
+    rc, remotes_out = run(dest, "remote")
+    remotes = [r for r in remotes_out.splitlines() if r.strip()] if rc == 0 else []
+
+    ref = None
+    branch = None
+    for b in MAIN_CANDIDATES:
+        rc, out = run(dest, "rev-parse", "--abbrev-ref", f"{b}@{{upstream}}")
+        if rc == 0 and out:
+            ref, branch = out, b
+            break
+
+    if ref is None:
+        if len(remotes) == 1:
+            for b in MAIN_CANDIDATES:
+                cand = f"{remotes[0]}/{b}"
+                rc, _ = run(dest, "rev-parse", "--verify", "--quiet", cand)
+                if rc == 0:
+                    ref, branch = cand, b
+                    break
+        if ref is None:
+            if len(remotes) > 1:
+                return None, (
+                    f"cannot tell which remote is authoritative for {dest}: "
+                    f"{', '.join(sorted(remotes))} are all configured and no "
+                    f"main branch tracks one of them. REFUSING to guess — the "
+                    f"wrong remote silently rebases onto the wrong tree. Fix: "
+                    f"`git -C {dest} branch --set-upstream-to=<remote>/main main`.")
+            return None, (
+                f"cannot resolve an upstream ref for {dest} "
+                f"({'no remotes configured' if not remotes else 'no main/master branch found'}).")
+
+    # A DIVERGENCE IS REPORTED, NEVER ACTED ON. We do not switch refs, merge, or
+    # pick the "more advanced" remote — choosing between two authorities is a
+    # human's call. We only refuse to be quiet about it.
+    chosen_remote = ref.split("/", 1)[0]
+    ahead = []
+    for r in remotes:
+        if r == chosen_remote:
+            continue
+        other = f"{r}/{branch}"
+        rc, _ = run(dest, "rev-parse", "--verify", "--quiet", other)
+        if rc != 0:
+            continue
+        rc, out = run(dest, "rev-list", "--count", f"{ref}..{other}")
+        if rc == 0 and out.isdigit() and int(out) > 0:
+            rc2, sha = run(dest, "rev-parse", "--short", other)
+            ahead.append(f"{other} is {out} ahead ({sha if rc2 == 0 else '?'})")
+    if ahead:
+        return ref, (f"NOTE: {'; '.join(ahead)} — {ref} is what this repo tracks, "
+                     f"so that is what was used, but work exists that it does not "
+                     f"contain.")
+    return ref, None
+
+
+@dataclass(frozen=True)
+class Staleness:
+    """How a tree stands against its upstream — IN BOTH DIRECTIONS.
+
+    Both risks were live in this fleet on one evening (aegis-ib65p), and they are
+    not the same risk, so collapsing them into one "stale" bit would hide one of
+    them:
+
+      behind    commits on the ref that this tree does NOT have.
+                Risk: DUPLICATION. The coordinator rebuilt a status-bar fix from
+                scratch that already existed, and the branches later auto-merged
+                into a duplicate map key that only the compiler caught.
+      unpushed  commits here that are NOT on the ref.
+                Risk: LOSS. Work that exists in exactly one place, invisible to
+                everyone, and destroyed by any of the resets this codebase
+                already forbids (aegis-repg/iaef).
+
+    `dirty` is uncommitted work — the reason a refresh must REPORT rather than
+    act. `note` carries a remote divergence or a refusal from upstream_ref.
+    """
+    ref: str | None = None
+    behind: int = 0
+    unpushed: int = 0
+    dirty: bool = False
+    note: str | None = None
+    error: str | None = None
+
+    def current(self) -> bool:
+        """Nothing to fetch and nothing stranded. `dirty` is deliberately NOT
+        part of this: uncommitted work is normal mid-task and is not staleness."""
+        return self.error is None and self.behind == 0 and self.unpushed == 0
+
+    def render(self) -> str:
+        """One line, and it must never flatter. Silence about a thing we could
+        not measure is how the fleet learned to trust a stale tree."""
+        if self.error:
+            return f"staleness UNKNOWN ({self.error})"
+        bits = []
+        if self.behind:
+            bits.append(f"{self.behind} behind {self.ref} (work you do NOT have "
+                        f"— check for duplication before you build)")
+        if self.unpushed:
+            bits.append(f"{self.unpushed} unpushed (exists only here — push or "
+                        f"it is one reset from gone)")
+        if self.dirty:
+            bits.append("uncommitted changes")
+        if not bits:
+            return f"current with {self.ref}"
+        return "; ".join(bits)
+
+
+def tree_staleness(dest: Path | str, run: GitRunner = _git,
+                   fetch: bool = False) -> Staleness:
+    """Measure a tree against its resolved upstream. NEVER writes, never pulls.
+
+    `fetch` is OFF by default and that is a design constraint, not laziness: this
+    is called from an EDIT-TIME hook (aegis-ib65p decision 5), and a hook that
+    hit the network on every edit would be switched off within a day — at which
+    point it protects nothing. Reading already-fetched refs is nearly free and is
+    honest about what it is: "as of the last fetch". The dispatch path, which
+    runs once and can afford it, passes fetch=True.
+    """
+    ref, note = upstream_ref(dest, run=run)
+    if ref is None:
+        return Staleness(ref=None, note=note, error=note)
+    if fetch:
+        run(dest, "fetch", "--all", "--quiet")
+        ref, note = upstream_ref(dest, run=run)
+        if ref is None:
+            return Staleness(ref=None, note=note, error=note)
+    rc, behind = run(dest, "rev-list", "--count", f"HEAD..{ref}")
+    rc2, unpushed = run(dest, "rev-list", "--count", f"{ref}..HEAD")
+    if rc != 0 or rc2 != 0:
+        return Staleness(ref=ref, note=note,
+                         error=f"could not count commits against {ref}")
+    rc3, porcelain = run(dest, "status", "--porcelain")
+    return Staleness(
+        ref=ref,
+        behind=int(behind) if behind.isdigit() else 0,
+        unpushed=int(unpushed) if unpushed.isdigit() else 0,
+        # CANNOT TELL IS NOT CLEAN. A failed status must not read as a tidy tree,
+        # because the whole point of the flag is to stop a refresh from acting.
+        dirty=bool(porcelain.strip()) if rc3 == 0 else True,
+        note=note,
+    )
 
 
 def ensure_worktree(repo: Path | str, agent: str, base: str = "origin/main",

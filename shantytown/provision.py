@@ -380,6 +380,41 @@ def _with_untracked_hook(text: str, role: str, root) -> str:
     return json.dumps(cfg, indent=2) + "\n"
 
 
+def _with_stale_hook(text: str, role: str, root) -> str:
+    """Inject the edit-time STALENESS advisory (aegis-ib65p decision 5).
+
+    HERE, not in `claude_settings_for_role`, for the reason the two injectors
+    above already record and that this codebase has now measured twice: this
+    consent file is re-applied on EVERY launch and therefore self-heals, while
+    `--settings` is emitted only on `role set` and never reaches an agent that
+    is already running. A staleness guard that reaches nobody would be a
+    particularly bad joke, since not reaching people is the entire bug.
+
+    UNLIKE the untracked nudge, EVERY role gets this one, administrators
+    included. That exemption exists there because a coordinator should not be
+    scolded for dispatching rather than committing — a role-specific behaviour.
+    Staleness is not role-specific: the incident that opened this bead was the
+    COORDINATOR rebuilding a fix that already existed. Exempting the role it
+    actually happened to would be exactly the wrong lesson.
+
+    APPENDS and is idempotent — any previous entry is dropped first, so
+    re-provisioning cannot stack it and fire it twice per tool call.
+    """
+    from .runtime import _stale_hook      # lazy: provision<->runtime hygiene
+    try:
+        cfg = json.loads(text)
+    except ValueError:
+        return text
+    if not isinstance(cfg, dict):
+        return text
+    hooks = cfg.setdefault("hooks", {})
+    kept = [e for e in hooks.get("PreToolUse", [])
+            if not any("shantytown.stale_guard" in h.get("command", "")
+                       for h in e.get("hooks", []))]
+    hooks["PreToolUse"] = kept + [_stale_hook(root)]
+    return json.dumps(cfg, indent=2) + "\n"
+
+
 def provision(card: Agent, root, *, secrets=None) -> list[str]:
     """Equip the agent's workspace. Returns the server names it can now reach.
 
@@ -445,8 +480,10 @@ def provision(card: Agent, root, *, secrets=None) -> list[str]:
         out.mkdir(parents=True, exist_ok=True)
         text = (render(consent.read_text(), {"SERVERS": ""}) if "${SERVERS}"
                 in consent.read_text() else consent.read_text())
-        final = _with_untracked_hook(
-            _with_capture_hook(_consent_for_role(text, card.role), root),
+        final = _with_stale_hook(
+            _with_untracked_hook(
+                _with_capture_hook(_consent_for_role(text, card.role), root),
+                card.role, root),
             card.role, root)
         (out / CONSENT_TEMPLATE).write_text(final)
 
