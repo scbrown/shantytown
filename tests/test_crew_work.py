@@ -220,3 +220,76 @@ def test_crew_reports_an_unrecognised_session_without_calling_it_crew(
     assert "no card claims: scratch" in out
     assert "listed, not judged" in out
     assert "→" not in out, "blamed an agent for a session that names none"
+
+
+# --- card-vs-process ROLE DRIFT (internal-ref) --------------------------------
+#
+# Settings are read ONCE at launch; the card is read CONTINUOUSLY. Promote an
+# agent to lead by card edit and the running process never gets `drain`, so its
+# reports' stop events rise to the administrator as `lead-unreachable` while the
+# lead is visibly up. The tier is configured and INERT, and the cards — the only
+# place anyone looks — show it as correct.
+
+from shantytown.runtime import settings_for_role
+
+
+class _CmdlinePanes(_Panes):
+    """Panes that can also report a launch cmdline — the only evidence of what a
+    running process actually carries."""
+
+    def __init__(self, screens: dict, cmdlines: dict):
+        super().__init__(screens)
+        self._cmdlines = cmdlines
+
+    def cmdline(self, pane: str) -> str:
+        return self._cmdlines.get(pane, "")
+
+
+def _tier_roster(tmp_path: Path):
+    """A lead with a report under an administrator — the real shape."""
+    crew = tmp_path / "crew"; crew.mkdir()
+    (crew / "boss.json").write_text(json.dumps(
+        {"role": "administrator", "pane": "p-boss"}))
+    (crew / "mal.json").write_text(json.dumps(
+        {"role": "lead", "reports_to": "boss", "pane": "p-mal"}))
+    (crew / "ellie.json").write_text(json.dumps(
+        {"role": "worker", "reports_to": "mal", "pane": "p-ellie"}))
+    return tmp_path
+
+
+def _launched_as(tmp_path: Path, role: str) -> str:
+    """A cmdline naming a REAL emitted settings artifact for `role`. Built by the
+    production emitter so the fake cannot drift from what st actually writes."""
+    p = tmp_path / f"{role}.settings.json"
+    p.write_text(json.dumps(settings_for_role(role, root=tmp_path)))
+    return f"claude --settings {p}"
+
+
+def _crew_out(tmp_path, monkeypatch, capsys, launched_role):
+    root = _tier_roster(tmp_path)
+    panes = _CmdlinePanes(
+        {"p-boss": IDLE_SCREEN, "p-mal": IDLE_SCREEN, "p-ellie": IDLE_SCREEN},
+        {"p-mal": _launched_as(tmp_path, launched_role),
+         "p-ellie": _launched_as(tmp_path, "worker"),
+         "p-boss": _launched_as(tmp_path, "administrator")})
+    monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: panes)
+    assert cli._cmd_crew(_Args(root)) == cli.OK
+    return capsys.readouterr().out
+
+
+def test_crew_NAMES_a_lead_running_settings_that_lack_drain(tmp_path, monkeypatch, capsys):
+    """mal's CARD says lead; mal's PROCESS was launched as a worker."""
+    out = _crew_out(tmp_path, monkeypatch, capsys, "worker")
+    assert "MATCH THEIR ROLE" in out, (
+        "a promoted-but-not-relaunched lead was not named — the tier is inert "
+        "and st crew reports it as fine")
+    assert "mal" in out
+    assert "st stop" in out and "st new" in out, "named the fault but not the fix"
+
+
+def test_crew_is_SILENT_when_the_live_process_matches_the_card(tmp_path, monkeypatch, capsys):
+    """The discrimination control. Without it the warning above could be
+    unconditional and the test could not tell the two worlds apart."""
+    out = _crew_out(tmp_path, monkeypatch, capsys, "lead")
+    assert "MATCH THEIR ROLE" not in out, (
+        "warned about a lead whose live process DOES carry drain — false positive")
