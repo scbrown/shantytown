@@ -299,6 +299,12 @@ class Panes(Protocol):
     # session it does not own, even on an exact name match — the registry pane
     # names collide with the live crew, so a name match is not permission to kill.
     def owns(self, name: str) -> bool: ...
+    # ENUMERATION, as opposed to every other verb here, which needs the name
+    # first. That asymmetry is a blind spot with a cost attached: a fleet running
+    # under a retired naming scheme is invisible to name-addressed checks, and
+    # was (aegis-np4x1). Returns None for "could not ask" — never [] , which
+    # would assert an all-clear the probe never established.
+    def sessions(self) -> list[str] | None: ...
 
 
 @dataclass(frozen=True)
