@@ -103,6 +103,7 @@ from .deployment import deployment_default, resolve_root, root_note
 from .dispatch import (Dispatcher, TriageRefused, SendUnverified,
                        DispatchedButUntracked, AlreadyAssigned, Closed,
                        GovernorRefused)
+from . import forgejo as forgejo_mod
 from . import governor as gov_mod
 from . import guard as guard_mod
 from .events import FilesEvents
@@ -123,7 +124,8 @@ from .runtime import (asks_a_question, auth_expired, ClaudeRuntime, CapabilityEr
                       live_wiring, settings_for_role)
 from .tmux import Tmux, declared_socket
 from .workspace import (WorkspaceError, cleanup_worktree, ensure_workspace,
-                        ensure_worktree, unlaunchable, worktree_for)
+                        ensure_worktree, tree_staleness, unlaunchable,
+                        upstream_ref, worktree_for)
 from .provision import ProvisionError, provision as provision_ws
 
 # `st new` liveness poll: how long to wait for the runtime to appear in the pane
@@ -478,6 +480,12 @@ def build_parser() -> argparse.ArgumentParser:
                          "status bar: `ok <five_hour> <seven_day> [tier label]`, or "
                          "the bare word `lost` / `off`. Both budgets, because they "
                          "exhaust independently")
+    cr.add_argument("--trees", action="store_true",
+                    help="also measure each agent's WORKTREE off every shared "
+                         "repo, not just its workspace clone. Costs a few git "
+                         "calls per agent per repo — this is the whole staleness "
+                         "sweep in one command, instead of a hand-rolled loop "
+                         "across directories")
 
     # aegis-fagvi: the roles/role footgun (plural-vs-singular) is consolidated
     # into ONE noun with verbs: `st roles {show|set|sync}`. The old `role` and
@@ -2506,6 +2514,27 @@ def _cmd_go(a) -> int:
         if wt_warn := _refresh_worktree(wt_path):
             print(f"  ⚠ {wt_warn}", file=sys.stderr)
             wtag += f" — {wt_warn}"
+        else:
+            # SAY THE SHA, not just "current" (aegis-ib65p acceptance). "current"
+            # is unfalsifiable a day later; a sha lets the agent — or whoever
+            # reads the bead afterwards — check what it actually started from.
+            ref, _ = upstream_ref(wt_path)
+            wtag += f" — current with {ref} @{_short_head(wt_path)}"
+        # OPEN PRs RIDE THE DISPATCH TOO (decision 4). This is the half that
+        # catches the expensive case: the duplication that prompted this bead was
+        # an unmerged DRAFT, so no amount of branch-tip currency would have shown
+        # it. A tree can be perfectly current and still be missing the work.
+        prs, pr_err = _open_prs_for(wt_path)
+        if pr_err:
+            # NEVER SILENCE (decision 4, explicit). "We could not look" must not
+            # render as "there are none" — that reads as an all-clear the fleet
+            # did not earn.
+            wtag += f" — open PRs UNKNOWN: {pr_err}"
+        elif prs:
+            wtag += (f" — {len(prs)} OPEN PR(s) on this repo, check before you "
+                     f"build: {'; '.join(prs[:5])}")
+        else:
+            wtag += " — no open PRs on this repo"
         wtag += "]"
         note = f"{note} — {wtag}" if note else wtag
     try:
@@ -2621,6 +2650,7 @@ def _cmd_crew(a) -> int:
     runtime = _runtime(a, panes)
     free, busy, queued, shelled = [], [], [], []
     deliberate = []
+    tree_stale = []
     verdicts = []
     waiting = []
     saturated = []
@@ -2653,6 +2683,10 @@ def _cmd_crew(a) -> int:
         # disagree about the same agent.
         verdict = _settings_verdict(launches, ag.name, state == "up")
         verdicts.append((ag.name, verdict))
+        tree_cell, tree_detail = _tree_staleness_cell(
+            a, ag, sweep=getattr(a, 'trees', False))
+        if tree_detail:
+            tree_stale.append((ag.name, tree_detail))
         # A DOWN pane with a stop record is down BY DECISION (#29). Collected here
         # and reported below rather than folded into the state column: `down` is
         # what the pane says and stays what the pane says — this is why.
@@ -2667,8 +2701,23 @@ def _cmd_crew(a) -> int:
         if gaps := launchable.launch_gaps(ag):
             bad_cards.append((ag.name, gaps))
         print(f"  {ag.name:<11} {ag.role:<14} {state:<8} {verdict:<8} "
-              f"{work:<16} {posture:<7} {ag.pane or '—'}")
+              f"{tree_cell:<9} {work:<16} {posture:<7} {ag.pane or '—'}")
     stale, unknown = _reach_buckets(verdicts)
+    # THE SWEEP, AS A LINE (aegis-ib65p decision 6). Learning that 12 of 12
+    # worktrees were behind took a hand-rolled loop across three directories,
+    # which means in practice nobody ever knew. The column answers "is anyone
+    # stale"; this answers "which tree, and by how much" — the part an operator
+    # would otherwise go and script again.
+    if tree_stale:
+        print()
+        print(f"  {len(tree_stale)} agent(s) on a STALE or DIVERGED tree:")
+        for name, detail in tree_stale:
+            print(f"    · {name:<11} {detail}")
+        print("    -N = commits you do NOT have (duplication risk: someone may "
+              "have built it already).")
+        print("    +N = local commits nobody else has (loss risk: push them).")
+        print("    NOT pulled for you — rebase your own clean tree, never one "
+              "with work in it.")
     print()
     # Down on purpose is not a roster hole to plug. Said before the free/busy
     # lines because an operator reading "3 down" needs to know which of those they
@@ -3271,6 +3320,26 @@ def _cmd_worktree(a) -> int:
                 print(f"  {note}")
         except guard_mod.GuardError as e:
             print(f"  ⚠ guard NOT installed — {e}", file=sys.stderr)
+        # BRING IT CURRENT BEFORE HANDING IT BACK (aegis-ib65p decision 1).
+        # Provisioning was idempotent-and-inert: an EXISTING worktree was returned
+        # untouched, so the second and every later call handed back whatever the
+        # tree was months ago. Measured: 12 of 12 shantytown worktrees behind, one
+        # of them by 155 commits, on the repo the fleet changes hourly — and the
+        # coordinator rebuilt from scratch a fix that already existed.
+        #
+        # This is the right moment because it is the moment st KNOWS the shared
+        # repo is in play — the same argument that put the guard install here, and
+        # the reason there is no new command to remember.
+        #
+        # NEVER FATAL, NEVER FORCED. ff/rebase-only on a CLEAN tree; dirty or
+        # conflicted is reported and left exactly as it was. A supervisor that
+        # discarded an agent's uncommitted work to make a staleness number reach
+        # zero would be a worse bug than the staleness (aegis-repg/iaef).
+        if warn := _refresh_worktree(path):
+            print(f"  ⚠ {warn}", file=sys.stderr)
+        else:
+            ref, _ = upstream_ref(path)
+            print(f"  current with {ref}")
         print(path)
         return OK
     except WorkspaceError as e:
@@ -3413,26 +3482,180 @@ def _keep_current(a, agent_name: str) -> str | None:
             f"stale. Clean or reconcile {card.workspace} to restore keep-current.")
 
 
-def _refresh_worktree(dest, base: str = "origin/main") -> str | None:
-    """Bring a project WORKTREE current — by REBASE onto <base>, not ff-pull.
+def _agent_trees(a, ag, sweep: bool = False) -> list:
+    """The trees this agent edits. Its workspace clone always; its worktree off
+    every shared repo st has provisioned from only when `sweep` is set.
 
-    The keep-current sibling _refresh_clone ff-pulls a clone on `main`. A worktree
-    is on `wt/<agent>`, so an ff-only pull of origin/main either no-ops (wrong
-    branch) or fails — the caveat flagged on aegis-h2rr. The right move is the
-    crew-worktree pattern: rebase wt/<agent> onto origin/main. But ONLY when the
-    tree is clean: rebasing over uncommitted work is the force/reset data-loss
-    (aegis-repg) this whole line removes. A dirty tree, or a rebase that conflicts,
-    is LEFT AS-IS and reported — a stale-but-intact worktree beats a mangled one.
-    Never raises; returns a one-line warning or None (current)."""
+    THE SWEEP IS OPT-IN, and the reason is cost on the hottest command there is.
+    `st crew` is what a coordinator runs constantly. Discovering repos and
+    measuring a worktree per agent per repo is ~3 git subprocesses each — on
+    this fleet, fifteen agents across twelve containers, which is well over a
+    hundred processes for one status read. A status command that got noticeably
+    slower would be run less, and a staleness signal nobody looks at is the
+    condition this bead is trying to end, reached by a different road.
+
+    So the DEFAULT column costs one tree per agent (its own workspace clone) and
+    `st crew --trees` buys the full picture. That is also what makes the default
+    hermetic: discovery reads `GT_ROOT`/`~/gt` off the real filesystem, so an
+    unconditional sweep made unit tests depend on which worktrees happened to
+    exist on the developer's machine — measured, it silently changed three
+    existing tests' output.
+
+    When it does sweep, repos are DISCOVERED, never configured — `guard.discover`
+    finds the `<repo>-wt` containers st created itself. A hardcoded repo list is
+    the failure mode here, measured: the deployment's own installer defaulted to
+    ONE repo when twelve were live.
+    """
+    out = []
+    if ag.workspace:
+        p = Path(ag.workspace).expanduser()
+        if p.is_dir():
+            out.append(p)
+    if not sweep:
+        return out
+    try:
+        for repo in guard_mod.discover():
+            wt = worktree_for(repo, ag.name)
+            if wt.is_dir():
+                out.append(wt)
+    except Exception:
+        pass
+    return out
+
+
+def _tree_label(p) -> str:
+    """Name a tree by its REPO, not by its directory name.
+
+    A worktree lives at `<repo>-wt/<agent>`, so its basename is the AGENT — which
+    means a per-agent sweep rendered by basename says "arnold -5; arnold -3;
+    arnold -1/+15" and names the same thing three times while identifying none of
+    them. Measured on the live fleet: the detail lines told an operator they were
+    stale in four places and not one of which repo, which is most of the value.
+    """
+    p = Path(p)
+    if p.parent.name.endswith("-wt"):
+        return p.parent.name[: -len("-wt")]
+    return "workspace"
+
+
+def _tree_staleness_cell(a, ag, sweep: bool = False) -> "tuple[str, str | None]":
+    """(column cell, detail line or None) for `st crew`.
+
+    The cell is deliberately TINY — `-3/+1`, `ok`, `?` — because it sits in a row
+    an operator scans, and the detail goes on its own line below. `?` is its own
+    value and never rounds to `ok`: a tree whose upstream could not be resolved
+    is not a healthy tree, and this whole bead exists because invisible
+    staleness was read as fine.
+    """
+    trees = _agent_trees(a, ag, sweep=sweep)
+    if not trees:
+        return "—", None
+    behind = unpushed = 0
+    unknown = False
+    parts = []
+    for t in trees:
+        try:
+            s = tree_staleness(t, fetch=False)
+        except Exception:
+            unknown = True
+            continue
+        if s.error:
+            unknown = True
+            parts.append(f"{_tree_label(t)}: {s.render()}")
+            continue
+        behind += s.behind
+        unpushed += s.unpushed
+        if not s.current():
+            bits = []
+            if s.behind:
+                bits.append(f"-{s.behind}")
+            if s.unpushed:
+                bits.append(f"+{s.unpushed}")
+            parts.append(f"{_tree_label(t)} {'/'.join(bits)} vs {s.ref}")
+    if behind or unpushed:
+        cell = f"-{behind}/+{unpushed}"
+    elif unknown:
+        cell = "?"
+    else:
+        cell = "ok"
+    return cell, ("; ".join(parts) if parts else None)
+
+
+def _short_head(dest) -> str:
     import subprocess
     try:
-        subprocess.run(["git", "-C", str(dest), "fetch", "origin", "--quiet"],
+        r = subprocess.run(["git", "-C", str(dest), "rev-parse", "--short", "HEAD"],
+                           capture_output=True, text=True, timeout=15)
+        return (r.stdout or "").strip() or "?"
+    except Exception:
+        return "?"
+
+
+def _open_prs_for(dest) -> "tuple[list[str] | None, str | None]":
+    """Open PRs on the forge behind this tree's upstream. (prs, error)."""
+    import subprocess
+    try:
+        ref, _ = upstream_ref(dest)
+        if not ref:
+            return None, "no upstream ref resolved for this tree"
+        remote = ref.split("/", 1)[0]
+        r = subprocess.run(["git", "-C", str(dest), "remote", "get-url", remote],
+                           capture_output=True, text=True, timeout=15)
+        if r.returncode != 0:
+            return None, f"no url for remote {remote!r}"
+        return forgejo_mod.open_pulls((r.stdout or "").strip())
+    except Exception as e:
+        return None, str(e)
+
+
+def _refresh_worktree(dest, base: str | None = None) -> str | None:
+    """Bring a project WORKTREE current — by REBASE onto its upstream, not ff-pull.
+
+    The keep-current sibling _refresh_clone ff-pulls a clone on `main`. A worktree
+    is on `wt/<agent>`, so an ff-only pull either no-ops (wrong branch) or fails —
+    the caveat flagged on aegis-h2rr. The right move is the crew-worktree pattern:
+    rebase wt/<agent> onto the upstream. But ONLY when the tree is clean: rebasing
+    over uncommitted work is the force/reset data-loss (aegis-repg) this whole line
+    removes. A dirty tree, or a rebase that conflicts, is LEFT AS-IS and reported —
+    a stale-but-intact worktree beats a mangled one.
+    Never raises; returns a one-line warning or None (current).
+
+    `base` IS NO LONGER `origin/main` (aegis-ib65p). It is RESOLVED from the
+    repo's own config by workspace.upstream_ref, because on the very repo this
+    was written for, `origin` is a public MIRROR and `main` tracks `forge` — and
+    which of the two led INVERTED inside three hours. Rebasing onto a literal
+    `origin/main` there would have moved twelve worktrees BACKWARD off the
+    authority while reporting success, which is this bead's own failure produced
+    by its remedy. Passing `base` explicitly still works and still overrides;
+    None means "ask the repo".
+
+    It also now reports UNPUSHED work, not just missing work. Both were live in
+    one evening and they are different risks: behind = duplication, unpushed =
+    LOSS. A tree that is merely ahead used to read as perfectly fine.
+    """
+    import subprocess
+    try:
+        if base is None:
+            base, note = upstream_ref(dest)
+            if base is None:
+                return note                      # cannot tell — say so, act not
+        else:
+            note = None
+        subprocess.run(["git", "-C", str(dest), "fetch", "--all", "--quiet"],
                        capture_output=True, text=True, timeout=60)
+        stale = tree_staleness(dest)
+        extra = f" {note}" if note else ""
+        # STRANDED WORK IS REPORTED WHETHER OR NOT THE REBASE SUCCEEDS. It is not
+        # an error and must not block, but nobody else can see it, and a reset
+        # anywhere near it destroys it silently.
+        if stale.unpushed:
+            extra += (f" {stale.unpushed} local commit(s) are NOT on {base} — "
+                      f"push them; they exist only in this tree.")
         dirty = subprocess.run(["git", "-C", str(dest), "status", "--porcelain"],
                                capture_output=True, text=True)
         if dirty.returncode != 0 or dirty.stdout.strip():
             return ("worktree has local changes — not rebased onto "
-                    f"{base}; working on it as-is (may be behind).")
+                    f"{base}; working on it as-is (may be behind).{extra}")
         r = subprocess.run(["git", "-C", str(dest), "rebase", base],
                            capture_output=True, text=True, timeout=60)
         if r.returncode != 0:
@@ -3441,8 +3664,9 @@ def _refresh_worktree(dest, base: str = "origin/main") -> str | None:
                            capture_output=True, text=True)
             first = (r.stderr or r.stdout).splitlines()
             return (f"worktree rebase onto {base} refused "
-                    f"({first[0] if first else 'conflict'}) — on the existing tree.")
-        return None
+                    f"({first[0] if first else 'conflict'}) — on the existing "
+                    f"tree.{extra}")
+        return extra.strip() or None
     except Exception as e:                       # not a repo, git absent, timeout
         return str(e)
 
