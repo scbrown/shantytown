@@ -319,6 +319,27 @@ def _untracked_hook(root=None) -> dict:
             "hooks": [{"type": "command", "command": cmd, "timeout": 15}]}
 
 
+def _stale_hook(root=None) -> dict:
+    """The edit-time staleness advisory (aegis-ib65p decision 5).
+
+    MATCHER IS THE EDITING TOOLS ONLY — deliberately NOT Bash, unlike the
+    untracked nudge above. This hook's subject is the tree a file is being
+    written into, and it reads that tree from the tool's `file_path`. A Bash
+    call has no such path, so including Bash would fire it on every shell
+    command with nothing to measure but the cwd — noise on the busiest matcher
+    there is, which is how an advisory channel dies.
+
+    SHORT TIMEOUT: two `rev-list --count` calls against LOCAL refs and no fetch
+    (see stale_guard's cost constraint). If it ever exceeds this, something is
+    wrong and the right outcome is that the edit proceeds unadvised.
+    """
+    cmd = f"{_hook_interpreter()} -m shantytown.stale_guard"
+    if root is not None:
+        cmd += f" --root {Path(root).resolve()}"
+    return {"matcher": "Edit|Write|MultiEdit|NotebookEdit",
+            "hooks": [{"type": "command", "command": cmd, "timeout": 10}]}
+
+
 def _policy_cmd(root=None) -> dict:
     """The unified Stop decision, with the store's location BAKED IN (same reason
     as _stop_cmd: the agent runs in its own workspace, which has no .shanty)."""
