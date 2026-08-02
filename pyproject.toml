@@ -1,6 +1,6 @@
 [project]
 name = "shantytown"
-version = "0.0.1"
+version = "0.1.0"
 description = "A small harness for running a crew of coding agents."
 requires-python = ">=3.11"
 license = "MIT"
