@@ -58,6 +58,16 @@ DATASETS = {
         {"id": "z", "assignee": "arnold", "status": "open"},
         {"id": "a", "assignee": "arnold", "status": "open"},
     ],
+    # BLOCKED is not workable by definition — serving it CYCLES the agent
+    # (aegis-zkbci). Both readers must exclude it, or the one that does not
+    # becomes the leak.
+    "blocked_only": [
+        {"id": "a", "assignee": "arnold", "status": "blocked"},
+    ],
+    "blocked_must_not_outrank_workable": [
+        {"id": "a", "assignee": "arnold", "status": "blocked"},
+        {"id": "z", "assignee": "arnold", "status": "open"},
+    ],
 }
 
 
@@ -76,3 +86,33 @@ def test_the_regression_itself_open_assigned_is_not_None_in_either(tmp_path):
     rows = DATASETS["open_assigned_only"]
     assert files_plate(_files_backend(tmp_path, rows), "arnold") is not None
     assert beads_plate(FakeBd(rows), "arnold") is not None
+
+
+# --- blocked must never reach a plate (aegis-zkbci) ---------------------------
+#
+# MEASURED 2026-08-02: 16 beads with status `blocked` were assigned, ALL 16, and
+# the plate reader served them. That does not just waste a turn, it CYCLES the
+# agent — plate hands over an unworkable item, the agent burns a turn finding
+# out, stops, and the next stop event hands it straight back. Observed on four
+# agents in one evening. It also makes the agent read as BUSY to the
+# coordinator, so the fleet reports capacity it does not have.
+#
+# `bd ready` already excludes blocked, so hauls/dispatchable/Rule Zero were
+# clean; the PLATE READERS were the only leak, which is why the fix and this
+# test live here.
+
+def test_a_blocked_bead_never_becomes_a_plate_item(tmp_path):
+    rows = [{"id": "a", "assignee": "arnold", "status": "blocked"}]
+    assert files_plate(_files_backend(tmp_path, rows), "arnold") is None
+    assert beads_plate(FakeBd(rows), "arnold") is None
+
+
+def test_a_workable_bead_is_still_served_alongside_a_blocked_one(tmp_path):
+    """The discrimination control. Without it the exclusion could be returning
+    None for everything and both assertions above would still pass."""
+    rows = [{"id": "a", "assignee": "arnold", "status": "blocked"},
+            {"id": "z", "assignee": "arnold", "status": "open"}]
+    fp = files_plate(_files_backend(tmp_path, rows), "arnold")
+    bp = beads_plate(FakeBd(rows), "arnold")
+    assert fp is not None and bp is not None, "excluded the workable item too"
+    assert fp.id == "z" and bp.id == "z", "served the BLOCKED bead over the open one"
