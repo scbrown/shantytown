@@ -2983,9 +2983,26 @@ def _throttled_idle_note(a) -> str:
         return (f"    ⚠ THROTTLED-IDLE, not fully available: the governor's "
                 f"{verdict.tier.at}% tier is engaged — {verdict.effect()}. Work "
                 f"below the floor cannot be dispatched to them; they are idle "
-                f"because the throttle is holding, not because nobody fed them.")
+                f"because the throttle is holding, not because nobody fed "
+                f"them.{_until(verdict)}")
     except Exception:      # noqa: BLE001 — the roster never fails on capacity
         return ""
+
+
+def _until(verdict) -> str:
+    """` They come back on their own when the five_hour budget resets in 1h35m.`
+
+    The sentence that turns waiting into a decision (aegis-9mehy). Every other
+    THROTTLED-IDLE line tells an operator that the fleet is down and nothing
+    tells them for how long — which is precisely the state that gets somebody to
+    start intervening by hand at 22:00 for a budget that refills at 22:40.
+    """
+    nxt = verdict.next_reset(time.time())
+    if nxt is None:
+        return ""
+    window, left = nxt
+    return (f" They come back on their own when the {window} budget resets "
+            f"{gov_mod.fmt_when(left)}.")
 
 
 def _crew_governor(a) -> int:
@@ -2996,13 +3013,23 @@ def _crew_governor(a) -> int:
     FORMAT — the first token is a STATUS WORD, and the three cases are
     structurally different so a reader cannot mistake one for another:
 
-        ok 45/50 24/45                              both budgets, no tier engaged
-        ok 70/80 24/45 dispatch only P0 and above [five_hour >= 70%]  a tier engaged
-        ok 96/- 24/45 ...                           above every five_hour tier
+        ok 45/50/5400 24/45/248400                  both budgets, no tier engaged
+        ok 70/80/5400 24/45/248400 dispatch only P0 and above [five_hour >= 70%]
+        ok 96/-/5400 24/45/248400 ...               above every five_hour tier
         lost                                        the signal could not be read
         off                                         no governor configured
 
-    Each budget is `current/next-threshold`. The NEXT THRESHOLD is in the output
+    Each budget is `current/next-threshold/seconds-until-reset`. THE RESET IS
+    HERE BECAUSE "THROTTLED" AND "THROTTLED UNTIL 22:40" ARE DIFFERENT SENTENCES
+    to the operator reading the bar (aegis-9mehy): the first invites
+    intervention, the second invites waiting, and the fleet had no way to say the
+    second. Seconds rather than a wall-clock time because the consumer is a
+    program — a duration needs no timezone, no date and no parsing, and the bar
+    formats "resets in 1h35m" from it. `-` means nothing published one, which is
+    a real answer; it is never rendered as 0, because a bar reading 0 would say
+    "resets now" forever.
+
+    The NEXT THRESHOLD is in the output
     because a consumer cannot colour honestly without it: the tiers are per-window
     and asymmetric (five_hour 50/70/80/95, seven_day 45/65/75/90), so a bare 44%
     is six points from engaging one budget and already engaging the other. A bar
@@ -3044,18 +3071,27 @@ def _crew_governor(a) -> int:
         print("lost")
         return OK
 
+    clock = time.time()
+
     def _pct(window: str) -> str:
         r = readings.get(window)
         # A window the producer does not publish is not a zero. Rendering 0 for
         # an absent budget would read as "plenty of headroom" — the most
         # expensive possible direction for this particular wrong answer.
         if r is None or not r.ok or r.pct is None:
-            return "?/?"
+            return "?/?/?"
         now = int(round(r.pct))
         # The lowest tier this window has NOT yet reached. Read off the policy so
         # the consumer never hardcodes thresholds that live in shantytown.toml.
         higher = sorted(t.at for t in gov.policy.tiers_for(window) if t.at > now)
-        return f"{now}/{higher[0] if higher else '-'}"
+        # SECONDS UNTIL THIS BUDGET REFILLS (aegis-9mehy) — seconds, not a clock
+        # time, because the consumer is a program and a duration needs no
+        # timezone, no date and no parsing. `-` is "nothing published one", which
+        # is a real answer and must not be rendered as 0: a bar reading 0 would
+        # say "resets now" forever.
+        left = r.resets_in(clock)
+        reset = "-" if left is None else str(max(0, int(left)))
+        return f"{now}/{higher[0] if higher else '-'}/{reset}"
 
     label = ""
     if verdict.engaged:
@@ -3695,6 +3731,19 @@ def _run_cmd(argv) -> None:
     subprocess.run(argv, capture_output=True, text=True, timeout=60)
 
 
+def _run_rc(argv) -> int:
+    """Same, but the RETURN CODE is the answer. `systemd-run` refuses (non-zero)
+    for reasons a caller must be able to act on — a unit name already taken, no
+    user manager at all — and a runner that swallowed that would report a wake
+    as armed when nothing was scheduled."""
+    import subprocess
+    try:
+        return subprocess.run(argv, capture_output=True, text=True,
+                              timeout=60).returncode
+    except Exception:      # noqa: BLE001 — no systemd is a refusal, not a crash
+        return 1
+
+
 def _attach_argv(pane: str, socket, read_only: bool, has_shanty: bool):
     """Build (argv, env-overlay) for the attach — the pure, testable core.
 
@@ -4233,6 +4282,16 @@ def _tend_once(a, quiet: bool = False) -> int:
         # number is indistinguishable from one with nothing to report, and the
         # fleet is spending the whole time.
         print(f"  ⚠ {verdict.alarm}", file=sys.stderr)
+    # THE ON RAMP FIRED (aegis-9mehy). A window left a tier, so agents held down
+    # by it become eligible in the very same pass — `_withheld` is re-evaluated
+    # from this verdict, and retirement is checked before it, so no retiree is
+    # resurrected by a relax. Printed because it is the single most consequential
+    # thing a pass can do and it used to happen in total silence: the throttle
+    # had a loud OFF ramp and a mute ON ramp.
+    if verdict is not None:
+        for _relaxed in verdict.relaxed:
+            print(f"  {_relaxed.render(os.environ.get(sup_mod.WAKE_ENV, ''), time.time())}",
+                  file=sys.stderr)
 
     def _respawn(card, session):
         runtime.start(card, session)
@@ -4336,6 +4395,15 @@ def _tend_once(a, quiet: bool = False) -> int:
         drained = _sweep("drain", lambda: _drain_sweep(a, verdict, agents, panes))
         if drained:
             print(gov_mod.render_drain(drained), file=sys.stderr)
+        # ARM THE WAKE (aegis-9mehy). Re-armed on EVERY pass, because the
+        # published reset timestamp moves — a wake computed an hour ago is a
+        # wake for the previous window. Inside `_sweep` like every other
+        # best-effort layer: a scheduler that could crash the supervisor would
+        # be the same bad trade as a notifier that could (aegis-ey7n), and here
+        # the worst case of doing nothing is merely a five-minute delay.
+        for line in _sweep("governor-wake",
+                           lambda: _governor_wake_sweep(a, verdict)):
+            print(f"  {line}", file=sys.stderr)
     if not quiet:
         print()
         if verdict is not None:
@@ -4344,7 +4412,7 @@ def _tend_once(a, quiet: bool = False) -> int:
             # cannot see the governor working cannot tell it from a governor that
             # is silently off, which is the whole class of bug this repo keeps
             # paying for.
-            print(verdict.render())
+            print(verdict.render(time.time()))
         print(rep.render())
         print()
     # The health signal, written even on a dry run — "a pass ran" is the fact
@@ -4385,6 +4453,33 @@ def _drain_sweep(a, verdict, agents, panes):
     return drainer.sweep(agents, verdict, _governor_episode(a),
                          live=lambda ag: bool(ag.pane) and panes.exists(ag.pane),
                          catalog=_catalog(a))
+
+
+def _governor_wake_sweep(a, verdict) -> list[str]:
+    """Arm/re-arm/disarm the per-window reset wakes (aegis-9mehy).
+
+    NO GOVERNOR, NO WAKES — and that has to include DISARMING, which is why an
+    absent verdict still constructs the waker. A governor turned off (or a
+    signal lost) while a wake was armed would otherwise leave a timer that fires
+    a tend pass on behalf of a policy nobody is running any more.
+
+    `wake_plan` is where every decision lives and it is pure; this function only
+    hands it to systemd. Nothing here reads a tier, so no code path exists by
+    which a clock could re-engage the crew on its own.
+    """
+    # THE ABSOLUTE PATH, never the bare name (aegis-408qs, one commit before
+    # this one). systemd --user does not search ~/.local/bin, and a unit that
+    # cannot exec fails 203/EXEC on every fire while the TIMER keeps reporting
+    # itself healthy — 687 silent failures over two days, last time. systemd-run
+    # happens to resolve the caller's PATH today, which would make this work
+    # from a shell and fail from the st-tend unit's minimal environment: exactly
+    # the kind of difference that ships.
+    waker = sup_mod.GovernorWake(sup_mod.resolve_st_bin() or "st", Path(a.root),
+                                 run=_run_rc,
+                                 is_active=_systemctl_user_active,
+                                 log=lambda m: print(f"  {m}", file=sys.stderr))
+    plan = {} if verdict is None else gov_mod.wake_plan(verdict, time.time())
+    return waker.sync(plan)
 
 
 def _governor_episode(a) -> float:

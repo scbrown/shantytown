@@ -76,7 +76,7 @@ def test_both_windows_no_tier(monkeypatch, capsys):
              _verdict())
     rc, out = _run(monkeypatch, capsys, g)
     assert rc == cli.OK
-    assert out == "ok 45/50 24/45"
+    assert out == "ok 45/50/- 24/45/-"
 
 
 def test_engaged_tier_is_named(monkeypatch, capsys):
@@ -85,7 +85,7 @@ def test_engaged_tier_is_named(monkeypatch, capsys):
     g = _Gov({gov_mod.FIVE_HOUR: _reading(70), gov_mod.SEVEN_DAY: _reading(24)},
              _verdict(engaged=[tier]))
     _, out = _run(monkeypatch, capsys, g)
-    assert out.startswith("ok 70/80 24/45 ")
+    assert out.startswith("ok 70/80/- 24/45/- ")
     assert "dispatch only P0 and above" in out
 
 
@@ -125,14 +125,14 @@ def test_absent_window_is_a_question_mark_not_zero(monkeypatch, capsys):
     as maximum headroom — the most expensive direction for this wrong answer."""
     g = _Gov({gov_mod.FIVE_HOUR: _reading(45)}, _verdict())   # no seven_day
     _, out = _run(monkeypatch, capsys, g)
-    assert out == "ok 45/50 ?/?"
+    assert out == "ok 45/50/- ?/?/?"
 
 
 def test_not_ok_reading_is_a_question_mark(monkeypatch, capsys):
     g = _Gov({gov_mod.FIVE_HOUR: _reading(45),
               gov_mod.SEVEN_DAY: _reading(None, ok=False)}, _verdict())
     _, out = _run(monkeypatch, capsys, g)
-    assert out == "ok 45/50 ?/?"
+    assert out == "ok 45/50/- ?/?/?"
 
 
 @pytest.mark.parametrize("case", ["lost", "off"])
@@ -157,7 +157,7 @@ def test_next_threshold_shows_the_window_asymmetry(monkeypatch, capsys):
     g = _Gov({gov_mod.FIVE_HOUR: _reading(44), gov_mod.SEVEN_DAY: _reading(44)},
              _verdict())
     _, out = _run(monkeypatch, capsys, g)
-    assert out == "ok 44/50 44/45"
+    assert out == "ok 44/50/- 44/45/-"
 
 
 def test_above_every_tier_renders_a_dash_not_a_number(monkeypatch, capsys):
@@ -166,4 +166,4 @@ def test_above_every_tier_renders_a_dash_not_a_number(monkeypatch, capsys):
     g = _Gov({gov_mod.FIVE_HOUR: _reading(97), gov_mod.SEVEN_DAY: _reading(24)},
              _verdict())
     _, out = _run(monkeypatch, capsys, g)
-    assert out.startswith("ok 97/- 24/45")
+    assert out.startswith("ok 97/-/- 24/45/-")
