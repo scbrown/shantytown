@@ -77,21 +77,25 @@ if [ -r "$CONF" ]; then
       internal_host_re) INTERNAL_HOST_RE="$v" ;;
       patterns)         PATTERNS="$v" ;;
       ticket_patterns)  TICKET_PATTERNS="$v" ;;
-      ticket_paths)     TICKET_PATHS="$v" ;;
+      ticket_exempt_path_re) TICKET_EXEMPT_RE="$v" ;;
     esac
   done < "$CONF"
 fi
 
-# The ticket rule's pathspec. Word-split on purpose: the projection emits a
-# space-separated git pathspec list (`README* CHANGELOG* docs/`). Unset -> `.`,
-# every tracked file, which is exactly what this guard did before the rule was
-# scoped — so a stale config enforces MORE than the graph asks, never less.
-if [ -n "$TICKET_PATHS" ]; then
-  # shellcheck disable=SC2206 — deliberate word split into a pathspec list
-  TICKET_PATHSPEC=($TICKET_PATHS)
-else
-  TICKET_PATHSPEC=(.)
-fi
+# ticket_files <from> <to|commit> — the changed files this rule GOVERNS, i.e.
+# every changed file its exemption regex does not name. ONE definition, shared
+# with hank, which matches the identical string against the same repo-relative
+# path (aegis-rdclc). Unset regex -> every file, the pre-scope behaviour, so a
+# stale config enforces MORE than the graph asks and never less.
+ticket_files() {
+  if [ -n "${2:-}" ]; then
+    names=$(git diff --name-only "$1" "$2" -- . "${GUARD_EXCLUDE[@]}" 2>/dev/null || true)
+  else
+    names=$(git show --format= --name-only "$1" -- . "${GUARD_EXCLUDE[@]}" 2>/dev/null || true)
+  fi
+  [ -n "$TICKET_EXEMPT_RE" ] && names=$(printf '%s\n' "$names" | grep -vE "$TICKET_EXEMPT_RE" || true)
+  printf '%s\n' "$names" | grep -v '^$' || true
+}
 
 if [ "${1:-}" = "--selftest" ]; then
   # Synthesises its own config, so the controls run without the real names ever
@@ -180,7 +184,7 @@ if [ "${1:-}" = "--selftest" ]; then
     r=$(mktemp -d); (
       cf="$r/scrub.conf"
       # Ticket rule SCOPED to user-facing artefacts; host rule unscoped as always.
-      printf 'internal_host_re=forge\\.invalid\npatterns=[a-z0-9-]+\\.invalid\\b\nticket_patterns=\\bzz-[a-z0-9]{3,6}\\b\nticket_paths=README* CHANGELOG* docs/\n' > "$cf"
+      printf 'internal_host_re=forge\\.invalid\npatterns=[a-z0-9-]+\\.invalid\\b\nticket_patterns=\\bzz-[a-z0-9]{3,6}\\b\nticket_exempt_path_re=\\.(py|rs|sh)$\n' > "$cf"
       git init -q --bare "$r/pub.git"
       git clone -q "$r/pub.git" "$r/w" 2>/dev/null
       cd "$r/w"
@@ -276,14 +280,19 @@ while read -r _lref lsha _rref rsha; do
     ticketlines=""
     for c in $newcommits; do
       addedlines+=$(git show --format= "$c" -- . "${GUARD_EXCLUDE[@]}" 2>/dev/null | grep -E '^\+' || true)$'\n'
-      ticketlines+=$(git show --format= "$c" -- "${TICKET_PATHSPEC[@]}" "${GUARD_EXCLUDE[@]}" 2>/dev/null | grep -E '^\+' || true)$'\n'
+      tf=$(ticket_files "$c")
+      [ -n "$tf" ] && ticketlines+=$(printf '%s\n' "$tf" | tr '\n' '\0' \
+        | xargs -0 git show --format= "$c" -- 2>/dev/null | grep -E '^\+' || true)$'\n'
       rawmsgs+=$(git log -1 --format=%B "$c" 2>/dev/null)$'\n'
     done
   else
     # Branch update: diff against the remote tip — pre-existing content is excluded
     # by construction.
     addedlines=$(git diff "$rsha" "$lsha" -- . "${GUARD_EXCLUDE[@]}" 2>/dev/null | grep -E '^\+' || true)
-    ticketlines=$(git diff "$rsha" "$lsha" -- "${TICKET_PATHSPEC[@]}" "${GUARD_EXCLUDE[@]}" 2>/dev/null | grep -E '^\+' || true)
+    tf=$(ticket_files "$rsha" "$lsha")
+    ticketlines=""
+    [ -n "$tf" ] && ticketlines=$(printf '%s\n' "$tf" | tr '\n' '\0' \
+      | xargs -0 git diff "$rsha" "$lsha" -- 2>/dev/null | grep -E '^\+' || true)
     rawmsgs=$(git log --format=%B "$rsha..$lsha" 2>/dev/null)
   fi
   # ADDED lines only (+ prefix), so pre-existing occurrences never trip it.
