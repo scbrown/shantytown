@@ -4502,6 +4502,19 @@ def _tend_once(a, quiet: bool = False) -> int:
         if idle:
             print(f"  ⚠ alerted the coordinator — {len(idle)} newly-idle feedable "
                   f"worker(s) with work ready: {', '.join(idle)}", file=sys.stderr)
+        # BLOCKED ON A HUMAN (internal-ref): the beads NOTHING else looks at.
+        # The plate-reader fix took blocked beads off plates — correct, and it
+        # also removed the last thing that touched them at all. They are off
+        # `bd ready`, off the Rule Zero sweep and off every capacity report, so
+        # a bead blocked on a person is operationally identical to abandoned
+        # while its status makes it look handled. Seventeen days on a P1
+        # security bead is the specimen. This is the only thing that re-asks.
+        stale_blocked = _sweep("blocked-stale", lambda: notify_mod.BlockedStaleAlerter(
+            Path(a.root), _registry(a), panes, log=_log).sweep())
+        if stale_blocked:
+            print(f"  ⚠ re-surfaced {len(stale_blocked)} bead(s) blocked "
+                  f"long enough to be forgotten: {', '.join(stale_blocked)}",
+                  file=sys.stderr)
         # STALLED (aegis-e01l): the PROGRESS-over-time twin of the point-in-time
         # push above — an agent parked idle HOLDING an in_progress item with no
         # pane/item/shell change across the whole threshold window. The weaver

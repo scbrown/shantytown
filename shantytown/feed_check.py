@@ -555,6 +555,24 @@ def bd_in_progress(cwd: str | None) -> list[dict]:
     return json.loads(r.stdout)
 
 
+def bd_blocked(cwd: str | None) -> list[dict]:
+    """`bd list --status blocked --json` — the population NOTHING else can see.
+
+    A separate query on purpose: `bd ready` excludes blocked BY DEFINITION, so
+    `_bd_ready()` cannot reach these. Measured on the live store: 126 ready, 0 of
+    them blocked; 16 blocked overall, all 16 assigned to agents. Re-surfacing
+    them therefore needs its own read, not a filter over an existing one.
+
+    Raises; callers fail open.
+    """
+    r = subprocess.run(["bd", "list", "--status", "blocked", "--json",
+                        "--limit", "0"],
+                       capture_output=True, text=True, timeout=20, cwd=cwd)
+    if r.returncode != 0:
+        raise RuntimeError(f"bd list failed: {r.stderr.strip()}")
+    return json.loads(r.stdout)
+
+
 def bd_claim(cwd: str | None, bead_id: str) -> None:
     """Claim a bead in_progress — the dispatcher's write, shared by both
     advance triggers so the tracker shows the truth and the worker's next stop
