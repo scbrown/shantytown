@@ -276,14 +276,14 @@ while read -r _lref lsha _rref rsha; do
     ticketlines=""
     for c in $newcommits; do
       addedlines+=$(git show --format= "$c" -- . "${GUARD_EXCLUDE[@]}" 2>/dev/null | grep -E '^\+' || true)$'\n'
-      ticketlines+=$(git show --format= "$c" -- "${TICKET_PATHSPEC[@]}" 2>/dev/null | grep -E '^\+' || true)$'\n'
+      ticketlines+=$(git show --format= "$c" -- "${TICKET_PATHSPEC[@]}" "${GUARD_EXCLUDE[@]}" 2>/dev/null | grep -E '^\+' || true)$'\n'
       rawmsgs+=$(git log -1 --format=%B "$c" 2>/dev/null)$'\n'
     done
   else
     # Branch update: diff against the remote tip — pre-existing content is excluded
     # by construction.
     addedlines=$(git diff "$rsha" "$lsha" -- . "${GUARD_EXCLUDE[@]}" 2>/dev/null | grep -E '^\+' || true)
-    ticketlines=$(git diff "$rsha" "$lsha" -- "${TICKET_PATHSPEC[@]}" 2>/dev/null | grep -E '^\+' || true)
+    ticketlines=$(git diff "$rsha" "$lsha" -- "${TICKET_PATHSPEC[@]}" "${GUARD_EXCLUDE[@]}" 2>/dev/null | grep -E '^\+' || true)
     rawmsgs=$(git log --format=%B "$rsha..$lsha" 2>/dev/null)
   fi
   # ADDED lines only (+ prefix), so pre-existing occurrences never trip it.
