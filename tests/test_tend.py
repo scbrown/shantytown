@@ -68,10 +68,11 @@ class _Launches:
 
 
 def _tender(panes, runtime, *, launches=None, spawn=None, refresh=None,
-            ensure=lambda card: card.workspace, log=None):
+            ensure=lambda card: card.workspace, log=None, stops=None):
     return tend_mod.Tender(panes, runtime, launches or _Launches(),
                            spawn=spawn or runtime.start, refresh=refresh,
-                           ensure=ensure, log=log or (lambda m: None))
+                           ensure=ensure, log=log or (lambda m: None),
+                           stops=stops)
 
 
 # --- the bug this exists for: died vs RETIRED --------------------------------
@@ -175,13 +176,21 @@ def test_a_STOPPED_agent_is_refused_because_st_stop_forgot_its_stamp(tmp_path, s
     `get`/`root`, so the gate's fail-open `except` swallows it and the gate is
     never exercised — which is why no existing test caught this.
 
-    Note what tend then SAYS: "never launched by st … another orchestrator owns
-    it". For this agent that is a misdiagnosis — st launched it and st removed the
-    stamp — and it sends an operator hunting an orchestrator that does not exist.
+    NOT RESPAWNING IT IS CORRECT and unchanged — a deliberate stop must stay down
+    until asked back, which is what `st stop` now promises. What was wrong was the
+    REASON: "never launched by st … another orchestrator owns it" is false in every
+    clause here (st launched it, st removed the stamp) and sends an operator
+    hunting an orchestrator that does not exist. So this asserts the verdict is
+    STOPPED with the true cause and the remedy, and its partner below asserts the
+    aegis-2j2r wording still fires for a genuinely foreign card. Neither test is
+    meaningful alone: the defect was ONE message serving TWO populations, so only
+    the pair can show they are told apart.
     """
     from shantytown.launched import FilesLaunches
+    from shantytown.stopped import FilesStops
 
     launches = FilesLaunches(tmp_path / "launched")
+    stops = FilesStops(tmp_path / "stopped")
     stamp_src = tmp_path / "settings.json"
     stamp_src.write_text("{}")
     # Two agents launched by st. Both stamped, as a real launch would.
@@ -191,19 +200,60 @@ def test_a_STOPPED_agent_is_refused_because_st_stop_forgot_its_stamp(tmp_path, s
 
     # EXACTLY what `st stop ellie` does after killing the session.
     launches.forget("ellie")
+    stops.record("ellie", 1754150000.0, by="sattler", reason="governor dam")
 
     card = Agent(name="ellie", pane="p-ellie")
     rt = _Runtime()
     said = []
-    rep = _tender(_Panes(live=set()), rt, launches=launches,
+    rep = _tender(_Panes(live=set()), rt, launches=launches, stops=stops,
                   log=said.append).pass_over([card])
 
-    assert rep.findings[0].verdict == tend_mod.REFUSED, (
-        "tend respawned a stopped agent — if this passes, `st stop`'s promise is "
-        "true and this bug is fixed at the source"
+    assert rep.findings[0].verdict == tend_mod.STOPPED, (
+        "a deliberate stop read as a generic REFUSED — that is the misdiagnosis"
     )
-    assert "no launch stamp" in rep.findings[0].why
+    why = rep.findings[0].why
+    assert "deliberately stopped" in why and "sattler" in why
+    assert "st new ellie" in why, "refused without naming the one command that fixes it"
+    assert "another orchestrator" not in why, (
+        "still blaming a foreign orchestrator for st's own stop"
+    )
     assert rt.started == [], "respawned an agent it had just refused"
+    assert any("STOPPED" in m for m in said)
+    # A DECISION IS NOT A FAULT — same rule RETIRED/GOVERNED/BELOW_TARGET follow.
+    # Five stood-down agents made `st tend` report "5 fault(s)" and exit non-zero,
+    # while `st crew` called the same five "stopped ON PURPOSE" off the same record.
+    assert rep.faults == [], "a deliberate stop counted as a fault"
+    assert rep.healthy
+
+
+def test_a_FOREIGN_unstamped_card_still_gets_the_orchestrator_wording(tmp_path, settings):
+    """The negative control for the test above (aegis-k9068 / aegis-2j2r).
+
+    Without this the fix could have been "call every unstamped agent deliberately
+    stopped", which trades one wrong message for another and re-opens the trap
+    aegis-2j2r closed: st resurrecting another orchestrator's cards into this
+    deployment's settings. Same input as its partner — unstamped while other
+    stamps exist — differing ONLY in whether a stop record exists.
+    """
+    from shantytown.launched import FilesLaunches
+    from shantytown.stopped import FilesStops
+
+    launches = FilesLaunches(tmp_path / "launched")
+    stops = FilesStops(tmp_path / "stopped")
+    stamp_src = tmp_path / "settings.json"
+    stamp_src.write_text("{}")
+    launches.record("weaver", stamp_src)          # somebody else's stamp exists
+    # 'ghost' was never launched by st and was never stopped by st: no record.
+    assert stops.get("ghost") is None
+
+    rt = _Runtime()
+    said = []
+    rep = _tender(_Panes(live=set()), rt, launches=launches, stops=stops,
+                  log=said.append).pass_over([Agent(name="ghost", pane="p-ghost")])
+
+    assert rep.findings[0].verdict == tend_mod.REFUSED
+    assert "another orchestrator owns it" in rep.findings[0].why
+    assert rt.started == [], "respawned a foreign orchestrator's card"
     assert any("REFUSED" in m for m in said)
 
 
