@@ -59,7 +59,7 @@ DATASETS = {
         {"id": "a", "assignee": "arnold", "status": "open"},
     ],
     # BLOCKED is not workable by definition — serving it CYCLES the agent
-    # (aegis-zkbci). Both readers must exclude it, or the one that does not
+    # (internal-ref). Both readers must exclude it, or the one that does not
     # becomes the leak.
     "blocked_only": [
         {"id": "a", "assignee": "arnold", "status": "blocked"},
@@ -88,7 +88,7 @@ def test_the_regression_itself_open_assigned_is_not_None_in_either(tmp_path):
     assert beads_plate(FakeBd(rows), "arnold") is not None
 
 
-# --- blocked must never reach a plate (aegis-zkbci) ---------------------------
+# --- blocked must never reach a plate (internal-ref) ------------------------
 #
 # MEASURED 2026-08-02: 16 beads with status `blocked` were assigned, ALL 16, and
 # the plate reader served them. That does not just waste a turn, it CYCLES the
