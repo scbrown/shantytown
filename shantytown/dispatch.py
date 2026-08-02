@@ -99,6 +99,44 @@ class SendUnverified(Exception):
         super().__init__(f"sent {item_id} to {pane} but could not confirm it landed")
 
 
+class HasOpenBlocker(Exception):
+    """The item is gated by a `blocks` dependency that is not closed.
+
+    The THIRD variant of one hole, and the reason this class exists rather than
+    a comment: plan() already refuses CLOSED and BLOCKED, and both refusals rest
+    on the same sentence — serving an item writes `status=in_progress`, so a
+    dispatch must not put work on a plate that nobody can advance. An item whose
+    blocker is still open is exactly that, and it was the one variant left.
+
+    MEASURED 2026-08-02: a P1 was dispatched to an agent while `bd ready`
+    correctly EXCLUDED it, because its blocker — a filed, open telemetry gap —
+    was unmet. The agent could not advance it for precisely the reason the
+    tracker already knew. `bd ready` had the right answer and the dispatch path
+    never asked.
+
+    REFUSES ON A POSITIVE READING ONLY. `open_blockers` is empty for a backend
+    with no dependency model, and empty means "none known", never "ready" — so
+    an absent list can never manufacture a refusal, and cannot-tell stays
+    cannot-tell. Same discipline as everywhere else here.
+
+    Clearing it is deliberate: close the blocker, or drop the dependency
+    (`bd dep remove <item> <blocker>`) if it is no longer real. --reassign does
+    not bypass — reassign takes work from a live holder, it does not make
+    blocked work workable.
+    """
+
+    def __init__(self, item_id: str, requested: str, blockers):
+        self.item_id, self.requested, self.blockers = item_id, requested, tuple(blockers)
+        names = ", ".join(self.blockers)
+        super().__init__(
+            f"{item_id} is gated by {len(self.blockers)} unmet blocker(s): {names}. "
+            f"Refusing to serve it to {requested} — `bd ready` already excludes it "
+            f"for this reason, and dispatching it anyway puts work on a plate that "
+            f"cannot be advanced. Close the blocker, or drop the dependency if it "
+            f"is no longer real (`bd dep remove {item_id} <blocker>`), then dispatch."
+        )
+
+
 class Blocked(Exception):
     """The item is BLOCKED, and dispatching it OVERWRITES that decision.
 
@@ -280,6 +318,13 @@ class Dispatcher:
         # payload, so a refusal does no work at all.
         if item.status == "blocked":
             raise Blocked(item_id, agent_name)
+        # ...AND AN UNMET BLOCKER IS THE SAME REFUSAL (internal-ref). Third
+        # variant of the one hole: `bd ready` already excludes an item whose
+        # `blocks` dependency is open, and the dispatch path never asked. Only a
+        # POSITIVE reading refuses — an empty list means "none known" (the files
+        # backend has no dependency model at all), never "ready".
+        if getattr(item, "open_blockers", ()):
+            raise HasOpenBlocker(item_id, agent_name, item.open_blockers)
         # Do not STEAL work someone is already doing (aegis-uvw5, the 7yeb shape).
         # plan() used to read the item and overwrite status/assignee unconditionally,
         # so dispatching an item another agent held silently reassigned it and two
