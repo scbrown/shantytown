@@ -1,16 +1,17 @@
 """st — the CLI. Twenty-two commands, and the count is load-bearing: each earns its slot.
 
     anchor [--short|--events|--harness] · go · inbox [--count] · task
-    · crew [--count] · input [--show|--clear|--dismiss] · ask · answer
+    · crew [--count|--governor] · input [--show|--clear|--dismiss] · ask · answer
     · roles [--check|set|sync] · init · new · start [--mode]
     · stop · log · context · doctor [--install]
     · tend [--install|--status|--reauth|--target] · attach [-r|--no-start]
     · dashboard [admin] · subscribe · worktree [--gc] · stats
 
-Five of those flags are MACHINE-READABLE modes, added for an external status bar
-(anchor --short/--events/--harness, crew --count, inbox --count). They are flags
-and not commands on purpose: the surface is the thesis, and "a status bar wants
-this" does not earn a slot. Each prints ONE value and nothing else — docs/cli.md.
+Six of those flags are MACHINE-READABLE modes, added for an external status bar
+(anchor --short/--events/--harness, crew --count, crew --governor, inbox --count).
+They are flags and not commands on purpose: the surface is the thesis, and "a
+status bar wants this" does not earn a slot. Each prints ONE value and nothing
+else — docs/cli.md.
 
 TWO COMMANDS WERE RENAMED, and the count did not move (Stiwi, 2026-07-19):
   · prime -> anchor — an agent's anchor is what holds it to its work. `prime`
@@ -472,6 +473,11 @@ def build_parser() -> argparse.ArgumentParser:
                     help="print ONLY `busy/total` — the same verdict the table "
                          "renders, for a status bar. Agents whose busy/idle state "
                          "is unknown are in NEITHER number")
+    cr.add_argument("--governor", action="store_true",
+                    help="print ONLY the capacity verdict, machine-readable, for a "
+                         "status bar: `ok <five_hour> <seven_day> [tier label]`, or "
+                         "the bare word `lost` / `off`. Both budgets, because they "
+                         "exhaust independently")
 
     # aegis-fagvi: the roles/role footgun (plural-vs-singular) is consolidated
     # into ONE noun with verbs: `st roles {show|set|sync}`. The old `role` and
@@ -2588,6 +2594,14 @@ def _cmd_crew(a) -> int:
     answered: a stamp records WHICH BYTES an agent launched with, and one we did
     not observe would be a fabricated measurement, which is worse than a blank.
     """
+    # --governor answers FIRST, before the registry and the panes are touched.
+    # Capacity is a property of the BUDGET, not the roster: a registry that cannot
+    # be read must not blank the number that decides whether to dispatch at all.
+    # (It is on `crew` rather than a new command because `--count` set the
+    # precedent for a status-bar reader here, and the command count is pinned by
+    # test_command_count — a new verb is a deliberate widening, this is not.)
+    if getattr(a, "governor", False):
+        return _crew_governor(a)
     panes = _panes(a)
     try:
         agents = _registry(a).all()
@@ -2884,6 +2898,71 @@ def _crew_states(agents, panes, runtime):
             # was observed. What the card lacks is launch_gaps()' question.
             posture = "—"
         yield ag, state, work, posture
+
+
+def _crew_governor(a) -> int:
+    """`st crew --governor` — the capacity verdict, machine-readable, one line.
+
+    THE CONSUMER IS A STATUS BAR, and that shapes every choice here.
+
+    FORMAT — the first token is a STATUS WORD, and the three cases are
+    structurally different so a reader cannot mistake one for another:
+
+        ok 45 24                                    both budgets, no tier engaged
+        ok 70 24 dispatch only P0 and above [five_hour >= 70%]     a tier is engaged
+        lost                                        the signal could not be read
+        off                                         no governor configured
+
+    `lost` and `off` carry NO NUMBERS AT ALL. That is deliberate: a bar that
+    printed a stale percentage while blind would silently undo the governor's
+    whole fail-safe, which is that blindness is LOUD (it alarms every pass on
+    purpose). Making the blind case unparseable-as-a-reading is the same rule
+    `shantytown.answer` applies to a collection — "could not look" must not be
+    representable as an answer.
+
+    BOTH WINDOWS, always. They exhaust independently and a five-hour budget
+    refills in hours while the weekly does not refill for days, so one number is
+    the wrong number half the time. The tier LABEL is last and may
+    contain spaces: a reader takes the first three fields and treats the
+    remainder as the label.
+
+    A PURE READ (`persist=False`). A status bar polls every few seconds; if this
+    extended a hysteresis hold, merely LOOKING at the bar would ratchet fleet
+    policy. `st tend` remains the one writer of the engaged tier.
+    """
+    gov = _governor(a)
+    if gov is None:
+        print("off")
+        return OK
+    try:
+        readings = gov.reader.read_all()
+        verdict = gov.evaluate(persist=False)
+    except Exception:
+        # Any failure to READ is `lost`, never a number. The reader already
+        # distinguishes its own failure modes for the operator-facing path; a
+        # status bar needs exactly one bit and must not guess.
+        print("lost")
+        return OK
+    if verdict.signal_lost:
+        print("lost")
+        return OK
+
+    def _pct(window: str) -> str:
+        r = readings.get(window)
+        # A window the producer does not publish is not a zero. Rendering 0 for
+        # an absent budget would read as "plenty of headroom" — the most
+        # expensive possible direction for this particular wrong answer.
+        if r is None or not r.ok or r.pct is None:
+            return "?"
+        return str(int(round(r.pct)))
+
+    label = ""
+    if verdict.engaged:
+        # The TOP engaged tier names the restriction in force. Policy.engaged is
+        # cumulative, so the last one is the most restrictive.
+        label = verdict.engaged[-1].label()
+    print(f"ok {_pct(gov_mod.FIVE_HOUR)} {_pct(gov_mod.SEVEN_DAY)} {label}".rstrip())
+    return OK
 
 
 def _crew_count(agents, panes, runtime) -> int:
