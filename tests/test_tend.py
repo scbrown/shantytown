@@ -804,3 +804,42 @@ def test_the_crash_loop_retirement_ACTUALLY_WRITES_THE_CARD(tmp_path, monkeypatc
     card = json.loads((root / "crew" / "billy.json").read_text())
     assert card["retired"] is True, "the crash-loop give-up wrote nothing"
     assert "could not retire" not in capsys.readouterr().err
+
+
+# --- a MASKED foreign unit is a tombstone, not a competitor -------------------
+#
+# A masked Type=oneshot + RemainAfterExit=yes unit that ran before it was masked
+# reports active FOREVER. Reading that residue as a live supervisor refused
+# --install with no way out short of a reboot — and refused it precisely because
+# the operator had already made the call the refusal exists to demand.
+
+def test_a_masked_unit_is_not_a_foreign_supervisor_even_while_active():
+    """The live case: gastown-crew.service masked, but still reporting active
+    from its pre-mask boot run. The other FOREIGN_UNITS entry is quiet."""
+    assert supervisor.foreign_supervisor(
+        is_active=lambda u: u == "gastown-crew.service",
+        is_masked=lambda u: u == "gastown-crew.service") is None
+
+
+def test_masked_beats_enabled_as_well_as_active():
+    assert supervisor.foreign_supervisor(
+        is_active=lambda u: False,
+        is_enabled=lambda u: True,
+        is_masked=lambda u: True) is None
+
+
+def test_an_unmasked_active_unit_still_refuses():
+    """The guard must not be softened into uselessness by the masked case."""
+    got = supervisor.foreign_supervisor(
+        is_active=lambda u: u == "gastown-crew.service",
+        is_masked=lambda u: False)
+    assert got == ("gastown-crew.service", "active now")
+
+
+def test_install_PROCEEDS_past_a_masked_but_still_active_foreign_unit(unit_home, tmp_path):
+    changed, msg = supervisor.install(
+        ST_BIN, tmp_path / "root", run=lambda c: None,
+        is_active=lambda u: True,
+        is_masked=lambda u: True)
+    assert changed, f"refused a tombstone: {msg}"
+    assert (unit_home / supervisor.TIMER).exists()
