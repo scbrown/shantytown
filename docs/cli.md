@@ -865,11 +865,18 @@ $ st crew --count
 3/9
 
 $ st crew --governor
-ok 45/50 24/45
-# each budget is current/next-threshold; `-` = no higher tier.
-# both windows, because they exhaust independently and are asymmetric.
+ok 45/50/5400 24/45/248400
+# each budget is current/next-threshold/seconds-until-reset.
+#   `-` in the second slot = no higher tier; `-` in the third = no reset published.
+#   Neither is ever rendered as a number: a bar reading 0 would say "resets now" forever.
+# both windows, because they exhaust independently and are asymmetric — and they
+# refresh on completely different clocks (95 minutes vs 70 hours, measured).
+# The reset is here because "throttled" and "throttled for another 1h35m" are
+# different sentences to the operator: the first invites intervention, the second
+# invites waiting. Seconds, not a wall-clock time — the consumer is a program, and
+# it formats "resets in 1h35m" itself.
 # A tier in force is NAMED after the numbers:
-#   ok 70/80 24/45 dispatch only P0 and above [five_hour >= 70%]
+#   ok 70/80/5400 24/45/248400 dispatch only P0 and above [five_hour >= 70%]
 # Blind cases carry NO digits, so a bar cannot scrape a stale reading:
 #   lost   the signal could not be read
 #   off    no governor configured
