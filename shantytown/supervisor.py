@@ -105,6 +105,11 @@ def resolve_st_bin(which=None, argv0=None) -> str | None:
     return None
 
 
+# The SuccessExitStatus=2 rationale below is aegis-unbuw's; the 203/EXEC episode
+# it cites is aegis-408qs. The citations live HERE, in a Python comment, and not
+# in the unit text — that text is a VALUE this function writes to disk, and this
+# repo is public. (Found by the internal-identifier ratchet, which was red on
+# main; the reasoning in the unit is worth keeping, the ticket ids are not.)
 def _service(st_bin: str, root: Path) -> str:
     return f"""{MARKER}
 [Unit]
@@ -117,8 +122,8 @@ Type=oneshot
 # agent, a refusal) — not that it failed to run, which is what systemd's own
 # failure state means. Both are visible in `st tend --status`.
 #
-# ...AND THAT COMMENT USED TO BE THE WHOLE FIX, WHICH IS WHY THIS LINE EXISTS
-# (aegis-unbuw). Naming the mismatch in a comment did not stop systemd making
+# ...AND THAT COMMENT USED TO BE THE WHOLE FIX, WHICH IS WHY THIS LINE EXISTS.
+# Naming the mismatch in a comment did not stop systemd making
 # it: exit 2 is `_cmd_tend`'s "found a FAULT", so a pass that ran PERFECTLY and
 # reported faults left the unit in `failed`. Measured 2026-08-01: 10 faults on
 # the live fleet (resurrected retirees mid-shuffle), so `is-failed` read
@@ -128,7 +133,7 @@ Type=oneshot
 #   - "the supervisor is broken" is unreadable, because it is always failed;
 #   - "the supervisor found faults" is not an alert either, because it never
 #     clears — a bit that is always on carries no information.
-# And it is precisely how aegis-408qs hid: 687 consecutive 203/EXEC failures
+# And it is precisely how an earlier bug hid: 687 consecutive 203/EXEC failures
 # looked like the same red this unit shows on an ordinary healthy night.
 #
 # So systemd's failure state is handed back its ONE job — did the pass run.
