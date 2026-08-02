@@ -135,7 +135,7 @@ def advise(path: Path, now: float | None = None) -> str | None:
                    "`git -C %s log --oneline HEAD..%s` before you start, and check "
                    "open PRs (unmerged work will NOT show there)." % (repo, s.ref))
     if s.unpushed:
-        msg.append("Your local commits exist in no other place; push them.")
+        msg.append("Those commits are on no remote ref this tree knows about — fetch to confirm, then push; if it is real they exist in exactly one place.")
     msg.append("NOT pulled for you: changing files under a live edit is a worse "
                "bug than staleness. Rebase yourself when your tree is clean.")
     return " ".join(msg)
