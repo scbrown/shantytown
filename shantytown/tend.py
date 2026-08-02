@@ -62,7 +62,23 @@ from .workspace import WorkspaceError, ensure_workspace
 OK = "ok"                     # up, wired, nothing to do
 RESPAWNED = "respawned"       # it was down; it is not any more
 WOULD = "would-respawn"       # --dry-run: down, and we stopped there
-RETIRED = "retired"           # deliberately stopped. NOT a fault, NOT respawned
+RETIRED = "retired"           # deliberately retired. NOT a fault, NOT respawned
+STOPPED = "stopped"           # down because somebody ran `st stop` (aegis-k9068).
+                              # NOT a fault, NOT respawned, and NOT a retirement:
+                              # `st new <agent>` brings it straight back.
+                              # It exists because `st stop` DELETES the launch
+                              # stamp itself (cli `_launches().forget()`), so the
+                              # aegis-2j2r ownership gate below catches st's own
+                              # stopped agents and used to explain them with the
+                              # foreign-orchestrator wording — "never launched by
+                              # st ... another orchestrator owns it" — which is
+                              # false in every clause for this population and
+                              # sends the reader hunting an orchestrator that
+                              # does not exist. Two causes, one message; this is
+                              # the second one, told apart by the stop record.
+                              # Refusing is still CORRECT (a deliberate stop must
+                              # stay down until asked back, which is what `st
+                              # stop` now promises) — only the reason was wrong.
 RESURRECTED = "RESURRECTED"   # retired AND alive — something else respawned it
 DEAF = "deaf"                 # alive, but the running process cannot report
 STALE = "stale-settings"      # alive, running settings older than the file
@@ -220,6 +236,27 @@ def retirement_provenance(card: Agent) -> str:
     return f" (retired by {who or 'unrecorded'} at {when or 'unrecorded time'})"
 
 
+def _by_at(stop) -> str:
+    """" by X at T" — or "" when the stop record does not say (aegis-k9068).
+
+    Same discipline as retirement_provenance above and blank for the same reason:
+    a line that padded itself with "by unknown" would make a plainly-recorded stop
+    look like a mystery. `at` is a float epoch; render it as the local timestamp a
+    reader can compare against `st crew`.
+    """
+    who = getattr(stop, "by", "") or ""
+    when = getattr(stop, "at", None)
+    stamp = ""
+    if when:
+        try:
+            stamp = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(float(when)))
+        except (TypeError, ValueError, OSError):
+            stamp = ""
+    if not who and not stamp:
+        return ""
+    return f" by {who or 'unrecorded'} at {stamp or 'unrecorded time'}"
+
+
 class Tender:
     """One supervision pass. Every dependency is injected — the point of this
     class is that a test can run a whole pass with no tmux, no git, no systemd
@@ -230,7 +267,7 @@ class Tender:
                  refresh_trees=None,
                  ensure=ensure_workspace, log=None, gaps=None, crashes=None,
                  retire=None, now=None, target=None, governed=None,
-                 catalog=None):
+                 catalog=None, stops=None):
         self._panes = panes
         self._runtime = runtime
         self._launches = launches
@@ -273,6 +310,13 @@ class Tender:
         # governor's exclusion check. Bring-up order is the tree order above and
         # deliberately does not read it.
         self._catalog = catalog
+        # The deliberate-stop record (aegis-k9068). READ-ONLY here and consulted
+        # at exactly one place: to tell st's OWN stopped agents apart from another
+        # orchestrator's cards, which the launch-stamp gate alone cannot do. It
+        # changes no verdict's ACTION — an unstamped agent is still not respawned
+        # either way — only which of two true sentences gets printed. None keeps
+        # the pre-k9068 behaviour, so every existing caller is unaffected.
+        self._stops = stops
 
     def pass_over(self, agents: list[Agent], *, dry_run: bool = False) -> Report:
         rep = Report(started=time.time(), dry_run=dry_run)
@@ -463,6 +507,22 @@ class Tender:
         except Exception:  # noqa: BLE001 — stubbed/legacy stores lack the API
             unstamped = False
         if unstamped:
+            # WHICH KIND of unstamped? (aegis-k9068.) The gate above proves only
+            # that the stamp is GONE — it cannot say why, and the two reasons want
+            # opposite words and opposite actions. `st stop` forgets the stamp
+            # itself, so ask the stop record before speaking for it. No record =
+            # the aegis-2j2r case, wording unchanged.
+            stop = None
+            try:
+                stop = self._stops.get(card.name) if self._stops is not None else None
+            except Exception:  # noqa: BLE001 — an unreadable store is not an intent
+                stop = None
+            if stop is not None:
+                why = (f"deliberately stopped{_by_at(stop)} — st's own agent, and "
+                       f"`st stop` removed its launch stamp, so tend will not "
+                       f"bring it back. `st new {card.name}` restores it.")
+                self._log(f"STOPPED {card.name}: {why}")
+                return Finding(card.name, "down", STOPPED, why)
             # (Citation lives here, not in the emittable string: aegis-2j2r.)
             why = ("no launch stamp — never launched by st, so not st's "
                    "to respawn (another orchestrator owns it)")

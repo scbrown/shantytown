@@ -4576,6 +4576,11 @@ def _tend_once(a, quiet: bool = False) -> int:
         target=getattr(a, "target", None),
         governed=(None if verdict is None
                   else lambda card: verdict.excludes(card, _catalog(a))),
+        # The same record `st crew` reads to print "stopped ON PURPOSE", so the
+        # two commands cannot disagree about whose decision put an agent down
+        # (aegis-k9068). Without it tend explained every deliberate stop with the
+        # foreign-orchestrator wording and counted it as a FAULT.
+        stops=_stops(a),
     )
     rep = tender.pass_over(agents, dry_run=a.dry_run)
     # DELIVER blocked workers to their coordinator (aegis-w0kk). Not on a dry run
