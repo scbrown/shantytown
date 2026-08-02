@@ -601,6 +601,36 @@ def test_the_soonest_reset_is_the_one_reported(tmp_path):
     assert "five_hour resets in 1h35m" in v.render(clock())
 
 
+def test_an_UNENGAGED_window_is_not_the_one_you_are_waiting_on(tmp_path):
+    """The aegis-cjjdx bug, as measured live: five_hour NOT engaged and refilling
+    soon, seven_day ENGAGED and refilling much later.
+
+    Reporting the soonest reset OVERALL named `five_hour` and "3h18m" while the
+    thing actually holding the fleet was `seven_day`, 56.6h out — a 17x
+    understatement in the most expensive direction, because "clears after lunch"
+    is a decision to wait and "clears in 2.4 days" is a decision to re-prioritise.
+
+    five_hour tiers start at 50 and seven_day at 65, so 11/70 engages exactly one.
+    """
+    clock = _Clock()
+    v = _evaluate(tmp_path, clock, {FIVE: 11, SEVEN: 70},
+                  {FIVE: clock() + 5700, SEVEN: clock() + 252_000})
+    # Precondition: exactly one window is engaged, and it is NOT the soonest.
+    assert {t.window for t in v.engaged} == {SEVEN}
+    assert v.next_reset(clock())[0] == SEVEN
+    assert "seven_day resets in" in v.render(clock())
+    assert "five_hour resets in" not in v.render(clock())
+
+
+def test_no_engaged_window_has_a_readable_reset_reports_nothing(tmp_path):
+    """Silence beats naming a window that is not holding anything. An unengaged
+    window must never become "this is why you are throttled"."""
+    clock = _Clock()
+    v = _evaluate(tmp_path, clock, {FIVE: 11, SEVEN: 11},
+                  {FIVE: clock() + 5700, SEVEN: clock() + 252_000})
+    assert v.next_reset(clock()) is None
+
+
 def test_fmt_eta_reads_at_a_glance():
     assert gov.fmt_eta(5700) == "1h35m"
     assert gov.fmt_eta(720) == "12m"
