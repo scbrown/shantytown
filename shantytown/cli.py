@@ -2908,10 +2908,19 @@ def _crew_governor(a) -> int:
     FORMAT — the first token is a STATUS WORD, and the three cases are
     structurally different so a reader cannot mistake one for another:
 
-        ok 45 24                                    both budgets, no tier engaged
-        ok 70 24 dispatch only P0 and above [five_hour >= 70%]     a tier is engaged
+        ok 45/50 24/45                              both budgets, no tier engaged
+        ok 70/80 24/45 dispatch only P0 and above [five_hour >= 70%]  a tier engaged
+        ok 96/- 24/45 ...                           above every five_hour tier
         lost                                        the signal could not be read
         off                                         no governor configured
+
+    Each budget is `current/next-threshold`. The NEXT THRESHOLD is in the output
+    because a consumer cannot colour honestly without it: the tiers are per-window
+    and asymmetric (five_hour 50/70/80/95, seven_day 45/65/75/90), so a bare 44%
+    is six points from engaging one budget and already engaging the other. A bar
+    that coloured on the raw number would call those the same, which is precisely
+    the "one number is the wrong number" mistake this flag prints two budgets to
+    avoid. `-` means no higher tier exists for that window.
 
     `lost` and `off` carry NO NUMBERS AT ALL. That is deliberate: a bar that
     printed a stale percentage while blind would silently undo the governor's
@@ -2953,8 +2962,12 @@ def _crew_governor(a) -> int:
         # an absent budget would read as "plenty of headroom" — the most
         # expensive possible direction for this particular wrong answer.
         if r is None or not r.ok or r.pct is None:
-            return "?"
-        return str(int(round(r.pct)))
+            return "?/?"
+        now = int(round(r.pct))
+        # The lowest tier this window has NOT yet reached. Read off the policy so
+        # the consumer never hardcodes thresholds that live in shantytown.toml.
+        higher = sorted(t.at for t in gov.policy.tiers_for(window) if t.at > now)
+        return f"{now}/{higher[0] if higher else '-'}"
 
     label = ""
     if verdict.engaged:
