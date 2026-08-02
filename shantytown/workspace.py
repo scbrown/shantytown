@@ -509,19 +509,40 @@ def upstream_ref(dest: Path | str, run: GitRunner = _git
     # A DIVERGENCE IS REPORTED, NEVER ACTED ON. We do not switch refs, merge, or
     # pick the "more advanced" remote — choosing between two authorities is a
     # human's call. We only refuse to be quiet about it.
+    # EVERY main-candidate on EVERY remote, not just the same branch name on a
+    # different remote (widened after the shanty TOMBSTONE, aegis-ib65p).
+    #
+    # The narrow version compared only `<other-remote>/<same-branch>`, which
+    # cannot see the case that actually bit this fleet: shanty's worktrees track
+    # `forge/master`, and `forge/master` is a TOMBSTONE — one commit reading
+    # "shanty has moved to github" — while `forge/main` carries the live work.
+    # Same remote, different branch, so the old check was blind to it and
+    # `st worktree` would have reported "current with forge/master" while sitting
+    # on a dead branch.
+    #
+    # Config-resolution alone does NOT save you here, and that is the honest
+    # limit worth stating: the branch really does track the tombstone, so "ask
+    # the repo" faithfully returns the wrong answer. Configuration can be stale
+    # in exactly the way a hardcoded name can. What saves you is refusing to be
+    # quiet — the ref is still used (we do not silently switch branches under
+    # anyone), but a live branch that the chosen ref does not contain is always
+    # named, and a human moves the upstream.
     chosen_remote = ref.split("/", 1)[0]
     ahead = []
+    seen_refs = {ref}
     for r in remotes:
-        if r == chosen_remote:
-            continue
-        other = f"{r}/{branch}"
-        rc, _ = run(dest, "rev-parse", "--verify", "--quiet", other)
-        if rc != 0:
-            continue
-        rc, out = run(dest, "rev-list", "--count", f"{ref}..{other}")
-        if rc == 0 and out.isdigit() and int(out) > 0:
-            rc2, sha = run(dest, "rev-parse", "--short", other)
-            ahead.append(f"{other} is {out} ahead ({sha if rc2 == 0 else '?'})")
+        for b in MAIN_CANDIDATES:
+            other = f"{r}/{b}"
+            if other in seen_refs:
+                continue
+            seen_refs.add(other)
+            rc, _ = run(dest, "rev-parse", "--verify", "--quiet", other)
+            if rc != 0:
+                continue
+            rc, out = run(dest, "rev-list", "--count", f"{ref}..{other}")
+            if rc == 0 and out.isdigit() and int(out) > 0:
+                rc2, sha = run(dest, "rev-parse", "--short", other)
+                ahead.append(f"{other} is {out} ahead ({sha if rc2 == 0 else '?'})")
     if ahead:
         return ref, (f"NOTE: {'; '.join(ahead)} — {ref} is what this repo tracks, "
                      f"so that is what was used, but work exists that it does not "
@@ -541,10 +562,27 @@ class Staleness:
                 Risk: DUPLICATION. The coordinator rebuilt a status-bar fix from
                 scratch that already existed, and the branches later auto-merged
                 into a duplicate map key that only the compiler caught.
-      unpushed  commits here that are NOT on the ref.
+      unpushed  commits here that are on NO REMOTE REF AT ALL.
                 Risk: LOSS. Work that exists in exactly one place, invisible to
                 everyone, and destroyed by any of the resets this codebase
                 already forbids (aegis-repg/iaef).
+
+                MEASURED AGAINST EVERY REMOTE REF, NOT AGAINST THE UPSTREAM
+                (corrected by tim, aegis-ib65p). The first version counted
+                `<ref>..HEAD` — commits not on origin/main — and that is a
+                different and much larger set: it counts every in-flight FEATURE
+                BRANCH as stranded. Measured false positive: hank-wt/tim was
+                reported "+1, exists only here" while the commit was sitting on
+                `origin/hank-1-daemon-stage3c`, pushed and mid-review. Nothing
+                was at risk.
+
+                That error runs in the WORST direction for this particular
+                warning. A loss alarm earns attention only by being rare; one
+                that fires on every open feature branch on the fleet trains
+                everyone to dismiss it, and then the one genuinely stranded
+                commit is dismissed with the rest. `HEAD --not --remotes` asks
+                the question we actually mean — "does this exist anywhere but
+                here" — instead of a proxy for it.
 
     `dirty` is uncommitted work — the reason a refresh must REPORT rather than
     act. `note` carries a remote divergence or a refusal from upstream_ref.
@@ -600,7 +638,11 @@ def tree_staleness(dest: Path | str, run: GitRunner = _git,
         if ref is None:
             return Staleness(ref=None, note=note, error=note)
     rc, behind = run(dest, "rev-list", "--count", f"HEAD..{ref}")
-    rc2, unpushed = run(dest, "rev-list", "--count", f"{ref}..HEAD")
+    # NOT `{ref}..HEAD` — see Staleness.unpushed. That measures ahead-of-main and
+    # flags every open feature branch as stranded; this asks whether the commits
+    # exist on ANY remote ref, which is the question "is this work anywhere but
+    # here" actually means.
+    rc2, unpushed = run(dest, "rev-list", "--count", "HEAD", "--not", "--remotes")
     if rc != 0 or rc2 != 0:
         return Staleness(ref=ref, note=note,
                          error=f"could not count commits against {ref}")
