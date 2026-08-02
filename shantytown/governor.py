@@ -251,6 +251,26 @@ class Policy:
     password_file: str | None = None
     stub_pct: float | None = None
     tiers: tuple[Tier, ...] = ()
+    # Agents whose dispatches the PRIORITY FLOOR does not apply to (aegis-yegfx).
+    #
+    # A floor is a fleet-wide instrument and the fleet is not uniform. Measured
+    # 2026-08-02: seven_day at 70% engaged a P0-only floor with ZERO P0 beads
+    # board-wide, so every agent was idle for ~54h with 19 P1s ready. The floor
+    # was working exactly as specified and the outcome was a total stall — the
+    # budget was being conserved by spending none of it.
+    #
+    # WHAT THIS IS NOT: a way to make room for work. The two escape hatches an
+    # operator reaches for under a floor are both worse than this one. Raising a
+    # bead's priority (which `admits` itself suggests) edits the board to satisfy
+    # the instrument, and the inflation is permanent and untraceable. Lowering the
+    # tier disables the guard for everyone. Naming the agent leaves the floor,
+    # the tier and every other agent exactly as they were, and it is legible in
+    # one grep of the config.
+    #
+    # DELIBERATELY NOT HONOURED BY A DRAIN OR A FREEZE — see `admits`. Those are
+    # about total spend and about a blind signal; this is about the SHAPE of what
+    # remains dispatchable under a floor, which is a different question.
+    exempt: tuple[str, ...] = ()
 
     @property
     def active(self) -> bool:
@@ -991,6 +1011,10 @@ class Verdict:
     # that was working. A display bug that manufactures a plausible false bug
     # report is more dangerous than one that merely confuses.
     by_window: dict = field(default_factory=dict)
+    # Agents the PRIORITY FLOOR does not apply to. Copied off the policy so a
+    # Verdict stays self-contained — every other field a refusal needs to explain
+    # itself is here, and "why was this one let through" is the same question.
+    exempt: tuple[str, ...] = ()
 
     def resets_in(self, window: str, now: float) -> float | None:
         at = self.resets.get(window)
@@ -1091,7 +1115,41 @@ class Verdict:
         all — two tiers each naming a band is two conditions, not a choice."""
         return tuple(t for t in self.engaged if t.traits)
 
-    def admits(self, item) -> str:
+    def waives(self, item, agent=None) -> bool:
+        """True if `agent` is floor-exempt AND the floor is what would otherwise
+        have refused this item. Not "is this agent exempt" — the narrower
+        question, because it is the one that must be REPORTED.
+
+        An exemption that fires silently on every dispatch is indistinguishable
+        from a governor that is off, which is precisely the state aegis-hdqej's
+        fail-safe section refuses to allow. So callers announce a waiver, and to
+        announce it only when it CHANGED the outcome they need this rather than a
+        membership test: an exempt agent taking a P0 under a P0 floor was going
+        to be admitted anyway, and saying "waived" there would train the reader
+        to ignore the word.
+        """
+        if not agent or agent not in self.exempt:
+            return False
+        if self.frozen or self.drains:
+            return False          # never waived — see admits
+        floor = self.floor
+        if self.tier is None or floor is None:
+            return False          # no floor in force; nothing to waive
+        priority = getattr(item, "priority", None)
+        return priority is None or priority > floor
+
+    def waiver_says(self, item, agent=None) -> str:
+        """The one line a caller prints when `waives` is true. Names the agent,
+        the item, the floor it cleared and WHERE the exemption is configured, so
+        the reader can undo it without going looking."""
+        priority = getattr(item, "priority", None)
+        shown = "no priority" if priority is None else f"P{priority}"
+        return (f"{self._tier_says()} and {getattr(item, 'id', 'this item')} is "
+                f"{shown} — dispatched anyway because {agent} is FLOOR-EXEMPT "
+                f"(`exempt` in [governor]). The floor still applies to every "
+                f"other agent; spend against it is still spend.")
+
+    def admits(self, item, agent=None) -> str:
         """"" if this item may be dispatched, else WHY not.
 
         READ THE SIGN OF `min_priority`. It is bd's numbering, where 0 is the
@@ -1122,6 +1180,15 @@ class Verdict:
             return (f"{self._tier_says()}: FULL STOP — the fleet is draining, so "
                     f"NOTHING is dispatched. The item is untouched and stays "
                     f"ready; dispatch it when usage falls.")
+        # FLOOR EXEMPTION (aegis-yegfx). Deliberately placed AFTER frozen and
+        # drain and before the floor, because that ordering IS the policy: a
+        # drain is a full stop for spend reasons and a freeze means we cannot see
+        # the budget at all, and neither becomes negotiable because of who is
+        # asking. Only the priority floor — a judgement about which work is worth
+        # the remaining budget — admits the idea that one agent's lane was
+        # misjudged by a fleet-wide rule.
+        if self.waives(item, agent):
+            return ADMITTED
         floor = self.floor
         if self.tier is None or floor is None:
             return ADMITTED
@@ -1531,7 +1598,8 @@ class Governor:
         return Verdict(reading=reading, pct=pct, tier=chosen, held=held, why=why,
                        by_window=by_window,
                        alarm=alarm, engaged=tuple(engaged_tiers),
-                       resets=resets, relaxed=tuple(relaxed))
+                       resets=resets, relaxed=tuple(relaxed),
+                       exempt=pol.exempt)
 
     def episode(self) -> float:
         """The current tier's episode key — what a drain dedupes against."""
@@ -1781,7 +1849,7 @@ def render_drain(rows: list[Drained]) -> str:
 
 _GOV_KEYS = {"source", "window", "on_signal_lost", "relax_margin",
              "max_age_seconds", "url", "path", "username", "password_file",
-             "stub_pct", "tier"}
+             "stub_pct", "tier", "exempt"}
 _TIER_KEYS = {"at", "min_priority", "traits", "action", "window"}
 
 
@@ -1831,6 +1899,29 @@ def parse(tbl: dict) -> Policy:
                                 f"{stub!r}")
         stub = float(stub)
 
+    raw_exempt = tbl.get("exempt", [])
+    if isinstance(raw_exempt, str):
+        # ONE NAME IS NOT A LIST OF CHARACTERS. `exempt = "ellie"` is the typo an
+        # operator writes first, and iterating it silently exempts nobody while
+        # every letter looks like an agent name in a dump. Refuse and say the fix.
+        raise GovernorError(
+            f"[governor] exempt must be an ARRAY of agent names, got the string "
+            f'{raw_exempt!r}. Write `exempt = ["{raw_exempt}"]`.')
+    if not isinstance(raw_exempt, list):
+        raise GovernorError(f"[governor] exempt must be an array of agent names, "
+                            f"got {type(raw_exempt).__name__}")
+    exempt = []
+    for name in raw_exempt:
+        if not isinstance(name, str) or not name.strip():
+            raise GovernorError(f"[governor] exempt entries must be non-empty "
+                                f"agent names, got {name!r}")
+        exempt.append(name.strip())
+    dupes = sorted({n for n in exempt if exempt.count(n) > 1})
+    if dupes:
+        raise GovernorError(f"[governor] exempt names {', '.join(dupes)} twice; "
+                            f"a repeated name means one of them is a typo nobody "
+                            f"will notice.")
+
     raw_tiers = tbl.get("tier", [])
     if isinstance(raw_tiers, dict):
         raw_tiers = [raw_tiers]
@@ -1851,7 +1942,7 @@ def parse(tbl: dict) -> Policy:
                   url=tbl.get("url"), path=tbl.get("path"),
                   username=tbl.get("username"),
                   password_file=tbl.get("password_file"), stub_pct=stub,
-                  tiers=tiers)
+                  tiers=tiers, exempt=tuple(exempt))
 
 
 def _int(tbl: dict, key: str, default: int, *, minimum: int) -> int:

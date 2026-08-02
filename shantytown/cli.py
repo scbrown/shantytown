@@ -366,7 +366,22 @@ def _dispatch_gate(a):
     verdict = gov.evaluate(persist=False)
     if verdict.alarm:
         print(f"  ⚠ {verdict.alarm}", file=sys.stderr)
-    return verdict.admits
+
+    def gate(item, agent=None):
+        """SAY IT WHEN A WAIVER IS WHAT LET THIS THROUGH (aegis-yegfx).
+
+        A silent exemption is the one failure mode this feature can introduce:
+        the fleet keeps spending under a floor an operator believes is holding,
+        and nothing in the output distinguishes that from a governor that is
+        simply off. Printed on stderr like `alarm`, for the same reason and at
+        the same layer — the policy object decides, the CLI announces.
+        """
+        refusal = verdict.admits(item, agent)
+        if not refusal and verdict.waives(item, agent):
+            print(f"  ⚠ {verdict.waiver_says(item, agent)}", file=sys.stderr)
+        return refusal
+
+    return gate
 
 
 def _default_root() -> Path:
