@@ -569,10 +569,53 @@ stop with no shared answer; the full argument is in
 | 2 | **Rule Zero**: free feedable workers **and** dispatchable work both exist | **BLOCK**: dispatch |
 | 3 | **hibernate** declines | **ALLOW**, loudly |
 | 4 | a **deliverable** pending event (sender not mid-flight) | **BLOCK**: deliver |
-| 5 | otherwise | **ALLOW** |
+| 5 | idle because a **governor tier** holds the whole queue | **ALLOW**, loudly |
+| 6 | otherwise | **ALLOW** |
 
 Read the order as the answer to *"why did my coordinator not stop?"* — it is
 answerable from this table alone, which is the property the old chain lacked.
+
+### `dispatchable` means *passes the priority floor*
+
+Measured live, within sixty seconds of itself:
+
+```
+st tend -n     governor  usage 57% · 50% tier · dispatch only P1 and above
+st go <P2> tim refused: the usage governor's 50% tier is engaged and <bead> is P2
+feed_check     RULE ZERO — 1 feedable worker IDLE and 15 DISPATCHABLE bead(s).
+               Top ready: <P2>; <P2>; <P2>
+```
+
+A **blocking** stop hook was ordering a dispatch the governor forbade, and naming
+as its top candidates the exact beads that would be refused. `dispatchable` meant
+"open, unassigned, unblocked" and never asked whether the work could be *sent*.
+
+Two changes, and the second is the one that matters:
+
+1. **feed_check asks the governor.** `feed_check.throttle()` filters the ready list
+   through `Verdict.admits` — the same resolver `st go` gates on, never a floor
+   re-derived here. A duplicated constant would be two copies of a comparison
+   whose sign is already documented as a foot-gun.
+2. **Rank 5 allows the stop and NARRATES it.** Under an engaged tier, an idle
+   fleet with a full queue is the *correct* state — and it is observationally
+   identical to a feeder that has broken. A coordinator that cannot tell them
+   apart assumes the second, because that is the one it can act on.
+
+> **The escape hatch stays.** `st go`'s refusal still ends *"or raise its priority
+> if it really is that important"* — an earlier draft of this fix reworded it and
+> that decision was **withdrawn** (Stiwi, on the bead). The bump is legitimate
+> because it is **recorded**: `bd history` carries priority per revision with
+> timestamps, so an inflation is visible and diffable after the fact. What was
+> wrong was never the hatch; it was the blocking hook *herding* an automated actor
+> toward it. Remove the push and a re-grade becomes a judgement someone made,
+> rather than one the mechanism extracted. Two known limits on that audit trail
+> are tracked separately — history entries read `Author: beads` (so *who* bumped is
+> not recorded), and `bd compact`/`flatten` can squash the trail away.
+
+`st crew` shows the same fact on the roster: a free agent under an engaged floor
+is **THROTTLED-IDLE**, which is not the same failure as an agent nobody fed — and
+Rule Zero exists to catch the second. It is evaluated only when somebody is free,
+so a saturated fleet pays nothing for it, and it fails to silence on any error.
 
 **Ranks 1–5 fail open.** Any error — tmux, bd, a config typo — allows the stop; a
 hook that wedges an agent on a transient hiccup is worse than the stall it

@@ -2689,6 +2689,16 @@ def _cmd_crew(a) -> int:
               "interrupts work.")
     if busy:
         print(f"  {len(busy)} busy: {', '.join(busy)}")
+    # THROTTLED-IDLE IS NOT IDLE (aegis-diasw). `3 free` means "three agents can
+    # take work"; under an engaged priority floor it may mean "three agents that
+    # nothing is allowed to reach". Those are opposite instructions to a
+    # coordinator, and the roster reported them identically — which is half of
+    # what made Rule Zero and the governor contradict each other in production.
+    # Evaluated ONLY when somebody is free: when the fleet is saturated the
+    # answer changes nothing, and `st crew` must not grow a metric read on a path
+    # where it cannot matter.
+    if free and (note := _throttled_idle_note(a)):
+        print(note)
     # Not free, not busy, and the one state an operator will otherwise "fix" by
     # hand (aegis-x6xh). Say what it means and what NOT to do about it: the
     # incident that produced this line was an administrator reading a pane,
@@ -2898,6 +2908,35 @@ def _crew_states(agents, panes, runtime):
             # was observed. What the card lacks is launch_gaps()' question.
             posture = "—"
         yield ag, state, work, posture
+
+
+def _throttled_idle_note(a) -> str:
+    """The line that tells a free agent apart from a REACHABLE one, or "".
+
+    FAILS TO SILENCE, always. No governor, an unreadable one, a signal we cannot
+    see, no floor in force — every one of those returns "" and the roster reads
+    exactly as it did before this existed. A capacity annotation that could break
+    `st crew` would be a bad trade: the roster is the command an operator reaches
+    for when things are already going wrong.
+    """
+    try:
+        gov = _governor(a)
+        if gov is None:
+            return ""
+        verdict = gov.evaluate(persist=False)
+        if verdict.signal_lost or verdict.tier is None:
+            return ""
+        if verdict.drains:
+            return ("    ⚠ THROTTLED-IDLE, not available: the usage governor is "
+                    "draining the fleet — nothing dispatches at any priority.")
+        if verdict.floor is None:
+            return ""
+        return (f"    ⚠ THROTTLED-IDLE, not fully available: the governor's "
+                f"{verdict.tier.at}% tier is engaged — {verdict.effect()}. Work "
+                f"below the floor cannot be dispatched to them; they are idle "
+                f"because the throttle is holding, not because nobody fed them.")
+    except Exception:      # noqa: BLE001 — the roster never fails on capacity
+        return ""
 
 
 def _crew_governor(a) -> int:
