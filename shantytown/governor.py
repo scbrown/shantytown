@@ -981,16 +981,36 @@ class Verdict:
         return None if at is None else at - now
 
     def next_reset(self, now: float) -> tuple[str, float] | None:
-        """(window, seconds) for the SOONEST refill, or None if none is known.
+        """(window, seconds) until the throttle LIFTS, or None if unknowable.
 
-        The soonest is the one an operator is waiting on: a five-hour budget
-        refilling in 95 minutes beside a weekly one 70 hours out means the
-        answer to "how long am I throttled" is 95 minutes, not 70 hours.
+        The soonest reset among the windows that are ENGAGED — not the soonest
+        reset overall. Refilling a budget that is not constraining anything
+        changes nothing an operator can act on.
+
+        THE BUG THIS FIXES (aegis-cjjdx). This used to take `min()` over every
+        readable window. Measured live 2026-08-02: `five_hour` was NOT engaged
+        (`at: null`) and refilled in 3h18m, while `seven_day` WAS engaged at 45%
+        and refilled in 56.6h. `st crew` therefore told the coordinator the fleet
+        "comes back on its own when the five_hour budget resets in 3h18m" — the
+        wrong window, understating by 17x, for a fleet that was actually
+        restricted to P1-and-above for two and a half days.
+
+        That error runs in the most expensive direction there is. "Clears after
+        lunch" is a decision to WAIT; "clears in 2.4 days" is a decision to
+        re-prioritise the board or accept a mostly-idle crew. The old docstring's
+        reasoning — that the soonest refill is the one you are waiting on — is
+        correct ONLY when every window in the running is actually holding you.
+
+        Returns None when nothing engaged has a readable reset, which is the
+        honest answer: a blind window must never become "resets at 0", and an
+        unengaged one must never become "this is why you are throttled".
         """
-        if not self.resets:
+        engaged_windows = {t.window for t in self.engaged if t.window}
+        holding = {w: at for w, at in self.resets.items() if w in engaged_windows}
+        if not holding:
             return None
-        w = min(self.resets, key=lambda k: self.resets[k])
-        return w, self.resets[w] - now
+        w = min(holding, key=lambda k: holding[k])
+        return w, holding[w] - now
 
     @property
     def drains(self) -> bool:
