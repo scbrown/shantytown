@@ -99,6 +99,43 @@ class SendUnverified(Exception):
         super().__init__(f"sent {item_id} to {pane} but could not confirm it landed")
 
 
+class Blocked(Exception):
+    """The item is BLOCKED, and dispatching it OVERWRITES that decision.
+
+    Exactly the `Closed` shape, one status over, and it went unguarded for the
+    same reason: plan() writes `status=in_progress` on serve, so serving a
+    blocked bead silently converts "nobody should work this yet" into "somebody
+    is working this now". Blocking is a DELIBERATE act — an operator decided the
+    thing cannot be advanced — and a dispatch must not undo it as a side effect.
+
+    MEASURED 2026-08-02, on the author of the fix. I set a P1 bead to blocked
+    with its gate written on the bead, verified `bd show` reported BLOCKED, and a
+    dispatch then served it back to me as in_progress. The status I had set was
+    gone, the bead was on my plate, and the `is_blocked` plate-reader exclusion I
+    had shipped hours earlier could not help — by the time the plate read it, it
+    was no longer blocked.
+
+    That is the second-order failure worth naming: this defect DEFEATS the fix
+    for the plate-reader fix. Excluding blocked from plates is worthless if the dispatch
+    path launders the status on the way in. The same reasoning as `Closed`'s
+    "reopening is a separate, deliberate act": unblocking is
+    `bd update <id> --status open`, never a dispatch side effect, and
+    --reassign does not bypass it — reassign takes work from a live holder, it
+    does not overrule a block.
+    """
+
+    def __init__(self, item_id: str, requested: str):
+        self.item_id, self.requested = item_id, requested
+        super().__init__(
+            f"{item_id} is BLOCKED; refusing to serve it to {requested}. Serving "
+            f"it would overwrite that status with in_progress and put an item "
+            f"nobody can advance on an agent's plate — which is what cycles "
+            f"agents. If the block is resolved, clear it deliberately "
+            f"(`bd update {item_id} --status open`), then dispatch. If it is not, "
+            f"the bead's own comment says what it is waiting for."
+        )
+
+
 class Closed(Exception):
     """The item is CLOSED, and closed is terminal for the serve path (aegis-vuh33).
 
@@ -234,6 +271,15 @@ class Dispatcher:
         # never a dispatch side effect; --reassign does not raise the dead.
         if item.status == "closed":
             raise Closed(item_id, agent_name)
+        # BLOCKED IS A DECISION, AND SERVING IT OVERWRITES THE DECISION
+        # (internal-ref). Same position and same argument as CLOSED directly
+        # above: plan() writes status=in_progress, so a dispatch silently turns
+        # "nobody should work this yet" into "somebody is working it now" and
+        # puts an unadvanceable item on a plate — which is precisely what cycles
+        # agents. Checked here, before the holder logic and before composing the
+        # payload, so a refusal does no work at all.
+        if item.status == "blocked":
+            raise Blocked(item_id, agent_name)
         # Do not STEAL work someone is already doing (aegis-uvw5, the 7yeb shape).
         # plan() used to read the item and overwrite status/assignee unconditionally,
         # so dispatching an item another agent held silently reassigned it and two

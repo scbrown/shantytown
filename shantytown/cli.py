@@ -101,7 +101,7 @@ from . import scaffold
 from . import triage as triage_mod
 from .deployment import deployment_default, resolve_root, root_note
 from .dispatch import (Dispatcher, TriageRefused, SendUnverified,
-                       DispatchedButUntracked, AlreadyAssigned, Closed,
+                       DispatchedButUntracked, AlreadyAssigned, Blocked, Closed,
                        GovernorRefused)
 from . import forgejo as forgejo_mod
 from . import governor as gov_mod
@@ -2463,6 +2463,9 @@ def _cmd_go(a) -> int:
         except Closed as e:
             print(f"  refused: {e}", file=sys.stderr)
             return REFUSED
+        except Blocked as e:
+            print(f"  refused: {e}", file=sys.stderr)
+            return REFUSED
         except AlreadyAssigned as e:
             print(f"  refused: {e}", file=sys.stderr)
             return REFUSED
@@ -2543,6 +2546,13 @@ def _cmd_go(a) -> int:
         # Closed is terminal (aegis-vuh33). Nothing written, nothing sent — serving
         # a closed bead reverts it to in_progress and re-does finished work. Reopen
         # deliberately if it must be worked again.
+        print(f"  refused: {e}", file=sys.stderr)
+        return REFUSED
+    except Blocked as e:
+        # BLOCKED is a DECISION (internal-ref). Nothing written, nothing sent —
+        # serving a blocked bead overwrites that status with in_progress and puts
+        # an unadvanceable item on a plate, which is what cycles agents. Clear the
+        # block deliberately if it is resolved.
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED
     except AlreadyAssigned as e:
