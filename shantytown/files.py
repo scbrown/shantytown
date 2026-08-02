@@ -9,7 +9,7 @@ import json
 import os
 from pathlib import Path
 
-from .inbox import is_message
+from .inbox import is_blocked, is_message
 from .protocols import Agent, WorkItem
 # The pane-naming policy lives with the tier that writes cards. Imported under a
 # clear name because this module is the zero-dependency floor and a bare
@@ -284,6 +284,10 @@ def plate(tracker: FilesTracker, agent: str) -> WorkItem | None:
         # a message that reached it would EVICT the agent's actual work. Shared
         # predicate with beads.plate — one judgment, both backends.
         and not is_message(item.title)
+        # BLOCKED is not workable by definition — same exclusion, same reason,
+        # same predicate as beads.plate. A blocked bead on a plate cycles the
+        # agent AND makes it read as busy to the coordinator.
+        and not is_blocked(getattr(item, "status", None))
     ]
     if not mine:
         return None

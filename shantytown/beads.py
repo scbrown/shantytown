@@ -18,7 +18,7 @@ import subprocess
 from pathlib import Path
 
 from . import stores
-from .inbox import is_message
+from .inbox import is_blocked, is_message
 from .protocols import WorkItem
 
 
@@ -180,6 +180,10 @@ def plate(tracker: "BeadsTracker", agent: str) -> "WorkItem | None":
         # uses. Measured need: `st mail -d` items titled "mail: ..." are open and
         # assigned on the live aegis store today, i.e. sitting on real plates.
         and not is_message(x.get("title", ""))
+        # BLOCKED is not workable BY DEFINITION, so serving it cycles the agent:
+        # it burns a turn discovering that, stops, and the next stop hands it back.
+        # Measured 2026-08-02: 16 blocked beads, all 16 assigned, all being served.
+        and not is_blocked(x.get("status"))
     ]
     if not mine:
         return None
