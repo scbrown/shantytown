@@ -118,6 +118,16 @@ PROBE_TS_METRIC = "claude_usage_probe_timestamp_seconds"
 # reading separately: when the probe fails the producer RETAINS the last good
 # percentages and flags them, so the number stays fresh-looking while this climbs.
 CACHE_AGE_METRIC = "claude_usage_cache_age_seconds"
+# WHEN THE BUDGET REFILLS — the ON ramp's whole input (aegis-9mehy). The producer
+# has published this since aegis-fnd8g and the governor never read it, so the
+# throttle had a well-built OFF ramp and no ON ramp: a refreshed budget re-engaged
+# the crew only if a human happened to notice.
+#
+# IT IS NEVER A REASON TO ACT ON ITS OWN. A reset timestamp says when the budget
+# is SCHEDULED to refill, which is a prediction; the tier is left because the
+# READING dropped, never because the clock passed. Everything downstream of this
+# metric only ever decides WHEN TO LOOK.
+RESET_TS_METRIC = "claude_usage_reset_timestamp_seconds"
 
 # The producer's window labels. `five_hour`/`seven_day`, not `5h`/`7d`.
 FIVE_HOUR, SEVEN_DAY = "five_hour", "seven_day"
@@ -139,7 +149,25 @@ DEFAULT_MAX_AGE_S = 900
 # Leaving a tier requires falling this far BELOW its threshold. Without it a
 # reading oscillating around 70 flips the whole fleet between "P0 only" and "P1+"
 # every pass, and each flip is a dispatch decision an agent already acted on.
+#
+# IT APPLIES ON THE WAY UP TOO, and that direction is the one aegis-9mehy is
+# about: a five-hour window that refreshes to 48% must not re-engage the whole
+# fleet into an immediate re-throttle at 50%. Flapping the crew is worse than
+# staying down a few minutes longer.
 DEFAULT_RELAX_MARGIN = 5
+
+# How long AFTER a published reset the wake fires. The producer runs on a ~5 min
+# cron and the clocks are not the same clock, so waking exactly AT the timestamp
+# reads a percentage the reset has not reached yet — which looks like "the reset
+# did not land" and holds the tier for a further five minutes. A minute of skew
+# buys the first read after the wake being genuinely post-reset.
+WAKE_SKEW_S = 60
+
+# A reset timestamp further ahead than this is not scheduled, it is WRONG. The
+# longest budget here is seven days; anything past eight is a parse error or a
+# clock problem, and arming a timer for it would silently replace a five-minute
+# fallback with a wake in 2087. Refused, loudly, and the fallback stands.
+MAX_WAKE_AHEAD_S = 8 * 86400
 
 
 class GovernorError(ValueError):
@@ -316,6 +344,22 @@ class Reading:
     # be minutes old while everything else about the exposition looks current.
     # None = not published; the timestamp check below still applies.
     cache_age: float | None = None
+    # WHEN THIS WINDOW'S BUDGET REFILLS, epoch seconds (aegis-9mehy). Unlike
+    # everything else on this record it is per-WINDOW, because it describes a
+    # budget rather than the probe.
+    #
+    # ITS ABSENCE IS NOT SIGNAL LOST, deliberately, and `lost()` below does not
+    # mention it. A missing reset timestamp costs PROMPTNESS — the re-engagement
+    # falls back to tend's five-minute pass — and promptness is not worth the
+    # power to stop a fleet. Letting a missing ON-ramp input blind the governor
+    # would make a nice-to-have able to do what the fail-safe forbids.
+    reset_at: float | None = None
+
+    def resets_in(self, now: float) -> float | None:
+        """Seconds until this budget refills, or None if nothing published one.
+        Negative means the published reset is already past — a real state
+        (the probe has not re-read yet), not an error."""
+        return None if self.reset_at is None else self.reset_at - now
 
     def lost(self, now: float, max_age: float) -> str:
         """"" if this reading is usable, else WHY it is not.
@@ -438,25 +482,32 @@ def _readings_by_window(samples, source: str) -> dict[str, Reading]:
     weekly budget was further gone than the five-hour one and did not look. This
     function is that filter deleted; no reader changed shape to get it.
 
-    WHAT IS PER-WINDOW AND WHAT IS NOT: only the percentage carries a `window`
-    label. The probe's success flag, its timestamp and the published cache age
-    describe the PROBE, not a budget, so they are folded once and shared by every
-    window. Splitting them would invent a per-window staleness the producer never
-    published.
+    WHAT IS PER-WINDOW AND WHAT IS NOT: the percentage and the reset timestamp
+    carry a `window` label — they describe a BUDGET. The probe's success flag,
+    its timestamp and the published cache age describe the PROBE, so they are
+    folded once and shared by every window. Splitting them would invent a
+    per-window staleness the producer never published.
 
     Every fold stays conservative, for the same reasons as before: pct MAX (an
     account at 88 and one at 12 is a fleet at 88), ok MIN (any blind account
     blinds the governor), age MAX (freshness is only as good as the stalest
-    input).
+    input) — and reset MAX for the same family of reason (aegis-9mehy): the
+    governed percentage is the WORST account's, so the moment that number can
+    fall is the LAST account's reset, not the first. Taking the earliest would
+    arm a wake that reads a still-high number, report "the reset did not land",
+    and hold the tier — correct behaviour reached by an avoidably wrong route.
     """
     at = cache_age = None
     ok = True
     saw_ok = False
     pct: dict[str, float] = {}
     rule_pct: dict[str, float] = {}
+    reset: dict[str, float] = {}
     for name, labels, value in samples:
         w = labels.get("window")
-        if name == USAGE_METRIC and w:
+        if name == RESET_TS_METRIC and w:
+            reset[w] = value if w not in reset else max(reset[w], value)
+        elif name == USAGE_METRIC and w:
             # The recording rule is ALREADY the max across accounts. If Prometheus
             # somehow returned several, max again — it cannot be wrong.
             rule_pct[w] = value if w not in rule_pct else max(rule_pct[w], value)
@@ -480,13 +531,13 @@ def _readings_by_window(samples, source: str) -> dict[str, Reading]:
             # must have worked" from the presence of a number is exactly the
             # assumption the flag exists to remove.
             out[w] = Reading(pct=v, at=at, ok=True, source=source,
-                             cache_age=cache_age,
+                             cache_age=cache_age, reset_at=reset.get(w),
                              error=f"no {PROBE_OK_METRIC} series — the value "
                                    f"cannot be vouched for, so it is not read "
                                    f"as a measurement")
         else:
             out[w] = Reading(pct=v, at=at, ok=ok, source=source,
-                             cache_age=cache_age)
+                             cache_age=cache_age, reset_at=reset.get(w))
     return out
 
 
@@ -498,7 +549,7 @@ class StubReader:
 
     def __init__(self, pct: float | None = None, at: float | None = None,
                  ok: bool = True, error: str = "", now=time.time,
-                 window: str = FIVE_HOUR):
+                 window: str = FIVE_HOUR, resets=None):
         # pct may be a NUMBER (one window, the original shape) or a
         # {window: pct} MAP (aegis-59hao). The map is what lets a test express
         # the case the bug is about — a nearly-empty five-hour budget beside an
@@ -506,6 +557,13 @@ class StubReader:
         self._pct, self._at, self._ok, self._error = pct, at, ok, error
         self._now = now
         self._window = window
+        # {window: epoch} — the reset timestamps (aegis-9mehy). Same shape as
+        # pct so REHEARSING A RESET is one dict change: drop the percentage,
+        # move the timestamp forward. That rehearsal is the point of the stub —
+        # the case that must be proved is the one where the clock passed and the
+        # NUMBER DID NOT FALL, and waiting five hours to observe it is not a test.
+        self._resets = resets if isinstance(resets, dict) else (
+            {} if resets is None else {window: resets})
 
     def read(self) -> Reading:
         return self.read_all().get(
@@ -517,10 +575,11 @@ class StubReader:
         at = self._at if self._at is not None else self._now()
         if isinstance(self._pct, dict):
             return {w: Reading(pct=v, at=at, ok=self._ok, error=self._error,
-                               source="stub")
+                               source="stub", reset_at=self._resets.get(w))
                     for w, v in self._pct.items()}
         return {self._window: Reading(pct=self._pct, at=at, ok=self._ok,
-                                      error=self._error, source="stub")}
+                                      error=self._error, source="stub",
+                                      reset_at=self._resets.get(self._window))}
 
 
 class TextfileReader:
@@ -721,7 +780,8 @@ class Engaged:
     """
     at: int | None = None
     since: float = 0.0
-    by_window: dict = field(default_factory=dict)   # window -> {"at":int|None,"since":float}
+    # window -> {"at":int|None, "since":float, "reset":float|None}
+    by_window: dict = field(default_factory=dict)
 
     def hold(self, window: str) -> tuple[int | None, float]:
         """(at, since) for one window, falling back to the legacy flat fields."""
@@ -732,6 +792,24 @@ class Engaged:
         if window == FIVE_HOUR:
             return self.at, self.since
         return None, 0.0
+
+    def reset_of(self, window: str) -> float | None:
+        """The reset timestamp this window carried on the LAST pass, or None.
+
+        Remembered for exactly one purpose (aegis-9mehy): telling a budget that
+        REFRESHED apart from a budget that merely fell. A percentage dropping
+        because agents stopped burning it and a percentage dropping because the
+        window rolled over look identical in the number, and the log line an
+        operator reads at 22:40 should not have to guess which it was. A reset we
+        recorded that is now in the past, replaced by a later one, is the
+        rollover — observed, not predicted.
+        """
+        d = self.by_window.get(window) or {}
+        v = d.get("reset")
+        try:
+            return None if v is None else float(v)
+        except (TypeError, ValueError):
+            return None
 
 
 class FilesGovernorState:
@@ -779,6 +857,97 @@ class FilesGovernorState:
 ADMITTED = ""
 
 
+def fmt_eta(seconds: float | None) -> str:
+    """A duration a human reads at a glance: `1h35m`, `12m`, `2d 22h`, `now`.
+
+    "Resets in 1h35m" is the difference between an operator WAITING and an
+    operator INTERVENING, which is the entire argument for surfacing this at all
+    (aegis-9mehy decision 7). A bare epoch on a status bar is a number nobody
+    subtracts in their head at 3am.
+    """
+    if seconds is None:
+        return "—"
+    s = int(seconds)
+    if s <= 0:
+        # PAST, not zero. The producer's cron has not re-read yet, so the
+        # timestamp is history — and saying "0s" would read as "about to happen".
+        return "now (overdue)" if s < -60 else "now"
+    d, rem = divmod(s, 86400)
+    h, rem = divmod(rem, 3600)
+    m = rem // 60
+    if d:
+        return f"{d}d {h}h"
+    if h:
+        return f"{h}h{m:02d}m"
+    if m:
+        return f"{m}m"
+    return f"{s}s"
+
+
+def fmt_when(seconds: float | None) -> str:
+    """The same duration as a PHRASE — `in 1h35m`, `now`, `now (overdue)`.
+
+    Separate from fmt_eta because "resets in now" is what you get from gluing
+    "in " onto a duration formatter that can also return an instant, and that is
+    what the first live run of this feature printed. The past case is not a
+    degenerate duration; it is a different sentence, and the caller should not
+    have to know which one it is about to get.
+    """
+    if seconds is None:
+        return "—"
+    eta = fmt_eta(seconds)
+    return eta if eta.startswith("now") else f"in {eta}"
+
+
+@dataclass(frozen=True)
+class Relaxed:
+    """One window LEFT a tier this pass — the ON ramp's observable (aegis-9mehy).
+
+    THIS RECORD IS WRITTEN FROM A READING, NEVER FROM A CLOCK. `refreshed` says
+    the budget was measured to have rolled over (a reset we recorded has passed
+    and a later one has replaced it); it is reported, and it is not what caused
+    the tier to be left. The tier was left because the percentage fell below
+    (threshold - relax_margin). A pass where the clock rolled and the number did
+    not produces no Relaxed at all, which is the behaviour that matters: re-
+    engaging on a predicted drop would spend the whole refreshed budget in
+    minutes, the exact failure the governor exists to prevent.
+    """
+    window: str
+    was: int                       # the tier `at` that is no longer held
+    now_at: int | None             # the tier still engaged in this window, if any
+    pct: float
+    refreshed: bool = False        # the window's budget was MEASURED to roll over
+    reset_at: float | None = None  # the NEXT reset, from this same reading
+
+    def render(self, woke_for: str = "", now: float | None = None) -> str:
+        """The line tend prints. It names WHICH WINDOW and WHICH PATH.
+
+        Decision 3 of the bead: the timer exists for promptness and tend's
+        five-minute pass is the fallback, so a reader must be able to tell which
+        one actually got us here. If the timer silently stopped working we would
+        otherwise keep re-engaging — five minutes later, every time — and nothing
+        would ever say so.
+        """
+        why = ("its budget REFRESHED" if self.refreshed
+               else "the reading fell on its own (no rollover observed)")
+        to = (f"the {self.now_at}% tier still holds" if self.now_at is not None
+              else "NO tier holds this window now")
+        if woke_for == self.window:
+            path = f"the {self.window} reset wake timer"
+        elif woke_for:
+            path = (f"the {woke_for} reset wake timer (it woke for a different "
+                    f"window; this one relaxed too)")
+        else:
+            path = "the scheduled tend pass (no wake timer fired)"
+        nxt = ""
+        if self.reset_at is not None and now is not None:
+            nxt = f", next {self.window} reset {fmt_when(self.reset_at - now)}"
+        return (f"governor RE-ENGAGE: {self.window} is {self.pct:.0f}% and "
+                f"{why} — the {self.was}% tier is RELEASED, {to}. Found by "
+                f"{path}{nxt}. Held agents become eligible on this pass; "
+                f"`retired` ones do not.")
+
+
 @dataclass(frozen=True)
 class Verdict:
     """What the governor decided this pass, and on what evidence.
@@ -798,6 +967,30 @@ class Verdict:
     # EVERY engaged tier, not just the top one. Restriction is CUMULATIVE and
     # must be monotone in usage — see Policy.engaged for the bug that proves it.
     engaged: tuple[Tier, ...] = ()
+    # {window: epoch} — when each READABLE window's budget refills (aegis-9mehy).
+    # Only windows we actually got a reading for; a blind window contributes
+    # nothing here, because "we cannot see the budget" must not become "the
+    # budget resets at 0".
+    resets: dict = field(default_factory=dict)
+    # Windows that LEFT a tier on this pass. Empty on almost every pass, which is
+    # the point: it is the ON ramp firing, and it is the thing to log.
+    relaxed: tuple = ()
+
+    def resets_in(self, window: str, now: float) -> float | None:
+        at = self.resets.get(window)
+        return None if at is None else at - now
+
+    def next_reset(self, now: float) -> tuple[str, float] | None:
+        """(window, seconds) for the SOONEST refill, or None if none is known.
+
+        The soonest is the one an operator is waiting on: a five-hour budget
+        refilling in 95 minutes beside a weekly one 70 hours out means the
+        answer to "how long am I throttled" is 95 minutes, not 70 hours.
+        """
+        if not self.resets:
+            return None
+        w = min(self.resets, key=lambda k: self.resets[k])
+        return w, self.resets[w] - now
 
     @property
     def drains(self) -> bool:
@@ -918,8 +1111,15 @@ class Verdict:
                 else f"usage {self.pct:.0f}%" if self.pct is not None else "usage")
         return f"the usage governor's {t.at}% tier is engaged ({seen})"
 
-    def render(self) -> str:
-        """One line for `st tend` / `st tend --status`."""
+    def render(self, now: float | None = None) -> str:
+        """One line for `st tend` / `st tend --status`.
+
+        WITH A TIER ENGAGED IT NAMES THE RESET (aegis-9mehy decision 7). "we are
+        throttled" and "we are throttled for another 1h35m" are different
+        sentences to the person reading them: the first invites intervention, the
+        second invites waiting. The number was already in the exposition and the
+        governor simply never looked at it.
+        """
         if not self.tier and not self.signal_lost:
             pct = "—" if self.pct is None else f"{self.pct:.0f}%"
             return f"  governor    usage {pct} · no tier engaged · wide open"
@@ -928,8 +1128,24 @@ class Verdict:
             return f"  governor    SIGNAL LOST · {state} · {self.why}"
         pct = "—" if self.pct is None else f"{self.pct:.0f}%"
         held = " (held)" if self.held else ""
-        return (f"  governor    usage {pct} · {self.tier.at}% tier{held} · "
+        line = (f"  governor    usage {pct} · {self.tier.at}% tier{held} · "
                 f"{self.effect()}")
+        return line + self.reset_note(now)
+
+    def reset_note(self, now: float | None = None) -> str:
+        """` · five_hour resets in 1h35m`, or "" when nothing published one.
+
+        SILENT WHEN UNKNOWN, never a placeholder. A governor that printed
+        "resets in —" every pass would train an operator to ignore the field on
+        the pass where it matters.
+        """
+        if now is None or not self.resets:
+            return ""
+        nxt = self.next_reset(now)
+        if nxt is None:
+            return ""
+        window, left = nxt
+        return f" · {window} resets {fmt_when(left)}"
 
 
 def carries_any(agent, traits, catalog=None) -> tuple[bool, bool]:
@@ -1062,6 +1278,8 @@ class Governor:
         # the entire bug. Restriction is the union of what every budget says.
         decided: dict[str, tuple] = {}     # window -> (chosen, held, since, pct)
         blind: list[tuple[str, str]] = []  # (window, why) — seen but unreadable
+        resets: dict[str, float] = {}      # window -> epoch the budget refills
+        relaxed: list[Relaxed] = []        # windows that LEFT a tier this pass
         prior = self.state.get() if self.state is not None else Engaged()
         for w in pol.windows():
             r = readings.get(w) or transport_error or Reading(
@@ -1071,6 +1289,12 @@ class Governor:
             if why_lost:
                 blind.append((w, why_lost))
                 continue
+            # RECORDED FROM A READING WE ACCEPTED, never from a blind one. A
+            # reset timestamp carried alongside a stale percentage is as stale as
+            # the percentage; arming a wake from it would schedule a look based
+            # on a number we have already refused to govern by.
+            if r.reset_at is not None:
+                resets[w] = r.reset_at
             wpct = float(r.pct)
             cand = pol.candidate(wpct, w)
             held_at, held_since = prior.hold(w)
@@ -1091,6 +1315,22 @@ class Governor:
                 # new episode. The episode key is what a drain dedupes on.
                 wsince = now
             decided[w] = (wchosen, wheld, wsince, wpct)
+
+            # ---- THE ON RAMP FIRING (aegis-9mehy) ---------------------------
+            # A tier is LEFT here and nowhere else, and it is left because
+            # `wpct` — a number we just read — fell below (held_at -
+            # relax_margin). No branch above consults a reset timestamp, and
+            # that is the design: the timer decides when to LOOK, the reading
+            # decides what to DO. `refreshed` is reported on the way past.
+            if held_at is not None and (wchosen is None or wchosen.at < held_at):
+                prior_reset = prior.reset_of(w)
+                refreshed = bool(
+                    prior_reset is not None and prior_reset <= now
+                    and (r.reset_at is None or r.reset_at > prior_reset))
+                relaxed.append(Relaxed(
+                    window=w, was=held_at,
+                    now_at=None if wchosen is None else wchosen.at,
+                    pct=wpct, refreshed=refreshed, reset_at=r.reset_at))
 
         # EVERY window blind = the old signal-lost path, unchanged. PARTIAL
         # blindness is different and must NOT stop the crew: govern on what can
@@ -1148,7 +1388,13 @@ class Governor:
                    if decided.get(FIVE_HOUR) and decided[FIVE_HOUR][0] else None,
                 since=(decided.get(FIVE_HOUR) or (None, None, 0.0))[2]
                       if decided.get(FIVE_HOUR) else 0.0,
-                by_window={w: {"at": None if c is None else c.at, "since": s}
+                # `reset` rides along so the NEXT pass can tell a budget that
+                # rolled over from one that merely fell (aegis-9mehy). Written
+                # for every decided window, tier or no tier — a reset observed
+                # while wide open is exactly what makes the first throttled pass
+                # after it able to say "refreshed".
+                by_window={w: {"at": None if c is None else c.at, "since": s,
+                               "reset": resets.get(w)}
                            for w, (c, _, s, _) in decided.items()}))
 
         # EVERY refusal names its WINDOW (aegis-59hao). With two budgets, "usage
@@ -1174,11 +1420,48 @@ class Governor:
         pct = decided[pol.window][3] if pol.window in decided else (
             max((p for _, _, _, p in decided.values()), default=None))
         return Verdict(reading=reading, pct=pct, tier=chosen, held=held, why=why,
-                       alarm=alarm, engaged=tuple(engaged_tiers))
+                       alarm=alarm, engaged=tuple(engaged_tiers),
+                       resets=resets, relaxed=tuple(relaxed))
 
     def episode(self) -> float:
         """The current tier's episode key — what a drain dedupes against."""
         return self.state.get().since if self.state is not None else 0.0
+
+
+def wake_plan(verdict: Verdict, now: float, *, skew: float = WAKE_SKEW_S,
+              max_ahead: float = MAX_WAKE_AHEAD_S) -> dict[str, int]:
+    """{window: seconds from now} — when to WAKE AND RE-READ. Pure, so the
+    scheduling decision is testable without systemd, a clock or a fleet.
+
+    ONLY WINDOWS WITH A TIER ENGAGED. A wide-open window has nothing to
+    re-engage, so a wake for it would be a tend pass bought for nothing — and an
+    idle timer that fires forever is how a mechanism stops being read as
+    meaningful.
+
+    ONLY WINDOWS WE CAN SEE. `verdict.resets` already excludes blind windows,
+    and a signal-lost verdict arms nothing at all: waking to re-read a budget we
+    could not read this pass adds no information, and the loud SIGNAL LOST alarm
+    is already the right response.
+
+    A RESET ALREADY IN THE PAST ARMS NOTHING, because THIS pass is the post-reset
+    read. Arming for a moment that has gone would fire immediately and forever.
+
+    AND AN ABSURD TIMESTAMP IS REFUSED rather than trusted. Everything this
+    function declines to schedule degrades to tend's five-minute pass, never to a
+    stuck fleet — the timer is for promptness and is allowed to be missing.
+    """
+    plan: dict[str, int] = {}
+    if verdict.signal_lost:
+        return plan
+    for window in {t.window for t in verdict.engaged}:
+        reset_at = verdict.resets.get(window)
+        if reset_at is None:
+            continue
+        delay = int(reset_at + skew - now)
+        if delay <= 0 or delay > max_ahead:
+            continue
+        plan[window] = delay
+    return plan
 
 
 # --- the drain protocol -------------------------------------------------------

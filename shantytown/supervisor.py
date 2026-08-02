@@ -28,6 +28,21 @@ MARKER = "# written-by: st tend --install"
 SERVICE = "st-tend.service"
 TIMER = "st-tend.timer"
 
+# --- the governor's ON ramp (aegis-9mehy) ------------------------------------
+# One transient one-shot per window, armed from the published reset timestamp,
+# whose whole job is to run an ORDINARY tend pass at the moment the budget is
+# due to refill. It carries no policy and makes no decision: it makes us LOOK,
+# and the reading that pass takes decides whether anything changes.
+WAKE_PREFIX = "st-governor-wake"
+# Set on the woken pass so the log can say WHICH PATH re-engaged the crew. Without
+# it a timer that quietly stopped working is invisible — every re-engagement
+# would still happen, just five minutes late, and nothing would ever say so.
+WAKE_ENV = "SHANTY_GOVERNOR_WAKE"
+# Re-arming is free but not silent (each one writes journal lines), and the
+# published reset timestamp jitters by a second or two between probes. Only
+# re-arm when the target moved by more than this.
+WAKE_TOLERANCE_S = 30
+
 # Supervisors known to tend the same crew. Presence is a REFUSAL, not a warning:
 # two things respawning the same agents fight, and the fight looks like flapping
 # nobody can attribute.
@@ -199,6 +214,178 @@ def uninstall(*, run=None) -> tuple[bool, str]:
     if run is not None:
         run(["systemctl", "--user", "daemon-reload"])
     return True, f"removed {', '.join(p.name for p in present)}."
+
+
+class GovernorWake:
+    """Arm a one-shot wake per window, so a refreshed budget re-engages the crew
+    without a human noticing (aegis-9mehy).
+
+    THE TIMER IS FOR PROMPTNESS AND IS ALLOWED TO BE MISSING. tend's five-minute
+    pass already re-reads the number and already re-engages; this exists because
+    the five-hour window refills at a specific minute and every minute after it
+    is capacity bought and not used. So EVERY failure in here — no systemd, a
+    refused unit, an unwritable state file — logs and returns. It can cost a
+    delay of one tend interval and it can never cost more than that. A
+    supervision feature that could stop supervision is a bad trade, and the
+    governor's own module says so in the fail-safe it opens with.
+
+    IT NEVER DECIDES ANYTHING. The unit runs a plain `st tend`; the pass it wakes
+    takes a fresh reading and that reading decides. Nothing in this class knows
+    what a tier is. That separation is decision 1 of the bead, expressed as
+    structure rather than as a rule somebody has to remember: re-engaging on a
+    PREDICTED drop would spend a whole refreshed budget in minutes, and the only
+    way to make that unrepresentable is for the scheduler to have no opinion.
+
+    TRANSIENT UNITS, deliberately, not files in ~/.config/systemd/user. A one-
+    shot whose fire time changes every five minutes is not configuration; it is
+    state. `systemd-run` owns the lifecycle and a reboot forgets the lot, which
+    is correct — after a reboot the next tend pass re-reads and re-arms from a
+    fresh number rather than honouring a wake computed before the outage.
+    """
+
+    def __init__(self, st_bin: str, root, *, run=None, is_active=None,
+                 now=time.time, log=None):
+        self._st = st_bin
+        self._root = Path(root)
+        self.path = self._root / "governor" / "wake.json"
+        # run(argv) -> returncode. Injected for the usual reason: this must be
+        # provable with no systemd, and CI has none.
+        self._run = run or (lambda argv: 1)
+        self._is_active = is_active or (lambda unit: False)
+        self._now = now
+        self._log = log or (lambda msg: None)
+
+    def unit(self, window: str) -> str:
+        # systemd unit names take no underscores gracefully in every tool that
+        # reads them back; the window label is the producer's (`five_hour`).
+        return f"{WAKE_PREFIX}-{window.replace('_', '-')}"
+
+    # --- the record of what is armed -----------------------------------------
+
+    def _load(self) -> dict:
+        try:
+            data = json.loads(self.path.read_text())
+            return data if isinstance(data, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    def _save(self, data: dict) -> None:
+        try:
+            from .files import write_json_atomic
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            write_json_atomic(self.path, data)
+        except OSError:
+            pass          # best-effort, same rule as the launch stamp
+
+    def armed(self) -> dict:
+        """{window: fire_epoch} — what we believe is armed. BELIEF, not truth:
+        `sync` re-checks against systemd, because a record of a timer somebody
+        killed is exactly the case that must self-heal."""
+        out = {}
+        for w, rec in self._load().items():
+            try:
+                out[w] = float((rec or {}).get("fire"))
+            except (TypeError, ValueError):
+                continue
+        return out
+
+    # --- arming ---------------------------------------------------------------
+
+    def sync(self, plan: dict) -> list[str]:
+        """Make the armed set match `plan` ({window: seconds from now}).
+
+        Returns one line per CHANGE, for the caller to print. A pass that changed
+        nothing says nothing — this runs every five minutes and a supervisor that
+        narrates its own no-ops teaches operators to skim.
+        """
+        now = self._now()
+        record = self._load()
+        lines: list[str] = []
+        for window, delay in sorted(plan.items()):
+            fire = now + float(delay)
+            unit = self.unit(window)
+            prior = record.get(window) or {}
+            try:
+                prior_fire = float(prior.get("fire"))
+            except (TypeError, ValueError):
+                prior_fire = None
+            # SKIP only when the target has not moved AND the timer is really
+            # still there. Trusting the record alone would let a killed timer
+            # stay "armed" forever, silently downgrading us to the fallback with
+            # nothing saying so — the failure this whole bead is about, one
+            # layer down.
+            if (prior_fire is not None
+                    and abs(prior_fire - fire) <= WAKE_TOLERANCE_S
+                    and self._is_active(f"{unit}.timer")):
+                continue
+            if self._arm(unit, window, int(delay)):
+                record[window] = {"fire": fire, "unit": unit}
+                lines.append(f"governor wake ARMED: {unit} fires in "
+                             f"{int(delay)}s to re-read the {window} budget "
+                             f"(a plain tend pass; the reading decides)")
+            else:
+                # Loud, and NOT recorded as armed: an unarmed wake must be
+                # retried next pass, and recording it would make us skip the
+                # retry on the strength of a unit that does not exist.
+                record.pop(window, None)
+                lines.append(f"⚠ governor wake: could NOT arm {unit} — falling "
+                             f"back to tend's own interval, so re-engagement is "
+                             f"late, not lost")
+        for window in [w for w in record if w not in plan]:
+            self._disarm(self.unit(window))
+            record.pop(window, None)
+            lines.append(f"governor wake DISARMED for {window} — nothing is "
+                         f"engaged on that budget, so there is nothing to "
+                         f"re-engage")
+        self._save(record)
+        return lines
+
+    def _arm(self, unit: str, window: str, delay: int) -> bool:
+        # THE SAME REFUSAL install() MAKES, for the same measured reason
+        # (aegis-408qs): systemd --user does not search ~/.local/bin, so a unit
+        # written with a bare name fails 203/EXEC on every fire while the timer
+        # reports itself healthy. systemd-run resolves the CALLER's PATH, which
+        # makes a bare name work from a shell and fail from the st-tend unit's
+        # minimal environment — a difference that only shows up in production.
+        # Refusing here degrades to tend's own interval, loudly, which is a
+        # thing the operator can read.
+        if not os.path.isabs(self._st):
+            self._log(f"governor wake: {self._st!r} is not an absolute path — "
+                      f"systemd --user cannot exec it, and the wake would look "
+                      f"armed while never running. Not arming {unit}")
+            return False
+        # STOP FIRST. systemd-run refuses a unit name that already exists, and
+        # the whole point is that this is re-armed as the timestamp moves.
+        self._disarm(unit)
+        try:
+            rc = self._run([
+                "systemd-run", "--user", "--quiet", f"--unit={unit}",
+                f"--on-active={delay}",
+                # AccuracySec, because systemd's default (1min) would let a wake
+                # land before the reset it was computed from — which reads as
+                # "the reset did not happen" and holds the tier for a further
+                # interval. The skew in wake_plan and this go together.
+                "--timer-property=AccuracySec=1s",
+                f"--setenv={WAKE_ENV}={window}",
+                # No ticket id in the description: it is a VALUE this program
+                # emits into a public-facing unit file, and the citation belongs
+                # in the comments above, where it leaks nothing.
+                f"--description=st governor: re-read usage after the {window} "
+                f"budget resets",
+                self._st, "--root", str(self._root), "tend",
+            ])
+        except Exception as e:      # noqa: BLE001 — no systemd is not a crash
+            self._log(f"governor wake: {type(e).__name__} arming {unit}: "
+                      f"{str(e)[:80]}")
+            return False
+        return rc == 0
+
+    def _disarm(self, unit: str) -> None:
+        for suffix in (".timer", ".service"):
+            try:
+                self._run(["systemctl", "--user", "stop", f"{unit}{suffix}"])
+            except Exception:       # noqa: BLE001 — best effort, always
+                pass
 
 
 class PassLog:
