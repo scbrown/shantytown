@@ -17,6 +17,7 @@ import re
 import subprocess
 from pathlib import Path
 
+from . import stores
 from .inbox import is_message
 from .protocols import WorkItem
 
@@ -52,7 +53,22 @@ class BeadsTracker:
         r = self._bd("show", item_id, "--json")
         if r.returncode != 0:
             # exit 2 territory: could not tell vs does not exist. Say which.
-            raise LookupError(f"bd show {item_id} failed: {r.stderr.strip()[:120]}")
+            #
+            # ABSENCE WITH A NAMED BOUNDARY (aegis-81zyb). This used to report only
+            # bd's stderr, so a miss read as "that id does not exist" when all it
+            # ever meant was "not in the ONE store this tracker was pointed at" —
+            # and there are 125 bd stores on this host. That gap is not academic:
+            # an agent generalised a single-store miss into "it exists in no store"
+            # and published it as confidence:extracted. So the store searched is
+            # named, and the unsearched remainder is counted. The enumeration is
+            # best-effort and never raises: a diagnostic that fails must not
+            # replace the real error with its own.
+            msg = f"bd show {item_id} failed: {r.stderr.strip()[:120]}"
+            try:
+                msg += f" — {stores.not_found_here(self.repo, item_id)}"
+            except Exception:
+                pass
+            raise LookupError(msg)
         d = json.loads(r.stdout)
         if isinstance(d, list):
             d = d[0]
