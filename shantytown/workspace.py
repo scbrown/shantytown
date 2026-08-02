@@ -563,9 +563,19 @@ class Staleness:
                 scratch that already existed, and the branches later auto-merged
                 into a duplicate map key that only the compiler caught.
       unpushed  commits here that are on NO REMOTE REF AT ALL.
-                Risk: LOSS. Work that exists in exactly one place, invisible to
-                everyone, and destroyed by any of the resets this codebase
+                Risk: LOSS. Work that exists in exactly one place, invisible
+                to everyone, and destroyed by any of the resets this codebase
                 already forbids (aegis-repg/iaef).
+
+                QUALIFIED BY WHAT WE HAVE FETCHED, and the wording says so.
+                `--remotes` means remote-tracking refs THIS TREE KNOWS, so a
+                branch that was pushed but never fetched here reads as stranded.
+                Measured: four commits reported at-risk in gastown-wt/harding
+                were all on `origin/aegis-ri87-on-installed`, and a later fetch
+                dropped the count to zero without a single byte moving. Two
+                separate false-positive reports went out on this metric before
+                it was stated plainly, which is why the string now claims only
+                what the data supports.
 
                 MEASURED AGAINST EVERY REMOTE REF, NOT AGAINST THE UPSTREAM
                 (corrected by tim, aegis-ib65p). The first version counted
@@ -609,8 +619,8 @@ class Staleness:
             bits.append(f"{self.behind} behind {self.ref} (work you do NOT have "
                         f"— check for duplication before you build)")
         if self.unpushed:
-            bits.append(f"{self.unpushed} unpushed (exists only here — push or "
-                        f"it is one reset from gone)")
+            bits.append(f"{self.unpushed} on no remote ref KNOWN LOCALLY "
+                        f"(as of the last fetch — fetch before treating as lost)")
         if self.dirty:
             bits.append("uncommitted changes")
         if not bits:
