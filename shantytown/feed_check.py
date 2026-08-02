@@ -257,6 +257,84 @@ def hauls(ready_beads) -> dict[str, list[str]]:
     return out
 
 
+class _Item:
+    """The two attributes `governor.Verdict.admits` reads, off a bd JSON bead.
+
+    A SHIM AND NOT A SECOND RULE. The alternative — re-implementing "does this
+    priority clear the floor" here against the same dicts — is exactly the
+    duplicated constant this bead forbids: two copies of a comparison whose sign
+    is already documented as a foot-gun, in two files, drifting the first time a
+    tier gains a field. So the ONE resolver `st go` uses is called with an object
+    shaped the way it expects, and this class is the whole adaptation.
+    """
+    __slots__ = ("id", "priority")
+
+    def __init__(self, bead: dict):
+        self.id = bead.get("id", "?")
+        p = bead.get("priority")
+        # bd emits ints; anything unparseable becomes None, which `admits`
+        # already refuses under a floor (it cannot be SHOWN to clear it).
+        try:
+            self.priority = None if p is None else int(p)
+        except (TypeError, ValueError):
+            self.priority = None
+
+
+def throttle(ready: list[tuple[str, str]], beads, admits) -> tuple[list, list]:
+    """Split the dispatchable list into (admitted, held) by the GOVERNOR's rule.
+
+    WHY THIS EXISTS (aegis-diasw). Rule Zero and the governor contradicted each
+    other in production: `st tend` reported a 50% tier admitting only P1-and-above
+    while feed_check ordered a dispatch and named three P2 beads as its top
+    candidates — every one of which `st go` then refused. A blocking stop hook
+    demanding an action a second mechanism forbids has exactly one easy way out,
+    and it is the wrong one: bump the P2 to P1 and the alarm stops.
+
+    So "dispatchable" now means PASSES THE FLOOR, not merely open-and-unassigned.
+    `admits` is the callable off the governor's own Verdict — the same object
+    `st go` gates on — never a floor re-derived here.
+
+    `admits` of None means no governor is configured, which is the default and
+    must behave exactly as before: everything admitted, nothing held.
+    """
+    if admits is None:
+        return list(ready), []
+    by_id = {b.get("id"): b for b in beads}
+    ok, held = [], []
+    for bid, title in ready:
+        why = admits(_Item(by_id.get(bid) or {"id": bid}))
+        (held if why else ok).append((bid, title, why) if why else (bid, title))
+    return ok, held
+
+
+def held_reason(free: list[str], held: list[tuple[str, str, str]]) -> str:
+    """Why the stop is being ALLOWED with idle workers and a full queue.
+
+    THE POINT IS THAT IT SPEAKS. Rule Zero going quiet is the correct behaviour
+    under an engaged tier and it is also exactly what a broken feeder looks like;
+    the coordinator cannot tell them apart from silence, and the one it will
+    assume is the one that makes it act.
+
+    IT DOES NOT FORBID THE PRIORITY BUMP (ruled by Stiwi on aegis-diasw, which
+    withdrew the decision that would have removed the escape hatch from `st go`).
+    The hatch is legitimate BECAUSE the bump is recorded — bd history carries
+    priority per revision with timestamps, so an inflation is visible and
+    diffable after the fact. What was wrong was never that the hatch existed; it
+    was that a BLOCKING stop hook pushed the coordinator toward it while the
+    governor forbade the dispatch. Removing the push is the fix, and this
+    function is the removal. So it states that idle is correct and stops there:
+    a deliberate re-grade by an actor that has read this line is a judgement
+    someone can audit, which is a different thing entirely from one manufactured
+    by two mechanisms disagreeing.
+    """
+    why = held[0][2] if held else ""
+    return (f"RULE ZERO YIELDS to the usage governor: {len(free)} idle "
+            f"worker(s) ({', '.join(sorted(free))}) and {len(held)} ready "
+            f"bead(s), 0 of which clear the priority floor. IDLE IS THE CORRECT "
+            f"STATE — the throttle is holding, the feeder is not broken, and the "
+            f"work is untouched. Nothing here needs doing. Governor says: {why}")
+
+
 def _reason(free: list[str], ready: list[tuple[str, str]]) -> str:
     top = "; ".join(f"{bid} {title}"[:70] for bid, title in ready[:3])
     return (
@@ -266,8 +344,38 @@ def _reason(free: list[str], ready: list[tuple[str, str]]) -> str:
         f"is allowed. Top ready: {top}.")
 
 
-def gate_inputs(root, reg, panes, runtime, me: str | None = None):
-    """(free feedable workers, dispatchable ready beads) — RULE ZERO's two numbers.
+def governor_admits(root):
+    """The governor's `item -> "" | why` for this root, or None if none is
+    configured. A PURE READ (`persist=False`): asking whether work is dispatchable
+    must never ratchet fleet policy — `st tend` is the one writer of the engaged
+    tier, and a stop hook that advanced hysteresis would make the governor's state
+    depend on how often agents happened to stop.
+
+    Returns None on ANY failure, which is the fail-open direction this whole
+    module is built on: an unreadable governor must degrade to the old behaviour
+    (nag about everything), never to a silent refusal to nag about anything.
+    """
+    try:
+        from . import config
+        from . import governor as gov_mod
+        cfg, _err = config.load_or_default(Path(root))
+        if not cfg.governor.active:
+            return None
+        gov = gov_mod.Governor(cfg.governor, gov_mod.reader_for(cfg.governor),
+                               gov_mod.FilesGovernorState(Path(root)))
+        return gov.evaluate(persist=False).admits
+    except Exception:      # noqa: BLE001 — no governor readable -> ungoverned
+        return None
+
+
+def gate_inputs(root, reg, panes, runtime, me: str | None = None, admits=None):
+    """(free feedable workers, dispatchable ready beads, HELD-BY-GOVERNOR beads).
+
+    The third value is the aegis-diasw fix and it is not decoration: with a tier
+    engaged, `ready` legitimately goes empty and the stop is correctly allowed —
+    but "the throttle is holding" and "the feeder is broken" then look IDENTICAL
+    to the coordinator, which is the failure mode this repo keeps paying for.
+    Held is what lets the caller say WHICH.
 
     Lifted verbatim out of main() so the unified stop decision (stop_policy, rank
     2) and this hook compute them ONE way. The logic below is the part of
@@ -280,7 +388,7 @@ def gate_inputs(root, reg, panes, runtime, me: str | None = None):
     """
     free = free_feedable_workers(reg, panes, runtime, root=root)
     if not free:
-        return [], []
+        return [], [], []
     # bd_cwd, not the ambient cwd, even though the hook usually fires in the
     # admin's workspace: "usually" is how the tend caller silently never
     # fired (see bd_cwd). None still falls back to ambient — fail-open.
@@ -292,8 +400,14 @@ def gate_inputs(root, reg, panes, runtime, me: str | None = None):
     # workers) x (unassigned ready work).
     free = [w for w in free if w not in hauls(ready_beads)]
     if not free:
-        return [], []
-    return free, dispatchable(set(free), ready_beads)
+        return [], [], []
+    # THE GOVERNOR IS ASKED LAST, over the beads that survived every other
+    # filter — so `held` names exactly the work that WOULD have been dispatched
+    # and is not, which is the number the coordinator needs to tell a holding
+    # throttle from a broken feeder.
+    ok, held = throttle(dispatchable(set(free), ready_beads), ready_beads,
+                        admits if admits is not None else governor_admits(root))
+    return free, ok, held
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -314,8 +428,15 @@ def main(argv: list[str] | None = None) -> int:
         panes = Tmux(socket=declared_socket(root))
         runtime = ClaudeRuntime(panes, lambda _c: None, root=root)
 
-        free, ready = gate_inputs(root, reg, panes, runtime)
+        free, ready, held = gate_inputs(root, reg, panes, runtime)
         if not free or not ready:
+            # ALLOWED — but not SILENTLY, when the governor is why (aegis-diasw).
+            # An idle fleet under an engaged tier is the CORRECT state, and it
+            # is indistinguishable from a broken feeder unless something says so.
+            # stderr, because this path allows the stop and a JSON payload on
+            # stdout is the block protocol.
+            if free and held:
+                print(held_reason(free, held), file=sys.stderr)
             return 0                     # nothing to feed -> allow the stop
 
         # Both conditions hold, and we are certain: BLOCK, with an actionable

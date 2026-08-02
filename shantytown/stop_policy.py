@@ -15,7 +15,23 @@ must be able to answer "why did my coordinator not stop?" from it alone.
   2  RULE ZERO: free feedable AND dispatchable      -> BLOCK: dispatch
   3  hibernate declines                             -> ALLOW, loudly
   4  a DELIVERABLE pending event                    -> BLOCK: deliver
-  5  otherwise                                      -> ALLOW
+  5  idle because a GOVERNOR TIER holds the queue   -> ALLOW, loudly
+  6  otherwise                                      -> ALLOW
+
+RANK 5 IS AN ALLOW THAT REFUSES TO BE SILENT (aegis-diasw). Under an engaged
+usage tier, an idle fleet with a full ready queue is the CORRECT state — and it
+is observationally identical to a feeder that has broken. A coordinator that
+cannot tell them apart assumes the second, because that is the one it can act on;
+and the action available to it is to re-grade a P2 to P1 until the queue clears
+the floor. That is priority inflation manufactured by two mechanisms disagreeing,
+and it defeats the throttle at exactly the moment the throttle is working.
+
+The fix is to remove the PUSH, not the escape hatch: `st go`'s refusal still
+offers the bump, because bd history records priority per revision so an inflation
+is auditable after the fact (ruled by Stiwi, who withdrew the decision that would
+have reworded it). What this rank removes is the blocking hook demanding an action
+the governor forbids — nobody is herded toward the hatch, so a bump becomes a
+judgement someone made rather than one the mechanism extracted.
 
 RANK 2 ABOVE RANK 3 IS THE WHOLE FIX. Hibernate can now only fire in a state where
 quiet is correct — nothing urgent, nothing to hand out — and when Rule Zero
@@ -60,6 +76,7 @@ BY_URGENT = "urgent"
 BY_RULE_ZERO = "rule-zero"
 BY_HIBERNATE = "hibernating"
 BY_EVENTS = "events"
+BY_THROTTLED = "governor-throttled"
 BY_NOTHING = "nothing-to-do"
 BY_ERROR = "fail-open"
 
@@ -84,6 +101,12 @@ class Inputs:
     pending: list = field(default_factory=list)      # NOT consumed — a read
     free_feedable: list = field(default_factory=list)
     dispatchable: int = 0
+    # Ready, unassigned, claimable — and REFUSED BY THE GOVERNOR's priority floor
+    # (aegis-diasw). Not folded into `dispatchable`: the whole defect was that
+    # "throttle holding" and "feeder broken" were the same observation, and one
+    # number cannot carry both. `throttled_why` is the governor's own sentence.
+    throttled: int = 0
+    throttled_why: str = ""
     hibernate: "config.Hibernate | None" = None
     minutes_quiet: float | None = None
     fleet: "config.Fleet | None" = None
@@ -156,8 +179,15 @@ def decide(inp: Inputs) -> Verdict:
             if inp.hibernate.max_quiet_minutes and inp.minutes_quiet is not None:
                 remaining = inp.hibernate.max_quiet_minutes - inp.minutes_quiet
                 left = f", or {remaining:.0f} min of quiet remaining"
+            # "nothing dispatchable" is TRUE but incomplete when a tier is the
+            # reason (aegis-diasw): an operator reading it goes looking for an
+            # empty queue and finds a full one. Name the throttle here too.
+            why = ""
+            if inp.throttled:
+                why = (f" ({inp.throttled} ready bead(s) held by the usage "
+                       f"governor's priority floor — idle is correct)")
             return Verdict(False,
-                           f"nothing dispatchable, nothing urgent. "
+                           f"nothing dispatchable{why}, nothing urgent. "
                            f"{len(inp.pending)} event(s) left PENDING, unconsumed. "
                            f"Next wake: a tend push, an inbox, a dispatch{left}.",
                            BY_HIBERNATE)
@@ -165,6 +195,20 @@ def decide(inp: Inputs) -> Verdict:
     if inp.pending:
         return Verdict(True, f"{len(inp.pending)} pending event(s) to deliver.",
                        BY_EVENTS)
+
+    # RANK 5. Nothing to dispatch — and the governor is WHY. Said out loud, on an
+    # ALLOW, because silence here is what trains a coordinator to go hunting for
+    # a way to make work dispatchable. Deliberately AFTER the event ranks: a
+    # throttled queue is no reason to sit on someone's undelivered report.
+    if inp.free_feedable and inp.throttled and not inp.dispatchable:
+        return Verdict(False,
+                       f"the usage governor is holding the queue: "
+                       f"{len(inp.free_feedable)} idle worker(s) and "
+                       f"{inp.throttled} ready bead(s), 0 clearing the priority "
+                       f"floor. IDLE IS CORRECT — the throttle is holding, not "
+                       f"the feeder. Nothing here needs doing. "
+                       f"{inp.throttled_why}".rstrip(),
+                       BY_THROTTLED)
     return Verdict(False, "", BY_NOTHING)
 
 
@@ -218,8 +262,10 @@ def gather(root, me: str, *, reg=None, panes=None, runtime=None,
         return inp
 
     try:
-        free, ready = feed_mod.gate_inputs(root, reg, panes, runtime, me)
+        free, ready, held = feed_mod.gate_inputs(root, reg, panes, runtime, me)
         inp.free_feedable, inp.dispatchable = free, ready
+        inp.throttled = len(held)
+        inp.throttled_why = held[0][2] if held else ""
     except Exception:      # noqa: BLE001 — fail open: no gate, no block
         inp.free_feedable, inp.dispatchable = [], 0
 

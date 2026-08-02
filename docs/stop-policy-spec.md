@@ -85,11 +85,19 @@ able to answer "why did my coordinator not stop?" from this list alone.
 | 2 | **Rule Zero**: free feedable workers AND dispatchable work both exist | **BLOCK**: dispatch | there is work to hand out. Sleeping through this is the stall the gate exists to prevent, and it OVERRIDES hibernate |
 | 3 | **hibernate** declines (policy on, schedule not elapsed) | **ALLOW**, loudly | nothing to dispatch and nothing urgent: quiet is correct. Says how many events stay pending |
 | 4 | a **deliverable** pending event (sender not mid-flight) | **BLOCK**: deliver | the ordinary drain |
-| 5 | otherwise | **ALLOW** | |
+| 5 | idle because a **usage-governor tier** holds the whole queue | **ALLOW**, loudly | idle is the CORRECT state under an engaged floor — and indistinguishable from a broken feeder unless something says so |
+| 6 | otherwise | **ALLOW** | |
 
 Rank 2 above rank 3 is the whole fix: hibernate can now only fire in a state where
 quiet is *correct*, and when Rule Zero overrides it the output says so by name
 instead of the knob appearing broken.
+
+Rank 5 is below the event ranks deliberately: a throttled queue is no reason to
+sit on somebody's undelivered report, so a capacity hold must never become a way
+for the coordinator to stop hearing from its crew. And rank 2's `dispatchable`
+now means *passes the governor's priority floor* — computed by the governor's own
+`Verdict.admits`, the resolver `st go` gates on, so the gate can no longer demand
+a dispatch that dispatch will refuse.
 
 ### Inputs, gathered ONCE
 

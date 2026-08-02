@@ -178,7 +178,7 @@ def test_one_invocation_sweeps_the_panes_ONCE(tmp_path, monkeypatch):
     from shantytown import feed_check as feed_mod
     panes = _CountingPanes(["billy"])
     monkeypatch.setattr(feed_mod, "gate_inputs",
-                        lambda *a, **k: (panes.capture("p") and [], 0))
+                        lambda *a, **k: (panes.capture("p") and [], 0, []))
 
     class _Reg:
         def get(self, n):
