@@ -143,6 +143,18 @@ Type=oneshot
 # 1 (REFUSED — install collision, unknown agent) stays a failure: that IS a
 # run that did not happen.
 SuccessExitStatus=2
+# EVERY SEND FROM THIS UNIT WAS UNJOURNALED WITHOUT THIS (internal-ref). st
+# resolves the journal from $SHANTY_ROOT, and systemd starts a unit with almost
+# no environment, so the supervisor's own pane sends logged
+# `send UNJOURNALED (SHANTY_ROOT unset ...)` on every pass. --root is passed on
+# the command line but does not reach the env the journal reader consults.
+#
+# That is an AUDIT hole, not a cosmetic one: the supervisor types into agent
+# panes (cycle prompts, self-heal nudges, re-surfaced beads), and unattributed
+# pane input is exactly what the injection-audit work exists to make impossible.
+# The one process on this host that types into the most panes was the one
+# recording none of it.
+Environment=SHANTY_ROOT={root}
 ExecStart={st_bin} --root {root} tend
 """
 
