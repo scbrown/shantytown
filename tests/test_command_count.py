@@ -163,8 +163,22 @@ def test_the_surface_is_twenty():
     anyone reading the surface. Deletion is the lever; consolidation alone was
     not.
 
+    Grew to 22 with `ask` and `answer` — the blocking PICKER as a surface you can
+    read and act on (aegis-w30p2). `input` above gave the coordinator a verb for
+    what is in an agent's BUFFER; neither it nor anything else could say what a
+    blocked agent was being ASKED, so the coordinator went back to raw
+    `capture-pane`/`send-keys` at other agents' panes — six times in one evening
+    across five agents, hand-typing a socket name and a pane name every time.
+
+    They are TWO slots and not one flag, on the rule this file keeps applying:
+    `ask` is a read over one agent, `answer` acts inside another agent's decision.
+    That is the widest consequence any verb here carries, and it does not get to
+    hide behind a flag on the safe-looking command. There is deliberately no third
+    slot for `cancel` — Escape already cancels a tool call, and `input --dismiss`
+    already sends Escape.
+
     Each command still earns its slot."""
-    assert len(_actual_subcommands()) == 20, (
+    assert len(_actual_subcommands()) == 22, (
         "the command count changed. If that's intended, update the number here and "
         "the cli.py docstring together — and say why the surface grew in docs/cli.md."
     )

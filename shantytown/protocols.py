@@ -274,6 +274,14 @@ class Panes(Protocol):
     # keeps invariant #5 intact: this adds a way to EDIT a pane's input box,
     # not a way to express a handoff or inject text.
     def control(self, pane: str, key: str) -> None: ...
+    # ONE DIGIT (1-9), selecting an option on a BLOCKING picker (aegis-w30p2).
+    # Separate from control() because a digit is not an editing key — at an input
+    # box it TYPES, which is why picker.answer will not call this unless the
+    # runtime says a picker is up. Invariant #5 is untouched: this selects an
+    # option the agent itself put on screen, so it still cannot express a handoff
+    # or inject text of the caller's own, and it needs no Enter (a bare digit
+    # selects AND confirms — measured).
+    def option(self, pane: str, n: int) -> None: ...
     def cmdline(self, pane: str) -> str | None: ...
                                                # it to decide, #2 verify reads it
                                                # to confirm a send landed. Both
