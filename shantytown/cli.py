@@ -3277,10 +3277,13 @@ def _crew_governor(a) -> int:
         return f"{now}/{higher[0] if higher else '-'}/{reset}"
 
     label = ""
-    if verdict.engaged:
-        # The TOP engaged tier names the restriction in force. Policy.engaged is
-        # cumulative, so the last one is the most restrictive.
-        label = verdict.engaged[-1].label()
+    if verdict.governing is not None:
+        # NOT engaged[-1] (aegis-yc864). That was a POSITIONAL pick resting on
+        # "cumulative, so the last one is the most restrictive" — true under one
+        # budget, false once `engaged` spans two windows. `governing` derives
+        # from the same computation `admits` enforces, so this line cannot
+        # disagree with `st go` again.
+        label = verdict.governing.label()
     print(f"ok {_pct(gov_mod.FIVE_HOUR)} {_pct(gov_mod.SEVEN_DAY)} {label}".rstrip())
     return OK
 
