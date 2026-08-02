@@ -1221,10 +1221,18 @@ class Verdict:
         if self.signal_lost:
             state = "FROZEN — no new dispatch" if self.frozen else "running UNGOVERNED"
             return f"  governor    SIGNAL LOST · {state} · {self.why}"
-        pct = "—" if self.pct is None else f"{self.pct:.0f}%"
+        # THE PERCENTAGE MUST BELONG TO THE TIER BESIDE IT (aegis-cjjdx, and
+        # again in aegis-yc864). `self.pct` is read against the POLICY'S DEFAULT
+        # window while `self.tier` may belong to another, so this line rendered
+        # `usage 57% · 65% tier` — a five_hour reading beside a seven_day tier,
+        # which reads as a governor latched above its own threshold. `effect()`
+        # was fixed for exactly this and `render()` was not, so the refusal text
+        # and the status line disagreed about the same pass.
+        p = self.by_window.get(self.tier.window, self.pct)
+        pct = "—" if p is None else f"{p:.0f}%"
         held = " (held)" if self.held else ""
-        line = (f"  governor    usage {pct} · {self.tier.at}% tier{held} · "
-                f"{self.effect()}")
+        line = (f"  governor    {self.tier.window} usage {pct} · "
+                f"{self.tier.at}% tier{held} · {self.effect()}")
         return line + self.reset_note(now)
 
     def reset_note(self, now: float | None = None) -> str:
