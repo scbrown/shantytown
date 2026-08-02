@@ -160,6 +160,53 @@ def test_the_workspace_is_ensured_before_the_launch(settings):
     assert order == ["ensure", "launch"]
 
 
+def test_a_STOPPED_agent_is_refused_because_st_stop_forgot_its_stamp(tmp_path, settings):
+    """aegis-k9068. `st stop` prints "`st tend` will still respawn it" — and then
+    deletes the launch stamp that tend gates on, which makes its own promise false.
+
+    The bead diagnosed this as gt-launched agents never having had a stamp. The
+    mechanism is wider: `st stop` calls `_launches.forget()` on EVERY stop
+    (correctly — a stamp left behind would describe a process that no longer
+    exists), and tend refuses any agent without one while ANY other agent has one.
+    On a live fleet that second condition is always true, so the promise is false
+    for every deliberately stopped agent, not only the gt-launched pair.
+
+    Uses the REAL store rather than the module's `_Launches` stub: the stub has no
+    `get`/`root`, so the gate's fail-open `except` swallows it and the gate is
+    never exercised — which is why no existing test caught this.
+
+    Note what tend then SAYS: "never launched by st … another orchestrator owns
+    it". For this agent that is a misdiagnosis — st launched it and st removed the
+    stamp — and it sends an operator hunting an orchestrator that does not exist.
+    """
+    from shantytown.launched import FilesLaunches
+
+    launches = FilesLaunches(tmp_path / "launched")
+    stamp_src = tmp_path / "settings.json"
+    stamp_src.write_text("{}")
+    # Two agents launched by st. Both stamped, as a real launch would.
+    launches.record("ellie", stamp_src)
+    launches.record("weaver", stamp_src)
+    assert launches.get("ellie") is not None
+
+    # EXACTLY what `st stop ellie` does after killing the session.
+    launches.forget("ellie")
+
+    card = Agent(name="ellie", pane="p-ellie")
+    rt = _Runtime()
+    said = []
+    rep = _tender(_Panes(live=set()), rt, launches=launches,
+                  log=said.append).pass_over([card])
+
+    assert rep.findings[0].verdict == tend_mod.REFUSED, (
+        "tend respawned a stopped agent — if this passes, `st stop`'s promise is "
+        "true and this bug is fixed at the source"
+    )
+    assert "no launch stamp" in rep.findings[0].why
+    assert rt.started == [], "respawned an agent it had just refused"
+    assert any("REFUSED" in m for m in said)
+
+
 def test_a_missing_workspace_REFUSES_instead_of_launching(settings):
     card = Agent(name="ellie", pane="p-ellie", workspace="/ws/gone")
 

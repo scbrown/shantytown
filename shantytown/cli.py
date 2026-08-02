@@ -1652,9 +1652,28 @@ def _cmd_stop(a) -> int:
     _stops(a).record(a.agent, time.time(),
                      by=os.environ.get("SHANTY_AGENT", ""),
                      reason=getattr(a, "reason", "") or "")
-    print(f"  stopped {a.agent} ({session}) — recorded as DELIBERATE. "
-          f"`st tend` will still respawn it; `st tend --retire {a.agent}` is how "
-          f"you say do not bring it back.")
+    # WHAT TEND WILL ACTUALLY DO, asked rather than assumed (aegis-k9068).
+    #
+    # This line used to promise "`st tend` will still respawn it" unconditionally.
+    # It is the same function that just called `_launches.forget()` above — and
+    # tend REFUSES an agent with no stamp while any other agent has one. So the
+    # promise was false for every deliberately stopped agent on a live fleet, and
+    # a stop taken on the strength of it silently became permanent: measured at
+    # ~2h of lost tier-1 alert cover.
+    #
+    # The remaining true case is narrow and worth keeping: with NO stamps left at
+    # all, tend's ownership gate does not fire (a fresh deployment must still
+    # self-heal), so it would respawn. Reporting the condition instead of a flat
+    # promise means the sentence stays correct in both.
+    others = [p for p in _launches(a).root.glob("*.json")] if _launches(a) else []
+    if others:
+        fate = (f"`st tend` will NOT bring it back — its launch stamp is gone, and "
+                f"tend does not respawn an unstamped agent. Use `st new {a.agent}`.")
+    else:
+        fate = (f"`st tend` will respawn it (no launch stamps remain, so tend's "
+                f"ownership gate does not apply); `st tend --retire {a.agent}` is "
+                f"how you say do not bring it back.")
+    print(f"  stopped {a.agent} ({session}) — recorded as DELIBERATE. {fate}")
     return OK
 
 
