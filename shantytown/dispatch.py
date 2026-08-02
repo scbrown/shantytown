@@ -115,9 +115,9 @@ class Blocked(Exception):
     had shipped hours earlier could not help — by the time the plate read it, it
     was no longer blocked.
 
-    That is the second-order failure worth naming: this defect DEFEATS the fix
-    for the plate-reader fix. Excluding blocked from plates is worthless if the dispatch
-    path launders the status on the way in. The same reasoning as `Closed`'s
+    That is the second-order failure worth naming: this defect DEFEATS the
+    plate-reader exclusion entirely. Excluding blocked from plates is worthless
+    if the dispatch path launders the status on the way in. The same reasoning as `Closed`'s
     "reopening is a separate, deliberate act": unblocking is
     `bd update <id> --status open`, never a dispatch side effect, and
     --reassign does not bypass it — reassign takes work from a live holder, it
