@@ -157,6 +157,17 @@ class WorkItem:
                                   # than guessing a middle value for it, so
                                   # "nobody set one" stays visible instead of
                                   # silently becoming P2.
+    open_blockers: tuple = ()     # ids of `blocks`-type dependencies that are
+                                  # NOT yet closed — the reason `bd ready`
+                                  # excludes this item (internal-ref).
+                                  #
+                                  # EMPTY MEANS "NONE KNOWN", NOT "READY". A
+                                  # backend with no dependency model (files)
+                                  # always reports empty, and that is a true
+                                  # statement about ITS data, not a clearance.
+                                  # The dispatch guard therefore refuses on a
+                                  # POSITIVE reading only — it never treats
+                                  # empty as evidence of readiness.
 
 
 @runtime_checkable

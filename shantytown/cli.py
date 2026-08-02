@@ -103,6 +103,7 @@ from . import triage as triage_mod
 from .deployment import deployment_default, resolve_root, root_note
 from .dispatch import (Dispatcher, TriageRefused, SendUnverified,
                        DispatchedButUntracked, AlreadyAssigned, Blocked, Closed,
+                       HasOpenBlocker,
                        GovernorRefused)
 from . import forgejo as forgejo_mod
 from . import governor as gov_mod
@@ -2479,6 +2480,9 @@ def _cmd_go(a) -> int:
         except Blocked as e:
             print(f"  refused: {e}", file=sys.stderr)
             return REFUSED
+        except HasOpenBlocker as e:
+            print(f"  refused: {e}", file=sys.stderr)
+            return REFUSED
         except AlreadyAssigned as e:
             print(f"  refused: {e}", file=sys.stderr)
             return REFUSED
@@ -2566,6 +2570,11 @@ def _cmd_go(a) -> int:
         # serving a blocked bead overwrites that status with in_progress and puts
         # an unadvanceable item on a plate, which is what cycles agents. Clear the
         # block deliberately if it is resolved.
+        print(f"  refused: {e}", file=sys.stderr)
+        return REFUSED
+    except HasOpenBlocker as e:
+        # `bd ready` already excludes an item with an unmet blocker; the dispatch
+        # path now agrees with it. Nothing written, nothing sent.
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED
     except AlreadyAssigned as e:

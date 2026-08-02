@@ -81,6 +81,17 @@ class BeadsTracker:
             # bead with no priority arrives as None so a governed dispatch can
             # say "nobody stated how important this is" instead of guessing.
             priority=_priority(d),
+            # From the SAME `bd show --json` read — no extra round trip, so the
+            # module's one-tracker-read budget is unchanged. Only `blocks`-type
+            # deps count: a `relates-to` link is context, not a gate. Only
+            # not-closed ones count: a closed blocker holds nothing.
+            open_blockers=tuple(
+                dep.get("id")
+                for dep in (d.get("dependencies") or [])
+                if dep.get("dependency_type") == "blocks"
+                and (dep.get("status") or "") != "closed"
+                and dep.get("id")
+            ),
         )
 
     def create(self, title: str, **fields) -> WorkItem:
