@@ -317,6 +317,62 @@ def test_install_REFUSES_a_second_supervisor_for_the_same_crew(unit_home, tmp_pa
     assert not (unit_home / supervisor.TIMER).exists(), "wrote units anyway"
 
 
+def test_install_REFUSES_a_boot_time_competitor_that_is_not_running_yet(unit_home, tmp_path):
+    """THE aegis-np4x1 REGRESSION, and the reason listing the name was not enough.
+
+    gastown-crew.service is a boot-time oneshot. On a host that is up it is
+    INACTIVE — so the is-active check saw nothing, --install proceeded, and the
+    next boot brought up a second fleet under the retired aegis-crew-* names.
+    Three agents got a twin on one workspace. Nothing errored anywhere.
+    """
+    changed, msg = supervisor.install(
+        ST_BIN, tmp_path / "root", run=lambda c: None,
+        is_active=lambda unit: False,                       # nothing running NOW
+        is_enabled=lambda unit: unit == "gastown-crew.service")
+    assert not changed, "installed beside a competitor armed for the next boot"
+    assert "REFUSED" in msg and "gastown-crew.service" in msg
+    assert "next boot" in msg, "refused without saying the trap is a REBOOT away"
+    assert not (unit_home / supervisor.TIMER).exists(), "wrote units anyway"
+
+
+def test_the_boot_time_autostart_is_actually_in_the_list(unit_home, tmp_path):
+    """A predicate that can see enabled units is worth nothing if the unit that
+    motivated it never got named. Both halves of the fix, or neither."""
+    assert "gastown-crew.service" in supervisor.FOREIGN_UNITS
+
+
+def test_install_proceeds_when_the_competitor_is_disabled(unit_home, tmp_path):
+    """The other direction: over-refusing is not free either. A unit that is
+    neither running nor armed is retired, and must not block anything."""
+    changed, msg = supervisor.install(
+        ST_BIN, tmp_path / "root", run=lambda c: None,
+        is_active=lambda unit: False, is_enabled=lambda unit: False)
+    assert changed, f"refused with no competitor at all: {msg}"
+
+
+def test_masked_and_static_units_do_not_read_as_ARMED(monkeypatch):
+    """`systemctl is-enabled` exits NON-zero for a masked unit and ZERO for a
+    static one, so an exit-code reading is wrong in BOTH directions. The word is
+    the answer. Our own gastown-crew.service is masked — if `masked` read as
+    armed, tend would refuse forever on the unit we deliberately retired."""
+    import subprocess as _sp
+
+    class _R:
+        def __init__(self, out, rc):
+            self.stdout, self.returncode, self.stderr = out, rc, ""
+
+    # (printed state, exit code) -> is it a live competitor?
+    cases = {"enabled": (0, True), "enabled-runtime": (0, True),
+             "masked": (1, False), "disabled": (1, False),
+             "static": (0, False), "indirect": (0, False),
+             "not-found": (4, False)}
+    for state, (rc, want) in cases.items():
+        monkeypatch.setattr(_sp, "run",
+                            lambda *a, _s=state, _c=rc, **k: _R(_s + "\n", _c))
+        got = cli._systemctl_user_enabled("gastown-crew.service")
+        assert got is want, f"is-enabled={state!r} (exit {rc}) read as armed={got}"
+
+
 def test_install_REFUSES_to_overwrite_a_unit_it_did_not_write(unit_home, tmp_path):
     unit_home.mkdir(parents=True)
     (unit_home / supervisor.TIMER).write_text("[Timer]\n# somebody else's\n")
@@ -384,9 +440,15 @@ def test_resolve_st_bin_returns_None_rather_than_a_name_it_cannot_verify():
 
 def test_gastown_crew_service_is_a_foreign_supervisor():
     """It was NOT in this list, so the boot-time competing fleet it starts
-    walked straight past the check it exists to trip (aegis-np4x1)."""
+    walked straight past the check it exists to trip (aegis-np4x1).
+
+    (Asserted against the ACTIVE predicate, which is the case where the boot
+    already happened and the competing fleet is up. The armed-but-not-yet-running
+    case — the one that made this bead — is the test further up.)
+    """
     assert supervisor.foreign_supervisor(
-        lambda u: u == "gastown-crew.service") == "gastown-crew.service"
+        lambda u: u == "gastown-crew.service") == ("gastown-crew.service",
+                                                   "active now")
 
 
 # --- the command ------------------------------------------------------------
