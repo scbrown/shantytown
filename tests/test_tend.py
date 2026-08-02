@@ -420,6 +420,31 @@ def test_the_written_ExecStart_is_absolute(unit_home, tmp_path):
     assert argv0 == ST_BIN
 
 
+def test_every_foreign_supervisor_call_site_passes_is_masked():
+    """The masked-tombstone fix (0eb9d3f) landed on foreign_supervisor and on
+    `--install`, and MISSED `--status` — which then went on reporting a masked
+    unit as an active competitor on the surface operators actually read.
+
+    is_masked defaults to "nothing is masked", and that default is the unsafe
+    one: omitting it does not disable a check, it manufactures a false
+    conflict. So the wiring is what needs pinning, not just the predicate.
+    """
+    import ast
+    from pathlib import Path
+    src = Path(__file__).resolve().parent.parent / "shantytown" / "cli.py"
+    tree = ast.parse(src.read_text())
+    calls = [n for n in ast.walk(tree)
+             if isinstance(n, ast.Call)
+             and getattr(n.func, "attr", None) == "foreign_supervisor"]
+    assert calls, "no foreign_supervisor call sites found — test is stale"
+    for c in calls:
+        passed = len(c.args) + len(c.keywords)
+        assert passed >= 3, (
+            f"foreign_supervisor call at cli.py:{c.lineno} passes {passed} "
+            f"predicates; without is_masked a masked tombstone reads as a "
+            f"live competitor")
+
+
 # --- systemd's failure state must mean "did not run" (aegis-unbuw) -----------
 #
 # exit 2 is _cmd_tend's "found a FAULT", not "failed to run". Without
