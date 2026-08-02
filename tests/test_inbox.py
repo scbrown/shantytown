@@ -234,3 +234,36 @@ def test_a_backend_with_no_title_cap_carries_a_long_message(tmp_path: Path):
     tbox = TrackerInbox(trk, lambda: files_items(trk))
     tbox.deliver("maldoon", long)                 # must not raise
     assert tbox.unread("maldoon")[0].body == long
+
+
+# --- ATTRIBUTION: an unsigned pane message reads as the OPERATOR -------------
+# Stiwi, 2026-08-02: "crew comms could be more clear afa who is saying what,
+# some of those msgs could seem as they're from me."
+#
+# send-keys types at the SAME prompt the human uses. Stiwi's word carries
+# authority no agent has (approvals, one-way doors, permission to push a public
+# repo), so an unsigned coordinator message can be read as an operator approval
+# and the recipient cannot tell. These two tests are a DIFFERENTIAL: the second
+# is what makes the first mean anything, because a test that only ever asserts
+# the prefix cannot distinguish "attributed correctly" from "prefixes always".
+
+def _dry_send(argv, env):
+    import subprocess, sys, os
+    e = dict(os.environ); e.pop("SHANTY_AGENT", None); e.update(env)
+    return subprocess.run([sys.executable, "-m", "shantytown.cli", *argv],
+                          capture_output=True, text=True, env=e).stdout
+
+
+def test_a_pane_message_names_its_sender():
+    out = _dry_send(["inbox", "dearing", "hello", "--dry-run"],
+                    {"SHANTY_AGENT": "sattler"})
+    assert "[from sattler] hello" in out, out
+
+
+def test_an_unattributable_send_stays_BARE_rather_than_inventing_a_name():
+    """The control. Claiming a sender we cannot establish is worse than none —
+    a wrong name is authority laundering, which is the exact harm the prefix
+    exists to prevent."""
+    out = _dry_send(["inbox", "dearing", "hello", "--dry-run"], {})
+    assert "hello" in out, out
+    assert "[from" not in out, out
