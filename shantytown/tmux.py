@@ -415,6 +415,33 @@ class Tmux:
             raise
         return name
 
+    def sessions(self) -> list[str] | None:
+        """EVERY session on this socket — ours and not. None if we cannot ask.
+
+        The rest of this adapter answers questions about panes we already know the
+        name of, which is precisely why nothing here could see the aegis-np4x1
+        collision: six agents ran for hours under a retired naming scheme on this
+        very socket, and every name-addressed check we own looked straight past
+        them. You cannot notice a session you never enumerate.
+
+        None, not [], when tmux cannot be reached. An empty list is the claim
+        "nothing else is running", and a detector that makes that claim because
+        its probe failed is worse than no detector — it is the reassuring silence
+        this function exists to end.
+        """
+        r = subprocess.run(
+            self._cmd("list-sessions", "-F", "#{session_name}"),
+            capture_output=True, text=True,
+        )
+        if r.returncode != 0:
+            # rc 1 with "no server running" is a genuine, answerable zero: there
+            # is no server, so there are no sessions. Any other failure is a
+            # question we did not get to ask.
+            if "no server running" in (r.stderr or "").lower():
+                return []
+            return None
+        return [ln.strip() for ln in r.stdout.splitlines() if ln.strip()]
+
     def owns(self, name: str) -> bool:
         """True iff this session carries st's provenance marker — i.e. st launched
         it and it is still the same session. A missing session, or a live session
@@ -616,6 +643,17 @@ class NullPanes:
 
     def owns(self, name: str) -> bool:
         return name in self._owned
+
+    def sessions(self) -> list[str] | None:
+        """The seeded `live` set, or None in ambient mode.
+
+        Ambient mode says "every pane exists", which is a useful lie for the
+        name-addressed calls and a useless one here — an enumerator cannot return
+        the set of all possible names. None is the honest answer, and it is the
+        same None the real adapter returns when it cannot ask, so callers get
+        exercised on the cannot-tell branch rather than only the happy one.
+        """
+        return None if self._live is None else sorted(self._live)
 
     def kill_session(self, name: str) -> None:
         """Idempotent: discard removes if present, no-op if absent."""
