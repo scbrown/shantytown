@@ -12,6 +12,8 @@ looks like one.
 """
 from __future__ import annotations
 
+import shutil
+
 import pytest
 
 from shantytown.bobbin import BobbinContext, NoContext
@@ -63,8 +65,25 @@ def test_unreachable_raises_rather_than_returning_empty():
         BobbinContext(server=DEAD, timeout=10).relevant("triage", 2)
 
 
+@pytest.mark.skipif(shutil.which("bobbin") is None,
+                    reason="needs the bobbin CLI on PATH: without it the call "
+                           "fails at the PATH check and never reaches a connect "
+                           "attempt, so there are no connection words to carry")
 def test_unreachable_error_says_which_failure():
-    """'unavailable' alone is a shrug. Carry bobbin's own words out."""
+    """'unavailable' alone is a shrug. Carry bobbin's own words out.
+
+    SKIPPED WITHOUT THE BINARY, deliberately, rather than loosened (aegis-qx8hn).
+    This asserts on WHICH failure occurred, and which failure occurs depends on
+    the environment: with bobbin installed the call reaches DEAD and fails to
+    connect; without it, it fails earlier at the PATH check with a different —
+    and equally correct — message. Relaxing the assertion to accept both would
+    turn a test about specificity into one that cannot fail.
+
+    Nothing is lost in a bare environment: the invariant that actually matters
+    (`test_unreachable_raises_rather_than_returning_empty` — a downed bobbin must
+    never look like a quiet one) holds on BOTH paths and runs everywhere, and the
+    no-binary case has its own test immediately below.
+    """
     with pytest.raises(ContextUnavailable) as e:
         BobbinContext(server=DEAD, timeout=10).relevant("triage", 2)
     assert "connect" in str(e.value).lower()
