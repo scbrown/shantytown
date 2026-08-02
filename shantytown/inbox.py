@@ -114,6 +114,43 @@ def is_decision(labels) -> bool:
                for lbl in (labels or []))
 
 
+def is_blocked(status) -> bool:
+    """Is this bead BLOCKED, and therefore not workable by anyone right now?
+
+    The FOURTH kind of thing that must never occupy a plate, and it arrives by
+    the same road as the other three: `is_message` (a message is not work),
+    `is_decision` (a human's call is not implementer work), and now this.
+
+    MEASURED 2026-08-02: 16 beads with status `blocked` were assigned, ALL 16 of
+    them, and the plate reader served them. That does not merely waste a turn —
+    it CYCLES the agent. The plate hands over an item that is unworkable by
+    definition, the agent burns a turn discovering that, stops, and the next stop
+    event hands it straight back. Observed repeatedly in one evening: malcolm on
+    one bead three times, plus gennaro, grant and muldoon on others.
+
+    Worse than the wasted turns: an agent holding a blocked bead reads as BUSY to
+    the coordinator. So the fleet reports capacity it does not have, and the
+    beads themselves are invisible everywhere else — off `bd ready`, off the Rule
+    Zero sweep, off every capacity report. `blocked` is the one status that is
+    simultaneously on a plate and out of every queue.
+
+    WIRED INTO THE TWO PLATE READERS ONLY, and that scope is measured rather
+    than assumed: `bd ready` already excludes blocked (checked live — 126 ready,
+    0 blocked), so hauls/dispatchable/Rule Zero were never leaking. `bd list` is
+    what the plate readers use, and it DOES carry them (30 assigned to one agent,
+    5 of them blocked). Adding the filter to the ready-based paths would be a
+    branch that cannot execute, so it is deliberately not there.
+
+    Tolerant of shape (str or a row-like mapping) because the two readers hold
+    the bead in different forms — beads.plate a dict row, files.plate a WorkItem
+    — and a predicate that only accepted one would grow a second implementation,
+    which is the drift this file exists to prevent.
+    """
+    if isinstance(status, dict):
+        status = status.get("status")
+    return (status or "").strip().lower() == "blocked"
+
+
 def _body_of(title: str) -> str:
     t = (title or "").lstrip()
     for p in (PREFIX, _LEGACY_PREFIX):
