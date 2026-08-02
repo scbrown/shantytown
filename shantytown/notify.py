@@ -824,3 +824,182 @@ class StalledAlerter:
                 f"did NOT act on a self-heal nudge. The haul is dammed. Reclaim "
                 f"the item or close it on the agent's behalf — a held bead nobody "
                 f"is working is invisible starvation.")
+
+
+# --- BLOCKED beads go silent forever (internal-ref) --------------------------
+
+# Do not shout about a bead that was blocked this morning: a human may simply not
+# have got to it. The alarm is for FORGOTTEN, not for pending.
+BLOCKED_MIN_AGE_DAYS = 3
+# ...and once it IS forgotten, re-surface on a cadence rather than every 5-minute
+# pass. A daily nudge is a nudge; a nudge every pass is noise, and noise about
+# forgotten work is how work stays forgotten.
+BLOCKED_RENOTIFY_DAYS = 1
+# Per-pass cap. The first run faces the whole accumulated backlog — 16 on the live
+# store — and sixteen pushes into one pane is a wall, and a wall gets dismissed as
+# noise. Capped, the backlog drains over passes instead of arriving as one blob.
+# NEVER SILENTLY: the remainder is COUNTED in the last message of the pass, because
+# a cap nobody is told about reads as "that was all of them", which is the same
+# class of lie this whole feature exists to end.
+BLOCKED_MAX_PER_PASS = 5
+
+
+def _bead_age_days(row: dict, now: float | None = None) -> float | None:
+    """Age from `created_at`, in days. None when unreadable.
+
+    CREATED, NOT UPDATED, AND THE CHOICE IS MEASURED. bd exposes no
+    status-transition timestamp — there is no `blocked_at` — so age must come
+    from what exists, and `updated_at` is actively wrong:
+
+        the 17-day P1 security bead read updated_at age = 0 DAYS,
+        because a roster cut touched it that morning.
+
+    Any comment, label or rehome resets `updated_at`. A re-surfacer built on it
+    is silenced by its own fleet's housekeeping, which is exactly how that bead
+    stayed quiet for seventeen days — every touch made it look fresh.
+
+    `created_at` OVER-reports: a bead worked for weeks before it blocked looks
+    older than its block. That is the correct direction for an alarm about
+    forgotten work, and it is the same asymmetry argument the staleness metric
+    already makes. Callers must render it as an upper bound — "created Nd ago",
+    never "blocked for Nd".
+    """
+    raw = (row or {}).get("created_at")
+    if not raw:
+        return None
+    try:
+        from datetime import datetime, timezone
+        t = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+        if t.tzinfo is None:
+            t = t.replace(tzinfo=timezone.utc)
+        now = now if now is not None else datetime.now(timezone.utc).timestamp()
+        return max(0.0, (now - t.timestamp()) / 86400.0)
+    except (ValueError, TypeError):
+        return None
+
+
+class BlockedStaleAlerter:
+    """RE-SURFACE beads that have been BLOCKED long enough to be forgotten.
+
+    IT DOES NOT TRY TO CLASSIFY WHY, and that is a measured decision, not
+    laziness. Two candidate discriminators were tested against the live store
+    and BOTH failed:
+
+      * a decision LABEL — 0 of 16 blocked beads carry one, INCLUDING the
+        seventeen-day P1 security specimen. A label-gated alerter is inert.
+      * `dependency_count` — it counts CLOSED dependencies. One blocked bead's
+        only dependency had closed weeks earlier; nothing held it, and it would
+        have been classified "blocked on work" and stayed silent.
+
+    The second failure is the more interesting one, because it inverts the
+    priority: a blocked bead whose blockers have all CLOSED is the WORST case,
+    not an excluded one. It is unblocked in reality and blocked on paper, and
+    nothing anywhere notices. So the alarm covers every aged blocked bead and
+    lets a human read the reason — which they can do in seconds and this cannot
+    do reliably at all.
+
+    The gap this closes: a bead blocked on a human is not waiting, it is
+    STOPPED. Nothing in this system asked a person a second time, so
+    "blocked on <human>" was operationally identical to "abandoned" — while the
+    bead's own status made it look handled. Seventeen days on a P1 security bead
+    is the specimen.
+
+    Deliberately NOT tied to plates or agents. The previous fix took blocked
+    beads OFF plates, which was right and which also removed the last thing that
+    touched them at all. Visibility has to come from somewhere that looks at the
+    STORE, not at who happens to hold the bead.
+
+    FAIL OPEN, like every alerter here: any error (bd, registry, tmux) pushes
+    nothing and returns []. A broken re-surfacer must never break a tend pass.
+    """
+
+    def __init__(self, root, reg, panes, *, push=push_to_admin,
+                 bd_blocked=None, now=None, log=None):
+        self.path = Path(root) / "notify" / "blocked_stale.json"
+        self._reg = reg
+        self._panes = panes
+        self._push = push
+        self._bd_blocked = bd_blocked
+        self._now = now
+        self._log = log or (lambda msg: None)
+
+    def _load(self) -> dict:
+        try:
+            return json.loads(self.path.read_text())
+        except (OSError, ValueError):
+            return {}
+
+    def _save(self, ledger: dict) -> None:
+        from .files import write_json_atomic
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        write_json_atomic(self.path, ledger)
+
+    def sweep(self) -> list[str]:
+        """One pass. Returns the bead ids actually re-surfaced (usually none)."""
+        from .inbox import is_blocked
+        try:
+            if self._bd_blocked is not None:
+                rows = self._bd_blocked()
+            else:
+                from .feed_check import bd_blocked, bd_cwd
+                rows = bd_blocked(bd_cwd(self._reg))
+        except Exception as e:                      # FAIL OPEN
+            self._log(f"blocked-stale: could not read the store ({e!r})")
+            return []
+
+        now = self._now() if callable(self._now) else self._now
+        if now is None:
+            from datetime import datetime, timezone
+            now = datetime.now(timezone.utc).timestamp()
+
+        ledger = self._load()
+        live = set()
+        due = []
+        for r in rows or []:
+            bid = r.get("id")
+            if not bid or not is_blocked(r.get("status")):
+                continue
+            live.add(bid)
+            age = _bead_age_days(r, now)
+            if age is None or age < BLOCKED_MIN_AGE_DAYS:
+                continue
+            last = ledger.get(bid)
+            if isinstance(last, (int, float)) and (now - last) < BLOCKED_RENOTIFY_DAYS * 86400:
+                continue                            # already nudged this cadence
+            due.append((bid, r, age))
+
+        # Re-arm: a bead that is no longer blocked-on-human is forgotten, so if it
+        # returns to that state it alerts again rather than staying suppressed by
+        # a stale entry.
+        for bid in [b for b in ledger if b not in live]:
+            del ledger[bid]
+
+        surfaced = []
+        due.sort(key=lambda x: -x[2])          # oldest first — most forgotten, most urgent
+        held_back = max(0, len(due) - BLOCKED_MAX_PER_PASS)
+        for i, (bid, r, age) in enumerate(due[:BLOCKED_MAX_PER_PASS]):
+            who = (r.get("assignee") or "").split("/")[-1] or "nobody"
+            msg = (f"⚠ BLOCKED and going stale: {bid} "
+                   f"(p{r.get('priority')}, assignee {who}) — created "
+                   f"{age:.0f}d ago, still blocked. {(r.get('title') or '')[:90]}. "
+                   f"BLOCKED is invisible everywhere else — off bd ready, off the "
+                   f"Rule Zero sweep, off every capacity report — so it is STOPPED, "
+                   f"not waiting, and nothing re-asks. CHECK ITS BLOCKER IS STILL "
+                   f"REAL: a closed dependency does NOT clear this status, so a "
+                   f"bead whose blocker closed is unblocked in fact and blocked on "
+                   f"paper. Then unblock it, get the decision, or re-route it. "
+                   f"(age is created_at, an UPPER bound — bd records no "
+                   f"blocked-at timestamp.)")
+            if held_back and i == min(BLOCKED_MAX_PER_PASS, len(due)) - 1:
+                msg += (f" [+{held_back} more aged blocked bead(s) held back this "
+                        f"pass to avoid a wall; they surface on following passes.]")
+            if self._push(self._reg, self._panes, msg):
+                ledger[bid] = now
+                surfaced.append(bid)
+            else:
+                self._log(f"blocked-stale: {bid} is stale but the push to the "
+                          f"administrator did not land — NOT ledgered, so it "
+                          f"retries next pass")
+
+        self._save(ledger)
+        return surfaced
