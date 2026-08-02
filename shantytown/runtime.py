@@ -442,6 +442,38 @@ def bash_guard_command(root=None) -> str | None:
     return deployment_default(root, "SHANTY_BASH_GUARD")
 
 
+def mcp_guard_command(root=None) -> str | None:
+    """The deployment's PreToolUse MCP guard command, or None for none.
+
+    THE GAP THIS CLOSES (aegis-uy8e8). Hook matchers match TOOL NAMES, and the
+    emitted matchers were exactly `Edit|Write|MultiEdit` and `Bash` — verified on
+    all three role settings. Nothing matched `mcp__*`, so the ENTIRE MCP surface
+    ran unguarded on every role, including genuinely mutating actions: an agent
+    whose `systemctl restart X` the deployment's Bash guard refuses could reach
+    an MCP service-restart tool and nothing looked at it.
+
+    And the gap WIDENS as the guarded path improves: every tightening of the Bash
+    guard pushes traffic to this door, invisibly — the Bash guard's own logs
+    record the block as a success, so the safer the guarded path looks, the more
+    the unguarded one gets used. That is why this exists as its own extension
+    point rather than waiting on any action-governance design.
+
+    SEPARATE from SHANTY_BASH_GUARD on purpose, not folded into it. The two see
+    different payload shapes — a Bash guard reads `tool_input.command`, an MCP
+    guard reads a tool NAME plus an arbitrary argument object — and a deployment
+    may reasonably govern one and not the other. Chaining several guards behind
+    one command is the deployment's job (the aegis deployment already does this
+    for Bash), not this emitter's.
+
+    Same contract and same silence as bash_guard_command: shantytown ships NO
+    guard and hardcodes NO path, because which ACTIONS are dangerous is a
+    property of the deployment. Absent the setting, no hook is emitted at all —
+    an empty matcher is not a guard, and emitting one would claim coverage this
+    module cannot provide.
+    """
+    return deployment_default(root, "SHANTY_MCP_GUARD")
+
+
 def stop_capture_command(root=None) -> str | None:
     """The deployment's session-capture Stop hook command, or None for none.
 
@@ -533,6 +565,16 @@ def claude_settings_for_role(role: str, root=None) -> dict:
     if guard_cmd:
         pre_tool.append({"matcher": "Bash",
                          "hooks": [{"type": "command", "command": guard_cmd}]})
+    # Deployment MCP guard (aegis-uy8e8). The matcher is a NAME REGEX covering
+    # the whole MCP surface, because matchers cannot see ARGUMENTS — the handler
+    # filters itself. That is not a style choice: `Bash(pattern)` matchers are
+    # PERMISSIONS syntax, invalid as hook matchers, and fired ZERO times before
+    # anyone checked (aegis-ac5x/18e0). A matcher that looks specific and never
+    # runs is worse than a broad one that does.
+    mcp_cmd = mcp_guard_command(root)
+    if mcp_cmd:
+        pre_tool.append({"matcher": "mcp__.*",
+                         "hooks": [{"type": "command", "command": mcp_cmd}]})
     return {
         "hooks": {
             # QUERY-FIRST at session start (aegis-rcyd): inject the "ask the
