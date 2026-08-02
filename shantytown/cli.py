@@ -2222,6 +2222,28 @@ def _cmd_inbox(a) -> int:
         return _inbox_read(a, me)
 
     msg = " ".join(a.message)
+    # ATTRIBUTE THE SENDER (Stiwi, 2026-08-02): "crew comms could be more clear
+    # as to who is saying what, some of those msgs could seem as they're from me."
+    #
+    # send-keys types into the recipient's pane at the SAME prompt the human uses,
+    # so an unattributed agent message is INDISTINGUISHABLE FROM THE OPERATOR. That
+    # is not a cosmetic problem: Stiwi's word carries authority no agent has —
+    # approvals, one-way doors, permission to push a public repo, standing
+    # directives. An unsigned coordinator message can be read as an operator
+    # approval, and the recipient has no way to tell.
+    #
+    # Measured the same day: arnold's pane held the line "got the telegram,
+    # confirming receipt — close 6te9n" — first person, naming the bead and the
+    # action. It was model-generated GHOST text, and it read exactly like Stiwi
+    # confirming the one fact aegis-6te9n was blocked on. Attribution does not fix
+    # ghosts, but it makes "no prefix" a visible anomaly rather than the norm.
+    #
+    # Prefix only when we KNOW who is sending. An unattributable send stays bare
+    # rather than claiming a name it cannot support — inventing a sender is worse
+    # than omitting one.
+    _from = _me(a)
+    if _from:
+        msg = f"[from {_from}] {msg}"
     try:
         agent = _registry(a).get(a.agent)
     except LookupError as e:
