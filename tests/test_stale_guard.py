@@ -83,7 +83,11 @@ def test_UNPUSHED_work_is_advised_too_with_the_LOSS_risk(tmp_path):
     up = _repo(tmp_path / "up"); wt = _clone(up, tmp_path / "wt")
     _commit(wt, "only_local")
     msg = stale_guard.advise(wt / "seed.txt")
-    assert msg and "NOT pushed" in msg and "no other place" in msg
+    assert msg and "NOT pushed" in msg
+    # The claim is QUALIFIED to what has been fetched: `--remotes` only knows
+    # refs this tree has. Four commits were reported at-risk on the live fleet
+    # and a later fetch dropped the count to zero without a byte moving.
+    assert "no remote ref this tree knows about" in msg
 
 
 def test_a_CURRENT_tree_says_nothing_at_all(tmp_path):
