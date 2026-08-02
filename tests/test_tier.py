@@ -14,7 +14,7 @@ import pytest
 
 from shantytown.files import FilesRegistry
 from shantytown.protocols import Agent
-from shantytown.tier import (
+from shantytown.tier import (LeadStatus,
     Capacity, Decision, LeadState, Reason, Routing,
     handle_stop, plan_role_set, release, role_set, route_stop,
 )
@@ -177,6 +177,54 @@ def test_Q3_positive_control_lead_up_does_NOT_rise(tmp_path):
     r = _hier(tmp_path)
     rt = route_stop(r, "ellie", lead_is_up=lambda n: True)
     assert rt.rose is False, "rise fired even with the lead up — the test can't discriminate"
+
+
+# --- lead-unreachable must distinguish its TWO causes (internal-ref) ----------
+#
+# "the lead is DOWN" and "the lead is UP but cannot drain" want OPPOSITE actions
+# — restart vs relaunch — and were one string. The second fired ~6 times in one
+# evening during a restructure and was absorbed as noise every time, because the
+# operator could SEE the lead was up while the alert said unreachable.
+
+def test_lead_unreachable_carries_WHY_when_the_probe_knows(tmp_path):
+    r = _hier(tmp_path)
+    status = LeadStatus(False, "malcolm is UP but CANNOT DRAIN: relaunch it")
+    rt = route_stop(r, "ellie", lead_is_up=lambda n: status)
+    assert rt.rose is True and rt.reason is Reason.LEAD_UNREACHABLE
+    assert "CANNOT DRAIN" in rt.detail, "rose without saying which kind of unreachable"
+    assert "CANNOT DRAIN" in rt.render(), "the detail never reaches the rendered line"
+
+
+def test_the_two_causes_are_DISTINGUISHABLE_not_just_decorated(tmp_path):
+    """The discrimination test: two different falsy verdicts must not render the
+    same. Without this, `detail` could be a constant and every assertion above
+    would still pass."""
+    r = _hier(tmp_path)
+    down = route_stop(r, "ellie",
+                      lead_is_up=lambda n: LeadStatus(False, "malcolm is DOWN — restart it"))
+    deaf = route_stop(r, "ellie",
+                      lead_is_up=lambda n: LeadStatus(False, "malcolm is UP but CANNOT DRAIN"))
+    assert down.detail != deaf.detail
+    assert "restart" in down.detail and "CANNOT DRAIN" in deaf.detail
+
+
+def test_a_plain_BOOL_predicate_still_works_unchanged(tmp_path):
+    """Back-compat is load-bearing: route_stop carries stop events, and every
+    caller that returns a bare bool must keep routing. Absent detail stays
+    EMPTY — never invented, because a fabricated cause on an escalation is
+    worse than no cause."""
+    r = _hier(tmp_path)
+    rt = route_stop(r, "ellie", lead_is_up=lambda n: False)
+    assert rt.rose is True and rt.reason is Reason.LEAD_UNREACHABLE
+    assert rt.detail == ""
+    assert "ROSE: lead-unreachable)" in rt.render()
+
+
+def test_a_truthy_LeadStatus_does_NOT_rise(tmp_path):
+    """Control: LeadStatus(True) must behave exactly like True."""
+    r = _hier(tmp_path)
+    rt = route_stop(r, "ellie", lead_is_up=lambda n: LeadStatus(True))
+    assert rt.rose is False, "a reachable lead rose — __bool__ is not wired"
 
 
 def test_Q4_worker_with_no_lead_goes_to_admin_directly(tmp_path):

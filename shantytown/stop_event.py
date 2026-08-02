@@ -57,7 +57,7 @@ from .policy import NullRanker, PolicyRanker
 from .protocols import RankUnavailable
 from .runtime import ClaudeRuntime, live_wiring
 from .stopped import FilesStops
-from .tier import is_governance, route_stop
+from .tier import LeadStatus, is_governance, route_stop
 from .triage import running_shells, context_tokens_k, CYCLE_THRESHOLD_K
 from .tmux import Tmux
 
@@ -102,15 +102,38 @@ def _lead_is_up(reg: FilesRegistry, panes) -> "callable":
     do not know it will drain, and "assume it drains" is the assumption that lost
     the events.
     """
-    def up(name: str) -> bool:
+    def up(name: str) -> "LeadStatus":
+        # RETURNS A REASON, NOT JUST A BOOL. Four distinct states collapsed into
+        # False here, and two of them want opposite actions from the coordinator
+        # — restart vs relaunch. The bool was right and unactionable.
         try:
             lead = reg.get(name)
         except LookupError:
-            return False
-        if not lead.pane or not panes.exists(lead.pane):
-            return False
+            return LeadStatus(False, f"{name} is not on the roster at all")
+        if not lead.pane:
+            return LeadStatus(False, f"{name}'s card names no pane")
+        if not panes.exists(lead.pane):
+            return LeadStatus(False, f"{name} is DOWN (no pane {lead.pane!r}) "
+                                     f"— restart it")
         wiring = live_wiring(lead.pane, panes.cmdline)
-        return wiring is not None and "drain" in wiring.directions
+        if wiring is None:
+            # Cannot-tell still rises (see docstring), but it must not be
+            # reported as "cannot drain" — that would be a claim we did not
+            # measure, on the same alert that already cost credibility once.
+            return LeadStatus(False, f"{name} is UP but its stop wiring could "
+                                     f"NOT be read from the running process — "
+                                     f"UNVERIFIED, not confirmed broken")
+        if "drain" not in wiring.directions:
+            carries = (f"carries {sorted(wiring.directions)}"
+                       if wiring.directions else "carries no `stop_event` hook")
+            whence = (f" from {wiring.settings_path}" if wiring.settings_path
+                      else " and its launch line has NO --settings")
+            return LeadStatus(False, f"{name} is UP but CANNOT DRAIN: it "
+                                     f"{carries}{whence}. Its card says lead; "
+                                     f"the process was launched before that. "
+                                     f"RELAUNCH it (`st stop {name} && st new "
+                                     f"{name}`) — restarting is not the fix")
+        return LeadStatus(True)
     return up
 
 
