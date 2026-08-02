@@ -4111,7 +4111,10 @@ def _cmd_tend(a) -> int:
     if a.retire or a.unretire:
         return _tend_retire(a)
     if a.install:
-        st_bin = "st"
+        # NOT the bare name — see supervisor.resolve_st_bin. install() refuses
+        # a relative path, so an unresolvable st is a loud failure here rather
+        # than a silent 203/EXEC on every timer fire (aegis-408qs).
+        st_bin = sup_mod.resolve_st_bin() or "st"
         changed, msg = sup_mod.install(st_bin, Path(a.root), interval=a.interval,
                                        run=None if a.dry_run else _run_cmd,
                                        is_active=_systemctl_user_active,
