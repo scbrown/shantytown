@@ -1,7 +1,7 @@
-"""st — the CLI. Nineteen commands, and the count is load-bearing: each earns its slot.
+"""st — the CLI. Twenty-two commands, and the count is load-bearing: each earns its slot.
 
     anchor [--short|--events|--harness] · go · inbox [--count] · task
-    · crew [--count] · input [--show|--clear|--dismiss]
+    · crew [--count] · input [--show|--clear|--dismiss] · ask · answer
     · roles [--check|set|sync] · init · new · start [--mode]
     · stop · log · context · doctor [--install]
     · tend [--install|--status|--reauth|--target] · attach [-r|--no-start]
@@ -52,6 +52,15 @@ grew past the original ten by seven, each on a specific ask — not drift:
               timer-driven supervisor that will not touch an agent it has no
               launch stamp for — a cold host has no stamps. Declarative and
               idempotent: it converges the fleet on a named crew set.
+  · ask     — print the QUESTION a blocked agent is sitting on: prompt, the command
+              being approved, and the numbered options VERBATIM. A read, and it
+              exists because the read it replaces was `tmux -L <sock> capture-pane
+              -p -t <pane> | tail -12` run by hand six times in one evening.
+  · answer   — select an option BY NUMBER. Its own slot rather than a flag on `ask`
+              for the reason `tend` and `attach` have theirs: `ask` is a READ, and
+              this is the only verb in the repo that acts inside ANOTHER agent's
+              decision. A consequence behind a flag on a read is a consequence
+              somebody triggers by running the safe-looking thing.
   · init    — scaffold a NEW deployment by asking: the store, the crew cards (with
               generated panes), their hooks, and shantytown.toml. It writes through
               the EXISTING seams — the registry, tier.role_set, the same settings
@@ -680,7 +689,22 @@ def build_parser() -> argparse.ArgumentParser:
                             "suggestion's buffer is already empty, and "
                             "'clearing' one teaches the wrong model")
     ib2_g.add_argument("--dismiss", action="store_true",
-                       help="dismiss the suggestion (Escape)")
+                       help="dismiss the suggestion (Escape). Also the way to "
+                            "CANCEL a tool call an agent is stopped on — Escape "
+                            "is that key too, so there is no `st cancel`")
+
+    ak = sub.add_parser("ask",
+                        help="print the QUESTION an agent is blocked on: the "
+                             "prompt, the command being approved, and the "
+                             "numbered options verbatim. Read-only.")
+    ak.add_argument("agent", help="who is blocked")
+
+    aw = sub.add_parser("answer",
+                        help="select option N on an agent's blocking picker, by "
+                             "NUMBER. Refuses on a pane that is not on one.")
+    aw.add_argument("agent", help="who to answer")
+    aw.add_argument("n", type=int, metavar="N",
+                    help="the option number, as `st ask` printed it")
 
     db = sub.add_parser("dashboard", help="a live, self-refreshing view of an "
                                           "admin's tier (roster/state/work)")
@@ -800,6 +824,10 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_attach(a)
     if a.cmd == "input":
         return _cmd_input(a)
+    if a.cmd == "ask":
+        return _cmd_ask(a)
+    if a.cmd == "answer":
+        return _cmd_answer(a)
     if a.cmd == "dashboard":
         return _cmd_dashboard(a)
     if a.cmd == "subscribe":
@@ -2664,11 +2692,15 @@ def _cmd_crew(a) -> int:
               f"will not time out. An ANSWERED")
         print(f"    picker still blocks until it is submitted; two agents sat on "
               f"those for over an hour.")
-        print(f"    Answer it (`st log <agent>` to read the question), or tell "
-              f"them to put the decision on")
-        print(f"    the bead with a recommendation and carry on — a question in a "
-              f"pane reaches nobody and")
-        print(f"    dies with the session.")
+        # NAME THE COMMAND (aegis-w30p2). `st log <agent>` dumped the pane and
+        # left the reader to eyeball a picker — which is how an option 2 that had
+        # changed meaning between two prompts got answered twice in one evening.
+        print(f"    Read it:   st ask {waiting[0]}")
+        print(f"    Answer it: st answer {waiting[0]} <N>")
+        print(f"    ...or tell them to put the decision on the bead with a "
+              f"recommendation and carry")
+        print(f"    on — a question in a pane reaches nobody and dies with the "
+              f"session.")
     # Say the consequence, not just the count (aegis-q73g). The reader who needs
     # this line is the administrator about to book the previous item as done.
     if shelled:
@@ -3417,6 +3449,121 @@ def _cmd_input(a) -> int:
         return CANNOT_TELL
     if a.clear and rep.verdict != input_box.EMPTY:
         return REFUSED
+    return OK
+
+
+def _resolve_pane(a):
+    """(panes, card, screen, awaiting) for a live agent pane, or None on refusal.
+
+    Shared by ask/answer/input so the three cannot drift on the one thing they
+    must agree about: whether a PICKER is up. `awaiting` is the RUNTIME's verdict,
+    passed in exactly as work_state and input_box take it.
+    """
+    from .runtime import asks_a_question
+    reg, panes = _registry(a), _panes(a)
+    try:
+        card = reg.get(a.agent)
+    except Exception as e:
+        print(f"  no such agent {a.agent!r}: {e}", file=sys.stderr)
+        return None
+    if not card.pane or not panes.exists(card.pane):
+        print(f"  {a.agent} has no live pane — nothing to read.", file=sys.stderr)
+        return None
+    screen = panes.capture(card.pane, attrs=True)
+    awaiting = bool(asks_a_question(_runtime(a, panes),
+                                    triage_mod.strip_attrs(screen)))
+    return panes, card, screen, awaiting
+
+
+def _print_question(agent: str, q) -> None:
+    """The block verbatim, then the options NUMBERED — the whole point (w30p2).
+
+    Verbatim because paraphrasing an approval prompt is how an operator approves
+    something other than what they read. The options carry their own numbers from
+    the screen rather than being re-numbered here, so `st answer <agent> N` and
+    what the agent will act on are the same N by construction.
+    """
+    print(f"  {agent} is blocked on a question:\n")
+    for ln in q.context:
+        print(f"    │{ln}")
+    print()
+    for o in q.options:
+        mark = "❯" if o.selected else " "
+        print(f"    {mark} {o.n}. {o.text}")
+        if o.detail:
+            print(f"         {o.detail}")
+    if q.footer:
+        print(f"\n    ({q.footer})")
+    print(f"\n  Answer it: st answer {agent} <N>")
+
+
+def _cmd_ask(a) -> int:
+    """ask <agent> — print the question an agent is blocked on. READ-ONLY.
+
+    THE COMMAND THAT REPLACES `capture-pane -p -t <pane> | tail -12`. The
+    coordinator ran that six times in one evening across five agents, hand-typing
+    a socket name and a pane name every time — and three of those panes were
+    `aegis-crew-*` while most of the fleet is `shanty-*`, so the naming era had to
+    be recalled per agent, at the moment of deciding whether to approve someone
+    else's shell command. The card already knows the pane (aegis-w30p2).
+
+    Reading the options MACHINE-WISE is the safety half. Option 2 is not a
+    stable thing: measured across three live pickers on one night it was "Yes,
+    and don't ask again for: curl …", "No, exit", and "Spaces". A coordinator
+    who has learned what 2 means has learned something false.
+    """
+    got = _resolve_pane(a)
+    if got is None:
+        return REFUSED
+    panes, card, screen, awaiting = got
+    if not awaiting:
+        print(f"  {card.name}: no blocking picker is up — nothing is being "
+              f"asked. (`st input {card.name} --show` for what is in its box.)")
+        return OK
+
+    from .runtime import reads_a_question
+    q = reads_a_question(_runtime(a, panes), screen)
+    if q is None:
+        # NOT "no question" — the runtime says one IS up. Saying otherwise would
+        # tell a coordinator a blocked agent is fine, which is the whole class of
+        # bug this area keeps closing.
+        print(f"  {card.name}: a picker IS up, but its options could not be "
+              f"read off this frame — so this is a could-not-tell, not an "
+              f"all-clear. `st attach {card.name}` and read it.", file=sys.stderr)
+        return CANNOT_TELL
+    _print_question(card.name, q)
+    return OK
+
+
+def _cmd_answer(a) -> int:
+    """answer <agent> N — select option N on an agent's blocking picker.
+
+    THE ONE COMMAND HERE THAT ACTS ON ANOTHER AGENT'S SESSION, so it echoes what
+    it selected and refuses in every direction it can: not a picker, unreadable
+    picker, N out of range, N past what a keystroke can address. It also records
+    who answered what, before it acts — an approval granted into someone else's
+    pane must not rely on anybody remembering they granted it (aegis-6hfmi spent
+    a cross-session argument on exactly that question).
+
+    THERE IS NO --yes AND THERE WILL NOT BE. A permission prompt is a DECISION;
+    the value of it being a decision is that a person made it. One keystroke is
+    the goal, zero is a different and worse thing (aegis-apz9).
+    """
+    from . import picker
+    got = _resolve_pane(a)
+    if got is None:
+        return REFUSED
+    panes, card, _, awaiting = got
+    res = picker.answer(panes, card.pane, a.n, awaiting=awaiting, agent=card.name)
+    if not res.ok:
+        print(f"  {card.name}: {res.detail}", file=sys.stderr)
+        return REFUSED
+    # ECHO WHAT WAS SELECTED, not the number that was typed. The number is what
+    # the operator already knew; the TEXT is the thing they may have got wrong.
+    print(f"  {card.name}: selected {res.option.n}. {res.option.text}")
+    if not res.changed:
+        print(f"    note     : {res.detail}", file=sys.stderr)
+        return CANNOT_TELL
     return OK
 
 

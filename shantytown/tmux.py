@@ -44,6 +44,12 @@ CONTROL_KEYS = frozenset({
     "Escape",  # dismiss the suggestion
 })
 
+# The ONLY keys Panes.option will send (aegis-w30p2): the digits that address an
+# option on a blocking picker. A SEPARATE allowlist from CONTROL_KEYS on purpose
+# — see Tmux.option. Enter and Tab are absent here for the same reason and with
+# the same force, and they are not needed: a bare digit selects AND confirms.
+OPTION_KEYS = frozenset("123456789")
+
 
 def _journal_send(pane: str, text: str) -> None:
     """Append one line per pane send to the send journal: who put what into
@@ -96,6 +102,14 @@ def _journal_send(pane: str, text: str) -> None:
     except OSError as e:
         print(f"  ⚠ send journal write failed ({e}) — message still delivered",
               file=sys.stderr)
+
+
+# The journal as a PUBLIC seam (aegis-w30p2). picker.answer records who answered
+# what before it acts, and it needs the fleet's one forensic log rather than a
+# second one: "text NOT in sends.log => it traversed no st channel => injector"
+# is the apz9 test, and an audit trail that answers live somewhere else would
+# both weaken that test and hide from the person grepping for it.
+journal = _journal_send
 
 
 # Provenance marker for the ownership guard. st new sets it in the
@@ -327,6 +341,39 @@ class Tmux:
         _journal_send(pane, f"<control:{key}>")
         subprocess.run(self._cmd("send-keys", "-t", pane, key), check=True)
 
+    def option(self, pane: str, n: int) -> None:
+        """Send ONE DIGIT, 1-9, to pick an option from a blocking picker.
+
+        DELIBERATELY NOT PART OF control() (aegis-w30p2). control()'s allowlist
+        means one thing — "keys that edit a line and cannot commit it" — and a
+        digit is not that: at an input box a digit TYPES. Widening that set to
+        carry this would make the c6hli invariant read "no Enter, no Tab, but
+        also some characters that insert text", which is not an invariant anyone
+        can check at a glance. Two verbs, two allowlists, each with one meaning.
+
+        The safety here is not in this method, it is at the gate: picker.answer
+        refuses unless the runtime says a picker is actually up, precisely
+        because THIS call typed at an idle pane is a stray character in its
+        input box.
+
+        STILL NO ENTER, STILL NO TAB, and not by restraint — none is needed. A
+        bare digit SELECTS AND CONFIRMS: measured 2026-08-01 on a live Claude
+        Code pane, `1` at the folder-trust dialog and `3` at a Bash permission
+        prompt, each acted on with no second keystroke.
+
+        `-l` sends the digit LITERALLY. Without it tmux resolves the argument as
+        a key NAME, and key-name space is not something to be standing in when
+        the target is another agent's live session.
+        """
+        key = str(n)
+        if key not in OPTION_KEYS:
+            raise ValueError(
+                f"{n!r} is not a selectable option key. Allowed: "
+                f"{', '.join(sorted(OPTION_KEYS))}. One keystroke cannot address "
+                f"a two-digit option.")
+        _journal_send(pane, f"<option:{key}>")
+        subprocess.run(self._cmd("send-keys", "-t", pane, "-l", key), check=True)
+
     def new_session(self, name: str, cwd: str | None = None) -> str:
         """Create a DETACHED, EMPTY session; return its address (the name).
 
@@ -450,6 +497,11 @@ class NullPanes:
         # "no Enter, no Tab" must be able to see every key that reached the pane,
         # and folding them into `sent` would hide them among message bodies.
         self.controls = []
+        # Picked options, kept apart from `controls` and `sent` for the same
+        # reason those two are apart (aegis-w30p2): three different kinds of
+        # keystroke reach a pane, and a test that folds them together cannot
+        # assert what any one of them did.
+        self.picked = []
         self.screen = screen
         # pane -> launch command line. Lets a test model the green-and-dead
         # shape: a pane that EXISTS while the process in it carries someone
@@ -502,6 +554,21 @@ class NullPanes:
         if key not in CONTROL_KEYS:
             raise ValueError(f"{key!r} is not an allowed control key")
         self.controls.append((pane, key))
+
+    def option(self, pane: str, n: int) -> None:
+        """Records the digit; enforces the SAME allowlist as Tmux.option.
+
+        Duplicated for the reason control() records above: a double that accepted
+        keys the real adapter refuses lets a test prove a refusal the shipped
+        path does not make. Recorded in its OWN list — a test asking "what keys
+        reached this pane" must be able to see a picked option as distinct from
+        an editing key and from message text, or `no Enter, no Tab` is an
+        assertion about a bucket nobody can enumerate.
+        """
+        key = str(n)
+        if key not in OPTION_KEYS:
+            raise ValueError(f"{n!r} is not a selectable option key")
+        self.picked.append((pane, key))
 
     def cmdline(self, pane: str) -> str | None:
         """The launch line of the "process" in `pane`: the SEED if one was given,
