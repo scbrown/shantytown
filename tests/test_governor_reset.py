@@ -657,3 +657,42 @@ def test_a_past_reset_does_not_render_as_RESETS_IN_NOW(tmp_path):
     v = _evaluate(tmp_path, clock, {FIVE: 75}, {FIVE: clock() - 1})
     line = v.render(clock())
     assert "resets now" in line and "resets in now" not in line
+
+
+def test_a_refusal_quotes_the_TIERS_OWN_window_not_the_default_one(tmp_path):
+    """The aegis-cjjdx display bug — the one that MANUFACTURED a false bug report.
+
+    `Verdict.pct` is the POLICY'S DEFAULT window (five_hour). `Verdict.tier` can
+    belong to a different window. Printed together they read as one measurement:
+
+        the usage governor's 45% tier is engaged (usage 11%)
+
+    Both numbers were true and they described different budgets. Read as a pair
+    they say the governor is throttling on a condition that has cleared — a latch
+    bug — and two readers reached exactly that conclusion independently, one of
+    whom filed it and dispatched the "fix". The proposed remedy was to release the
+    tier early: to switch off a spend guard on a budget genuinely 57% consumed.
+
+    So the refusal must name the tier's OWN window and that window's reading.
+    five_hour 11% is under every five_hour tier (lowest is 50); seven_day 70% is
+    over its 65% tier. Exactly one tier engages, and it is not the default
+    window's — so a message quoting `pct` cannot help but be the wrong number.
+    """
+    clock = _Clock()
+    v = _evaluate(tmp_path, clock, {FIVE: 11, SEVEN: 70},
+                  {FIVE: clock() + 5700, SEVEN: clock() + 252_000})
+    # Precondition: the engaged tier belongs to the NON-default window.
+    assert {t.window for t in v.engaged} == {SEVEN}
+    assert v.pct == 11                      # unchanged: still the default window
+
+    refusal = v.admits(_ITEM_P2)
+    assert "seven_day usage 70%" in refusal, refusal
+    # The whole defect: the default window's number must not appear beside a
+    # seven_day tier. 11 is five_hour's reading and says nothing about this tier.
+    assert "usage 11%" not in refusal, refusal
+
+
+class _ITEM_P2:
+    """The smallest thing `admits` reads: an id and a priority."""
+    id = "st-cjjdx"
+    priority = 2
