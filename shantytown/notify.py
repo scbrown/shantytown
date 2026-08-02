@@ -534,6 +534,27 @@ class IdleFleetAlerter:
                 self._log(f"haul: {worker} idle but every queued bead is its "
                           f"own open anchor — not fed this pass")
                 continue
+            # THE SESSION CEILING, ON THIS TRIGGER TOO (aegis-xxae9). ONE
+            # advance, TWO triggers — the same reason haul_feed_message itself
+            # is shared. A ceiling enforced only at the worker's own stop would
+            # be bypassed here every time: tend feeds workers that are ALREADY
+            # idle, which is exactly the state a worker is in after the ceiling
+            # told it to stop. The gate has to sit on both or it sits on
+            # neither.
+            from . import session_budget as sb
+            limits, spend, ceiling = sb.gate(self._shanty_root, worker)
+            if ceiling is not None:
+                self._log(f"haul: {worker} is over its session ceiling "
+                          f"({ceiling.label()}) — NOT fed; it has been asked to "
+                          f"report and stop")
+                if not sb.already_reported(self._shanty_root, worker, spend):
+                    sb.mark_reported(self._shanty_root, worker, spend)
+                    push_to_own_pane(self._reg, self._panes, worker,
+                                     sb.stop_message(ceiling))
+                continue
+            if limits.active and spend.signal_lost:
+                self._log(sb.signal_lost_note(limits, spend, worker))
+
             if (ck := self._context_k(worker)) is not None and ck >= self._handoff_k:
                 message = feed_check.haul_handoff_message(ck, self._handoff_k)
             else:
@@ -542,7 +563,12 @@ class IdleFleetAlerter:
                     feed_check.bd_claim(cwd, nid)
                 except Exception:
                     pass                       # best-effort, same as the stop hook
-                message = feed_check.haul_feed_message(nid, "", len(feedable) - 1)
+                repeats = sb.times_served(self._shanty_root, worker, nid,
+                                          spend.started)
+                sb.record_item(self._shanty_root, worker, spend.session, nid)
+                message = feed_check.haul_feed_message(
+                    nid, "", len(feedable) - 1,
+                    headroom=sb.headroom(limits, spend), repeats=repeats)
             target = push_to_own_pane(self._reg, self._panes, worker, message)
             if target is None:
                 self._log(f"haul: {worker} is idle with {len(beads)} assigned "

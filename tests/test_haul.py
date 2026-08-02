@@ -144,3 +144,169 @@ def test_a_failed_claim_still_feeds(monkeypatch, capsys):
     stop_event._haul(_Reg([WORKER]), _Panes({"p-b": "❯ "}), "billy", None)
     out = capsys.readouterr().out
     assert "aegis-2" in out, "feed survives a failed claim"
+
+
+# --- the session ceiling, WIRED (aegis-xxae9) -------------------------------
+#
+# The module's own tests live in test_session_budget.py. These drive the real
+# `_haul` because the usage governor taught this exact lesson the expensive way:
+# every tier passed in isolation while the COMPOSITION was wrong, and it took
+# running the real thing to see it. A ceiling that computes correctly and is
+# never consulted is the same as no ceiling, and it looks identical from here.
+
+import sqlite3
+import time
+
+from shantytown import session_budget as sb
+from shantytown import stats
+
+
+def _armed_root(tmp_path, hours=3.0, items=4, risk=2, spend_hours=None,
+                spend_items=0, spend_risk=0, agent="billy"):
+    """A shanty root with the budget armed and a stats store showing a spend."""
+    lines = ["[session_budget]"]
+    if hours is not None:
+        lines.append(f"max_hours = {hours}")
+    if items is not None:
+        lines.append(f"max_items = {items}")
+    if risk is not None:
+        lines.append(f"max_risk = {risk}")
+    (tmp_path / "shantytown.toml").write_text("\n".join(lines) + "\n",
+                                              encoding="utf-8")
+    now = time.time()
+    conn = sqlite3.connect(tmp_path / "stats.sqlite")
+    conn.executescript(stats._SCHEMA)
+    rows = []
+    if spend_hours:
+        # working density, so it reads as ONE stretch
+        n = max(2, int(spend_hours * 3600 / 300))
+        rows += [(now - spend_hours * 3600 + i * 300, agent, "tool", None)
+                 for i in range(n)]
+    rows.append((now - 30, agent, "tool", None))
+    rows += [(now - 60 - i, agent, "haul", None) for i in range(spend_items)]
+    rows += [(now - 120 - i, agent, "tool", "deploy") for i in range(spend_risk)]
+    conn.executemany("INSERT INTO events(ts, agent, kind, session, risk)"
+                     " VALUES (?,?,?,?,?)",
+                     [(t, a, k, "s1", r) for t, a, k, r in rows])
+    conn.commit()
+    conn.close()
+    return tmp_path
+
+
+def _haul_at(monkeypatch, capsys, root, panes=None, **bd):
+    _bd(monkeypatch, **bd)
+    rc = stop_event._haul(_Reg([WORKER]), panes or _Panes({"p-b": "❯ "}),
+                          "billy", root)
+    out = capsys.readouterr().out.strip()
+    return rc, (json.loads(out) if out else None)
+
+
+READY = [{"id": "aegis-2", "title": "next up", "assignee": "billy"}]
+
+
+def test_over_the_ceiling_the_haul_STOPS_instead_of_serving(tmp_path, monkeypatch,
+                                                            capsys):
+    root = _armed_root(tmp_path, spend_hours=7.0)
+    claims = []
+    rc, block = _haul_at(monkeypatch, capsys, root, ready=READY, claims=claims)
+    assert rc == 0
+    assert block["decision"] == "block"
+    assert "SESSION CEILING" in block["reason"]
+    assert "aegis-2" not in block["reason"], "must not hand over the withheld bead"
+    assert claims == [], "an unserved bead must not be claimed in_progress"
+
+
+def test_the_ceiling_blocks_once_then_lets_the_session_END(tmp_path, monkeypatch,
+                                                           capsys):
+    """The failure mode that would be WORSE than the bug: a Stop hook that blocks
+    while the ceiling is over can never let the agent stop at all."""
+    root = _armed_root(tmp_path, spend_hours=7.0)
+    _rc, first = _haul_at(monkeypatch, capsys, root, ready=READY)
+    assert first and "SESSION CEILING" in first["reason"]
+    _rc, second = _haul_at(monkeypatch, capsys, root, ready=READY)
+    assert second is None, "the second stop must be ALLOWED through"
+
+
+def test_the_ceiling_outranks_the_context_handoff(tmp_path, monkeypatch, capsys):
+    """Order matters: the handoff is a RECYCLE (shed context, haul resumes), so
+    asking it first would send an over-ceiling session through /clear and
+    straight back into the queue."""
+    root = _armed_root(tmp_path, spend_hours=7.0)
+    _rc, block = _haul_at(monkeypatch, capsys, root, ready=READY,
+                          panes=_Panes({"p-b": SATURATED_PANE}))
+    assert "SESSION CEILING" in block["reason"]
+    assert "HAUL HANDOFF" not in block["reason"]
+
+
+def test_under_the_ceiling_it_feeds_normally_WITH_the_headroom(tmp_path,
+                                                               monkeypatch, capsys):
+    root = _armed_root(tmp_path, spend_hours=1.0, spend_items=1)
+    claims = []
+    _rc, block = _haul_at(monkeypatch, capsys, root, ready=READY, claims=claims)
+    assert "aegis-2" in block["reason"] and "HAUL" in block["reason"]
+    assert "session budget" in block["reason"]
+    assert "before you stop and report" in block["reason"]
+    assert claims == ["aegis-2"]
+
+
+def test_serving_an_item_COUNTS_it(tmp_path, monkeypatch, capsys):
+    """Otherwise max_items can never trip — the counter the ceiling reads is
+    written by the advance itself."""
+    root = _armed_root(tmp_path, spend_hours=0.5)
+    before = sb.read_spend(root, "billy").items
+    _haul_at(monkeypatch, capsys, root, ready=READY)
+    assert sb.read_spend(root, "billy").items == before + 1
+
+
+def test_the_fourth_item_trips_a_four_item_ceiling(tmp_path, monkeypatch, capsys):
+    """The incident's own number: four haul items back to back, unremarked."""
+    root = _armed_root(tmp_path, hours=None, risk=None, items=4,
+                       spend_hours=1.0, spend_items=4)
+    _rc, block = _haul_at(monkeypatch, capsys, root, ready=READY)
+    assert "SESSION CEILING" in block["reason"] and "haul items" in block["reason"]
+
+
+def test_production_actions_trip_it_sooner_than_ordinary_work(tmp_path,
+                                                              monkeypatch, capsys):
+    """Bead item 2. Two deploys is over; the same session's clock and item count
+    are nowhere near their ceilings."""
+    root = _armed_root(tmp_path, spend_hours=0.5, spend_items=1, spend_risk=2)
+    _rc, block = _haul_at(monkeypatch, capsys, root, ready=READY)
+    assert "SESSION CEILING" in block["reason"]
+    assert "production actions" in block["reason"]
+
+
+def test_a_repeat_of_the_same_bead_is_FLAGGED_when_it_is_re_served(tmp_path,
+                                                                   monkeypatch,
+                                                                   capsys):
+    """Bead item 4: the signal that was over-read twice."""
+    root = _armed_root(tmp_path, spend_hours=0.5)
+    _rc, first = _haul_at(monkeypatch, capsys, root, ready=READY)
+    assert "SAME BEAD" not in first["reason"]
+    _rc, again = _haul_at(monkeypatch, capsys, root, ready=READY)
+    assert "SAME BEAD" in again["reason"]
+
+
+def test_an_UNARMED_deployment_behaves_exactly_as_before(tmp_path, monkeypatch,
+                                                         capsys):
+    """Default-off by omission: a deployment that has never heard of this is
+    untouched, including its message text."""
+    claims = []
+    _rc, block = _haul_at(monkeypatch, capsys, tmp_path, ready=READY, claims=claims)
+    assert "aegis-2" in block["reason"] and "this queue is yours." in block["reason"]
+    assert "session budget" not in block["reason"]
+    assert claims == ["aegis-2"]
+
+
+def test_an_armed_budget_with_NO_signal_feeds_and_says_it_is_blind(tmp_path,
+                                                                   monkeypatch,
+                                                                   capsys):
+    """A probe bug must never stop the crew — but it must never be silent either
+    (the aegis-jrax3 rule). Armed + blind = fed, with an alarm on stderr."""
+    (tmp_path / "shantytown.toml").write_text(
+        "[session_budget]\nmax_hours = 3.0\n", encoding="utf-8")
+    _bd(monkeypatch, ready=READY)
+    stop_event._haul(_Reg([WORKER]), _Panes({"p-b": "❯ "}), "billy", tmp_path)
+    cap = capsys.readouterr()
+    assert "aegis-2" in cap.out, "blind must not block the haul"
+    assert "SIGNAL LOST" in cap.err and "UNMEASURED" in cap.err
