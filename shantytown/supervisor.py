@@ -146,21 +146,37 @@ def ours(path: Path) -> bool:
         return False
 
 
-def foreign_supervisor(is_active, is_enabled=lambda unit: False):
+def foreign_supervisor(is_active, is_enabled=lambda unit: False,
+                       is_masked=lambda unit: False):
     """Is something else already tending this crew? Returns (unit, why) or None.
 
-    TWO predicates, because a supervisor has two ways to exist and only one of
-    them is visible right now: it is running, or it is armed to run at the next
-    boot. The second is the one that bit us (see FOREIGN_UNITS), and it is the
-    one a live check cannot see — which is exactly why it has to be asked for
-    separately rather than inferred.
+    THREE predicates, because a supervisor has two ways to EXIST and one way to
+    be permanently disarmed, and no single systemd question covers them:
 
-    `why` is returned rather than reconstructed by the caller because the two
-    cases want different things from a human: an ACTIVE competitor is fighting
-    you now, an ENABLED one is a trap set for the next reboot, and the second
-    reads as a false alarm unless the message says otherwise.
+    * ACTIVE  — it is running now and will fight you.
+    * ENABLED — it is armed for the next boot. This is the one that bit us (see
+      FOREIGN_UNITS); a live check cannot see it, which is why it is asked for
+      separately rather than inferred.
+    * MASKED  — it is symlinked to /dev/null and CANNOT BE STARTED BY ANYTHING.
+      Not by a boot, not by a dependency, not by systemctl start.
+
+    MASKED WINS OVER ACTIVE, and that ordering is the entire point. A masked
+    `Type=oneshot` + `RemainAfterExit=yes` unit that ran before it was masked
+    stays ACTIVE forever — it is a tombstone, not a competitor. Its ExecStart
+    finished long ago and can never run again. Reading that residue as a live
+    supervisor is a false positive that blocks --install with no way out short
+    of a reboot, which is exactly the corner it put us in: the operator had
+    ALREADY made the call this refusal exists to demand, in the strongest form
+    systemd offers, and got refused for having done so.
+
+    `why` is returned rather than reconstructed by the caller because the cases
+    want different things from a human: an ACTIVE competitor is fighting you
+    now, an ENABLED one is a trap set for the next reboot, and the second reads
+    as a false alarm unless the message says otherwise.
     """
     for unit in FOREIGN_UNITS:
+        if is_masked(unit):
+            continue                  # disarmed at the strongest level systemd has
         if is_active(unit):
             return unit, "active now"
         if is_enabled(unit):
@@ -170,6 +186,7 @@ def foreign_supervisor(is_active, is_enabled=lambda unit: False):
 
 def install(st_bin: str, root: Path, *, interval: str = "5min", run=None,
             is_active=lambda unit: False, is_enabled=lambda unit: False,
+            is_masked=lambda unit: False,
             dry_run: bool = False) -> tuple[bool, str]:
     """Write + enable the units. IDEMPOTENT, and refuses rather than clobbers.
 
@@ -187,7 +204,7 @@ def install(st_bin: str, root: Path, *, interval: str = "5min", run=None,
             f"absolute path to the st you are running."
         )
 
-    other = foreign_supervisor(is_active, is_enabled)
+    other = foreign_supervisor(is_active, is_enabled, is_masked)
     if other:
         unit, why = other
         return False, (
