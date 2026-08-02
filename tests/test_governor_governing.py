@@ -111,3 +111,23 @@ def test_no_engaged_tiers_is_None_not_a_crash():
     """`st crew --governor` prints an empty label rather than inventing a
     restriction — the ungoverned case is a real state, not an error."""
     assert _verdict().governing is None
+
+
+# --- the percentage must belong to the tier beside it ----------------------------
+
+
+def test_render_reports_the_percentage_OF_THE_TIERS_OWN_WINDOW():
+    """`usage 57% · 65% tier` is a five_hour reading beside a seven_day tier.
+
+    That reads as a governor latched above its own threshold — which is exactly
+    the false conclusion two careful readers drew in aegis-cjjdx, and the remedy
+    it implies is to release a working spend guard on a budget that is genuinely
+    65% gone. `effect()` was fixed for this; `render()` was not, so the refusal
+    text and the status line disagreed about the same pass.
+    """
+    v = Verdict(reading=Reading(), tier=SEVEN_65, engaged=(FIVE_50, SEVEN_65),
+                pct=57.0, by_window={FIVE_HOUR: 57.0, SEVEN_DAY: 65.0})
+    line = v.render()
+    assert "seven_day usage 65%" in line, line
+    assert "57%" not in line, f"five_hour's reading leaked next to a seven_day tier: {line}"
+    assert "65% tier" in line
