@@ -3750,6 +3750,25 @@ def _refresh_worktree(dest, base: str | None = None) -> str | None:
         return str(e)
 
 
+def _systemctl_user_masked(unit: str) -> bool:
+    """Is the unit symlinked to /dev/null? Then nothing can start it, ever.
+
+    Deliberately a SEPARATE question from _systemctl_user_active: a masked
+    oneshot with RemainAfterExit=yes reports active forever after its last
+    pre-mask run, so is-active alone reads a tombstone as a live competitor.
+    """
+    import subprocess
+    for scope in (["--user"], []):
+        try:
+            r = subprocess.run(["systemctl", *scope, "is-enabled", unit],
+                               capture_output=True, text=True, timeout=10)
+            if r.stdout.strip() == "masked":
+                return True
+        except Exception:
+            pass
+    return False                                 # cannot tell -> do not claim it
+
+
 def _systemctl_user_active(unit: str) -> bool:
     import subprocess
     try:
@@ -4233,6 +4252,7 @@ def _cmd_tend(a) -> int:
         changed, msg = sup_mod.install(st_bin, Path(a.root), interval=a.interval,
                                        run=None if a.dry_run else _run_cmd,
                                        is_active=_systemctl_user_active,
+                                       is_masked=_systemctl_user_masked,
                                        is_enabled=_systemctl_user_enabled,
                                        dry_run=a.dry_run)
         print(f"  {msg}")
