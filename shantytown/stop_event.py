@@ -308,6 +308,30 @@ def _haul(reg: FilesRegistry, panes, me: str, root: Path) -> int:
         if not mine:
             return 0
 
+        # THE SESSION CEILING, ASKED BEFORE THE CONTEXT HANDOFF (aegis-xxae9).
+        # Order matters and this is the deliberate one: the handoff is a RECYCLE
+        # — it sheds context and the haul resumes — so asking it first would send
+        # an over-ceiling session through /clear and straight back into the
+        # queue. The ceiling is a STOP, and a stop outranks a recycle.
+        #
+        # Blocks ONCE per stretch, then allows: see the block-once note in
+        # session_budget. Deliberately does NOT claim a bead and does NOT name
+        # the next one — naming it would hand over the exact thing the ceiling
+        # is withholding.
+        from . import session_budget as sb
+        limits, spend, ceiling = sb.gate(root, me)
+        if ceiling is not None:
+            if sb.already_reported(root, me, spend):
+                return 0                 # told once — let the session end
+            sb.mark_reported(root, me, spend)
+            print(json.dumps({"decision": "block",
+                              "reason": sb.stop_message(ceiling)}))
+            return 0
+        if limits.active and spend.signal_lost:
+            # Armed but blind. Allowed — a probe bug must never stop the crew —
+            # but never silently: stderr, because stdout is the block protocol.
+            print(sb.signal_lost_note(limits, spend, me), file=sys.stderr)
+
         # THE HANDOFF LINE: past 60% of the window, the advance stops feeding
         # and instructs the reset — between beads is the uniquely safe moment
         # to shed context, and feeding another bead here would spend the
@@ -324,6 +348,11 @@ def _haul(reg: FilesRegistry, panes, me: str, root: Path) -> int:
         nid = nxt.get("id", "?")
         title = (nxt.get("title") or "")[:80]
         rest = len(mine) - 1
+        repeats = sb.times_served(root, me, nid, spend.started)
+        # The item is recorded BEFORE it is served, so a feed that is interrupted
+        # still counts. Under-counting is what let four items go by unremarked.
+        sb.record_item(root, me, spend.session, nid)
+        headroom = sb.headroom(limits, spend)
         # Claim it the way a dispatch would, so the tracker shows the truth and
         # the next stop sees an active anchor. Best-effort: a failed claim
         # still feeds — the agent claims by hand per the instruction. The
@@ -334,7 +363,8 @@ def _haul(reg: FilesRegistry, panes, me: str, root: Path) -> int:
             pass
         print(json.dumps({"decision": "block",
                           "reason": "anchor closed ✓ — "
-                          + haul_feed_message(nid, title, rest)}))
+                          + haul_feed_message(nid, title, rest,
+                                              headroom=headroom, repeats=repeats)}))
         return 0
     except Exception:
         return 0                     # fail-open: never trap a worker's stop

@@ -67,6 +67,98 @@ def test_bash_binary_attributed_in_detail(tmp_path, monkeypatch):
         assert got == ("Bash", want), f"{cmd!r} -> {got}"
 
 
+# --- attribution past `cd X &&`, and the risk class (aegis-xxae9) -----------
+#
+# THE MEASUREMENT THAT FORCED THIS. Replaying the fleet's 50,156 real Bash
+# commands, the first version of _bash_bin attributed 25,698 of them to `cd` —
+# the largest bucket by 12x, every one hiding the command that actually ran. A
+# session that deployed binaries to production three times and restarted two live
+# services recorded ZERO deploy-shaped commands. The session ceiling budgets risk
+# more tightly than ordinary work, and it cannot do that on a column that is
+# blind to precisely the risky half. After the fix: 246 `cd` (99.0% recovered).
+
+@pytest.mark.parametrize("cmd,want", [
+    ("cd /srv/repo && ansible-playbook site.yml", "ansible-playbook"),
+    ("cd /repo && cargo build --release", "cargo"),
+    ("timeout 300 ansible-playbook -i inv deploy.yml", "ansible-playbook"),
+    ("timeout -k 5 30 hank impact foo", "hank"),
+    ("cd /tmp && ls -la | head -3", "ls"),
+    ("cd /a && cd /b && bd ready", "bd"),
+    ("cd /tmp", "cd"),                       # genuinely only navigation — say so
+])
+def test_attribution_sees_past_cd_and_wrappers(cmd, want):
+    assert stats._bash_bin({"command": cmd}) == want
+
+
+@pytest.mark.parametrize("cmd,want", [
+    # counted: it changes production
+    ("cd ~/ops/ansible && ansible-playbook -i inv site.yml", "deploy"),
+    ("systemctl restart bobbin", "restart"),
+    ("sudo systemctl reload traefik", "restart"),
+    ("ssh host.invalid 'systemctl restart quipu'", "restart"),
+    ("scp ./bobbin root@host.invalid:/usr/local/bin/", "deploy"),
+    ("docker compose up -d", "deploy"),
+    ("ansible web -m copy -a 'src=x dest=/etc/y'", "deploy"),
+    # NOT counted, and each one is a false positive that was measured for real
+    ("cd ~/ops/ansible && ansible-playbook site.yml --check", None),   # dry run
+    ("ansible-playbook site.yml --syntax-check", None),
+    ("ansible --version", None),
+    ("ansible web -m shell -a 'journalctl -u foo | tail'", None),  # a log read
+    ("scp root@host.invalid:/opt/quipu/quipu.db ./local/", None),      # a FETCH
+    ("rsync -a root@host:/etc/traefik/ /tmp/look/", None),         # a FETCH
+    ("ssh host.invalid 'cat /etc/hosts'", None),
+    ("ssh -i ~/.ssh/id_ed25519 root@host.invalid 'systemctl is-active quipu'", None),
+    ("systemctl --user restart gastown", None),                    # not production
+    ("systemctl status bobbin", None),
+    ("docker ps", None),
+    ("git status && echo done", None),
+])
+def test_risk_class_counts_production_actions_only(cmd, want):
+    """CONSERVATIVE ON PURPOSE. Under-counting is the bug this fixes, but a
+    budget that trips on `git status` is noise, and noise gets switched off. Each
+    None above is a real false positive from the first pass over fleet history:
+    dry runs, ad-hoc log reads, and — the largest group — scp/rsync FETCHES,
+    which were counted as deploys because only "is any endpoint remote" was
+    asked, never which END was."""
+    assert stats._risk_class("Bash", {"command": cmd}) == want
+
+
+def test_a_heredoc_BODY_is_data_not_commands():
+    """Prose that merely mentions a restart must not be measured as one — the
+    aegis-0214 hazard read backwards. A commit message is not a deploy."""
+    cmd = ("git commit -F - <<'EOF'\n"
+           "fix(deploy): stop running `systemctl restart quipu` by hand\n"
+           "EOF")
+    assert stats._risk_class("Bash", {"command": cmd}) is None
+    assert stats._bash_bin({"command": cmd}) == "git"
+
+
+def test_the_mcp_restart_tool_is_itself_a_production_action():
+    assert stats._risk_class("mcp__homelab__service_restart", {}) == "restart"
+    assert stats._risk_class("mcp__bobbin__search", {"query": "x"}) is None
+
+
+def test_risk_is_recorded_on_the_row(tmp_path, monkeypatch):
+    monkeypatch.setenv("SHANTY_AGENT", "billy")
+    monkeypatch.delenv("ST_STATS_PUSHGATEWAY", raising=False)
+    p = _payload_tool(tool_name="Bash",
+                      tool_input={"command": "cd /a && systemctl restart quipu"})
+    assert _run_capture(tmp_path, p, monkeypatch) == 0
+    assert sqlite3.connect(tmp_path / "stats.sqlite").execute(
+        "SELECT detail, risk FROM events").fetchone() == ("systemctl", "restart")
+
+
+def test_unparseable_command_still_records_the_row(tmp_path, monkeypatch):
+    """Fail-soft: a row without attribution beats a lost row, and capture must
+    never raise into a tool call."""
+    monkeypatch.setenv("SHANTY_AGENT", "billy")
+    monkeypatch.delenv("ST_STATS_PUSHGATEWAY", raising=False)
+    p = _payload_tool(tool_name="Bash", tool_input={"command": "echo 'unbalanced"})
+    assert _run_capture(tmp_path, p, monkeypatch) == 0
+    assert sqlite3.connect(tmp_path / "stats.sqlite").execute(
+        "SELECT COUNT(*) FROM events").fetchone()[0] == 1
+
+
 def test_skill_use_recorded_as_skill(tmp_path, monkeypatch):
     monkeypatch.setenv("SHANTY_AGENT", "kelly")
     monkeypatch.delenv("ST_STATS_PUSHGATEWAY", raising=False)

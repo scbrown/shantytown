@@ -383,3 +383,55 @@ max_load_per_core = 4.0
 #
 # Then put it on the card's role stack: roles = ["administrator", "coordinator"]
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# [session_budget] — A CEILING ON WHAT ONE SESSION MAY DO BEFORE IT REPORTS.
+#
+# NOT the same thing as [governor] above, and the difference is the reason this
+# table exists. [governor] reads FLEET-WIDE Claude usage and asks "how much
+# budget is left". [session_budget] asks "how far has THIS ONE agent gone".
+# Eleven cheap agents and one agent doing eleven production deploys read
+# identically on a usage gauge — and it was the second that ran for six hours
+# unattended while the usage governor sat correctly below its first tier.
+#
+# The failure it prevents is structural, not careless: the haul advance is
+# SELF-FEEDING. Closing a bead is what unblocks the next one, so completing work
+# produces more work and there is no natural stopping point anywhere in the loop.
+# Its one pre-existing ceiling — the context handoff — is a RECYCLE (shed
+# context, the haul resumes), not a stop.
+#
+# THE DEFAULT IS OFF, BY OMITTING THE KEYS. Same rule as [governor]: declaring a
+# limit is the enabling act, there is no separate `enabled` boolean to forget.
+# A ceiling of 0 is REFUSED at parse rather than accepted — it would read as "no
+# items allowed" and wedge every worker in the fleet from one typo.
+#
+#   max_hours    wall-clock for the current STRETCH of work. Not the harness
+#                session: `/clear` starts a new session id, and the haul's own
+#                handoff instructs a /clear and then resumes — so a session-keyed
+#                budget would reset at exactly the moment the haul hands over,
+#                silently, while appearing to work. A stretch is this agent's
+#                events with no idle gap over 45 minutes.
+#   max_items    haul items served in the stretch.
+#   max_risk     PRODUCTION-CLASS actions — deploys and service restarts,
+#                classified when the tool call is captured. Budget this TIGHTER
+#                than the other two: three binary deploys and two service
+#                restarts in one unattended stretch is a different animal from
+#                three hours of editing. Dry runs (`--check`, `--syntax-check`),
+#                ad-hoc log reads and scp/rsync FETCHES deliberately do not count.
+#   on_signal_lost   "warn" (default) or "stop". warn = an unmeasurable session
+#                runs UNBOUNDED and alarms every pass. It never fails INTO a
+#                stop, for the same reason the usage governor never fails into a
+#                drain: a probe bug must not halt the crew.
+#
+# WHEN IT TRIPS the haul stops serving, does not claim the next bead, and does
+# not name it — naming it would hand over the exact thing being withheld. The
+# agent is asked to push, write up the bead trail, and stop cleanly. It blocks
+# EXACTLY ONCE per stretch: a Stop hook that blocks while the ceiling is over
+# could never let the agent stop at all, which would be worse than no ceiling.
+# ---------------------------------------------------------------------------
+
+# [session_budget]
+# max_hours = 4.0
+# max_items = 4
+# max_risk = 3
+# on_signal_lost = "warn"
