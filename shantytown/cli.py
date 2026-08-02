@@ -2851,6 +2851,44 @@ def _cmd_crew(a) -> int:
               f"<agent>`) — the mode is read at launch, so")
         print(f"    editing the card alone changes nothing. Verify by this "
               f"column flipping, never by the card.")
+    # aegis-np4x1. EVERY column above is a question asked of a pane we already
+    # knew the name of, so a fleet running under a RETIRED naming scheme is
+    # invisible here by construction — and was. Six aegis-crew-* agents ran
+    # beside this roster for hours while it reported 19 agents and zero faults.
+    # Not merely silent: WRONG. goldblum, maldoon and sentinel each printed
+    # `down` while their twin was live under the old name, and three agents had
+    # two sessions on one workspace — the shared-index clobber hazard, arrived at
+    # by a route no amount of care inside the roster loop could have seen.
+    from . import tier as tier_mod
+    live_sessions = panes.sessions()
+    if live_sessions is not None:
+        stray = tier_mod.strays(live_sessions,
+                                [ag.pane for ag in agents if ag.pane],
+                                [ag.name for ag in agents])
+        dupes = [(s, who) for s, who in stray if who]
+        others = [s for s, who in stray if not who]
+        if dupes:
+            print(f"  ⚠ {len(dupes)} session(s) running a ROSTER AGENT under a "
+                  f"name no card claims:")
+            for s, who in dupes:
+                card = next((g for g in agents if g.name == who), None)
+                says = "—"
+                if card is not None and card.pane:
+                    says = "up" if panes.exists(card.pane) else "DOWN"
+                print(f"      {s}  → {who} (whose card says {says})")
+            print(f"    Two agents on one workspace share a git index, and a "
+                  f"sibling's commit can swallow yours")
+            print(f"    while git reports success to both. This is what an "
+                  f"autostart unit left enabled through a")
+            print(f"    rename looks like the morning after a reboot. Find the "
+                  f"launcher BEFORE killing anything —")
+            print(f"    a duplicate you kill without disarming its supervisor is "
+                  f"back at the next boot.")
+        if others:
+            print(f"  ⚠ {len(others)} session(s) on this socket that no card "
+                  f"claims: {', '.join(others)}")
+            print(f"    Not necessarily crew — but st cannot tend what it cannot "
+                  f"name, so they are listed, not judged.")
     if free or busy or queued or waiting or saturated or authdead or shelled or manual:
         print()
     # Say the consequence, not just the state. The operator who needs this line is

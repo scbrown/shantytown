@@ -259,3 +259,53 @@ def test_absorb_rate_is_a_query_not_a_vibe(tmp_path):
     for i in range(5):
         handle_stop(s2, f"i{i}", is_light=True); release(s2, f"i{i}")
     assert s2.absorb_rate == 1.0, "100% absorb — the tier isn't working, and it's queryable"
+
+
+# --- strays: the sessions no card claims (aegis-np4x1) -----------------------
+
+from shantytown.tier import strays
+
+
+ROSTER = ["dearing", "goldblum", "ian", "malcolm", "maldoon", "sentinel"]
+CARDS = [f"shanty-{n}" for n in ROSTER]
+
+
+def test_a_retired_naming_scheme_is_named_not_merely_counted():
+    """THE aegis-np4x1 BLIND SPOT. Six agents ran as aegis-crew-* beside the
+    shanty-* roster and `st crew` reported 19 agents, 0 faults — because every
+    check it owns is addressed BY NAME, and nothing ever enumerated the socket."""
+    live = CARDS + ["aegis-crew-goldblum", "aegis-crew-ian", "aegis-crew-malcolm"]
+    got = strays(live, CARDS, ROSTER)
+    assert got == [("aegis-crew-goldblum", "goldblum"),
+                   ("aegis-crew-ian", "ian"),
+                   ("aegis-crew-malcolm", "malcolm")], got
+
+
+def test_a_clean_socket_reports_nothing():
+    """The control. A detector never observed staying quiet is an alarm, not a
+    detector — and this one runs on every `st crew`."""
+    assert strays(CARDS, CARDS, ROSTER) == []
+
+
+def test_a_roster_name_INSIDE_another_name_is_not_a_duplicate():
+    """`ian` is a substring of `sebastian`, and the remedy for a real duplicate
+    is killing a session — so a substring match would point a human at a live
+    agent's pane and call it debris. Match the last segment, never a substring."""
+    got = strays(["shanty-sebastian", "ianitor", "guardian"], CARDS, ROSTER)
+    assert [who for _, who in got] == [None, None, None], got
+
+
+def test_an_unrecognised_session_is_still_reported_but_not_blamed():
+    """Weaker signal, still reported: dropping it would rebuild the same blind
+    spot one size smaller. agent=None is the difference between `this is your
+    agent, twice` and `st cannot name this`."""
+    got = strays(CARDS + ["scratch"], CARDS, ROSTER)
+    assert got == [("scratch", None)]
+
+
+def test_a_card_that_names_an_odd_pane_is_not_its_own_stray():
+    """Cards keep whatever pane name they were written with (pane_for never
+    overwrites one). A roster whose panes are NOT `shanty-<name>` must not have
+    its entire own fleet reported as impostors."""
+    odd = ["p-ian", "crew-goldblum"]
+    assert strays(odd, odd, ROSTER) == []

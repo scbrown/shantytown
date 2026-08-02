@@ -283,3 +283,38 @@ def test_stop_reaps_an_owned_and_stamped_session(tmp_path, monkeypatch):
     rc = cli._cmd_stop(_Args(root=root))
     assert rc == cli.OK
     assert not panes.exists("crew-ellie")
+
+
+# --- real tmux: enumeration, and the two ways it can return nothing ----------
+
+@pytestmark_tmux
+def test_real_sessions_enumerates_names_st_never_launched(sock):
+    """The aegis-np4x1 capability, on real tmux. Everything else in this adapter
+    needs the name first; this is the only call that can find a session nobody
+    told us about — which is what six agents under a retired naming scheme were."""
+    t = Tmux(socket=sock)
+    t.new_session("st-ours")
+    subprocess.run(["tmux", "-L", sock, "new-session", "-d",
+                    "-s", "aegis-crew-goldblum", "sleep 300"], check=True)
+    assert sorted(t.sessions()) == ["aegis-crew-goldblum", "st-ours"]
+
+
+@pytestmark_tmux
+def test_a_dead_server_is_a_REAL_zero_and_an_unreachable_one_is_NOT(sock):
+    """The two failures tmux distinguishes and a returncode does not. Both exit 1.
+
+      socket exists, server gone  -> "no server running on ..."  -> [] , a real zero
+      socket absent               -> "error connecting to ..."   -> None, we never asked
+
+    Collapsing them is how a detector comes to report all-clear because its probe
+    broke — the exact shape of the bug this whole enumeration exists to catch. So
+    both strings are pinned here against the real binary rather than assumed.
+    """
+    t = Tmux(socket=sock)
+    t.new_session("st-briefly")
+    assert t.sessions() == ["st-briefly"]
+    subprocess.run(["tmux", "-L", sock, "kill-server"], capture_output=True)
+    assert t.sessions() == [], "a server that exited is a genuine zero sessions"
+
+    assert Tmux(socket="st-test-absent-" + uuid.uuid4().hex[:8]).sessions() is None, \
+        "a socket we could not reach reported an all-clear"

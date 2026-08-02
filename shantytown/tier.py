@@ -68,6 +68,36 @@ def pane_for(name: str, existing: str | None = None) -> str:
     return existing or f"{PANE_PREFIX}{name}"
 
 
+def strays(sessions, known_panes, agent_names) -> list[tuple[str, str | None]]:
+    """Live sessions no card claims, paired with the agent each one impersonates.
+
+    Returns [(session, agent_or_None)], sorted. `agent` is set when the session's
+    LAST hyphen-segment is a roster name — `aegis-crew-goldblum` -> `goldblum` —
+    which is the shape a renaming leaves behind: same agents, same workspaces, a
+    prefix nobody updated.
+
+    Matching on the last segment rather than a substring is deliberate. A
+    substring test makes `ian` match `shanty-sebastian`, and a false duplicate
+    here is expensive in a specific way: the remedy for a real one is killing a
+    session, so an over-eager detector points a human at a live agent's pane and
+    tells them it is debris.
+
+    A stray that maps to NO roster name is still returned, with agent=None. It is
+    a weaker signal — it may be somebody's own shell on the same socket — but
+    dropping it would rebuild the blind spot one size smaller, and this function
+    exists because a check that only looked where it expected saw nothing wrong
+    for hours (aegis-np4x1).
+    """
+    known, roster = set(known_panes), set(agent_names)
+    out = []
+    for s in sessions:
+        if s in known:
+            continue
+        tail = s.rsplit("-", 1)[-1]
+        out.append((s, tail if tail in roster else None))
+    return sorted(out)
+
+
 # --- role set: generative. Writes the card AND the routing in one operation. ---
 
 class MutableRegistry(Registry):

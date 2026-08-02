@@ -48,6 +48,14 @@ class FakePanes:
     def send(self, pane, text) -> None:
         pass
 
+    def sessions(self) -> list[str] | None:
+        # None = "could not ask", which is what this double honestly is: it
+        # models liveness per NAME and was never given a world to enumerate.
+        # Returning sorted(self.live) would be the tempting lie — it would assert
+        # this fixture's panes are ALL the panes, and every stray-detection
+        # assertion built on it would then be testing the fixture.
+        return None
+
 
 def _crew(root: Path, **agents) -> Path:
     d = root / "crew"

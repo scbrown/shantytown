@@ -162,3 +162,61 @@ def test_a_pane_in_a_permission_mode_is_recognised_as_ready():
     assert rt.shows_ready_ui(LIVE_MODE_LINE)
     assert rt.is_live(LIVE_MODE_LINE)
     assert triage.work_state(LIVE_MODE_LINE, rt.shows_ready_ui(LIVE_MODE_LINE)) == triage.IDLE
+
+
+# --- the roster's blind spot: sessions it never enumerated (aegis-np4x1) ------
+
+def test_crew_NAMES_a_duplicate_running_under_a_retired_naming_scheme(
+        tmp_path, monkeypatch, capsys):
+    """MEASURED 2026-08-01. A boot-time autostart left enabled through the
+    shanty-* rename brought up six agents under the old aegis-crew-* names, and
+    this command reported 19 agents and ZERO faults beside them — every check it
+    owns is addressed by a pane name off a card, so a session under a name no
+    card carries could not be looked at, let alone judged.
+
+    The `down` in the assertion is the sharp end: st did not merely stay quiet,
+    it reported goldblum DOWN while goldblum was running one socket over.
+    """
+    root = _roster(tmp_path, {"goldblum": "shanty-goldblum", "ian": "shanty-ian"})
+    panes = _Panes({"shanty-ian": BUSY_SCREEN,
+                    "aegis-crew-goldblum": BUSY_SCREEN})   # the twin; card pane down
+    monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: panes)
+
+    assert cli._cmd_crew(_Args(root)) == cli.OK
+    out = capsys.readouterr().out
+
+    assert "aegis-crew-goldblum" in out, "the duplicate was not NAMED"
+    assert "→ goldblum" in out, "named the session but not the agent it doubles"
+    assert "card says DOWN" in out, \
+        "did not say the card contradicts the socket — the whole tell"
+    assert "at the next boot" in out, \
+        "sent a human to kill a session without warning them it respawns"
+
+
+def test_crew_stays_quiet_when_every_session_is_on_a_card(tmp_path, monkeypatch, capsys):
+    """The control, and it is the one that decides whether this feature is
+    usable: `st crew` runs constantly, so a stray warning that cries on a clean
+    fleet gets trained out and the real one goes with it."""
+    root = _roster(tmp_path, {"ellie": "p-ellie", "ian": "p-ian"})
+    monkeypatch.setattr(cli, "Tmux",
+                        lambda *_a, **_k: _Panes({"p-ellie": IDLE_SCREEN,
+                                                  "p-ian": BUSY_SCREEN}))
+    assert cli._cmd_crew(_Args(root)) == cli.OK
+    out = capsys.readouterr().out
+    assert "no card claims" not in out and "→" not in out
+
+
+def test_crew_reports_an_unrecognised_session_without_calling_it_crew(
+        tmp_path, monkeypatch, capsys):
+    """A session matching no roster name is listed, not blamed. It may be
+    somebody's shell — but st cannot tend what it cannot name, and dropping it
+    would rebuild the same blind spot one size smaller."""
+    root = _roster(tmp_path, {"ellie": "p-ellie"})
+    monkeypatch.setattr(cli, "Tmux",
+                        lambda *_a, **_k: _Panes({"p-ellie": IDLE_SCREEN,
+                                                  "scratch": SHELL_SCREEN}))
+    assert cli._cmd_crew(_Args(root)) == cli.OK
+    out = capsys.readouterr().out
+    assert "no card claims: scratch" in out
+    assert "listed, not judged" in out
+    assert "→" not in out, "blamed an agent for a session that names none"
