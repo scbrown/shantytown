@@ -975,6 +975,22 @@ class Verdict:
     # Windows that LEFT a tier on this pass. Empty on almost every pass, which is
     # the point: it is the ON ramp firing, and it is the thing to log.
     relaxed: tuple = ()
+    # {window: pct} — the reading each READABLE window was judged on this pass.
+    #
+    # WHY THIS EXISTS AT ALL (aegis-cjjdx). `pct` above is a single scalar taken
+    # from the POLICY'S DEFAULT window, while `tier` can belong to a different
+    # one. Every message that printed the two together therefore reported a
+    # percentage that had nothing to do with the tier beside it. Two careful
+    # readers independently concluded from `45% tier is engaged (usage 11%)` that
+    # the governor had LATCHED at a high-water mark and was throttling a fleet on
+    # a condition that had cleared — a bug that did not exist. The real reading
+    # was seven_day 57%, correctly above its own 45% threshold.
+    #
+    # That near-miss is the argument for the field: the proposed "fix" for the
+    # imagined latch was to release a tier early, i.e. to disable a spend guard
+    # that was working. A display bug that manufactures a plausible false bug
+    # report is more dangerous than one that merely confuses.
+    by_window: dict = field(default_factory=dict)
 
     def resets_in(self, window: str, now: float) -> float | None:
         at = self.resets.get(window)
@@ -1125,10 +1141,32 @@ class Verdict:
         return "; ".join(bits) or "no restriction declared"
 
     def _tier_says(self) -> str:
+        """`the usage governor's 45% tier is engaged (seven_day usage 57%)`.
+
+        NAMES THE TIER'S OWN WINDOW AND THAT WINDOW'S READING (aegis-cjjdx).
+        It used to print the bare scalar `self.pct`, which is the POLICY'S
+        DEFAULT window — so a seven_day tier was reported beside a five_hour
+        percentage, with nothing on the line to say they were different budgets.
+
+        Measured live 2026-08-02: `the usage governor's 45% tier is engaged
+        (usage 11%)`. Both numbers were true and they described different
+        windows; read together they say the governor is throttling on a
+        condition that cleared, which is a LATCH BUG. Two readers reached that
+        conclusion independently and one filed it. The actual reading was
+        seven_day 57% — above its own 45% threshold, correctly engaged, nothing
+        wrong at all.
+
+        The remedy that false finding implied was to release the tier early:
+        turn off a working spend guard on a budget that was genuinely 57% gone.
+        Hence naming the window here rather than only in `why` — the refusal is
+        what an operator reads, and it must not require cross-checking a second
+        field to be read correctly.
+        """
         t = self.tier
         assert t is not None
+        pct = self.by_window.get(t.window, self.pct)
         seen = ("held from a previous pass (hysteresis)" if self.held
-                else f"usage {self.pct:.0f}%" if self.pct is not None else "usage")
+                else f"{t.window} usage {pct:.0f}%" if pct is not None else "usage")
         return f"the usage governor's {t.at}% tier is engaged ({seen})"
 
     def render(self, now: float | None = None) -> str:
@@ -1439,7 +1477,14 @@ class Governor:
 
         pct = decided[pol.window][3] if pol.window in decided else (
             max((p for _, _, _, p in decided.values()), default=None))
+        # Carry EVERY window's reading, so a message about a tier can quote the
+        # budget that tier was actually judged against (aegis-cjjdx). `pct` above
+        # stays exactly as it was — it is the default window's number and several
+        # callers and tests depend on that — but it is no longer the only one
+        # available, which is what forced the mismatched messages.
+        by_window = {w: p for w, (_, _, _, p) in decided.items()}
         return Verdict(reading=reading, pct=pct, tier=chosen, held=held, why=why,
+                       by_window=by_window,
                        alarm=alarm, engaged=tuple(engaged_tiers),
                        resets=resets, relaxed=tuple(relaxed))
 
