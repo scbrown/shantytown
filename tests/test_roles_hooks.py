@@ -287,3 +287,64 @@ def test_env_json_capture_wins_over_ambient(tmp_path, monkeypatch):
     monkeypatch.setenv("SHANTY_STOP_CAPTURE", "/from/ambient")
     s = runtime.claude_settings_for_role("worker", root=tmp_path)
     assert s["hooks"]["Stop"][0]["hooks"][-1]["command"] == "/from/env.json"
+
+
+# --- the deployment MCP guard extension point (aegis-uy8e8) ------------------
+
+def test_NO_matcher_covers_the_mcp_surface_without_deployment_config(tmp_path):
+    """Shantytown ships no MCP policy, so absent config the surface is
+    DELIBERATELY unguarded — asserted as a positive shape, not an absence, so
+    this pins WHICH matchers exist rather than merely that one is missing."""
+    for role in ("worker", "lead", "administrator"):
+        s = runtime.claude_settings_for_role(role, root=tmp_path)
+        matchers = [h.get("matcher") for h in s["hooks"]["PreToolUse"]]
+        assert matchers == ["Edit|Write|MultiEdit"], f"{role}: {matchers}"
+
+
+def test_env_json_mcp_guard_is_emitted_for_every_role(tmp_path):
+    """THE aegis-uy8e8 GAP. Measured on the live deployment: every role emitted
+    exactly ['Edit|Write|MultiEdit', 'Bash'], so nothing matched mcp__* and the
+    whole MCP surface — including deploy-class actions like a service restart —
+    ran with no policy hook at all, on every role."""
+    (tmp_path / "env.json").write_text(
+        '{"SHANTY_MCP_GUARD": "/usr/local/lib/guards/mcp-policy.sh"}')
+    for role in ("worker", "lead", "administrator"):
+        s = runtime.claude_settings_for_role(role, root=tmp_path)
+        mcp = [h for h in s["hooks"]["PreToolUse"] if h.get("matcher") == "mcp__.*"]
+        assert len(mcp) == 1, f"{role}: {[h.get('matcher') for h in s['hooks']['PreToolUse']]}"
+        assert mcp[0]["hooks"] == [{"type": "command",
+                                    "command": "/usr/local/lib/guards/mcp-policy.sh"}]
+
+
+def test_the_mcp_matcher_actually_matches_mcp_tool_names(tmp_path):
+    """The matcher is the whole mechanism, so it is tested AS a regex against
+    real tool names rather than compared as a string. `Bash(rm -rf /*)`-style
+    matchers looked precise, were permissions syntax, and fired ZERO times
+    (aegis-ac5x/18e0) — a matcher nobody evaluated is the failure being avoided."""
+    import re
+    (tmp_path / "env.json").write_text('{"SHANTY_MCP_GUARD": "/g.sh"}')
+    s = runtime.claude_settings_for_role("worker", root=tmp_path)
+    pat = next(h["matcher"] for h in s["hooks"]["PreToolUse"]
+               if h.get("matcher", "").startswith("mcp__"))
+    for name in ("mcp__homelab__service_restart", "mcp__homelab__container_logs",
+                 "mcp__bobbin__search", "mcp__homelab__ntfy_publish"):
+        assert re.fullmatch(pat, name), f"{pat!r} did not match {name!r}"
+    for name in ("Bash", "Edit", "Write", "Read", "mcp_", "notmcp__x"):
+        assert not re.fullmatch(pat, name), f"{pat!r} wrongly matched {name!r}"
+
+
+def test_the_bash_guard_and_the_mcp_guard_are_INDEPENDENT(tmp_path):
+    """Configuring one must not emit the other. They see different payload
+    shapes (a command string vs a tool name + arbitrary args), and a deployment
+    may legitimately govern one surface and not the other — so a deployment that
+    set only SHANTY_BASH_GUARD must not silently acquire an MCP hook pointing at
+    a guard written to parse `tool_input.command`."""
+    (tmp_path / "env.json").write_text('{"SHANTY_BASH_GUARD": "/bash.sh"}')
+    s = runtime.claude_settings_for_role("worker", root=tmp_path)
+    assert [h.get("matcher") for h in s["hooks"]["PreToolUse"]] == \
+        ["Edit|Write|MultiEdit", "Bash"]
+
+    (tmp_path / "env.json").write_text('{"SHANTY_MCP_GUARD": "/mcp.sh"}')
+    s = runtime.claude_settings_for_role("worker", root=tmp_path)
+    assert [h.get("matcher") for h in s["hooks"]["PreToolUse"]] == \
+        ["Edit|Write|MultiEdit", "mcp__.*"]
