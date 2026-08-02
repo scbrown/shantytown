@@ -96,6 +96,7 @@ from . import bootstrap as boot_mod
 from . import config
 from . import harness as harness_mod
 from . import launchable
+from . import plate_publish
 from . import roles as roles_mod
 from . import scaffold
 from . import triage as triage_mod
@@ -2390,6 +2391,18 @@ def _cmd_anchor(a) -> int:
         # NOT success, NOT failure. "I could not look" must never say "fine".
         print(f"  could not tell: {e}", file=sys.stderr)
         return CANNOT_TELL
+    # PUBLISH the resolved plate for non-Python consumers (aegis-qdjof). This
+    # sits in the CLI and NOT in anchor(), whose docstring makes "reads only" a
+    # contract — the publish is bookkeeping this command does around a read, not
+    # a thing the resolver learned to do. Fail-silent by construction, so it
+    # cannot change what anchor prints or returns.
+    #
+    # Publishing on the UNREACHABLE path is deliberately skipped (we are above
+    # the return): a backend we could not reach tells us nothing about the
+    # plate, and writing "unknown" would erase a plate that is probably still
+    # correct. Missing-or-stale already reads as UNKNOWN downstream, so silence
+    # here costs nothing and a wrong write would cost a record.
+    plate_publish.publish(Path(a.root), me, p.item)
     if getattr(a, "short", False):
         # The id, or nothing. An empty plate prints an empty line's worth of
         # NOTHING — not "nothing.", not a dash: the consumer renders the segment
