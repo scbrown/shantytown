@@ -4846,8 +4846,16 @@ def _tend_status(a) -> int:
     print(f"  units       {'installed' if tmr.exists() else 'NOT installed'}"
           f"{'' if not tmr.exists() else (' (ours)' if sup_mod.ours(tmr) else ' (NOT ours)')}")
     print(f"  timer       {'active' if _systemctl_user_active(sup_mod.TIMER) else 'inactive'}")
+    # is_masked IS NOT OPTIONAL HERE (aegis-unbuw). It defaults to "nothing is
+    # masked", and this call site omitted it while `--install` passed it — so
+    # the masked-tombstone fix landed on the path that REFUSES and missed the
+    # path an operator actually reads. `st tend --status` went on calling a
+    # masked, RemainAfterExit=yes oneshot an active competitor, which is the
+    # same false positive, on the more-read surface, telling a human to go
+    # fight a unit that can never run again.
     other = sup_mod.foreign_supervisor(_systemctl_user_active,
-                                       _systemctl_user_enabled)
+                                       _systemctl_user_enabled,
+                                       _systemctl_user_masked)
     if other:
         print(f"  ⚠ conflict  {other[0]} is ALSO supervising this crew "
               f"({other[1]})")
