@@ -52,6 +52,23 @@ PATTERNS=""
 # source comment — the quipu #38 leak), NOT in commit messages, which keep the
 # bead ref for internal git history. Same graph rule, distinct enforcement point.
 TICKET_PATTERNS=""
+# WHERE the ticket rule applies — a git pathspec list, projected from the graph
+# (aegis-4boql). Ticket IDs are refused in USER-FACING artefacts (a published
+# CHANGELOG, README, docs/) and ALLOWED in source comments and docstrings, which
+# is this fleet's documentation convention and the reason its comments are worth
+# reading: a citation next to the code is how the reasoning stays findable.
+#
+# WHY THE SCOPE, not just a softer tier: a guard that refuses substantially every
+# normal push does not prevent the push, it trains the pusher to reach for
+# --no-verify without reading the finding — and the next finding might be a real
+# hostname. Measured on shantytown before this landed: 92 distinct ticket ids
+# were ALREADY public across 101 files, README among them, so refusing the 93rd
+# protected nothing while manufacturing exactly that reflex.
+#
+# EMPTY MEANS EVERYWHERE, deliberately. An old or un-regenerated config must keep
+# TODAY's behaviour rather than silently checking nothing — a scope that fails
+# open is a guard that reports success while enforcing less than it says.
+TICKET_PATHS=""
 if [ -r "$CONF" ]; then
   # shellcheck disable=SC1090
   internal_host_re=""; patterns=""
@@ -60,8 +77,20 @@ if [ -r "$CONF" ]; then
       internal_host_re) INTERNAL_HOST_RE="$v" ;;
       patterns)         PATTERNS="$v" ;;
       ticket_patterns)  TICKET_PATTERNS="$v" ;;
+      ticket_paths)     TICKET_PATHS="$v" ;;
     esac
   done < "$CONF"
+fi
+
+# The ticket rule's pathspec. Word-split on purpose: the projection emits a
+# space-separated git pathspec list (`README* CHANGELOG* docs/`). Unset -> `.`,
+# every tracked file, which is exactly what this guard did before the rule was
+# scoped — so a stale config enforces MORE than the graph asks, never less.
+if [ -n "$TICKET_PATHS" ]; then
+  # shellcheck disable=SC2206 — deliberate word split into a pathspec list
+  TICKET_PATHSPEC=($TICKET_PATHS)
+else
+  TICKET_PATHSPEC=(.)
 fi
 
 if [ "${1:-}" = "--selftest" ]; then
@@ -142,6 +171,54 @@ if [ "${1:-}" = "--selftest" ]; then
     rm -rf "$r"
   fi
 
+  # TICKET SCOPE (aegis-4boql). BOTH OUTCOMES, on a real repo, because the whole
+  # ruling is that the rule must fire in one place and not another — and a scope
+  # is exactly the kind of change that can silently degrade into "never fires".
+  # A rule proven only to stay quiet is indistinguishable from a rule that was
+  # switched off.
+  if command -v git >/dev/null 2>&1; then
+    r=$(mktemp -d); (
+      cf="$r/scrub.conf"
+      # Ticket rule SCOPED to user-facing artefacts; host rule unscoped as always.
+      printf 'internal_host_re=forge\\.invalid\npatterns=[a-z0-9-]+\\.invalid\\b\nticket_patterns=\\bzz-[a-z0-9]{3,6}\\b\nticket_paths=README* CHANGELOG* docs/\n' > "$cf"
+      git init -q --bare "$r/pub.git"
+      git clone -q "$r/pub.git" "$r/w" 2>/dev/null
+      cd "$r/w"
+      git config user.email t@t; git config user.name t
+      echo seed > seed.txt; git add seed.txt; git commit -qm seed
+      git push -q origin HEAD:main; git fetch -q origin 2>/dev/null
+      Z=0000000000000000000000000000000000000000
+
+      # 1. ticket id in a SOURCE COMMENT -> ALLOWED (the convention)
+      git checkout -q -b src; mkdir -p pkg
+      echo '# see zz-1a2b for why this is here' > pkg/mod.py
+      git add pkg/mod.py; git commit -qm "src comment"
+      if echo "refs/heads/src $(git rev-parse src) refs/heads/src $Z" | SCRUB_PATTERNS_FILE="$cf" bash "$SELF" origin "$r/pub.git" >/dev/null 2>&1; then
+        echo "ok   ticket in a source comment is allowed"
+      else echo "FAIL ticket in a source comment refused (aegis-4boql)"; exit 1; fi
+
+      # 2. same id in a USER-FACING artefact -> STILL REFUSED
+      git checkout -q main 2>/dev/null || git checkout -q -B main origin/main
+      git checkout -q -b chg
+      echo '- Fixed the thing (zz-1a2b)' > CHANGELOG.md
+      git add CHANGELOG.md; git commit -qm changelog
+      if echo "refs/heads/chg $(git rev-parse chg) refs/heads/chg $Z" | SCRUB_PATTERNS_FILE="$cf" bash "$SELF" origin "$r/pub.git" >/dev/null 2>&1; then
+        echo "FAIL ticket in a CHANGELOG was allowed — the scope swallowed the rule"; exit 1
+      else echo "ok   ticket in a CHANGELOG is still refused"; fi
+
+      # 3. a HOSTNAME in that same source file -> STILL REFUSED. The scope is the
+      #    TICKET rule's alone; narrowing it must not narrow the rule that matters.
+      git checkout -q main 2>/dev/null || git checkout -q -B main origin/main
+      git checkout -q -b host; mkdir -p pkg
+      echo '# talks to secret-host.invalid' > pkg/other.py
+      git add pkg/other.py; git commit -qm host
+      if echo "refs/heads/host $(git rev-parse host) refs/heads/host $Z" | SCRUB_PATTERNS_FILE="$cf" bash "$SELF" origin "$r/pub.git" >/dev/null 2>&1; then
+        echo "FAIL a hostname in source was allowed — the scope leaked into the host rule"; exit 1
+      else echo "ok   hostname in source is still refused"; fi
+    ) || fail=1
+    rm -rf "$r"
+  fi
+
   [ "$fail" -eq 0 ] && echo "selftest PASSED" || echo "selftest FAILED"
   exit "$fail"
 fi
@@ -196,14 +273,17 @@ while read -r _lref lsha _rref rsha; do
     # here; the single PATTERNS grep below is the one matcher for both branches.
     addedlines=""
     rawmsgs=""
+    ticketlines=""
     for c in $newcommits; do
       addedlines+=$(git show --format= "$c" -- . "${GUARD_EXCLUDE[@]}" 2>/dev/null | grep -E '^\+' || true)$'\n'
+      ticketlines+=$(git show --format= "$c" -- "${TICKET_PATHSPEC[@]}" 2>/dev/null | grep -E '^\+' || true)$'\n'
       rawmsgs+=$(git log -1 --format=%B "$c" 2>/dev/null)$'\n'
     done
   else
     # Branch update: diff against the remote tip — pre-existing content is excluded
     # by construction.
     addedlines=$(git diff "$rsha" "$lsha" -- . "${GUARD_EXCLUDE[@]}" 2>/dev/null | grep -E '^\+' || true)
+    ticketlines=$(git diff "$rsha" "$lsha" -- "${TICKET_PATHSPEC[@]}" 2>/dev/null | grep -E '^\+' || true)
     rawmsgs=$(git log --format=%B "$rsha..$lsha" 2>/dev/null)
   fi
   # ADDED lines only (+ prefix), so pre-existing occurrences never trip it.
@@ -213,8 +293,10 @@ while read -r _lref lsha _rref rsha; do
   # messages — a bead ref in a subject is the fleet's deliberate internal habit,
   # but the same ref in a CHANGELOG or a source comment reaching a public repo is
   # a leak a stranger cannot resolve (aegis-9cr1, the quipu #38 CHANGELOG).
+  # ...and only in the USER-FACING files the graph scopes the rule to. A bead ref
+  # in a source comment is the convention, not a leak (aegis-4boql).
   tickets=""
-  [ -n "$TICKET_PATTERNS" ] && tickets=$(printf '%s\n' "$addedlines" | grep -nE "$TICKET_PATTERNS" || true)
+  [ -n "$TICKET_PATTERNS" ] && tickets=$(printf '%s\n' "$ticketlines" | grep -nE "$TICKET_PATTERNS" || true)
   if [ -n "$added" ] || [ -n "$msgs" ] || [ -n "$tickets" ]; then
     violations=1
     echo "✗ REFUSED: this push would add internal identifiers to a PUBLIC remote." >&2
