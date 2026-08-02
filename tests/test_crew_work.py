@@ -293,3 +293,72 @@ def test_crew_is_SILENT_when_the_live_process_matches_the_card(tmp_path, monkeyp
     out = _crew_out(tmp_path, monkeypatch, capsys, "lead")
     assert "MATCH THEIR ROLE" not in out, (
         "warned about a lead whose live process DOES carry drain — false positive")
+
+
+# --- ALIVE ELSEWHERE is not DOWN (aegis-k9068) --------------------------------
+
+
+class _SessPanes:
+    """Panes that knows which sessions exist, so `st crew` can tell a dead agent
+    from one running in another orchestrator's namespace."""
+
+    def __init__(self, live, sessions):
+        self._live, self._sessions = set(live), sessions
+
+    def exists(self, pane):
+        return pane in self._live
+
+    def sessions(self):
+        return self._sessions
+
+
+def test_an_agent_alive_under_another_namespace_is_not_reported_as_plain_down():
+    """The 2h gap. A crew member launched by another orchestrator lands in that
+    orchestrator's session namespace, so the pane st manages is absent and the
+    roster rendered it IDENTICALLY to a crashed agent — while it was alive,
+    taking no dispatches, and holding tier-1 alert cover."""
+    from shantytown.cli import _alive_elsewhere_note
+    from shantytown.protocols import Agent
+
+    agents = [Agent(name="muldoon", pane="shanty-muldoon")]
+    panes = _SessPanes(live=[], sessions=["aegis-crew-muldoon", "shanty-ellie"])
+
+    note = _alive_elsewhere_note(agents, panes)
+    assert "ALIVE ELSEWHERE" in note
+    assert "muldoon" in note and "aegis-crew-muldoon" in note
+    assert "st new" in note, "said the problem without the recovery"
+
+
+def test_a_genuinely_dead_agent_says_nothing():
+    """The note must not fire for an agent that is simply down, or it becomes
+    noise on every ordinary stop and stops being read."""
+    from shantytown.cli import _alive_elsewhere_note
+    from shantytown.protocols import Agent
+
+    agents = [Agent(name="muldoon", pane="shanty-muldoon")]
+    panes = _SessPanes(live=[], sessions=["shanty-ellie", "shanty-arnold"])
+    assert _alive_elsewhere_note(agents, panes) == ""
+
+
+def test_cannot_enumerate_sessions_says_nothing_rather_than_accusing():
+    """`sessions()` returns None when it could not look. A roster that cannot
+    enumerate must not report every absent pane as alive-elsewhere: "I could not
+    look" is not "they are running somewhere". Same fail-silent discipline as the
+    throttle note beside it."""
+    from shantytown.cli import _alive_elsewhere_note
+    from shantytown.protocols import Agent
+
+    agents = [Agent(name="muldoon", pane="shanty-muldoon")]
+    assert _alive_elsewhere_note(agents, _SessPanes(live=[], sessions=None)) == ""
+
+
+def test_an_UP_agent_is_never_flagged_even_if_its_name_appears_elsewhere():
+    """The pane st manages is present, so there is nothing to warn about — a
+    same-named session elsewhere is somebody else's business."""
+    from shantytown.cli import _alive_elsewhere_note
+    from shantytown.protocols import Agent
+
+    agents = [Agent(name="muldoon", pane="shanty-muldoon")]
+    panes = _SessPanes(live=["shanty-muldoon"],
+                       sessions=["shanty-muldoon", "aegis-crew-muldoon"])
+    assert _alive_elsewhere_note(agents, panes) == ""

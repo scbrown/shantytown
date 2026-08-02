@@ -2826,6 +2826,11 @@ def _cmd_crew(a) -> int:
     # where it cannot matter.
     if free and (note := _throttled_idle_note(a)):
         print(note)
+    # Unconditional, unlike the throttle note above: this one matters MOST when
+    # the free list is empty, because an agent alive under another orchestrator is
+    # precisely one that never appears on it (aegis-k9068).
+    if (note := _alive_elsewhere_note(agents, panes)):
+        print(note)
     # Not free, not busy, and the one state an operator will otherwise "fix" by
     # hand (aegis-x6xh). Say what it means and what NOT to do about it: the
     # incident that produced this line was an administrator reading a pane,
@@ -3092,6 +3097,49 @@ def _crew_states(agents, panes, runtime):
             # was observed. What the card lacks is launch_gaps()' question.
             posture = "—"
         yield ag, state, work, posture
+
+
+def _alive_elsewhere_note(agents, panes) -> str:
+    """Agents whose pane is gone but whose NAME is on a live session anyway, or "".
+
+    THE 2h GAP THIS CLOSES (aegis-k9068). A crew member launched by another
+    orchestrator lands in that orchestrator's session namespace, so `st crew`
+    looks for the pane it manages, does not find it, and renders the agent
+    IDENTICALLY TO A DEAD ONE. The agent is alive, taking no dispatches, and the
+    roster says `down` — which reads as "nothing is running" rather than "running
+    where I cannot reach it". Tier-1 alert cover sat that way for two hours and no
+    instrument said so.
+
+    ORCHESTRATOR-AGNOSTIC ON PURPOSE. It does not look for any particular prefix:
+    hardcoding one orchestrator's naming into st would make this fix true for
+    exactly the case that already happened and false for the next one. The
+    question asked is the general one — "is this agent's name on a session that is
+    not the session I manage?"
+
+    FAILS SILENT, like its sibling above. `sessions()` returns None when it cannot
+    tell, and a roster that cannot enumerate sessions must say nothing rather than
+    report every agent as missing — "I could not look" is not "they are gone".
+    """
+    try:
+        live = panes.sessions()
+        if not live:                      # None (cannot tell) or empty: say nothing
+            return ""
+        stray = []
+        for ag in agents:
+            if not ag.pane or panes.exists(ag.pane):
+                continue
+            other = [s for s in live if ag.name in s and s != ag.pane]
+            if other:
+                stray.append(f"{ag.name} (on {', '.join(sorted(other))})")
+        if not stray:
+            return ""
+        return ("    ⚠ ALIVE ELSEWHERE, not down: " + "; ".join(sorted(stray)) +
+                " — the pane st manages is gone but a session carrying the agent's "
+                "name is running. It takes no dispatches from st and `st go` cannot "
+                "reach it. Recover with `st new <agent>` after stopping the other "
+                "session; do NOT read this as a crashed agent.")
+    except Exception:      # noqa: BLE001 — the roster never fails on this
+        return ""
 
 
 def _throttled_idle_note(a) -> str:
