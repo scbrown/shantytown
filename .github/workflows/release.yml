@@ -1,0 +1,94 @@
+name: Release
+
+# Tag-triggered, and it GATES on the suite before it publishes anything.
+#
+# The ordering is deliberate: a release must not be cuttable while the tests are
+# red. The first release of this project (v0.1.0) was cut by hand before any CI
+# existed, so nothing gated it but a suite someone ran locally — this workflow
+# is what makes that impossible to repeat.
+#
+# NOT release-plz, which is the pattern the Rust repos in this fleet use. It
+# operates on a cargo manifest and this project is Python with none, so there is
+# nothing for it to read. Recorded here because "use the fleet's release tool"
+# is the obvious suggestion and it does not apply.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write        # required to create the release
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0    # full history: release notes are generated from it
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+          python -m pip install pytest build
+
+      # THE GATE. Publishing over a red suite is how a broken harness reaches
+      # every consumer with a version number that implies somebody checked.
+      - name: Test
+        run: python -m pytest -q
+
+      # A tag that disagrees with the declared version produces an artifact
+      # whose own `--version` contradicts the release it ships under — the same
+      # two-worlds failure the CI drift check exists to prevent, one layer up.
+      # Cheap to assert, and the only moment it can be caught.
+      - name: Tag matches the declared version
+        run: |
+          python - <<'PY'
+          import os, pathlib, sys, tomllib
+          tag = os.environ["GITHUB_REF_NAME"]          # e.g. v0.1.0
+          declared = tomllib.loads(pathlib.Path("pyproject.toml").read_text())["project"]["version"]
+          if tag != f"v{declared}":
+              sys.exit(
+                  f"tag/version mismatch: tag is {tag!r} but pyproject.toml "
+                  f"declares {declared!r} (expected tag 'v{declared}'). "
+                  f"Bump the version, or tag the version that is declared."
+              )
+          print(f"tag {tag} matches declared version {declared}")
+          PY
+
+      - name: Build sdist and wheel
+        run: python -m build
+
+      # The entry point, exercised from the BUILT wheel rather than the source
+      # tree — the tests import modules directly, so they all pass over an
+      # install whose console script is broken.
+      #
+      # EXPECT `st <version> (unknown)` HERE, and do not "fix" it. `deployed_sha`
+      # answers from the package directory's git HEAD, and a wheel install is not
+      # a checkout, so there is no sha to report. That is the right answer for
+      # this install mode: for a wheel the VERSION is the identity — immutable
+      # and tied to this tag — whereas for the editable checkout the crews run,
+      # the SHA is the identity because the version is a static constant. Two
+      # install modes, two identity mechanisms, each using the one that can
+      # actually distinguish builds.
+      - name: Installed console script runs
+        run: |
+          python -m venv /tmp/relcheck
+          /tmp/relcheck/bin/pip install --quiet dist/*.whl
+          /tmp/relcheck/bin/st --version
+
+      - name: Publish the release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            dist/*
