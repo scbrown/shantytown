@@ -462,7 +462,8 @@ if __name__ == "__main__":
 # manual bootstrap; every mid-turn worker advanced fine). Same message, same
 # claim, same handoff line — built here so the two can never drift.
 
-def haul_feed_message(nid: str, title: str, rest: int) -> str:
+def haul_feed_message(nid: str, title: str, rest: int, headroom: str = "",
+                      repeats: int = 0) -> str:
     """The advance instruction: the specific next bead, claimed and named.
 
     The last line is the RELEASE affordance (aegis-tgvtg). The haul re-serves any
@@ -472,13 +473,38 @@ def haul_feed_message(nid: str, title: str, rest: int) -> str:
     bead reads as your ready work regardless of status, which is the whole reason
     a deliberate 'I'm done here' was silently re-claimed. Naming the exit at the
     exact moment of the re-serve is the fix; clearing the assignee is the exit.
+
+    `headroom` AND `repeats` ARE THE TWO SENTENCES THIS MESSAGE WAS MISSING
+    (aegis-xxae9, items 3 and 4).
+
+    "The coordinator was not pinged: this queue is yours" is TRUE and it was read
+    as standing authority to keep going, four items deep into an unattended run.
+    It cannot simply be deleted — a self-feeding queue does have to say that
+    nobody is coming — so it now carries the remaining budget beside it.
+    Authority with a number attached is a different sentence.
+
+    And a REPEAT is now visibly a repeat. Being handed the same bead back reads
+    as an instruction to continue; it is actually just the re-serve rule, which
+    means nothing at all. Saying so where it happens is the whole fix.
     """
     t = (title or "")[:80]
+    again = (f"⚠ THIS IS THE SAME BEAD YOU WERE ALREADY SERVED "
+             f"{'twice' if repeats > 1 else 'once'} this stretch. That is the "
+             f"re-serve rule, NOT a decision that you should keep at it — an "
+             f"assigned, open, ready bead comes back until you release it. If "
+             f"you already judged it done, blocked, or not yours, act on that "
+             f"judgement below rather than re-reading it. " if repeats else "")
+    # No budget declared -> the sentence stays exactly as it was. A deployment
+    # that has not armed the ceiling must not be told about headroom it has none
+    # of; a caveat with no number behind it is just noise to learn to skip.
+    authority = (f"The coordinator was not pinged: this queue is yours to work, "
+                 f"within the session budget — {headroom}. " if headroom else
+                 f"The coordinator was not pinged: this queue is yours. ")
     return (
-        f"HAUL: next on your haul: {nid} ({t}). Read it (`bd show {nid}`) and "
-        f"execute; close it when done and the haul advances itself ({rest} more "
-        f"after this). If your context is deep, checkpoint + /clear FIRST — the "
-        f"haul survives it. The coordinator was not pinged: this queue is yours. "
+        f"HAUL: next on your haul: {nid} ({t}). {again}Read it (`bd show {nid}`) "
+        f"and execute; close it when done and the haul advances itself ({rest} "
+        f"more after this). If your context is deep, checkpoint + /clear FIRST — "
+        f"the haul survives it. {authority}"
         f"Not this one? DONE -> `bd close {nid}`. BLOCKED/gated (nobody should "
         f"work it yet) -> `bd defer {nid}`, which takes it OUT of the ready pool "
         f"until you undo. Valid work but not yours -> `bd update {nid} -a \"\"` "

@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 import sys
 import time
@@ -41,7 +42,8 @@ CREATE TABLE IF NOT EXISTS events (
     file    TEXT,
     skill   TEXT,
     session TEXT,
-    detail  TEXT                    -- Bash: invoked binary (CLI attribution, rcyd)
+    detail  TEXT,                   -- Bash: invoked binary (CLI attribution, rcyd)
+    risk    TEXT                    -- 'deploy' | 'restart' | NULL (xxae9)
 );
 CREATE INDEX IF NOT EXISTS idx_events_agent_ts ON events(agent, ts);
 CREATE TABLE IF NOT EXISTS tokens (
@@ -64,10 +66,11 @@ def _db(root: Path) -> sqlite3.Connection:
     # Migrate pre-detail stores in place (aegis-rcyd): CREATE TABLE IF NOT EXISTS
     # won't add a column to an existing events table. Idempotent — the duplicate-
     # column error just means it's already there.
-    try:
-        conn.execute("ALTER TABLE events ADD COLUMN detail TEXT")
-    except sqlite3.OperationalError:
-        pass
+    for col in ("detail TEXT", "risk TEXT"):
+        try:
+            conn.execute(f"ALTER TABLE events ADD COLUMN {col}")
+        except sqlite3.OperationalError:
+            pass
     return conn
 
 
@@ -85,35 +88,311 @@ def _file_of(tool_input: dict) -> str | None:
     return None
 
 
-def _bash_bin(tool_input: dict) -> str | None:
-    """The leading executable of a Bash command, so CLI-via-Bash usage (hank,
-    bobbin, bd, git, curl to a service…) is attributable — 'Bash×313' cannot tell
-    you whether the crew is reaching for hank/bobbin (aegis-rcyd Phase 0). Best-
-    effort: skip leading `VAR=val` assignments and `env`/`sudo` wrappers, take the
-    basename of the first real token. Returns None on anything unparseable — the
-    row is still recorded, just without a CLI attribution (fail-soft)."""
-    cmd = tool_input.get("command")
-    if not isinstance(cmd, str) or not cmd.strip():
-        return None
+# Wrappers that PREFIX the real command. `timeout` and `xargs` take an argument
+# of their own, so skipping the bare word is not enough — see _segment_bin.
+_WRAPPERS = ("env", "sudo", "command", "nice", "nohup", "time", "exec", "doas")
+# Wrappers that take operands of their own before the real command. `timeout`
+# takes a DURATION (and -k takes one too), so a fixed skip count gets
+# `timeout -k 5 30 hank …` wrong — it lands on `5`. Durations are skipped by
+# SHAPE instead.
+_DURATION_WRAPPERS = ("timeout",)
+_FLAG_WRAPPERS = ("xargs", "stdbuf")
+_DURATION = re.compile(r"^[0-9]+(\.[0-9]+)?[smhd]?$")
+# Leaders that are NAVIGATION, not work. A command is almost never `cd` FOR the
+# cd — it is `cd somewhere && <the thing you actually ran>`.
+_NAVIGATION = ("cd", "pushd", "popd", "source", ".", "true", ":")
+_SEGMENT_SPLIT = ("&&", "||", ";", "|", "&")
+
+
+def _strip_heredocs(cmd: str) -> str:
+    """Drop heredoc BODIES, keeping the command line that introduced them.
+
+    A heredoc body is DATA — a commit message, a bead comment, a config file.
+    shlex has no idea, so it tokenises the prose as bare words, and a message
+    that merely MENTIONS `systemctl restart foo` then classifies as a restart.
+    That is the aegis-0214 hazard read backwards: there, prose was executed;
+    here, prose is measured. Both come from the same place — a body is not a
+    command, and only the delimiter says where it ends."""
+    if "<<" in cmd:
+        out, lines, i = [], cmd.split("\n"), 0
+        while i < len(lines):
+            line = lines[i]
+            out.append(line)
+            m = re.search(r"<<-?\s*['\"]?([A-Za-z_][A-Za-z0-9_]*)['\"]?", line)
+            i += 1
+            if m:
+                delim = m.group(1)
+                while i < len(lines) and lines[i].strip() != delim:
+                    i += 1
+                i += 1               # consume the closing delimiter too
+        return "\n".join(out)
+    return cmd
+
+
+def _segments(cmd: str) -> list[list[str]]:
+    """A shell command split into its pipeline/list segments, tokenised.
+
+    Only the structure `_bash_bin` needs — not a shell parser. shlex keeps quoted
+    strings whole, so a `;` inside quotes does not split (which a naive
+    `cmd.split(';')` would get wrong)."""
+    cmd = _strip_heredocs(cmd)
     try:
         import shlex
-        toks = shlex.split(cmd)
+        lexer = shlex.shlex(cmd, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        toks = list(lexer)
     except ValueError:
         toks = cmd.split()
+    out: list[list[str]] = [[]]
+    for t in toks:
+        if t in _SEGMENT_SPLIT:
+            out.append([])
+        else:
+            out[-1].append(t)
+    return [s for s in out if s]
+
+
+def _segment_bin(toks: list[str]) -> str | None:
+    """The executable a single segment invokes, past assignments and wrappers."""
     i = 0
     while i < len(toks):
         t = toks[i]
         if "=" in t and not t.startswith(("-", "/")) and t.split("=", 1)[0].isidentifier():
-            i += 1  # leading FOO=bar assignment
+            i += 1                       # leading FOO=bar assignment
             continue
-        if t in ("env", "sudo", "command", "nice", "nohup", "time"):
-            i += 1  # simple wrapper — the real binary is next
+        if t in _WRAPPERS:
+            i += 1                       # simple wrapper — the real binary is next
+            continue
+        if t in _DURATION_WRAPPERS:
+            i += 1
+            # `timeout [-k DUR] [--flags] DURATION cmd` — flags and durations in
+            # any order, then the command. Skipping a fixed count landed on the
+            # duration; skipping by shape does not.
+            while i < len(toks) and (toks[i].startswith("-")
+                                     or _DURATION.match(toks[i])):
+                i += 1
+            continue
+        if t in _FLAG_WRAPPERS:
+            i += 1
+            while i < len(toks) and toks[i].startswith("-"):
+                i += 1
             continue
         break
     if i >= len(toks):
         return None
     from os.path import basename
     return basename(toks[i]) or None
+
+
+def _bash_bin(tool_input: dict) -> str | None:
+    """The executable a Bash command actually RAN, so CLI-via-Bash usage (hank,
+    bobbin, bd, git, curl to a service…) is attributable — 'Bash×313' cannot tell
+    you whether the crew is reaching for hank/bobbin (aegis-rcyd Phase 0).
+
+    THIS LOOKS PAST `cd X &&`, AND THAT IS THE WHOLE POINT (aegis-xxae9). The
+    first version took the first token of the whole string, so every
+    `cd repo && ansible-playbook …` was recorded as `cd`. Measured before the
+    fix: `cd` was 6178 of the fleet's Bash rows — the largest bucket by 12x, and
+    every one of them was hiding the command that actually ran. A session that
+    built and deployed three binaries and restarted two production services
+    showed ZERO deploy-shaped commands in the store. An attribution column that
+    is blind to the risky half of the fleet's commands cannot support a budget
+    that is supposed to be TIGHTER on risk, which is what sent this back here.
+
+    So: split into segments, and return the first one that is not pure
+    navigation. `cd /tmp && ls` is an `ls`. A command that really is only
+    navigation still reports `cd` — honest, just no longer the default answer.
+
+    Returns None on anything unparseable — the row is still recorded, just
+    without a CLI attribution (fail-soft)."""
+    cmd = tool_input.get("command")
+    if not isinstance(cmd, str) or not cmd.strip():
+        return None
+    first = None
+    for seg in _segments(cmd):
+        b = _segment_bin(seg)
+        if b is None:
+            continue
+        if first is None:
+            first = b
+        if b not in _NAVIGATION:
+            return b
+    return first                         # all navigation — say so rather than lie
+
+
+# --- risk classification (aegis-xxae9) -------------------------------------
+#
+# WHY AT CAPTURE TIME. The classifier needs the WHOLE command — `ansible-playbook
+# --check` is a dry run and must not count, and `ssh host 'systemctl restart x'`
+# must. `detail` holds only a basename, so a governor reading it back later
+# cannot tell those apart. The hook is the one place the full text exists, so the
+# verdict is computed here and stored beside the row.
+#
+# CONSERVATIVE BY CONSTRUCTION. Under-counting is the bug this exists to fix, but
+# OVER-counting is what gets a budget switched off — a governor that trips on
+# `git status` is noise, and noise is uninstalled. So nothing lands here on a
+# guess: each entry is a subcommand that changes something outside this host, or
+# restarts something serving traffic.
+
+_RESTART_VERBS = {"restart", "reload", "start", "stop", "up", "down", "recreate"}
+# `mcp__…` tools that ARE the production action, no shell involved.
+_RISK_TOOLS = {
+    "mcp__homelab__service_restart": "restart",
+    "mcp__homelab__container_restart": "restart",
+}
+
+
+def _is_remote(word: str) -> bool:
+    """`host:path` — an scp/rsync endpoint on another machine."""
+    head = word.split(":", 1)[0]
+    return ":" in word and bool(head) and "/" not in head
+
+
+def _pushes_remote(toks: list[str]) -> bool:
+    """Does an scp/rsync call PUSH to a remote destination?
+
+    DIRECTION IS THE WHOLE QUESTION, and getting it wrong is what made this
+    over-count: `scp root@host:/opt/svc/data.db ./` is a FETCH — reading a
+    production file down to look at it — and the first version counted it as a
+    deploy because it only asked whether any argument was remote. Measured
+    against the fleet's real history, fetches were a large share of the scp/rsync
+    hits. Only the LAST positional (the destination) decides."""
+    words = [t for t in toks[1:] if not t.startswith("-")]
+    return bool(words) and _is_remote(words[-1])
+
+
+# ansible invocations that inspect rather than apply. `--check` is a dry run and
+# the rest never touch a host at all.
+_ANSIBLE_INERT = {"--check", "-C", "--syntax-check", "--list-tasks", "--list-hosts",
+                  "--list-tags", "--version", "--help", "-h"}
+# Ad-hoc modules that only READ. shell/command/raw are neither — they are
+# whatever they were handed, so they recurse.
+_ANSIBLE_READ_MODULES = {"setup", "ping", "debug", "slurp", "fetch", "gather_facts"}
+_ANSIBLE_PASSTHROUGH_MODULES = {"shell", "command", "raw", "script"}
+# ssh flags that consume the NEXT token, so a key path is not mistaken for the
+# host and the host is not mistaken for the remote command.
+_SSH_ARG_FLAGS = {"-i", "-o", "-p", "-l", "-F", "-E", "-b", "-c", "-D", "-e",
+                  "-I", "-J", "-L", "-m", "-O", "-Q", "-R", "-S", "-W", "-w"}
+
+
+def _opt_value(toks: list[str], flag: str) -> str | None:
+    """The value of `--flag value` or `--flag=value`, if present."""
+    for i, t in enumerate(toks):
+        if t == flag and i + 1 < len(toks):
+            return toks[i + 1]
+        if t.startswith(flag + "="):
+            return t.split("=", 1)[1]
+    return None
+
+
+def _ssh_remote_command(toks: list[str]) -> str | None:
+    """The command an `ssh` invocation runs on the far side, or None for a plain
+    session/tunnel. Skips flag operands so `ssh -i key host 'cmd'` finds `cmd`."""
+    i = 1
+    while i < len(toks):
+        t = toks[i]
+        if t in _SSH_ARG_FLAGS:
+            i += 2
+            continue
+        if t.startswith("-"):
+            i += 1
+            continue
+        break
+    if i >= len(toks) - 1:
+        return None                      # host only (or nothing) — no command
+    return " ".join(toks[i + 1:])
+
+
+def _risk_of_segment(toks: list[str]) -> str | None:
+    """The production-risk class of ONE command segment, or None."""
+    b = _segment_bin(toks)
+    if not b:
+        return None
+    # Re-find the binary's index so subcommand lookups are relative to it.
+    try:
+        rest = toks[toks.index(b) + 1:] if b in toks else toks[1:]
+    except ValueError:                                    # pragma: no cover
+        rest = toks[1:]
+    words = [w for w in rest if not w.startswith("-")]
+    flags = [w for w in rest if w.startswith("-")]
+    sub = words[0] if words else ""
+
+    if b in ("ansible-playbook", "ansible"):
+        # --check is a DRY RUN. The session this module was written for ran one
+        # deliberately, caught unrelated drift, and stopped — exactly the
+        # behaviour a budget must not tax. --syntax-check and --version do not
+        # reach a host at all; both showed up as false "deploys" when this only
+        # tested for --check.
+        if any(f.split("=", 1)[0] in _ANSIBLE_INERT for f in flags):
+            return None
+        if b == "ansible-playbook":
+            return "deploy"
+        # AD-HOC ansible is only as risky as the module it runs. `-m shell -a
+        # "journalctl -u foo"` is a log read that happens to travel over ansible;
+        # counting it as a deploy taxes exactly the diagnostic work an agent
+        # should feel free to do. So passthrough modules recurse into their -a.
+        mod = _opt_value(rest, "-m") or _opt_value(rest, "--module-name") or "command"
+        if mod in _ANSIBLE_READ_MODULES:
+            return None
+        if mod in _ANSIBLE_PASSTHROUGH_MODULES:
+            arg = _opt_value(rest, "-a") or _opt_value(rest, "--args") or ""
+            for seg in _segments(arg):
+                r = _risk_of_segment(seg)
+                if r:
+                    return r
+            return None
+        return "deploy"                  # copy/template/service/systemd/…
+    if b == "systemctl":
+        # --user units are this host's own agents, not a production service.
+        if "--user" in flags:
+            return None
+        return "restart" if sub in _RESTART_VERBS else None
+    if b in ("docker", "podman"):
+        if sub == "compose":
+            nxt = words[1] if len(words) > 1 else ""
+            return "deploy" if nxt in _RESTART_VERBS else None
+        return "restart" if sub in _RESTART_VERBS else None
+    if b == "kubectl":
+        return "deploy" if sub in ("apply", "rollout", "delete", "scale") else None
+    if b == "helm":
+        return "deploy" if sub in ("upgrade", "install", "rollback", "uninstall") else None
+    if b in ("scp", "rsync"):
+        return "deploy" if _pushes_remote(toks) else None
+    if b == "ssh":
+        # `ssh host <cmd>` is whatever <cmd> is. `ssh host` alone is a session.
+        # Recursing is what keeps `ssh host 'systemctl restart svc'` honest
+        # without taxing `ssh host 'cat /etc/hosts'`.
+        remote = _ssh_remote_command(toks)
+        if not remote:
+            return None
+        for seg in _segments(remote):
+            r = _risk_of_segment(seg)
+            if r:
+                return r
+        return None
+    return None
+
+
+def _risk_class(tool: str, tool_input: dict) -> str | None:
+    """'deploy' | 'restart' | None — is this call a production-class action?
+
+    Labelled rather than counted so a tripped budget can NAME what spent it.
+    Never raises: an unclassifiable command is None, and the row still records."""
+    try:
+        if tool in _RISK_TOOLS:
+            return _RISK_TOOLS[tool]
+        if tool != "Bash":
+            return None
+        cmd = tool_input.get("command")
+        if not isinstance(cmd, str) or not cmd.strip():
+            return None
+        for seg in _segments(cmd):
+            r = _risk_of_segment(seg)
+            if r:
+                return r
+        return None
+    except Exception:                    # noqa: BLE001 — capture never blocks
+        return None
 
 
 def _transcript_tokens(path: str) -> tuple[int, int]:
@@ -151,10 +430,11 @@ def capture(root: Path, payload: dict) -> None:
             # the file-touch metrics clean.
             conn.execute(
                 "INSERT INTO events(ts, agent, kind, tool, file, skill, session,"
-                " detail) VALUES (?,?,?,?,?,?,?,?)",
+                " detail, risk) VALUES (?,?,?,?,?,?,?,?,?)",
                 (now, agent, "tool", tool, _file_of(ti),
                  ti.get("skill") if tool == "Skill" else None, session,
-                 _bash_bin(ti) if tool == "Bash" else None),
+                 _bash_bin(ti) if tool == "Bash" else None,
+                 _risk_class(tool, ti)),
             )
         else:  # Stop (or anything stop-shaped): record the stop + token totals
             conn.execute(

@@ -58,7 +58,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import governor as governor_mod
+from . import session_budget as session_budget_mod
 from .governor import Policy as GovernorPolicy
+from .session_budget import Limits as SessionLimits
 from .protocols import Agent
 
 CONFIG_NAME = "shantytown.toml"
@@ -179,6 +181,12 @@ class Config:
     # untouched, and one that writes four tiers does not have to discover a fifth
     # line was required to make them do anything.
     governor: GovernorPolicy = field(default_factory=GovernorPolicy)
+    # [session_budget] — the ceiling on ONE session's own run (aegis-xxae9). A
+    # different axis from [governor] above, which reads fleet-wide Claude usage:
+    # eleven cheap agents and one agent doing eleven deploys look identical on a
+    # usage gauge, and it was the second that went unbounded for six hours. Same
+    # default-off-by-omission rule as the governor.
+    session_budget: SessionLimits = field(default_factory=SessionLimits)
     path: Path | None = None
 
     def catalog(self):
@@ -243,7 +251,7 @@ def load_or_default(root) -> tuple[Config, str | None]:
 # --- parsing ----------------------------------------------------------------
 
 _TOP_KEYS = {"startup", "modes", "hibernate", "fleet", "crew", "env", "tmux",
-             "roles", "precedence", "governor"}
+             "roles", "precedence", "governor", "session_budget"}
 _STARTUP_KEYS = {"mode"}
 _HIB_KEYS = {"enabled", "max_quiet_minutes"}
 _TMUX_KEYS = {"socket"}
@@ -298,7 +306,21 @@ def _resolve(data: dict, path: Path) -> Config:
                   roles=_roles(path, _table(path, data, "roles")),
                   precedence=_precedence(path, _table(path, data, "precedence")),
                   governor=_governor(path, _table(path, data, "governor")),
+                  session_budget=_session_budget(
+                      path, _table(path, data, "session_budget")),
                   path=path)
+
+
+def _session_budget(path: Path, tbl: dict) -> SessionLimits:
+    """[session_budget] — the per-session ceiling (aegis-xxae9).
+
+    Same split as _governor for the same reason: session_budget.py owns what a
+    valid limit IS, this function owns putting the file name on the complaint.
+    """
+    try:
+        return session_budget_mod.parse(tbl)
+    except session_budget_mod.BudgetError as e:
+        raise ConfigError(f"{path}: {e}") from e
 
 
 def _governor(path: Path, tbl: dict) -> GovernorPolicy:
