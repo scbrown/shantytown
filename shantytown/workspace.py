@@ -643,7 +643,23 @@ def tree_staleness(dest: Path | str, run: GitRunner = _git,
     if ref is None:
         return Staleness(ref=None, note=note, error=note)
     if fetch:
-        run(dest, "fetch", "--all", "--quiet")
+        # --prune IS LOAD-BEARING, not tidiness (tim, aegis-ib65p). A plain fetch
+        # does NOT delete remote-tracking refs for branches deleted upstream, and
+        # fetch.prune is unset here at local, global AND system scope. Those dead
+        # refs are still `--remotes`, so a commit whose only remote ref has been
+        # deleted counts as SAFE - reported as on-a-remote when it is on no
+        # remote at all.
+        #
+        # THE ASYMMETRY IS WHY THIS MATTERS MORE THAN THE LAST TWO CORRECTIONS.
+        # Stale BEHIND data over-reports: noise, and noise is survivable. Stale
+        # AHEAD data UNDER-reports: a commit declared safe that is already gone,
+        # which is the single failure mode a data-loss metric may not have.
+        # Measured in a live worktree: 3 refs would prune, each able to launder
+        # an orphan into "safe".
+        #
+        # "As of the last fetch" does NOT cover it, which is the subtle part -
+        # the lying ref SURVIVES the fetch. Only the prune removes it.
+        run(dest, "fetch", "--all", "--prune", "--quiet")
         ref, note = upstream_ref(dest, run=run)
         if ref is None:
             return Staleness(ref=None, note=note, error=note)

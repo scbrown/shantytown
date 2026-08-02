@@ -323,3 +323,47 @@ def test_a_commit_on_NO_remote_ref_IS_still_reported(tmp_path):
 
     s = tree_staleness(wt)
     assert s.unpushed == 1 and "no remote ref KNOWN LOCALLY" in s.render()
+
+
+def test_a_commit_whose_ONLY_REMOTE_REF_WAS_DELETED_is_still_at_risk(tmp_path):
+    """THE under-reporting regression (tim, aegis-ib65p) — the one direction a
+    data-loss metric may not fail in.
+
+    `git fetch` does NOT delete remote-tracking refs for branches deleted
+    upstream, and fetch.prune is unset here at local, global AND system scope.
+    So `refs/remotes/origin/<deleted>` survives, `--not --remotes` still counts
+    commits reachable from it, and an orphan is laundered into "on a remote".
+
+    Note the asymmetry against the two earlier corrections: those OVER-reported
+    (noise, survivable). This one UNDER-reports — it calls a commit safe when it
+    exists nowhere but this disk. And "as of the last fetch" does not cover it,
+    because the ref that lies SURVIVES the fetch; only the prune removes it.
+    """
+    up = _repo(tmp_path / "up")
+    wt = _clone(up, tmp_path / "wt")
+    _run(wt, "checkout", "-q", "-b", "doomed")
+    _commit(wt, "only_on_a_branch_about_to_be_deleted")
+    _run(wt, "push", "-q", "origin", "doomed")
+    _run(wt, "fetch", "-q")
+    assert tree_staleness(wt).unpushed == 0, "precondition: pushed, so safe"
+
+    # The branch is deleted upstream. A PLAIN fetch leaves the local ref behind.
+    _run(up, "branch", "-D", "doomed")
+    _run(wt, "fetch", "-q")
+    stale_ref = _run(wt, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/doomed")
+    assert stale_ref, "precondition: a plain fetch left the dead ref in place"
+
+    # fetch=True now prunes, so the orphan is seen for what it is.
+    s = tree_staleness(wt, fetch=True)
+    assert s.unpushed == 1, (
+        "a commit whose only remote branch was DELETED was reported as safe")
+
+
+def test_the_prune_does_not_invent_risk_for_a_live_branch(tmp_path):
+    """Negative control: pruning must not flag work that is genuinely pushed."""
+    up = _repo(tmp_path / "up")
+    wt = _clone(up, tmp_path / "wt")
+    _run(wt, "checkout", "-q", "-b", "alive")
+    _commit(wt, "pushed_and_kept")
+    _run(wt, "push", "-q", "origin", "alive")
+    assert tree_staleness(wt, fetch=True).unpushed == 0

@@ -3555,7 +3555,10 @@ def _tree_staleness_cell(a, ag, sweep: bool = False) -> "tuple[str, str | None]"
     parts = []
     for t in trees:
         try:
-            s = tree_staleness(t, fetch=False)
+            # The SWEEP fetches+prunes: its whole purpose is an authoritative
+            # at-risk number, and an unpruned read can under-report a genuinely
+            # orphaned commit as safe. The cheap default column stays fetchless.
+            s = tree_staleness(t, fetch=sweep)
         except Exception:
             unknown = True
             continue
@@ -3641,8 +3644,10 @@ def _refresh_worktree(dest, base: str | None = None) -> str | None:
                 return note                      # cannot tell — say so, act not
         else:
             note = None
-        subprocess.run(["git", "-C", str(dest), "fetch", "--all", "--quiet"],
-                       capture_output=True, text=True, timeout=60)
+        # --prune: see tree_staleness. Without it, refs for branches deleted
+        # upstream survive and launder orphaned commits into "on a remote".
+        subprocess.run(["git", "-C", str(dest), "fetch", "--all", "--prune",
+                        "--quiet"], capture_output=True, text=True, timeout=60)
         stale = tree_staleness(dest)
         extra = f" {note}" if note else ""
         # STRANDED WORK IS REPORTED WHETHER OR NOT THE REBASE SUCCEEDS. It is not
