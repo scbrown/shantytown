@@ -346,8 +346,12 @@ class Dispatcher:
         # the final word on work that is otherwise dispatchable, and only that.
         # --reassign does NOT bypass it: reassignment is still a dispatch, and the
         # tier is about what the fleet may SPEND, not about who holds what.
+        # The AGENT is passed, not just the item, because a floor exemption is a
+        # property of WHO is being dispatched to (aegis-yegfx). The gate stays a
+        # callable returning "" | refusal; it simply now knows both halves of the
+        # question it is being asked.
         if self.governor is not None:
-            refusal = self.governor(item)
+            refusal = self.governor(item, agent_name)
             if refusal:
                 raise GovernorRefused(refusal)
         text = f"Work is on your hook: {item_id} — {item.title}"
