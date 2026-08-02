@@ -1049,6 +1049,43 @@ class Verdict:
         return min(floors) if floors else None
 
     @property
+    def governing(self) -> Tier | None:
+        """The tier a HUMAN must be shown: the one whose restriction is in force.
+
+        This exists because the display and the enforcement disagreed, and the
+        display was the one that lied (aegis-yc864). `st crew --governor` and
+        `st tend` named `engaged[-1]` — a POSITIONAL pick, justified by a comment
+        reading "cumulative, so the last one is the most restrictive". That was
+        true when every tier was read against one budget. The two-budget change
+        (aegis-59hao) made `engaged` span WINDOWS, and across windows position no
+        longer implies strictness — but the caller kept its old justification.
+
+        Measured cost: five_hour engaged at 50 (min_priority=1) and seven_day at
+        65 (min_priority=0). `floor` correctly returned 0, so `st go` refused P1
+        — while the status line rendered the 50 tier and announced "dispatch only
+        P1 and above". A coordinator was told P1 was dispatchable by one command
+        and refused by another, and the refusal text suggests raising an item's
+        priority as the way out. That is a priority-inflation pump: the operator
+        who trusts the display edits real work to satisfy a floor that was never
+        what the display said. It happened to the person who had just written the
+        warning about it.
+
+        So this derives from the SAME computation `admits` enforces, rather than
+        being a second opinion about it. Order: a drain outranks any floor (it
+        refuses everything, including P0), then the strictest declared floor.
+        """
+        if not self.engaged:
+            return None
+        drains = [t for t in self.engaged if t.drains]
+        if drains:
+            return drains[-1]
+        floors = [t for t in self.engaged if t.min_priority is not None]
+        if floors:
+            # min on the value the enforcement path uses — NOT on position.
+            return min(floors, key=lambda t: t.min_priority)
+        return self.engaged[-1]
+
+    @property
     def trait_tiers(self) -> tuple[Tier, ...]:
         """Every engaged tier that restricts WHO RUNS. An agent must satisfy them
         all — two tiers each naming a band is two conditions, not a choice."""
