@@ -356,3 +356,55 @@ def test_haul_feed_message_still_carries_the_core_advance_instruction():
     assert "aegis-9z9z" in msg
     assert "close it when done" in msg
     assert "0 more" in msg
+
+
+# --- retired cards are not capacity (aegis-w4k8n) ----------------------------
+
+def test_a_RETIRED_worker_with_a_LIVE_IDLE_pane_is_not_free(tmp_path):
+    """THE aegis-w4k8n BUG, as a controlled pair.
+
+    Retiring a card stops `st tend` RESPAWNING that agent; it does not kill a
+    pane already up. So a retired agent mid-turn stays live and stays idle, and
+    every gate this function had — worker, pane exists, not dark, stamped, IDLE,
+    send-wired — passed it straight through as dispatchable capacity.
+
+    The two cards below differ in EXACTLY ONE field. If the assertion on the
+    retired one ever passes because the function broke rather than because the
+    gate works, `weaver` fails alongside it and says so.
+    """
+    settings = _send_settings(tmp_path)
+    reg = _Reg([Agent(name="zia", role="worker", pane="shanty-zia", retired=True),
+                Agent(name="weaver", role="worker", pane="shanty-weaver")])
+    panes = _Panes({"shanty-zia": IDLE, "shanty-weaver": IDLE},
+                   {"shanty-zia": f"claude --settings {settings}",
+                    "shanty-weaver": f"claude --settings {settings}"})
+    assert feed_check.free_feedable_workers(reg, panes, _Runtime()) == ["weaver"]
+
+
+def test_retired_is_TRI_STATE_and_only_true_excludes(tmp_path):
+    """`retired` is bool|None: None means NOT EXPRESSED and must read as
+    not-retired (protocols.py is explicit that absence is representable and that
+    every consumer tests truthiness). A gate that treated None as retired would
+    silently empty the feed list for every card written by a source that does not
+    model retirement — the aegis-6hfmi failure, inverted."""
+    settings = _send_settings(tmp_path)
+    cards = [Agent(name="a", role="worker", pane="p-a", retired=None),
+             Agent(name="b", role="worker", pane="p-b", retired=False),
+             Agent(name="c", role="worker", pane="p-c", retired=True)]
+    panes = _Panes({f"p-{n}": IDLE for n in "abc"},
+                   {f"p-{n}": f"claude --settings {settings}" for n in "abc"})
+    assert feed_check.free_feedable_workers(_Reg(cards), panes, _Runtime()) == ["a", "b"]
+
+
+def test_the_whole_fleet_retired_yields_ZERO_free_not_a_full_roster(tmp_path):
+    """MEASURED on the live fleet 2026-08-02, and the reason this is a P2 and not
+    a cosmetic count: after the roster cut, ALL SIX names this returned were
+    retired. The alert was not partly wrong, it was entirely wrong — every name
+    it handed the coordinator was one `st go` would refuse."""
+    settings = _send_settings(tmp_path)
+    names = ["billy", "franklin", "lowery", "tim", "weaver", "zia"]
+    cards = [Agent(name=n, role="worker", pane=f"shanty-{n}", retired=True)
+             for n in names]
+    panes = _Panes({f"shanty-{n}": IDLE for n in names},
+                   {f"shanty-{n}": f"claude --settings {settings}" for n in names})
+    assert feed_check.free_feedable_workers(_Reg(cards), panes, _Runtime()) == []

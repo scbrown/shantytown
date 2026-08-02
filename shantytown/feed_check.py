@@ -112,9 +112,25 @@ def free_feedable_workers(reg, panes, runtime, root=None) -> list[str]:
     """IDLE workers st can actually dispatch to — the same idle verdict `st crew`
     shows, gated on the `send` wiring so a dark worker is never counted as free.
     When `root` is given, additionally gated on the launch stamp: agents st did
-    not launch are not st's to feed (st_launched_agents)."""
+    not launch are not st's to feed (st_launched_agents).
+
+    RETIRED CARDS ARE NOT FEEDABLE (aegis-w4k8n). Retiring a card stops `st tend`
+    RESPAWNING that agent; it does not kill a pane that is already up. So a
+    retired agent mid-turn stays live, stays idle, and — until this gate — read as
+    dispatchable capacity. Measured after the roster cut: all SIX names this
+    returned were retired, i.e. the true feedable count was zero and every name
+    Rule Zero handed the coordinator was one `st go` would refuse.
+
+    The gate lives HERE, in the one computation the soft alert (IdleFleetAlerter)
+    and the hard stop gate share, precisely so they cannot disagree about who is
+    free — a second opinion is the thing this function exists to prevent.
+    """
     from . import triage as triage_mod
     from .runtime import asks_a_question, auth_expired, live_wiring
+    # tend owns the retirement predicate; imported HERE rather than at module
+    # level to match this function's other deferred imports and to keep
+    # feed_check free of a top-level dependency on the supervisor.
+    from .tend import is_retired
 
     dark = dark_agents()
     stamped = st_launched_agents(root) if root is not None else None
@@ -122,6 +138,12 @@ def free_feedable_workers(reg, panes, runtime, root=None) -> list[str]:
     for ag in reg.all():
         if ag.role != "worker" or not ag.pane or not panes.exists(ag.pane):
             continue
+        # Cheap, and FIRST among the card checks — the same ordering rule
+        # tend._one states: a retirement test that runs after the logic it is
+        # meant to veto is a test that can be reached too late. `retired` is
+        # tri-state (None = not expressed), and every consumer tests truthiness.
+        if is_retired(ag):
+            continue                     # deliberately stopped -> not a target
         if ag.name in dark:
             continue                     # gastown-dark: respawns + carries send
                                          # wiring, but routes no stop to us (dark_agents)
