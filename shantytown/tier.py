@@ -297,6 +297,38 @@ def is_governance(reason: str | None) -> bool:
     return reason in GOVERNANCE_REASONS
 
 
+@dataclass(frozen=True)
+class LeadStatus:
+    """WHY a lead is or is not reachable — not just whether.
+
+    `lead-unreachable` has two causes that want OPPOSITE actions from the
+    coordinator, and collapsing them into one bool made them one string:
+
+        the lead is DOWN            -> restart it
+        the lead is UP, no `drain`  -> RELAUNCH it (its card was promoted after
+                                       launch; settings are read once, the card
+                                       continuously, so the process never got
+                                       the direction its role now implies)
+
+    Measured: the second fired ~6 times in one evening during a restructure and
+    was absorbed as noise every time, because the operator could SEE the lead
+    was up and the alert said "unreachable". An alert whose stated reason
+    contradicts what the operator observes gets classified as noise — and then a
+    genuinely down lead is indistinguishable from it.
+
+    Bool-compatible ON PURPOSE (`__bool__`), so every existing `lead_is_up`
+    that returns a plain bool keeps working unchanged and callers that want the
+    detail ask for it. A required richer type here would have made this a
+    breaking change to a routing predicate, which is not a thing to do to the
+    path that carries stop events.
+    """
+    up: bool
+    detail: str = ""
+
+    def __bool__(self) -> bool:
+        return self.up
+
+
 @dataclass
 class Routing:
     """Where a worker's stop event goes, and whether it rose."""
@@ -304,11 +336,15 @@ class Routing:
     to: str                      # the recipient (lead, or administrator)
     rose: bool                   # did it rise past a lead?
     reason: Reason | None = None
+    # WHY the reason fired, when the probe could say. Empty when it could not,
+    # never a guess — a fabricated cause on an escalation is worse than none.
+    detail: str = ""
 
     def render(self) -> str:
         base = f"  {self.worker} stop -> {self.to}"
         if self.rose:
-            base += f"  (ROSE: {self.reason.value if self.reason else '?'})"
+            base += f"  (ROSE: {self.reason.value if self.reason else '?'}"
+            base += f" — {self.detail})" if self.detail else ")"
         return base
 
 
@@ -336,12 +372,18 @@ def route_stop(registry: Registry, worker: str, lead_is_up=None) -> Routing:
     if lead.role == "administrator":
         return Routing(worker=worker, to=lead.name, rose=False)
 
-    if not lead_is_up(lead.name):
-        # Q3: rise to the administrator, LOUDLY.
+    verdict = lead_is_up(lead.name)
+    if not verdict:
+        # Q3: rise to the administrator, LOUDLY — and SAY WHICH KIND of
+        # unreachable. `getattr` rather than an isinstance check because a
+        # plain bool is a valid verdict from any caller's own predicate and
+        # must keep working; absent detail stays empty rather than invented.
+        detail = getattr(verdict, "detail", "") or ""
         admin = _find_administrator(registry)
         if admin is None:
             raise LookupError(f"lead {lead.name} is down and there is no administrator — {worker}'s stop is stranded")
-        return Routing(worker=worker, to=admin, rose=True, reason=Reason.LEAD_UNREACHABLE)
+        return Routing(worker=worker, to=admin, rose=True,
+                       reason=Reason.LEAD_UNREACHABLE, detail=detail)
 
     return Routing(worker=worker, to=lead.name, rose=False)
 

@@ -87,7 +87,7 @@ import time
 # CRASH_LOOP ("RETIRED rather than respawned again") while the card said
 # nothing of the kind: the supervisor's own report and the durable state
 # disagreed, which is the same shape as the bug this bead is about, one caller
-# over. Found by a test written for the provenance work (aegis-6hfmi).
+# over. Found by a test written for the provenance work (internal-ref).
 from dataclasses import replace
 from pathlib import Path
 
@@ -2657,6 +2657,13 @@ def _cmd_crew(a) -> int:
     authdead = []
     manual = []
     bad_cards = []
+    role_drift = []
+    # One reader, built once: live_wiring off each pane's cmdline. A Panes
+    # adapter with no cmdline genuinely cannot answer, and that is a cannot-tell
+    # (live_verdict returns UNVERIFIED), never a pass.
+    _cmdline = getattr(panes, "cmdline", None)
+    _live = ((lambda pane: live_wiring(pane, _cmdline)) if _cmdline
+             else (lambda pane: None))
     print()
     for ag, state, work, posture in _crew_states(agents, panes, runtime):
         if work.endswith("sh"):
@@ -2700,6 +2707,26 @@ def _cmd_crew(a) -> int:
             manual.append(ag.name)
         if gaps := launchable.launch_gaps(ag):
             bad_cards.append((ag.name, gaps))
+        # CARD-vs-PROCESS ROLE DRIFT (internal-ref). Settings are read ONCE at
+        # launch; the card is read CONTINUOUSLY. So promoting an agent to lead by
+        # card edit routes its reports' stop events to a process that never got
+        # the `drain` direction — the tier is configured and inert, and the only
+        # place anyone looks (the cards) shows it as correct.
+        #
+        # This is checked HERE, not only at launch, because the launch check
+        # cannot see a card edited afterwards — which is the entire defect. Same
+        # class as the settings-staleness column beside it, and it reuses
+        # roles.live_verdict so the checker and this cannot disagree.
+        #
+        # LIVE AGENTS ONLY, and only when the graph requires something: a down
+        # agent has no process to mismatch, and an isolated agent (no lead above,
+        # no reports below) needs no directions at all — reporting on either
+        # would be a false alarm on every leaf, which is how a column stops being
+        # read.
+        if state == "up" and roles_mod.required_stop_directions(ag, agents):
+            lv, lv_why = roles_mod.live_verdict(ag, agents, _live)
+            if lv == roles_mod.BROKEN:
+                role_drift.append((ag.name, ag.role, lv_why))
         print(f"  {ag.name:<11} {ag.role:<14} {state:<8} {verdict:<8} "
               f"{tree_cell:<9} {work:<16} {posture:<7} {ag.pane or '—'}")
     stale, unknown = _reach_buckets(verdicts)
@@ -2910,6 +2937,25 @@ def _cmd_crew(a) -> int:
     # card is what `st tend` re-arms, and re-arming one of these manufactures the
     # incident again. It sat unseen behind `retired=true` for exactly this reason:
     # a retired card is not launched, so its defect never shows up as a symptom.
+    # BEFORE bad_cards on purpose: bad_cards is DORMANT (those agents are down,
+    # nothing is stalling now). This one is BURNING — the tier is inert while
+    # everything looks configured.
+    if role_drift:
+        print(f"  ⚠ {len(role_drift)} agent(s) are RUNNING SETTINGS THAT DO NOT "
+              f"MATCH THEIR ROLE: {', '.join(n for n, _, _ in role_drift)}")
+        for name, role, why in role_drift:
+            print(f"      {name} (card says {role}): {why}")
+        print(f"    Settings are read at LAUNCH; the card is read continuously. "
+              f"A role changed after launch does")
+        print(f"    NOT reach the running process, so the tier is configured "
+              f"and INERT — and the cards, which are")
+        print(f"    the only place anyone looks, show it as correct. Reports "
+              f"routed to a lead in this state rise")
+        print(f"    to the administrator as `lead-unreachable` while the lead "
+              f"is visibly up.")
+        print(f"    Fix: `st stop <agent> && st new <agent>`. NOT offered "
+              f"automatically — a relaunch destroys")
+        print(f"    in-flight context, so it stays a human's call.")
     if bad_cards:
         print(f"  ⚠ {len(bad_cards)} card(s) would launch an agent that "
               f"CANNOT WORK: {', '.join(n for n, _ in bad_cards)}")
@@ -2921,7 +2967,7 @@ def _cmd_crew(a) -> int:
               f"full reason, and REFUSES on a workspace")
         print(f"    fault (manual mode it only warns about — that one can be "
               f"deliberate).")
-    if stale or unknown or bad_cards:
+    if stale or unknown or bad_cards or role_drift:
         print()
     return OK
 
@@ -4101,7 +4147,7 @@ def _cmd_answer(a) -> int:
     it selected and refuses in every direction it can: not a picker, unreadable
     picker, N out of range, N past what a keystroke can address. It also records
     who answered what, before it acts — an approval granted into someone else's
-    pane must not rely on anybody remembering they granted it (aegis-6hfmi spent
+    pane must not rely on anybody remembering they granted it (internal-ref spent
     a cross-session argument on exactly that question).
 
     THERE IS NO --yes AND THERE WILL NOT BE. A permission prompt is a DECISION;
@@ -4759,7 +4805,7 @@ def _tend_retire(a) -> int:
     considered shutdown in under a minute.
 
     UN-retirement is the ARMING half, and it is the one that needed a
-    pre-flight (aegis-6hfmi). --retire only ever REMOVES a card from the
+    pre-flight (internal-ref). --retire only ever REMOVES a card from the
     supervisor's reach, so it cannot make anything launch and is never gated.
     --unretire hands a card back to a supervisor that will start it unattended,
     which makes it the last moment a human is present to notice the card cannot
@@ -4821,15 +4867,38 @@ def _tend_retire(a) -> int:
     if a.dry_run:
         print(f"  would mark {name} retired={want} (by {_actor()})")
         return OK
+    # THE WRITE IS RIGHT ON BOTH PATHS; ONLY THE SENTENCE WAS WRONG (internal-ref
+    # item 4, partially declined — see the bead).
+    #
+    # `retired_by`/`retired_at` are documented in protocols.py as "WHO last moved
+    # `retired`, and WHEN" — a TRANSITION record, in either direction, and
+    # test_un_retiring_records_the_actor_too pins that deliberately: the question
+    # internal-ref could not answer was about an UN-retirement, and answering it
+    # cost two agents and a stat(1) on the card mtime. Clearing these on
+    # --unretire would revert that, so we do not.
+    #
+    # What WAS a defect is the report: after an un-retirement this printed
+    # "recorded on the card: retired_by=X retired_at=T", which reads as "X
+    # retired this" — the exact inverse of what happened, in a line whose whole
+    # job is to say what was recorded. Same family as the rest of this bead: a
+    # tool describing an operation it did not perform. So the write stays and
+    # the wording is direction-specific.
     reg.set(replace(card, retired=want, retired_by=_actor(),
                     retired_at=_now_iso()))
     if want:
         print(f"  {name} is RETIRED. `st tend` will not respawn it, and will "
               f"ESCALATE if it finds it alive.")
+        print(f"  recorded on the card: RETIRED by {_actor()} "
+              f"at {_now_iso()}")
     else:
-        print(f"  {name} is tended again.")
-    print(f"  recorded on the card: retired_by={_actor()} "
-          f"retired_at={_now_iso()}")
+        prior = (f" (the retirement it replaces was recorded by "
+                 f"{card.retired_by or 'unrecorded'} at "
+                 f"{card.retired_at or 'unrecorded time'})"
+                 if card.retired_by or card.retired_at else "")
+        print(f"  {name} is tended again.{prior}")
+        print(f"  recorded on the card: UN-RETIRED by {_actor()} "
+              f"at {_now_iso()} — these fields record who last MOVED "
+              f"`retired`, not a retirement.")
     return OK
 
 

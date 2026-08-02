@@ -693,7 +693,7 @@ def test_a_stamped_dead_worker_is_still_respawned(tmp_path):
     assert f.verdict == tend_mod.RESPAWNED and f.acted
 
 
-# --- --unretire is the ARMING moment, and it now has a pre-flight (aegis-6hfmi)
+# --- --unretire is the ARMING moment, and it now has a pre-flight (internal-ref)
 #
 # THE INCIDENT. `st tend --unretire ian` re-armed a card carrying a gt-era pane
 # and NO workspace. Nothing warned. tend then launched it — into the
@@ -787,6 +787,40 @@ def test_un_retiring_records_the_actor_too(tmp_path, monkeypatch, capsys):
     assert json.loads((root / "crew" / "ian.json").read_text())["retired_by"] == "sattler"
 
 
+def test_un_retiring_does_not_REPORT_itself_as_a_retirement(tmp_path, monkeypatch, capsys):
+    """internal-ref item 4. The WRITE was right and stays (the fields mean "who
+    last MOVED retired" — test_un_retiring_records_the_actor_too pins that, and
+    internal-ref paid for it). The REPORT was wrong: it printed
+    "recorded on the card: retired_by=X retired_at=T" after an UN-retirement,
+    which reads as "X retired this" — the inverse of what happened, in the one
+    line whose job is to say what was recorded."""
+    ws = tmp_path / "w"; ws.mkdir()
+    root = _roster(tmp_path, {"ian": {"role": "worker", "pane": "p", "retired": True,
+                                      "workspace": str(ws),
+                                      "retired_by": "zia", "retired_at": "2026-07-01T00:00:00+00:00"}})
+    monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: _Panes(live=set()))
+    monkeypatch.setenv("SHANTY_AGENT", "sattler")
+
+    assert cli._cmd_tend(_Args(root, unretire="ian")) == cli.OK
+    out = capsys.readouterr().out
+    assert "UN-RETIRED by sattler" in out, "the report still describes a retirement"
+    assert "recorded on the card: RETIRED by" not in out
+    # the provenance it REPLACES is named, so the prior decision is not silently lost
+    assert "zia" in out and "2026-07-01" in out
+
+
+def test_retiring_still_REPORTS_itself_as_a_retirement(tmp_path, monkeypatch, capsys):
+    """The control: the retire path must keep saying RETIRED, or the fix above
+    would have made both directions equally uninformative."""
+    root = _roster(tmp_path, {"ellie": {"role": "worker", "pane": "p"}})
+    monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: _Panes(live=set()))
+    monkeypatch.setenv("SHANTY_AGENT", "sattler")
+
+    assert cli._cmd_tend(_Args(root, retire="ellie")) == cli.OK
+    out = capsys.readouterr().out
+    assert "RETIRED by sattler" in out and "UN-RETIRED" not in out
+
+
 def test_a_human_at_a_shell_is_labelled_as_a_UNIX_login_not_a_crew_name(
         tmp_path, monkeypatch, capsys):
     """The two namespaces are not guaranteed disjoint, and an audit line that
@@ -838,7 +872,7 @@ def test_an_unrecorded_retirement_does_not_pad_the_verdict_with_UNKNOWN(tmp_path
 def test_the_crash_loop_retirement_ACTUALLY_WRITES_THE_CARD(tmp_path, monkeypatch,
                                                             capsys):
     """A pre-existing NameError, found by the provenance test above and fixed
-    with it (aegis-6hfmi).
+    with it (internal-ref).
 
     `_retire_card` used a bare `replace` while the only import of it sat inside
     `_tend_retire`, so this raised on every call and had NEVER written a card.

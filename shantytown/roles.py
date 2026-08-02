@@ -117,8 +117,14 @@ def required_stop_directions(a: Agent, agents: list[Agent]) -> set[str]:
 _needs = required_stop_directions       # the in-module name, unchanged
 
 
-def _live_verdict(a: Agent, agents: list[Agent], live) -> tuple[str, str]:
+def live_verdict(a: Agent, agents: list[Agent], live) -> tuple[str, str]:
     """The THIRD leg (internal-ref): does the RUNNING PROCESS match the graph?
+
+    PUBLIC for the same reason required_stop_directions is: it now has a second
+    consumer. `st crew` asks this continuously, `st roles --check` asks it on
+    demand, and if the two computed it separately a disagreement between them
+    would be unattributable — you could not tell real drift from two
+    implementations of one rule. One definition, two callers.
 
     Leg two asks whether the ROLE'S ARTIFACT carries the right hooks. That is a
     strictly weaker question, and the gap between them is not theoretical — it
@@ -178,6 +184,9 @@ def _live_verdict(a: Agent, agents: list[Agent], live) -> tuple[str, str]:
                         f"pane {a.pane!r} carries {carries}{whence}, but this "
                         f"agent needs {sorted(need)} — so {why}")
     return OK, ""
+
+
+_live_verdict = live_verdict   # the in-module name, unchanged
 
 
 def _hooks_verdict(a: Agent, agents: list[Agent], emitted) -> tuple[str, str]:
