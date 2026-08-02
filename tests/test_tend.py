@@ -273,6 +273,13 @@ def test_the_pass_log_makes_an_ABSENT_supervisor_detectable(tmp_path):
 
 # --- install: idempotent, reversible, and refuses a collision ----------------
 
+# ABSOLUTE on purpose. These tests used to pass the bare name "st", which is
+# exactly the bug aegis-408qs: systemd --user never resolves it, so every unit
+# they "proved" would 203/EXEC on every fire. A test suite that hands its
+# subject the broken input cannot fail on the breakage.
+ST_BIN = "/usr/bin/st"
+
+
 @pytest.fixture
 def unit_home(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
@@ -281,16 +288,16 @@ def unit_home(tmp_path, monkeypatch):
 
 def test_install_is_idempotent(unit_home, tmp_path):
     ran = []
-    changed, msg = supervisor.install("st", tmp_path / "root", run=ran.append)
+    changed, msg = supervisor.install(ST_BIN, tmp_path / "root", run=ran.append)
     assert changed and (unit_home / supervisor.TIMER).exists()
 
-    changed2, msg2 = supervisor.install("st", tmp_path / "root", run=ran.append)
+    changed2, msg2 = supervisor.install(ST_BIN, tmp_path / "root", run=ran.append)
     assert not changed2, "a second install stacked units"
     assert "already installed" in msg2
 
 
 def test_uninstall_removes_everything_it_wrote(unit_home, tmp_path):
-    supervisor.install("st", tmp_path / "root", run=lambda c: None)
+    supervisor.install(ST_BIN, tmp_path / "root", run=lambda c: None)
     changed, _ = supervisor.uninstall(run=lambda c: None)
     assert changed
     assert not (unit_home / supervisor.TIMER).exists()
@@ -303,7 +310,7 @@ def test_install_REFUSES_a_second_supervisor_for_the_same_crew(unit_home, tmp_pa
     """Two things respawning the same agents fight, and the fight looks like
     flapping nobody can attribute. Refuse — and do NOT switch the other off."""
     changed, msg = supervisor.install(
-        "st", tmp_path / "root", run=lambda c: None,
+        ST_BIN, tmp_path / "root", run=lambda c: None,
         is_active=lambda unit: unit == "gastown-crew-watchdog.timer")
     assert not changed
     assert "REFUSED" in msg and "gastown-crew-watchdog.timer" in msg
@@ -313,7 +320,7 @@ def test_install_REFUSES_a_second_supervisor_for_the_same_crew(unit_home, tmp_pa
 def test_install_REFUSES_to_overwrite_a_unit_it_did_not_write(unit_home, tmp_path):
     unit_home.mkdir(parents=True)
     (unit_home / supervisor.TIMER).write_text("[Timer]\n# somebody else's\n")
-    changed, msg = supervisor.install("st", tmp_path / "root", run=lambda c: None)
+    changed, msg = supervisor.install(ST_BIN, tmp_path / "root", run=lambda c: None)
     assert not changed and "REFUSED" in msg
     assert "somebody else's" in (unit_home / supervisor.TIMER).read_text()
 
@@ -324,6 +331,62 @@ def test_uninstall_REFUSES_a_unit_it_did_not_write(unit_home, tmp_path):
     changed, msg = supervisor.uninstall(run=lambda c: None)
     assert not changed and "REFUSED" in msg
     assert (unit_home / supervisor.TIMER).exists()
+
+
+# --- the ExecStart must be absolute (aegis-408qs) ----------------------------
+#
+# The failure this pins is not "the unit was wrong" — it is that the unit was
+# wrong SILENTLY. systemd kept the timer healthy and the service died at exec
+# 687 times over two days: no supervision pass, no governor pass, no Rule Zero
+# alert, and nothing anywhere said so. The only defence is refusing to write
+# the unit at all, at install time, while a human is still reading output.
+
+def test_install_REFUSES_a_bare_command_name(unit_home, tmp_path):
+    changed, msg = supervisor.install("st", tmp_path / "root", run=lambda c: None)
+    assert not changed
+    assert "REFUSED" in msg and "absolute" in msg
+    assert not (unit_home / supervisor.SERVICE).exists(), (
+        "wrote a unit that can never exec — this is the 203/EXEC bug")
+
+
+def test_install_REFUSES_a_relative_path(unit_home, tmp_path):
+    changed, msg = supervisor.install("./bin/st", tmp_path / "root", run=lambda c: None)
+    assert not changed and "REFUSED" in msg
+    assert not (unit_home / supervisor.SERVICE).exists()
+
+
+def test_the_written_ExecStart_is_absolute(unit_home, tmp_path):
+    supervisor.install(ST_BIN, tmp_path / "root", run=lambda c: None)
+    line = [l for l in (unit_home / supervisor.SERVICE).read_text().splitlines()
+            if l.startswith("ExecStart=")][0]
+    argv0 = line.split("=", 1)[1].split()[0]
+    assert argv0.startswith("/"), f"ExecStart is not absolute: {line!r}"
+    assert argv0 == ST_BIN
+
+
+def test_resolve_st_bin_prefers_PATH_and_returns_an_absolute_path():
+    got = supervisor.resolve_st_bin(which=lambda n: "/opt/venv/bin/st")
+    assert got == "/opt/venv/bin/st"
+
+
+def test_resolve_st_bin_falls_back_to_argv0_when_not_on_PATH(tmp_path):
+    real = tmp_path / "st"
+    real.write_text("#!/bin/sh\n")
+    got = supervisor.resolve_st_bin(which=lambda n: None, argv0=str(real))
+    assert got == str(real)
+
+
+def test_resolve_st_bin_returns_None_rather_than_a_name_it_cannot_verify():
+    """None makes install() refuse. Returning "st" here would put the bug
+    back one layer down, which is how it survived the first time."""
+    assert supervisor.resolve_st_bin(which=lambda n: None, argv0="st") is None
+
+
+def test_gastown_crew_service_is_a_foreign_supervisor():
+    """It was NOT in this list, so the boot-time competing fleet it starts
+    walked straight past the check it exists to trip (aegis-np4x1)."""
+    assert supervisor.foreign_supervisor(
+        lambda u: u == "gastown-crew.service") == "gastown-crew.service"
 
 
 # --- the command ------------------------------------------------------------

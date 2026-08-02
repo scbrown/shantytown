@@ -13,6 +13,9 @@ tool that quietly wins that argument is a tool that will one day quietly lose it
 """
 from __future__ import annotations
 import json
+import os
+import shutil
+import sys
 import time
 from pathlib import Path
 
@@ -28,11 +31,51 @@ TIMER = "st-tend.timer"
 # Supervisors known to tend the same crew. Presence is a REFUSAL, not a warning:
 # two things respawning the same agents fight, and the fight looks like flapping
 # nobody can attribute.
-FOREIGN_UNITS = ("gastown-crew-watchdog.timer",)
+FOREIGN_UNITS = ("gastown-crew-watchdog.timer", "gastown-crew.service")
 
 
 def unit_dir() -> Path:
     return Path.home() / ".config" / "systemd" / "user"
+
+
+def resolve_st_bin(which=None, argv0=None) -> str | None:
+    """The ABSOLUTE path of the `st` we are running, or None if we cannot tell.
+
+    THE NAME THAT WORKS IN A SHELL IS NOT THE NAME THAT WORKS IN A UNIT.
+    systemd --user does not resolve a bare `st` against ~/.local/bin, so a unit
+    written with ExecStart=st can never exec. It 203/EXEC's on every single
+    fire — while `systemctl --user list-timers` keeps printing a healthy
+    LAST/PASSED for the timer, because the TIMER is fine; it is the service
+    that dies. A oneshot that fails at exec is indistinguishable from one that
+    ran unless you read the service journal, which nobody does while things
+    look fine.
+
+    Measured on a live crew host: 687 consecutive failures across two days,
+    with no supervision pass, no governor pass and no idle-fleet alert in any
+    of them. The fleet was unsupervised and the only symptom was silence.
+
+    So we resolve here, and install() REFUSES on a non-absolute path rather
+    than writing a unit that is born broken.
+    """
+    which = which or shutil.which
+    # PATH first: that is the binary the human typed, so the unit supervises
+    # the same st they are running. which() already vouches for existence and
+    # the executable bit, so we do not second-guess it — only that it is
+    # absolute, which is the property systemd actually needs.
+    cand = which("st")
+    if cand:
+        p = os.path.realpath(cand)
+        if os.path.isabs(p):
+            return p
+
+    # Fallback for `python -m shantytown`, where there may be no console
+    # script on PATH at all. Nothing vouches for argv0, so check it ourselves.
+    a0 = argv0 if argv0 is not None else (sys.argv[0] if sys.argv else None)
+    if a0:
+        p = os.path.realpath(a0)
+        if os.path.isabs(p) and os.path.exists(p):
+            return p
+    return None
 
 
 def _service(st_bin: str, root: Path) -> str:
@@ -91,6 +134,17 @@ def install(st_bin: str, root: Path, *, interval: str = "5min", run=None,
     Returns (changed, message). changed=False with a message is the second run:
     a no-op, which is the whole requirement — re-running must not stack timers.
     """
+    # A unit is only as good as its ExecStart. Refuse at INSTALL time, where a
+    # human is reading output, rather than at every fire, where nobody is.
+    if not st_bin or not os.path.isabs(st_bin):
+        return False, (
+            f"REFUSED: {st_bin!r} is not an absolute path. systemd --user does "
+            f"not search ~/.local/bin, so this unit would fail 203/EXEC on "
+            f"every fire while the timer still reported itself healthy — days "
+            f"of silent non-supervision is what that cost last time. Pass the "
+            f"absolute path to the st you are running."
+        )
+
     other = foreign_supervisor(is_active)
     if other:
         return False, (
