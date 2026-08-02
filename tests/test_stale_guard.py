@@ -210,3 +210,67 @@ def test_the_matcher_excludes_Bash(tmp_path):
     from shantytown.runtime import _stale_hook
     m = _stale_hook(tmp_path)["matcher"]
     assert "Edit" in m and "Write" in m and "Bash" not in m
+
+
+# --- decision 7: tend refreshes WORKTREES at the respawn moment --------------
+
+def test_tend_refreshes_worktrees_only_at_RESPAWN(tmp_path):
+    """The only safe seam. Everywhere else a worktree refresh could race an
+    agent mid-edit — which is why the edit-time guard only advises. At respawn
+    the agent is provably DOWN, the same safety proof the workspace-clone
+    refresh already relies on."""
+    from shantytown import tend as tend_mod
+    from shantytown.protocols import Agent
+
+    called = []
+
+    class _Panes:
+        def __init__(self): self.made = []
+        def exists(self, p): return False
+        def capture(self, p): return ""
+        def new_session(self, p, cwd=None): self.made.append(p)
+
+    class _Rt:
+        def shows_ready_ui(self, s): return False
+        def is_ready(self, s): return True
+
+    class _L:
+        def get(self, n): return None
+        def verdict(self, *a, **k): return "current"
+
+    card = Agent(name="zia", role="worker", pane="p-zia")
+    t = tend_mod.Tender(_Panes(), _Rt(), _L(), spawn=lambda c, p: None,
+                        ensure=lambda c: None,
+                        refresh_trees=lambda c: called.append(c.name) or [])
+    t.pass_over([card])
+    assert called == ["zia"], "the respawn path did not refresh worktrees"
+
+
+def test_a_worktree_refresh_failure_NEVER_blocks_the_respawn(tmp_path):
+    """Same trade as the clone refresh: refusing to start an agent because a
+    git fetch failed swaps a stale tree for an outage."""
+    from shantytown import tend as tend_mod
+    from shantytown.protocols import Agent
+
+    class _Panes:
+        def __init__(self): self.made = []
+        def exists(self, p): return False
+        def capture(self, p): return ""
+        def new_session(self, p, cwd=None): self.made.append(p)
+
+    class _Rt:
+        def shows_ready_ui(self, s): return False
+        def is_ready(self, s): return True
+
+    class _L:
+        def get(self, n): return None
+        def verdict(self, *a, **k): return "current"
+
+    panes = _Panes()
+    card = Agent(name="zia", role="worker", pane="p-zia")
+    def _boom(c): raise RuntimeError("git exploded")
+    t = tend_mod.Tender(panes, _Rt(), _L(), spawn=lambda c, p: None,
+                        ensure=lambda c: None, refresh_trees=_boom)
+    rep = t.pass_over([card])
+    assert panes.made == ["p-zia"], "a worktree refresh failure blocked the respawn"
+    assert rep.findings[0].verdict == tend_mod.RESPAWNED
