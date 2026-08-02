@@ -420,6 +420,33 @@ def test_the_written_ExecStart_is_absolute(unit_home, tmp_path):
     assert argv0 == ST_BIN
 
 
+# --- systemd's failure state must mean "did not run" (aegis-unbuw) -----------
+#
+# exit 2 is _cmd_tend's "found a FAULT", not "failed to run". Without
+# SuccessExitStatus the unit sat in `failed` on every fault-finding pass, so
+# `is-failed` was stuck on and could not report the thing it exists to report.
+# That is the same shape as aegis-408qs, where 687 exec failures were invisible
+# because the unit's health signal did not distinguish the two worlds.
+
+def test_a_fault_finding_pass_is_not_a_systemd_failure(unit_home, tmp_path):
+    supervisor.install(ST_BIN, tmp_path / "root", run=lambda c: None)
+    body = (unit_home / supervisor.SERVICE).read_text()
+    assert "SuccessExitStatus=2" in body, (
+        "exit 2 means the pass RAN and found faults; without this systemd "
+        "marks a healthy supervisor failed and the signal is unreadable")
+
+
+def test_REFUSED_is_still_a_systemd_failure(unit_home, tmp_path):
+    """1 must NOT be excused. A refusal is a pass that did not happen, which is
+    exactly what systemd's failure state is for — widening this to 1 would give
+    back the always-green unit that aegis-408qs hid behind."""
+    supervisor.install(ST_BIN, tmp_path / "root", run=lambda c: None)
+    line = [l for l in (unit_home / supervisor.SERVICE).read_text().splitlines()
+            if l.startswith("SuccessExitStatus=")][0]
+    excused = set(line.split("=", 1)[1].split())
+    assert "1" not in excused and excused == {"2"}
+
+
 def test_resolve_st_bin_prefers_PATH_and_returns_an_absolute_path():
     got = supervisor.resolve_st_bin(which=lambda n: "/opt/venv/bin/st")
     assert got == "/opt/venv/bin/st"
