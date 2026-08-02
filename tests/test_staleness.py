@@ -151,7 +151,7 @@ def test_UNPUSHED_is_reported_with_the_LOSS_risk_named(tmp_path: Path):
     s = tree_staleness(wt)
     assert s.behind == 0 and s.unpushed == 1
     assert not s.current(), "a tree with stranded work read as current"
-    assert "only here" in s.render()
+    assert "no remote ref KNOWN LOCALLY" in s.render()
 
 
 def test_BOTH_directions_at_once(tmp_path: Path):
@@ -164,7 +164,7 @@ def test_BOTH_directions_at_once(tmp_path: Path):
     s = tree_staleness(wt)
     assert s.behind == 1 and s.unpushed == 1
     r = s.render()
-    assert "behind" in r and "unpushed" in r
+    assert "behind" in r and "no remote ref KNOWN LOCALLY" in r
 
 
 def test_a_current_tree_says_so_and_dirt_alone_is_not_staleness(tmp_path: Path):
@@ -311,7 +311,7 @@ def test_a_PUSHED_FEATURE_BRANCH_is_not_reported_as_stranded(tmp_path):
     s = tree_staleness(wt)
     assert s.unpushed == 0, (
         "a commit pushed to origin/feature was reported as existing nowhere else")
-    assert "only here" not in s.render()
+    assert "no remote ref KNOWN LOCALLY" not in s.render()
 
 
 def test_a_commit_on_NO_remote_ref_IS_still_reported(tmp_path):
@@ -322,4 +322,4 @@ def test_a_commit_on_NO_remote_ref_IS_still_reported(tmp_path):
     _commit(wt, "never_pushed_anywhere")
 
     s = tree_staleness(wt)
-    assert s.unpushed == 1 and "only here" in s.render()
+    assert s.unpushed == 1 and "no remote ref KNOWN LOCALLY" in s.render()
