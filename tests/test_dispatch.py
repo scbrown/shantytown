@@ -264,3 +264,66 @@ def test_reassign_does_not_resurrect_a_closed_item(world):
     with pytest.raises(Closed):
         d.go("item-1", "ellie", reassign=True)
     assert tracker.get("item-1").status == "closed"
+
+
+# --- BLOCKED is a decision, and serving it overwrites the decision (internal-ref) ---
+#
+# Exactly the CLOSED shape one status over, and unguarded for the same reason:
+# plan() writes status=in_progress on serve, so a dispatch silently converts
+# "nobody should work this yet" into "somebody is working this now".
+#
+# MEASURED on the author of the fix. A P1 was set to blocked with its gate written
+# on the bead, `bd show` confirmed BLOCKED, and a dispatch served it back as
+# in_progress. The status was gone and the bead was on a plate. Critically this
+# DEFEATED the plate-reader exclusion shipped hours earlier: excluding blocked
+# from plates is worthless if the dispatch path launders the status on the way in.
+
+def test_serving_a_BLOCKED_item_is_refused(world):
+    d, tracker, panes = world
+    tracker.update("item-1", assignee="kelly", status="blocked")
+    tracker.updates = 0
+
+    from shantytown.dispatch import Blocked
+    with pytest.raises(Blocked):
+        d.go("item-1", "ellie")
+
+    assert not panes.sent, "a blocked bead was served — an unadvanceable item on a plate"
+    assert tracker.updates == 0, "a blocked bead's status was written"
+    assert tracker.get("item-1").status == "blocked", "the block was overwritten by a dispatch"
+
+
+def test_serving_a_BLOCKED_item_to_its_OWN_holder_is_still_refused(world):
+    """The measured specimen was served back to the agent who had just blocked it,
+    so assignee == server. The AlreadyAssigned guard never fires for that, which
+    is exactly how it slipped through."""
+    d, tracker, panes = world
+    tracker.update("item-1", assignee="ellie", status="blocked")
+    tracker.updates = 0
+
+    from shantytown.dispatch import Blocked
+    with pytest.raises(Blocked):
+        d.go("item-1", "ellie")
+    assert tracker.get("item-1").status == "blocked"
+
+
+def test_reassign_does_not_UNBLOCK_an_item(world):
+    """--reassign takes work from a live holder; it does not overrule a block.
+    Unblocking is a separate deliberate act, same as reopening."""
+    d, tracker, panes = world
+    tracker.update("item-1", assignee="kelly", status="blocked")
+    tracker.updates = 0
+
+    from shantytown.dispatch import Blocked
+    with pytest.raises(Blocked):
+        d.go("item-1", "ellie", reassign=True)
+    assert tracker.get("item-1").status == "blocked"
+
+
+def test_an_OPEN_item_is_still_served(world):
+    """The discrimination control. Without it the guard could refuse everything
+    and all three assertions above would still pass."""
+    d, tracker, panes = world
+    tracker.update("item-1", assignee="", status="open")
+    p = d.go("item-1", "ellie")
+    assert p is not None and panes.sent, "the guard refused a workable item"
+    assert tracker.get("item-1").status == "in_progress"
