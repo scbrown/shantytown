@@ -19,6 +19,10 @@ st task <title>               create a work item
 st crew [--count]             who exists, what state, what role, WHO IS FREE
 st input <agent>              what's in their input box: EMPTY | TYPED | GHOST, with the
                               SGR evidence. --clear (typed only) --dismiss. NEVER submits.
+st ask <agent>                the QUESTION they're blocked on: prompt, the command being
+                              approved, and the numbered options VERBATIM. read-only.
+st answer <agent> <N>         select option N. refuses on a pane that isn't on a picker,
+                              echoes what it selected, and records who answered.
 st roles [--check|set|sync]   the hierarchy: show it, verify it, write it, import it
 st init                       scaffold a NEW deployment (wizard): store, cards, hooks, config
 st new <agent>                create an agent from a card
@@ -39,7 +43,7 @@ st subscribe                  watch quipu entity events; route governed workflow
 st worktree <repo> [agent]    provision an agent's isolated worktree off a SHARED project repo
 ```
 
-Twenty. `--dry-run` is on every command that writes, from commit one. The surface grew past the
+Twenty-two. `--dry-run` is on every command that writes, from commit one. The surface grew past the
 original eight by nine, each on a specific ask — not drift: **inbox**/**task** (the dispatch/tracker
 pair, owner-directed), **context** (the bobbin Context protocol), **doctor**
 (out-of-box detect/install, Stiwi's direct ask), and **subscribe** (the quipu events adapter,

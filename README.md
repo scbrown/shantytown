@@ -24,7 +24,7 @@
 *Create a work item. Tell an agent to go get it. That's the whole idea.*
 
 [![dispatch 3.4s](https://img.shields.io/badge/dispatch-3.4s-brightgreen)](#-measured-against-gas-town)
-[![20 commands](https://img.shields.io/badge/commands-20-blue)](#-the-whole-surface)
+[![22 commands](https://img.shields.io/badge/commands-22-blue)](#-the-whole-surface)
 [![tests](https://img.shields.io/badge/tests-1450%20passing-blue)](#-principles)
 [![python](https://img.shields.io/badge/python-3.11%2B-blue)](#-install)
 [![dependencies none](https://img.shields.io/badge/dependencies-none-blue)](#-install)
@@ -197,7 +197,7 @@ stop.* Here is what the gate measured.
 
 | | `gt sling` | `st go` | |
 |---|---:|---:|---|
-| Commands | ~110 | **20** | *a small, deliberate fraction of the surface, by measured use* |
+| Commands | ~110 | **22** | *a small, deliberate fraction of the surface, by measured use* |
 | dispatch (dry-run) | 51.54 s | **0.15 s** | **~344× faster** |
 | dispatch (real) | > 120 s ⏱️ | **3.40 s** | **≥35× faster** |
 | Dolt connections | 63 | **3** | **21× fewer** |
@@ -276,6 +276,8 @@ st go <item> [agent]              dispatch. the one that matters.
 st anchor                          who am I, what's on my plate      ← the anchor
 st crew                           who exists, what state, what role
 st input <agent>                  what's in their input box: EMPTY | TYPED | GHOST (never submits)
+st ask <agent>                    the question they're blocked on, options read verbatim
+st answer <agent> <N>             select option N. refuses unless a picker is really up
 st roles [--check|set|sync]       the hierarchy: show it, verify it, write it, import it
 st init                           scaffold a NEW deployment: asks, then writes store+cards+config
 st new <agent>                    create an agent from a card

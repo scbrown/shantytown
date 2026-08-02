@@ -99,6 +99,25 @@ def asks_a_question(rt, screen: str) -> bool:
     return bool(ask(screen)) if callable(ask) else False
 
 
+def reads_a_question(rt, screen: str):
+    """Ask `rt` to READ the picker on this screen, or None if it cannot (w30p2).
+
+    The tolerant twin of asks_a_question, and tolerant for the same reason: pane
+    reading is an OPTIONAL runtime capability (CodexRuntime implements none of
+    it), so a hard AttributeError here would crash `st ask` over a runtime that
+    simply draws no pickers we know how to read.
+
+    NONE IS NOT "NO QUESTION", and unlike asks_a_question that distinction has to
+    be carried all the way to the operator. False-because-could-not-ask is safe
+    over there because the flag can only UPGRADE a `?` to `waiting`. Here the
+    return value IS the answer, so a caller that renders None as "no question"
+    tells a coordinator an agent is fine while it sits blocked. Callers print
+    "could not read it — attach" instead.
+    """
+    read = getattr(rt, "read_question", None)
+    return read(screen) if callable(read) else None
+
+
 def auth_expired(rt, screen: str) -> bool:
     """Does `rt` say its LOGIN EXPIRED banner is on this screen? (aegis-arma)
 
@@ -957,6 +976,27 @@ class ClaudeRuntime:
             lines.pop()
         tail = "\n".join(lines[-self._QUESTION_TAIL_LINES:])
         return any(m in tail for m in self.QUESTION_MARKERS + self.TRUST_MARKERS)
+
+    def read_question(self, screen: str):
+        """READ the blocking picker: its prompt, and its options verbatim (w30p2).
+
+        awaiting_answer says THAT this pane is blocked; this says WHAT ON. That
+        gap is what kept the coordinator on raw `capture-pane -p | tail -12`
+        after aegis-c6hli shipped the detector, and reading those by eye is how
+        an option-2 that had changed meaning between two prompts got answered
+        twice.
+
+        The parse lives in picker.py rather than here only because it is long.
+        The CAPABILITY belongs to the runtime: these blocks are Claude Code's own
+        chrome, exactly like QUESTION_MARKERS above, and a second runtime draws
+        its pickers differently and would answer this with its own reader.
+
+        Takes the same screen awaiting_answer does. Returns None when no whole
+        option run can be read — a REFUSAL that the caller must not render as
+        "nothing is being asked" (see reads_a_question).
+        """
+        from . import picker
+        return picker.parse(screen)
 
     def auth_dead(self, screen: str) -> bool:
         """Is this pane showing the runtime's LOGIN EXPIRED banner? (aegis-arma)
