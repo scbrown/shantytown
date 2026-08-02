@@ -143,6 +143,35 @@ def saturated_agents(agents, panes, runtime):
     return out
 
 
+def agent_states(agents, panes, runtime) -> dict:
+    """name -> live pane state, for every agent with a readable pane.
+
+    `saturated_agents` computes exactly this and then throws the state away,
+    keeping only the SATURATED names. That discard is what broke the cycle
+    ledger's dedup (internal-ref): "not in the saturated set" was read as
+    "recovered", and it is not — a BUSY agent past the threshold also leaves
+    that set, and while it is busy its context depth is UNREADABLE (the
+    "/clear to save Nk" footer is replaced by the spinner, as saturated_agents'
+    own docstring says).
+
+    So the state is returned rather than discarded, and the caller decides what
+    counts as recovery. An agent with no pane, or an unreadable one, is simply
+    absent from the map — cannot-tell is not a state, and inventing one here is
+    what the caller must not be allowed to do.
+    """
+    out = {}
+    for ag in agents:
+        if not ag.pane or not panes.exists(ag.pane):
+            continue
+        screen = panes.capture(ag.pane, attrs=True)
+        plain = triage_mod.strip_attrs(screen)
+        out[ag.name] = triage_mod.work_state(
+            screen, runtime.shows_ready_ui(plain),
+            awaiting=asks_a_question(runtime, plain),
+            auth_dead=auth_expired(runtime, plain))
+    return out
+
+
 def _cycle_message() -> str:
     # An INSTRUCTION the agent executes, NOT a bare `/clear` keystroke. The agent
     # checkpoints FIRST, then clears — a raw /clear would drop unsaved work
@@ -218,14 +247,33 @@ class CycleDriver:
         """One pass. PROMPT each newly-saturated agent to cycle, re-arm any that
         recovered, and return the names actually prompted (empty when none are
         newly saturated — the quiet, common case)."""
-        saturated = set(saturated_agents(agents, self._panes, runtime))
+        states = agent_states(agents, self._panes, runtime)
+        saturated = {n for n, s in states.items() if s == triage_mod.SATURATED}
         ledger = self._load()
         prompted = []
 
-        # Re-arm: an agent no longer saturated (it cycled, or dropped below) is
-        # forgotten, so its next saturation prompts again.
+        # RE-ARM ONLY ON A POSITIVE READING OF RECOVERY (internal-ref).
+        #
+        # This used to be "not in the saturated set -> forget it", and that is
+        # DEFEATED BY THE AGENT WORKING. SATURATED is derived in the IDLE
+        # branch; a busy agent past the threshold reads `busy`, and while it is
+        # busy its context depth is unreadable. So the moment a prompted agent
+        # started doing anything — including the cycling it was just told to do
+        # — it left the set, its entry was deleted, and its next idle moment
+        # prompted it again.
+        #
+        # MEASURED on the live fleet: 12 cycle prompts sent, with arnold at
+        # 07:56 and 09:14, malcolm at 07:26 and 08:44, dearing at 07:50 and
+        # 09:08 — a ~78-minute re-prompt cadence on a mechanism whose own
+        # message says "once per saturation episode".
+        #
+        # The shape is cannot-tell read as a pass: unreadable depth was treated
+        # as recovered. So recovery must now be OBSERVED — the agent is idle and
+        # no longer over the threshold. Busy, queued, waiting, auth-dead and
+        # pane-unreadable all KEEP the entry, because none of them is evidence
+        # the context was cleared.
         for agent in list(ledger):
-            if agent not in saturated:
+            if states.get(agent) == triage_mod.IDLE:
                 del ledger[agent]
 
         for agent in sorted(saturated):

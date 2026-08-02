@@ -213,3 +213,50 @@ def test_positive_control_the_wired_twin_is_prompted(tmp_path):
     reg, panes, rt = _world({"shanty-gennaro": _saturated_pane(687.0)})
     assert _driver(tmp_path, reg, panes).sweep(reg.all(), rt) == ["gennaro"]
     assert len(panes.sent) == 1
+
+
+# --- the dedup was defeated by the agent WORKING (internal-ref) --------------
+#
+# "once per saturation episode" was implemented as "not in the saturated set ->
+# forget it". SATURATED is derived in the IDLE branch, so a BUSY agent past the
+# threshold leaves that set — and while busy its depth is unreadable, the
+# "/clear to save Nk" footer being replaced by the spinner. So the moment a
+# prompted agent did anything, including the cycling it had just been told to
+# do, its ledger entry was deleted and its next idle moment re-prompted it.
+#
+# MEASURED on the live fleet: 12 prompts sent, arnold at 07:56 and 09:14,
+# malcolm 07:26/08:44, dearing 07:50/09:08 — a ~78-minute re-prompt cadence from
+# a mechanism whose own message says "once per saturation episode".
+#
+# test_recovery_re_arms_the_prompt above is this test's CONTROL: it proves an
+# agent that genuinely cycled (idle, under threshold) is still re-armed, so the
+# fix cannot have simply stopped re-arming and traded a noisy alarm for a dead
+# one.
+
+def test_being_BUSY_does_not_re_arm_the_prompt(tmp_path):
+    reg = _Reg([Agent(name="gennaro", role="worker", pane="shanty-gennaro")])
+    sat = _Panes({"shanty-gennaro": _saturated_pane(687.0)})
+    assert _driver(tmp_path, reg, sat).sweep(reg.all(), _Runtime()) == ["gennaro"]
+
+    # It starts working. Depth is now UNREADABLE — this is not recovery, and
+    # treating it as recovery is the bug.
+    busy = _Panes({"shanty-gennaro": BUSY})
+    assert _driver(tmp_path, reg, busy).sweep(reg.all(), _Runtime()) == []
+
+    # Back to idle, still saturated. It must stay silent: nothing observed it
+    # recover, so the episode never ended.
+    assert _driver(tmp_path, reg, sat).sweep(reg.all(), _Runtime()) == [], \
+        "re-prompted after merely being busy — the agent was punished for working"
+
+
+def test_an_UNREADABLE_pane_does_not_re_arm_either(tmp_path):
+    """Cannot-tell is not recovery. A pane that vanished mid-episode (agent
+    restarting, tmux hiccup) must not silently end the episode."""
+    reg = _Reg([Agent(name="gennaro", role="worker", pane="shanty-gennaro")])
+    sat = _Panes({"shanty-gennaro": _saturated_pane(687.0)})
+    assert _driver(tmp_path, reg, sat).sweep(reg.all(), _Runtime()) == ["gennaro"]
+
+    gone = _Panes({})
+    assert _driver(tmp_path, reg, gone).sweep(reg.all(), _Runtime()) == []
+    assert _driver(tmp_path, reg, sat).sweep(reg.all(), _Runtime()) == [], \
+        "an unreadable pane ended the episode — cannot-tell read as recovered"
