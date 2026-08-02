@@ -12,6 +12,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
+from . import stores
 from .protocols import Panes, Registry, Tracker
 from .triage import Action, Decision, triage
 
@@ -167,6 +168,7 @@ class Plan:
     updates: dict = field(default_factory=dict)
     text: str = ""
     note: str = ""
+    store: str = ""   # the `[st store: ...]` tag riding the payload (aegis-81zyb)
 
     def render(self) -> str:
         lines = [
@@ -175,6 +177,14 @@ class Plan:
             + ")",
             f"  would: send-keys -> pane {self.pane}",
         ]
+        if self.store:
+            # WHERE, in the preview (aegis-81zyb). The operator reading --dry-run
+            # is deciding whether this dispatch is right, and "is it pointing at
+            # the store I think it is" is part of that question — on a host with
+            # 125 of them it is most of it. render() shows the note but never the
+            # payload, so a store carried only in `text` would reach the agent and
+            # not the person authorising the send.
+            lines.append(f"  would: name store -> {self.store}")
         if self.note:
             # Show the note as it will actually be sent (flattened), not as it
             # was typed — a --dry-run that hides the transformation is not a
@@ -250,6 +260,20 @@ class Dispatcher:
             if refusal:
                 raise GovernorRefused(refusal)
         text = f"Work is on your hook: {item_id} — {item.title}"
+        # NAME THE STORE (aegis-81zyb). An id and a title are not a dispatch on a
+        # host with 125 bd stores — they are a riddle, and the receiving agent has
+        # no signal that the question is even open. The tag rides HERE, inside
+        # plan(), rather than being appended by the caller like keep-current's is,
+        # for the reason the note rides here: it must go through the same triage
+        # gate and the same verify, and it must show in --dry-run. A store that is
+        # only named on the real run is not named in the preview an operator reads
+        # to decide whether the dispatch is right.
+        #
+        # This costs NO extra reads: self.tracker was constructed against that
+        # store and agent.workspace came off the registry read at the top.
+        tag = stores.hook_tag(self.tracker, agent.workspace) or ""
+        if tag:
+            text += f" — {tag}"
         flat = flatten_note(note) if note else ""
         if flat:
             # The note goes AFTER the id and title on purpose: verify() looks for
@@ -263,6 +287,7 @@ class Dispatcher:
             updates={"status": "in_progress", "assignee": agent_name},
             text=text,
             note=flat,
+            store=tag,
         )
 
     def triage(self, item_id: str, agent_name: str, note: str | None = None) -> Decision:

@@ -135,6 +135,55 @@ $ st go st-9h2 ellie --dry-run
 during this design and hooked an agent with work nobody meant to assign. *Make the question askable
 without the consequence.*
 
+### Every dispatch names its STORE
+
+A dispatch used to be an id and a title. This host has **125 bd stores** (measured 2026-08-01), of
+which **11 are embedded** — reachable by no amount of thoroughness against the Dolt server. So an id
+alone is not underspecified, it is *unanswerable*, and worse: **a cross-store dispatch and a phantom
+id are the same observation.** Measured cost (malcolm, 2026-08-01): dispatched an item, could not
+find it in the default store, swept every database on the server with validated positive controls,
+got zero rows, and concluded it existed in **no** store. It existed — in an embedded one. The wrong
+conclusion shipped as `confidence:extracted` and a lead reinforced it before both were retracted.
+
+So the store rides the payload, always, as the command you would type:
+
+```
+$ st go st-9h2 ellie --dry-run
+
+  would: tracker.update(st-9h2, status=in_progress, assignee=ellie)
+  would: send-keys -> pane %5
+  would: name store -> [st store: bd -C /opt/rigs/aegis]
+```
+
+When the item is genuinely **not** in the store the recipient's own workspace resolves to, the tag
+stops describing and starts warning — naming both sides, because "this is elsewhere" without saying
+elsewhere-*than-what* is not re-checkable:
+
+```
+  would: name store -> [st store: bd -C /opt/work/sidecar — DIFFERENT STORE
+         from your workspace's (embedded:/opt/work/sidecar/na vs
+         db.invalid:3306/beads_aegis); -C is REQUIRED, the id will NOT resolve without it]
+```
+
+Three properties worth knowing:
+
+* **The tag is unconditional; the warning is not.** Naming the store only "when it differs from the
+  default" requires being right about the recipient's default — but `bd` resolves from the *ambient
+  cwd*, so that is a function of where the agent is standing when it types, not something this
+  process can compute. A conditional built on a guess goes silent in exactly the case that costs a
+  day. Naming it always has no failure mode.
+* **Stores are compared by identity, not by path.** The same store has many paths, and not rarely:
+  16 of those 125 paths resolve to the one database `db.invalid:3306/beads_aegis`, because
+  `~/gt/beads_aegis/.beads` holds no metadata — only a `redirect`. Path equality would have shouted
+  "different store" at 15 of 16 *correct* dispatches, until the warning meant nothing.
+* **A store we could not read is never reported as different.** "I could not read its metadata" is
+  not evidence of difference; rendering could-not-tell as a finding is the same error the incident
+  was.
+
+The other half is on the read side: when an id fails to resolve, the error now names the store it
+searched **and counts the ones it did not** — absence with a boundary is re-checkable, bare absence
+is what invited the generalisation.
+
 ### `--note` / `--note-file` — a caveat that rides WITH the work
 
 ```
