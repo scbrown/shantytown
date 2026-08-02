@@ -116,6 +116,28 @@ Type=oneshot
 # One pass. Non-zero means it found a FAULT (a resurrected retiree, a deaf
 # agent, a refusal) — not that it failed to run, which is what systemd's own
 # failure state means. Both are visible in `st tend --status`.
+#
+# ...AND THAT COMMENT USED TO BE THE WHOLE FIX, WHICH IS WHY THIS LINE EXISTS
+# (aegis-unbuw). Naming the mismatch in a comment did not stop systemd making
+# it: exit 2 is `_cmd_tend`'s "found a FAULT", so a pass that ran PERFECTLY and
+# reported faults left the unit in `failed`. Measured 2026-08-01: 10 faults on
+# the live fleet (resurrected retirees mid-shuffle), so `is-failed` read
+# "failed" continuously while supervision was healthy.
+#
+# That destroys BOTH signals, which is the part worth being careful about:
+#   - "the supervisor is broken" is unreadable, because it is always failed;
+#   - "the supervisor found faults" is not an alert either, because it never
+#     clears — a bit that is always on carries no information.
+# And it is precisely how aegis-408qs hid: 687 consecutive 203/EXEC failures
+# looked like the same red this unit shows on an ordinary healthy night.
+#
+# So systemd's failure state is handed back its ONE job — did the pass run.
+# The exit code keeps carrying the finding for anything that reads it directly;
+# only systemd's interpretation changes. Faults already alert on their own
+# channel (st tend messages the coordinator), so nothing is lost by this.
+# 1 (REFUSED — install collision, unknown agent) stays a failure: that IS a
+# run that did not happen.
+SuccessExitStatus=2
 ExecStart={st_bin} --root {root} tend
 """
 
