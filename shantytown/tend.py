@@ -227,6 +227,7 @@ class Tender:
     """
 
     def __init__(self, panes, runtime, launches, *, spawn=None, refresh=None,
+                 refresh_trees=None,
                  ensure=ensure_workspace, log=None, gaps=None, crashes=None,
                  retire=None, now=None, target=None, governed=None,
                  catalog=None):
@@ -238,6 +239,16 @@ class Tender:
         self._spawn = spawn
         # refresh(path) -> str | None. ff-only pull; returns an error string.
         self._refresh = refresh
+        # refresh_trees(card) -> list[str]. The agent's PROJECT WORKTREES, which
+        # `refresh` above does not cover: it is handed the workspace clone path,
+        # so nothing in a pass ever touched a worktree. That is why 12 of 12
+        # worktrees sat behind — every refresh path was event-driven (provision,
+        # dispatch), and an agent that is neither provisioned nor dispatched
+        # simply drifts (aegis-ib65p decision 7).
+        #
+        # Takes the CARD, not a path, because an agent has N worktrees across N
+        # shared repos and only the card identifies which are its.
+        self._refresh_trees = refresh_trees
         self._ensure = ensure
         # gaps(card) -> list of missing kit names. Injected so a pass can report
         # a half-equipped agent — nothing in the tier reported that difference,
@@ -502,6 +513,28 @@ class Tender:
             if err:
                 self._log(f"WARN {card.name}: clone refresh failed: {err} "
                           f"(launching anyway — a stale checkout beats no agent)")
+
+        # ...AND ITS PROJECT WORKTREES, in the same window and for the same
+        # reason (aegis-ib65p decision 7). This is the ONLY safe seam for it: the
+        # agent is provably DOWN here, which is exactly the condition decision
+        # 5's never-auto-pull-under-a-live-agent rule requires. Everywhere else a
+        # worktree refresh could race an agent mid-edit, so everywhere else the
+        # guard only ADVISES.
+        #
+        # Without this, every refresh path was event-driven — an agent that is
+        # neither provisioned nor dispatched drifts forever, which is why the
+        # fleet sweep found 12 of 12 worktrees behind, one by 155 commits.
+        #
+        # NEVER BLOCKING, same trade as the clone refresh above: a worktree we
+        # could not bring current is reported and the agent starts anyway. The
+        # underlying refresh is ff/rebase-only on a CLEAN tree and leaves a dirty
+        # or conflicted one untouched, so this cannot eat uncommitted work.
+        if self._refresh_trees is not None:
+            try:
+                for warn in self._refresh_trees(card) or []:
+                    self._log(f"WARN {card.name}: worktree — {warn}")
+            except Exception as e:                       # never fatal to a respawn
+                self._log(f"WARN {card.name}: worktree refresh errored ({e!r})")
 
         # A session may have appeared between the look and here. Never type into
         # a working agent: triage owns that verdict, and we do not write a second.

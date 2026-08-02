@@ -4238,6 +4238,10 @@ def _tend_once(a, quiet: bool = False) -> int:
         panes, runtime, _launches(a),
         spawn=None if a.dry_run else _respawn,
         refresh=None if a.dry_run else _refresh_clone,
+        # Decision 7: worktrees too, at the same safe moment. Dry run
+        # touches nothing, exactly like the clone refresh above.
+        refresh_trees=(None if a.dry_run
+                       else lambda card: _refresh_agent_worktrees(a, card)),
         gaps=lambda card: prov_mod.missing_kit(card, Path(a.root)),
         # Backoff + give-up (GitHub #12): a crash-looping agent must cost one
         # launch per interval, not one per pass, and must eventually be retired
@@ -4685,3 +4689,22 @@ def _tend_status(a) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+def _refresh_agent_worktrees(a, card) -> list:
+    """Bring this agent's PROJECT WORKTREES current; return warnings.
+
+    The tend-side counterpart to `_keep_current` (aegis-ib65p decision 7). Only
+    ever called from the respawn path, where the agent is provably down.
+    """
+    out = []
+    try:
+        for repo in guard_mod.discover():
+            wt = worktree_for(repo, card.name)
+            if not wt.is_dir():
+                continue
+            if warn := _refresh_worktree(wt):
+                out.append(f"{_tree_label(wt)}: {warn}")
+    except Exception as e:
+        out.append(f"could not sweep worktrees: {e}")
+    return out

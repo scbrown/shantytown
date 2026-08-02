@@ -286,3 +286,40 @@ def test_the_detail_names_the_REPO_not_the_agent(tmp_path):
     assert cli._tree_label("/home/x/gt/quipu-wt/arnold") == "quipu"
     assert cli._tree_label("/home/x/gt/shantytown-wt/zia") == "shantytown"
     assert cli._tree_label("/home/x/gt/beads_aegis/crew/zia") == "workspace"
+
+
+def test_a_PUSHED_FEATURE_BRANCH_is_not_reported_as_stranded(tmp_path):
+    """THE calibration regression (tim + dearing, aegis-ib65p).
+
+    `<ref>..HEAD` measures ahead-of-main, not unpushed, so every in-flight
+    feature branch on the fleet reported "+N, exists only here". Measured false
+    positives: hank-wt/tim's commit was on origin/hank-1-daemon-stage3c, and
+    dearing's four quipu commits were all on origin — pushed, mid-review,
+    nothing at risk.
+
+    It is the worst direction for THIS warning specifically: a loss alarm earns
+    attention by being rare, and one that fires on every open branch trains
+    everyone to dismiss it — including the one commit that really is stranded.
+    """
+    up = _repo(tmp_path / "up")
+    wt = _clone(up, tmp_path / "wt")
+    _run(wt, "checkout", "-q", "-b", "feature")
+    _commit(wt, "on_a_pushed_feature_branch")
+    _run(wt, "push", "-q", "origin", "feature")
+    _run(wt, "fetch", "-q")
+
+    s = tree_staleness(wt)
+    assert s.unpushed == 0, (
+        "a commit pushed to origin/feature was reported as existing nowhere else")
+    assert "only here" not in s.render()
+
+
+def test_a_commit_on_NO_remote_ref_IS_still_reported(tmp_path):
+    """The negative control — the fix must not silence the real case."""
+    up = _repo(tmp_path / "up")
+    wt = _clone(up, tmp_path / "wt")
+    _run(wt, "checkout", "-q", "-b", "feature")
+    _commit(wt, "never_pushed_anywhere")
+
+    s = tree_staleness(wt)
+    assert s.unpushed == 1 and "only here" in s.render()
