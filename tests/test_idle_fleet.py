@@ -327,3 +327,46 @@ def test_past_the_handoff_line_tend_instructs_the_reset_not_food(tmp_path, monke
     assert "aegis-9" not in msg and claims == [], "past the line, nothing is fed"
 
 
+
+
+# --- the governor must gate this alerter too (aegis-yc864, second consumer) ------
+
+
+def test_does_NOT_alert_when_the_floor_admits_NOTHING(tmp_path, monkeypatch):
+    """A timer that says DISPATCH while `st go` refuses everything is worse than
+    silence, because the refusal text offers "raise its priority" as the way out.
+
+    Measured live: a P0-only floor with ZERO P0 beads board-wide, and this alerter
+    pushing "72 dispatchable — DISPATCH" at the coordinator every five minutes.
+    `dispatchable()` means open-and-unassigned; it does NOT mean "clears the
+    floor". `gate_inputs` wraps that same call in `throttle()`; this alerter
+    called the inner half directly, which is why its docstring's claim to reuse
+    feed_check's computation EXACTLY was true and was the bug.
+    """
+    reg, panes = _world(tmp_path)
+    monkeypatch.setattr("shantytown.feed_check.free_feedable_workers",
+                        lambda *a, **k: ["kelly", "weaver"])
+    # A governor that refuses every item — the P0-only floor with no P0s.
+    monkeypatch.setattr("shantytown.feed_check.governor_admits",
+                        lambda _root: (lambda item: "below the P0 floor"))
+    a = IdleFleetAlerter(tmp_path, reg, panes, runtime=None,
+                         bd_ready=lambda: READY, log=lambda m: None)
+    a.sweep(list(reg.all()))
+    assert panes.sent == [], (
+        "pushed DISPATCH at the coordinator while the governor refuses every "
+        f"one of those beads: {panes.sent}")
+
+
+def test_STILL_alerts_when_the_floor_admits_the_work(tmp_path, monkeypatch):
+    """The positive control. Without it, the test above passes against an alerter
+    that never pushes at all — which would be a worse bug, silently."""
+    reg, panes = _world(tmp_path)
+    monkeypatch.setattr("shantytown.feed_check.free_feedable_workers",
+                        lambda *a, **k: ["kelly", "weaver"])
+    monkeypatch.setattr("shantytown.feed_check.governor_admits",
+                        lambda _root: (lambda item: ""))     # admits everything
+    a = IdleFleetAlerter(tmp_path, reg, panes, runtime=None,
+                         bd_ready=lambda: READY, log=lambda m: None)
+    a.sweep(list(reg.all()))
+    assert panes.sent, "the alerter went silent even though the floor admits the work"
+    assert "RULE ZERO" in panes.sent[0][1]

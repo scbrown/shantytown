@@ -628,7 +628,29 @@ class IdleFleetAlerter:
                       f"{len(feedable) - 1} more queued) — coordinator "
                       f"deliberately not pinged")
 
+        # THE GOVERNOR MUST BE ASKED HERE TOO (aegis-yc864, second consumer).
+        # `dispatchable()` means open-and-unassigned; it does NOT mean "clears
+        # the priority floor". `gate_inputs` wraps this exact call in
+        # `throttle()`, and this alerter called the inner half directly — so the
+        # docstring above is accurate and is the bug: it reuses feed_check's
+        # dispatchable computation EXACTLY, which is the ungoverned half.
+        #
+        # The cost is not a wrong number. Under a P0-only floor with zero P0
+        # beads on the board, this pushed "72 dispatchable — DISPATCH" at the
+        # coordinator on a five-minute timer while `st go` refused every one of
+        # them, and the refusal text offers "raise its priority" as the way out.
+        # That is aegis-diasw's contradiction restored by a second consumer, and
+        # a TIMER asking for the priority bump is worse than a hook asking once.
         ready = feed_check.dispatchable(set(unhauled_free), ready_beads)
+        ready, held = feed_check.throttle(
+            ready, ready_beads, feed_check.governor_admits(self._shanty_root))
+        if held and not ready:
+            # SILENT IS WRONG, but so is alerting. An idle fleet under an
+            # engaged tier is the CORRECT state; the coordinator only needs to
+            # be able to tell it from a broken feeder, which is what the log
+            # line is for. No push: there is nothing for them to do.
+            self._log(f"idle-fleet: {len(held)} bead(s) ready and NONE clear the "
+                      f"priority floor — {held[0][2]}. Correctly not alerting.")
         if not newly or not ready:
             # Nothing for the coordinator this pass. Record who was HANDLED
             # (still-idle already + the nudged), so a still-idle hauling worker
