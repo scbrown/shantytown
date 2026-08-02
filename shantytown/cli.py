@@ -3726,6 +3726,34 @@ def _systemctl_user_active(unit: str) -> bool:
         return False                             # cannot tell -> do not claim one
 
 
+# ARMED is the WORD, never the exit code. `systemctl is-enabled` exits 0 for
+# "static" and "indirect" too, and exits NON-zero while printing "masked" — so an
+# exit-code reading would both invent supervisors that cannot start and, worse,
+# have called our own deliberately-masked gastown-crew.service disarmed on the one
+# hand and armed on the other depending on which way you squinted. Ask for the
+# state, then compare it.
+_ARMED_STATES = {"enabled", "enabled-runtime"}
+
+
+def _systemctl_user_enabled(unit: str) -> bool:
+    """Will this unit start on its own at the next boot?
+
+    Deliberately NOT the same question as _systemctl_user_active. A boot-time
+    oneshot is inactive for the entire life of a running host and still starts a
+    competing fleet the moment it reboots (aegis-np4x1).
+    """
+    import subprocess
+    for scope in (["--user"], []):
+        try:
+            r = subprocess.run(["systemctl", *scope, "is-enabled", unit],
+                               capture_output=True, text=True, timeout=10)
+        except Exception:
+            return False                         # cannot tell -> do not claim one
+        if r.stdout.strip() in _ARMED_STATES:
+            return True
+    return False
+
+
 def _run_cmd(argv) -> None:
     import subprocess
     subprocess.run(argv, capture_output=True, text=True, timeout=60)
@@ -4167,6 +4195,7 @@ def _cmd_tend(a) -> int:
         changed, msg = sup_mod.install(st_bin, Path(a.root), interval=a.interval,
                                        run=None if a.dry_run else _run_cmd,
                                        is_active=_systemctl_user_active,
+                                       is_enabled=_systemctl_user_enabled,
                                        dry_run=a.dry_run)
         print(f"  {msg}")
         return OK if changed or "already installed" in msg or a.dry_run else REFUSED
@@ -4759,9 +4788,11 @@ def _tend_status(a) -> int:
     print(f"  units       {'installed' if tmr.exists() else 'NOT installed'}"
           f"{'' if not tmr.exists() else (' (ours)' if sup_mod.ours(tmr) else ' (NOT ours)')}")
     print(f"  timer       {'active' if _systemctl_user_active(sup_mod.TIMER) else 'inactive'}")
-    other = sup_mod.foreign_supervisor(_systemctl_user_active)
+    other = sup_mod.foreign_supervisor(_systemctl_user_active,
+                                       _systemctl_user_enabled)
     if other:
-        print(f"  ⚠ conflict  {other} is ALSO supervising this crew")
+        print(f"  ⚠ conflict  {other[0]} is ALSO supervising this crew "
+              f"({other[1]})")
     log = sup_mod.PassLog(Path(a.root))
     age = log.age_seconds()
     if age is None:

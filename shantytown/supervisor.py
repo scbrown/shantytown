@@ -46,6 +46,18 @@ WAKE_TOLERANCE_S = 30
 # Supervisors known to tend the same crew. Presence is a REFUSAL, not a warning:
 # two things respawning the same agents fight, and the fight looks like flapping
 # nobody can attribute.
+#
+# ARMED, not merely RUNNING — and that distinction is the whole of aegis-np4x1.
+# gastown-crew.service is a boot-time oneshot: between boots it is INACTIVE, so an
+# is-active check sees nothing, --install proceeds, and the NEXT boot starts both
+# fleets. That is what happened. The unit survived the rename to shanty-* still
+# enabled, the host almost never reboots, and so the collision stayed invisible
+# for as long as the host stayed up — six duplicate agents, three of them sharing a
+# workspace with their own twin, and `st crew` reporting zero faults throughout.
+#
+# So a unit that is ENABLED counts. It will supervise this crew again; that it is
+# not doing so this second is timing, not safety. Listing the name alone would not
+# have caught this — the predicate had to change with it.
 FOREIGN_UNITS = ("gastown-crew-watchdog.timer", "gastown-crew.service")
 
 
@@ -134,16 +146,31 @@ def ours(path: Path) -> bool:
         return False
 
 
-def foreign_supervisor(is_active) -> str | None:
-    """Is something else already tending this crew? Returns its unit name."""
+def foreign_supervisor(is_active, is_enabled=lambda unit: False):
+    """Is something else already tending this crew? Returns (unit, why) or None.
+
+    TWO predicates, because a supervisor has two ways to exist and only one of
+    them is visible right now: it is running, or it is armed to run at the next
+    boot. The second is the one that bit us (see FOREIGN_UNITS), and it is the
+    one a live check cannot see — which is exactly why it has to be asked for
+    separately rather than inferred.
+
+    `why` is returned rather than reconstructed by the caller because the two
+    cases want different things from a human: an ACTIVE competitor is fighting
+    you now, an ENABLED one is a trap set for the next reboot, and the second
+    reads as a false alarm unless the message says otherwise.
+    """
     for unit in FOREIGN_UNITS:
         if is_active(unit):
-            return unit
+            return unit, "active now"
+        if is_enabled(unit):
+            return unit, "enabled — it starts at the next boot"
     return None
 
 
 def install(st_bin: str, root: Path, *, interval: str = "5min", run=None,
-            is_active=lambda unit: False, dry_run: bool = False) -> tuple[bool, str]:
+            is_active=lambda unit: False, is_enabled=lambda unit: False,
+            dry_run: bool = False) -> tuple[bool, str]:
     """Write + enable the units. IDEMPOTENT, and refuses rather than clobbers.
 
     Returns (changed, message). changed=False with a message is the second run:
@@ -160,14 +187,17 @@ def install(st_bin: str, root: Path, *, interval: str = "5min", run=None,
             f"absolute path to the st you are running."
         )
 
-    other = foreign_supervisor(is_active)
+    other = foreign_supervisor(is_active, is_enabled)
     if other:
+        unit, why = other
         return False, (
-            f"REFUSED: {other} is active and supervises the same crew. Two "
+            f"REFUSED: {unit} is {why}, and it supervises the same crew. Two "
             f"supervisors respawning the same agents is worse than none — they "
             f"fight, and the fight looks like flapping nobody can attribute. "
             f"Decide which one owns this crew (that is a human's call, not "
-            f"this command's), then re-run."
+            f"this command's), then re-run. To retire the other: "
+            f"`systemctl --user disable --now {unit}` (add `mask` to make it "
+            f"survive a redeploy that would re-enable it)."
         )
 
     d = unit_dir()
