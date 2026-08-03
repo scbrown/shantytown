@@ -40,6 +40,7 @@ import json
 import os
 import time
 from pathlib import Path
+from typing import NamedTuple
 
 from . import triage as triage_mod
 from .protocols import Agent
@@ -143,8 +144,16 @@ def saturated_agents(agents, panes, runtime):
     return out
 
 
+class PaneRead(NamedTuple):
+    """One pane's live reading: what state it is in, and what its context depth
+    MEASURED as — `depth_k = None` meaning the depth could not be read, which is
+    a different thing from a low depth and must never collapse into one."""
+    state: str
+    depth_k: float | None
+
+
 def agent_states(agents, panes, runtime) -> dict:
-    """name -> live pane state, for every agent with a readable pane.
+    """name -> PaneRead, for every agent with a readable pane.
 
     `saturated_agents` computes exactly this and then throws the state away,
     keeping only the SATURATED names. That discard is what broke the cycle
@@ -158,6 +167,16 @@ def agent_states(agents, panes, runtime) -> dict:
     counts as recovery. An agent with no pane, or an unreadable one, is simply
     absent from the map — cannot-tell is not a state, and inventing one here is
     what the caller must not be allowed to do.
+
+    THE DEPTH RIDES ALONGSIDE THE STATE, and that is the whole point of PaneRead
+    (aegis-rfz1b). `IDLE` is NOT evidence that an agent is under the cycle
+    threshold: work_state returns IDLE both when the depth was READ and found
+    low, and when the depth could not be read at all — `context_tokens_k` returns
+    None whenever the "/clear to save Nk" footer is replaced by the spinner. A
+    caller that re-armed on IDLE was therefore treating cannot-tell as recovered,
+    which is the exact error the paragraph above describes, one field over. So
+    `depth_k` is None for "not measured" and a number for "measured", and a
+    caller deciding recovery must look at THAT, never at the state alone.
     """
     out = {}
     for ag in agents:
@@ -165,10 +184,12 @@ def agent_states(agents, panes, runtime) -> dict:
             continue
         screen = panes.capture(ag.pane, attrs=True)
         plain = triage_mod.strip_attrs(screen)
-        out[ag.name] = triage_mod.work_state(
-            screen, runtime.shows_ready_ui(plain),
-            awaiting=asks_a_question(runtime, plain),
-            auth_dead=auth_expired(runtime, plain))
+        out[ag.name] = PaneRead(
+            state=triage_mod.work_state(
+                screen, runtime.shows_ready_ui(plain),
+                awaiting=asks_a_question(runtime, plain),
+                auth_dead=auth_expired(runtime, plain)),
+            depth_k=triage_mod.context_tokens_k(screen))
     return out
 
 
@@ -248,7 +269,8 @@ class CycleDriver:
         recovered, and return the names actually prompted (empty when none are
         newly saturated — the quiet, common case)."""
         states = agent_states(agents, self._panes, runtime)
-        saturated = {n for n, s in states.items() if s == triage_mod.SATURATED}
+        saturated = {n for n, r in states.items()
+                     if r.state == triage_mod.SATURATED}
         ledger = self._load()
         prompted = []
 
@@ -272,8 +294,32 @@ class CycleDriver:
         # no longer over the threshold. Busy, queued, waiting, auth-dead and
         # pane-unreadable all KEEP the entry, because none of them is evidence
         # the context was cleared.
+        # RE-ARM ONLY ON A MEASURED DEPTH BELOW THE THRESHOLD (aegis-rfz1b).
+        #
+        # This used to re-arm on `state == IDLE`, and IDLE is not evidence of
+        # recovery: work_state returns it BOTH when the depth was read and found
+        # low AND when the depth could not be read at all, because
+        # context_tokens_k returns None while the "/clear to save Nk" footer is
+        # replaced by the spinner. So a pane caught mid-transition read IDLE, the
+        # entry was deleted, the very next sweep saw SATURATED again, and the
+        # agent was re-prompted — once per turn boundary, forever. Measured: the
+        # coordinator received the cycle instruction four times in one session
+        # having checkpointed after the first.
+        #
+        # That is the SAME defect the paragraph above describes and claims to have
+        # fixed. It stopped trusting "absent from the saturated set" precisely
+        # because absence could mean unreadable, then trusted IDLE — which is the
+        # bucket unreadable falls into. Cannot-tell was promoted to a verdict
+        # twice, in two different fields.
+        #
+        # `depth_k is None` therefore means CANNOT TELL and must leave the ledger
+        # exactly as it is. Only a number we actually read, and read below the
+        # threshold, retires an episode.
         for agent in list(ledger):
-            if states.get(agent) == triage_mod.IDLE:
+            read = states.get(agent)
+            if read is None or read.depth_k is None:
+                continue                       # no pane, or depth unreadable
+            if read.depth_k < triage_mod.CYCLE_THRESHOLD_K:
                 del ledger[agent]
 
         for agent in sorted(saturated):
