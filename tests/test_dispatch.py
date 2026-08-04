@@ -84,18 +84,28 @@ def test_dispatch_actually_dispatches(world):
 
 
 def test_budget_counts_not_stopwatch(world):
-    """docs/cli.md: tracker calls <= 2, sends 1, waits for ack 0.
+    """docs/cli.md: tracker calls <= 3, sends 1, waits for ack 0.
 
     gt sling --dry-run: 51.54s, 63 Dolt connections, and it writes NOTHING.
     A stopwatch would have passed that on a quiet night. Count the calls.
+
+    THE CEILING MOVED FROM 2 TO 3, ONCE, AND ONLY FOR THE READ-BACK (aegis-8xc5w).
+    Recorded here rather than quietly edited, because a budget that rises whenever
+    it is inconvenient is not a budget. The third call is `go` re-reading the row
+    it just wrote: `st go` printed "-> in progress" while the store still said
+    `open`, intermittently, and nothing in the system could tell which dispatches
+    had actually taken. A read is what this budget is CHEAP for — the 63
+    connections it was written against were resolution churn answering one
+    question, not a confirmation that a write landed. The next thing that wants a
+    fourth call has to make its own argument here.
     """
     d, tracker, panes = world
     tracker.gets = 0; tracker.updates = 0
 
     d.go("item-1", "ellie")
 
-    assert tracker.gets + tracker.updates <= 2, (
-        f"budget blown: {tracker.gets} gets + {tracker.updates} updates > 2"
+    assert tracker.gets + tracker.updates <= 3, (
+        f"budget blown: {tracker.gets} gets + {tracker.updates} updates > 3"
     )
     assert len(panes.sent) == 1
 
