@@ -342,9 +342,13 @@ def plate_reader(root: Path):
     from .deployment import deployment_default, resolve_root
     backend = deployment_default(root, "SHANTY_BACKEND") or "files"
     if backend == "beads":
-        from .beads import BeadsTracker, plate as beads_plate
+        from .beads import (BeadsTracker, EXTRA_REPOS_KEY, parse_extra_repos,
+                            plate as beads_plate)
         trk = BeadsTracker(repo=deployment_default(root, "SHANTY_BEADS_REPO"),
-                           timeout=BD_TIMEOUT_S)
+                           timeout=BD_TIMEOUT_S,
+                           # aegis-qmfa1
+                           extra_repos=parse_extra_repos(
+                               deployment_default(root, EXTRA_REPOS_KEY)))
         return lambda who: beads_plate(trk, who)
     if backend == "files":
         from .files import FilesTracker, plate as files_plate
