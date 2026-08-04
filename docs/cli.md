@@ -41,9 +41,10 @@ st stats [agent] [--files]    what the crew actually did: files, skills, tokens 
 st dashboard [admin]          live, tier-scoped view: roster/state/work, self-refreshing
 st subscribe                  watch quipu entity events; route governed workflows to the admin
 st worktree <repo> [agent]    provision an agent's isolated worktree off a SHARED project repo
+st push <repo> [agent]        push your branch to EVERY remote — pushing one forks a repo with two
 ```
 
-Twenty-two. `--dry-run` is on every command that writes, from commit one. The surface grew past the
+Twenty-three. `--dry-run` is on every command that writes, from commit one. The surface grew past the
 original eight by nine, each on a specific ask — not drift: **inbox**/**task** (the dispatch/tracker
 pair, owner-directed), **context** (the bobbin Context protocol), **doctor**
 (out-of-box detect/install, Stiwi's direct ask), and **subscribe** (the quipu events adapter,

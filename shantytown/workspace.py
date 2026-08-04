@@ -738,3 +738,81 @@ def cleanup_worktree(repo: Path | str, agent: str, base: str = "origin/main",
         return False                     # holds work — keep it, never discard
     remove(_shared_repo(repo), dest)
     return True
+
+
+# ── PUSH TO EVERY REMOTE (aegis-96few, ruled by arnold 2026-08-04) ────────────
+
+@dataclass(frozen=True)
+class PushOutcome:
+    """What one remote did with the push. `remote` is ALWAYS populated.
+
+    NAMING THE REMOTE IS THE POINT, not a nicety (arnold's requirement 2). A bare
+    "push rejected" cannot be acted on when a repo has two live peers: the author
+    cannot tell "my branch is behind" from "the other remote moved", and those
+    have different next steps. Every field below exists so the failure line can
+    say WHICH remote refused and WHY.
+    """
+    remote: str
+    ok: bool
+    up_to_date: bool = False
+    non_ff: bool = False
+    reason: str | None = None
+
+
+def push_every_remote(dest: Path | str, src: str, dst: str = "main",
+                      run: GitRunner = _git) -> "list[PushOutcome]":
+    """Push `src` to `dst` on EVERY configured remote. NEVER forces.
+
+    WHY EVERY REMOTE. shantytown has two live peers, neither a mirror, and each
+    agent's `wt/<name>` branch is configured to push to one of them — measured
+    2026-08-04: 11 agents to forge, 5 to origin. So the one documented recipe
+    lands in different places depending on WHOSE tree runs it, and any two agents
+    on opposite sides re-fork the repo the moment both push. Every agent is
+    correct from inside their own tree, which is why no amount of telling people
+    to be careful fixes it: there is no wrong actor. Pushing every remote makes
+    the split HARMLESS instead of requiring anyone to resolve it.
+
+    WHY IT REFUSES INSTEAD OF FORCING. A non-fast-forward here means the other
+    remote moved — someone else's work is on it. Converging two forked remotes
+    never needs a force (a merge commit has both parents, so both pushes are
+    fast-forwards; verified twice on 2026-08-04), so a force in this path could
+    only ever be destroying work that git and its author both believe landed.
+    That is aegis-repg/iaef at remote scale.
+
+    PARTIAL SUCCESS IS REPORTED, NOT UNWOUND. If origin accepts and forge
+    refuses, the origin push has happened and is not rolled back — un-pushing is
+    a rewrite, which is the very thing this refuses to do. The caller is told
+    exactly which remotes took it and which did not, and the fix is the same
+    either way: fetch the refusing remote, merge, push again.
+    """
+    rc, out = run(dest, "remote")
+    remotes = sorted(r.strip() for r in out.splitlines() if r.strip()) if rc == 0 else []
+    if not remotes:
+        return []
+
+    outcomes: list[PushOutcome] = []
+    for remote in remotes:
+        rc, out = run(dest, "push", "--porcelain", remote, f"{src}:refs/heads/{dst}")
+        # --porcelain puts the per-ref result on STDOUT (plain push writes it to
+        # stderr, which this runner drops) — that is why it is used here rather
+        # than for readability.
+        text = out or ""
+        if rc == 0:
+            outcomes.append(PushOutcome(
+                remote=remote, ok=True,
+                up_to_date=any(ln.startswith("=") for ln in text.splitlines())))
+            continue
+        low = text.lower()
+        non_ff = ("non-fast-forward" in low or "fetch first" in low
+                  or "[rejected]" in low)
+        if non_ff:
+            reason = (f"{remote} REFUSED: non-fast-forward. {remote} has commits "
+                      f"this branch does not. Fetch it and merge — never force: "
+                      f"`git fetch {remote} && git merge {remote}/{dst}` then push "
+                      f"again. A merge commit fast-forwards on BOTH remotes.")
+        else:
+            first = next((ln for ln in text.splitlines() if ln.strip()), "")
+            reason = f"{remote} FAILED: {first or 'no output from git push'}"
+        outcomes.append(PushOutcome(remote=remote, ok=False, non_ff=non_ff,
+                                    reason=reason))
+    return outcomes
