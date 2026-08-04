@@ -3239,6 +3239,12 @@ def _crew_governor(a) -> int:
         lost                                        the signal could not be read
         off                                         no governor configured
 
+    THE LABEL CARRIES EVERY ENGAGED RESTRICTION, `; `-separated (aegis-upo93) —
+    a priority floor and a "who runs" trait tier are different KINDS and engage
+    together, so a line that could name only one hid the one that stops agents:
+
+        ok 3/50/2877 79/90/118076 dispatch only P0 and above [seven_day >= 70%]; only support crew runs [seven_day >= 80%]
+
     Each budget is `current/next-threshold/seconds-until-reset`. THE RESET IS
     HERE BECAUSE "THROTTLED" AND "THROTTLED UNTIL 22:40" ARE DIFFERENT SENTENCES
     to the operator reading the bar (aegis-9mehy): the first invites
@@ -3328,14 +3334,23 @@ def _crew_governor(a) -> int:
             f"+{b.headroom:.0f}pts {int(b.resets_in)}s]"
             for b in verdict.burning)
 
-    label = ""
-    if verdict.governing is not None:
-        # NOT engaged[-1] (aegis-yc864). That was a POSITIONAL pick resting on
-        # "cumulative, so the last one is the most restrictive" — true under one
-        # budget, false once `engaged` spans two windows. `governing` derives
-        # from the same computation `admits` enforces, so this line cannot
-        # disagree with `st go` again.
-        label = verdict.governing.label()
+    # EVERY ENGAGED RESTRICTION, not the governing one alone (aegis-upo93).
+    #
+    # NOT engaged[-1] either (aegis-yc864). That was a POSITIONAL pick resting on
+    # "cumulative, so the last one is the most restrictive" — true under one
+    # budget, false once `engaged` spans two windows. `governing` derives from
+    # the same computation `admits` enforces, so this line cannot disagree with
+    # `st go` again — but `governing` answers only "WHICH FLOOR", and a trait
+    # tier restricting WHO RUNS is engaged alongside it and was invisible here.
+    # Measured: a P0 floor rendered while `excludes` was banning most of the
+    # roster, and the coordinator moved to restore an agent on the strength of
+    # this line. `restrictions` composes both kinds from the same properties the
+    # enforcement paths use.
+    #
+    # The parse contract is unchanged: three fields then a free-text label. The
+    # label may now contain `; `, which is the separator `Tier.label()` and
+    # `Verdict.effect()` already use inside one.
+    label = "; ".join(t.label() for t in verdict.restrictions)
     print(f"ok {_pct(gov_mod.FIVE_HOUR)} {_pct(gov_mod.SEVEN_DAY)} "
           f"{' '.join(x for x in (burn, label) if x)}".rstrip())
     return OK
