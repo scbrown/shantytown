@@ -1242,6 +1242,55 @@ class Verdict:
         all — two tiers each naming a band is two conditions, not a choice."""
         return tuple(t for t in self.engaged if t.traits)
 
+    @property
+    def restrictions(self) -> tuple[Tier, ...]:
+        """EVERY engaged restriction a human must be shown — not one (aegis-upo93).
+
+        `governing` above answers a NARROWER question than a display needs: "of
+        the engaged tiers, which FLOOR is in force". Returning one tier is right
+        for that, because floors compose into a single strictest number. It is
+        wrong as the whole of a display, because a TRAIT tier is a restriction of
+        a different KIND engaged at the same time, and one tier can only name one
+        of them.
+
+        MEASURED COST (aegis-upo93, 2026-08-03): seven_day at 79% with the floor
+        tier and the traits tier both engaged. `st crew --governor` printed
+
+            ok 3/50/2877 79/90/118076 dispatch only P0 and above [seven_day >= 65%]
+
+        while `excludes` was refusing to let most of the roster run at all. The
+        coordinator read that line, concluded the priority floor was the only
+        restriction in force, and moved to restore an agent the governor had
+        already banned. Nothing on the line could have said otherwise.
+
+        This is aegis-yc864 one type out. That bug was two answers to "WHICH
+        FLOOR"; this one is a display that could only ever answer one of two
+        different QUESTIONS. So the fix is the same shape: derive the display
+        from the same computations the enforcement uses (`governing` for the
+        floor, `trait_tiers` for who runs), rather than leave each caller to
+        remember there is a second kind.
+
+        ORDER: the floor first, because it is the field most readers came for,
+        then each trait tier. Deduplicated by value — a tier that is both the
+        governing one and a trait tier is one restriction, not two.
+
+        A DRAIN COLLAPSES TO ITSELF, matching `effect()`. Under a full stop
+        nothing dispatches and nobody runs at any band, so listing "only support
+        crew runs" beside it would describe a distinction the drain has already
+        erased — and reading it as "support crew still runs" is exactly the wrong
+        direction to be wrong in.
+        """
+        if not self.engaged:
+            return ()
+        top = self.governing
+        if self.drains:
+            return (top,) if top is not None else ()
+        out: list[Tier] = [top] if top is not None else []
+        for tier in self.trait_tiers:
+            if tier not in out:
+                out.append(tier)
+        return tuple(out)
+
     def waives(self, item, agent=None) -> bool:
         """True if `agent` is floor-exempt AND the floor is what would otherwise
         have refused this item. Not "is this agent exempt" — the narrower
