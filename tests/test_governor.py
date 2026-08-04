@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import urllib.error
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -684,6 +685,13 @@ class _Tracker:
 
     def update(self, item_id, **fields):
         self.updates.append((item_id, fields))
+        # AND IT APPLIES THEM (aegis-8xc5w). `st go` now reads its tracker write
+        # back, so a double that records the call and changes nothing looks
+        # exactly like the swallowed write that fix exists to catch. These tests
+        # are about the GOVERNOR; the tracker here is scenery and has to behave
+        # like a working one.
+        self.item = replace(self.item, **{
+            k: v for k, v in fields.items() if hasattr(self.item, k)})
 
     def create(self, title, **fields):
         raise AssertionError("not used")
@@ -738,9 +746,14 @@ def test_a_closed_item_reports_CLOSED_not_a_tier(tmp_path):
 
 
 def test_the_dispatch_budget_is_unchanged_by_the_governor(tmp_path):
-    """One registry read, one tracker read, one tracker write, one send — the
-    asserted budget. The gate is handed the item plan() already fetched, so it
-    costs no round trip."""
+    """One registry read, one tracker read, one tracker write, one READ-BACK, one
+    send — the asserted budget. The gate is handed the item plan() already
+    fetched, so it costs no round trip.
+
+    THE GOVERNOR is what this test guards, and that is still exactly zero reads:
+    the second read counted here belongs to the read-back `go` now does on its own
+    write (aegis-8xc5w), and it is present with or without a governor. If this
+    number moves again, ask whose call it was before raising it."""
     v = _gov(tmp_path, 45).evaluate()
     reads = []
     tracker = _Tracker(_item("st-6", priority=2))
@@ -751,7 +764,9 @@ def test_the_dispatch_budget_is_unchanged_by_the_governor(tmp_path):
     d.panes.send = lambda pane, text: None
     d.verify = lambda pane, item_id: True
     d.go("st-6", "tim")
-    assert len(reads) == 1
+    assert len(reads) == 2, (
+        "expected plan()'s resolution read + go()'s read-back, and nothing else — "
+        "a third read here would be the governor buying a round trip")
 
 
 # --- the drain protocol -------------------------------------------------------
