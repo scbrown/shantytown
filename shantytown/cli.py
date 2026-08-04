@@ -1781,11 +1781,21 @@ def _cmd_doctor(a) -> int:
     except Exception:          # noqa: BLE001 — doctor never fails on this leg
         wire_v, wire_why = stats_mod.WIRING_UNKNOWN, "registry unreadable"
 
+    # Stray stashes in SHARED repos (aegis-pxzi4). `refs/stash` is shared across
+    # every linked worktree and there is no stash hook, so DISCOVERY is the only
+    # lever — and nobody runs `git stash list` in a repo they did not stash in.
+    try:
+        _repos = guard_mod.discover()
+        stash_found, stash_n = doc.stray_stashes(_repos), len(_repos)
+    except Exception:          # noqa: BLE001 — same rule as the leg above
+        stash_found, stash_n = [], 0
+
     if not a.install:
         print(doc.report(healths))
         if self_h is not None:
             print(selfcheck.render(self_h))
         print(stats_mod.render_wiring(wire_v, wire_why))
+        print(doc.render_stashes(stash_found, stash_n))
         print(_render_socket(sock_v, sock_why))
         code = _fold_socket(_doctor_exit(doc, healths, self_h), sock_v, doc)
         # The untracked-hook liveness leg (aegis-06ue4): out-of-band answer to
