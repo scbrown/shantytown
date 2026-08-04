@@ -93,7 +93,7 @@ $ st roles --check
   ellie      worker         reports_to: malcolm    card: fresh    hooks: ok
   ian        worker         reports_to: malcolm    card: STALE    hooks: ok
                             └─ graph says reports_to=malcolm, card says arnold. GRAPH WINS.
-  dearing    worker         reports_to: —          *** ORPHAN: stop events go nowhere ***
+  dearing    worker         reports_to: —          *** ORPHAN ***
 
   BLOCKED: 1 stale projection, 1 orphan.
 ```

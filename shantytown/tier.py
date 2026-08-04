@@ -223,7 +223,7 @@ def plan_role_set(registry: Registry, agent_name: str, role: str,
     # has an escalation path. Generative, but honest about the gap.
     lead_reports_to = agent.reports_to
     if lead_reports_to is None:
-        admin = _find_administrator(registry)
+        admin = find_administrator(registry)
         if admin and admin != agent_name:
             lead_reports_to = admin
     plan.writes.append(Agent(name=agent_name, role="lead",
@@ -360,7 +360,7 @@ def route_stop(registry: Registry, worker: str, lead_is_up=None) -> Routing:
 
     if a.reports_to is None:
         # Q4: a worker with no lead is seen by the administrator directly.
-        admin = _find_administrator(registry)
+        admin = find_administrator(registry)
         if admin is None:
             raise LookupError(f"{worker} has no lead and there is no administrator — its stop goes nowhere")
         return Routing(worker=worker, to=admin, rose=False)
@@ -379,7 +379,7 @@ def route_stop(registry: Registry, worker: str, lead_is_up=None) -> Routing:
         # plain bool is a valid verdict from any caller's own predicate and
         # must keep working; absent detail stays empty rather than invented.
         detail = getattr(verdict, "detail", "") or ""
-        admin = _find_administrator(registry)
+        admin = find_administrator(registry)
         if admin is None:
             raise LookupError(f"lead {lead.name} is down and there is no administrator — {worker}'s stop is stranded")
         return Routing(worker=worker, to=admin, rose=True,
@@ -388,11 +388,24 @@ def route_stop(registry: Registry, worker: str, lead_is_up=None) -> Routing:
     return Routing(worker=worker, to=lead.name, rose=False)
 
 
-def _find_administrator(registry: Registry) -> str | None:
+def find_administrator(registry: Registry) -> str | None:
+    """Who receives a rise. PUBLIC because it must have exactly ONE answer.
+
+    `anchor` tells a worker where its stop events go; `route_stop` decides where
+    they actually go. When those two computed "is there an administrator?"
+    separately they were free to disagree, and a diagnostic that disagrees with
+    the router it describes is worse than no diagnostic (aegis-j1dzp). One
+    function, so the claim and the behaviour cannot drift apart.
+    """
     for a in registry.all():
         if a.role == "administrator":
             return a.name
     return None
+
+
+# The old private name, kept because this module's own call sites are not the
+# only thing that could reference it.
+_find_administrator = find_administrator
 
 
 # --- the lead's decision: absorb / delegate / escalate ---------------------

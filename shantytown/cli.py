@@ -2432,6 +2432,34 @@ def _cmd_task(a) -> int:
     return OK
 
 
+def _lead_status(registry, panes):
+    """The reachability predicate anchor reports on — THE ROUTER'S OWN.
+
+    stop_event._lead_is_up is what route_stop is actually asked at emit time, so
+    binding anchor to it is what makes section 3 a report of the mechanism rather
+    than a second opinion about it (aegis-j1dzp). It also drags in the meaning
+    that matters: `up` = WILL DRAIN, not `a pane answers to that name`. Under the
+    old pane-exists probe anchor printed "up. Your stop events go to them." about
+    a lead the router treats as unreachable — the live-but-deaf case that lost
+    seven workers' events (aegis-0v97).
+
+    Takes the ALREADY-BUILT registry and panes rather than an args namespace: it
+    must be the same registry anchor resolves identity from (two reads of a
+    backend can disagree), and under `--registry quipu` building a second one
+    means a second graph client on the most-used surface in the harness.
+
+    Imported inside the call because stop_event pulls in the runtime, tmux and
+    tracker layers, and that import cost would otherwise be paid by every
+    session start. Returns None if the import fails, and anchor falls back to
+    pane-exists — degraded, but never a claim we could not measure.
+    """
+    try:
+        from .stop_event import _lead_is_up
+    except Exception:
+        return None
+    return _lead_is_up(registry, panes)
+
+
 def _cmd_anchor(a) -> int:
     """anchor is a PURE READ. Note what is NOT here: no _wire(), because the
     Dispatcher exists to write. anchor resolves its own reads and nothing else.
@@ -2452,8 +2480,10 @@ def _cmd_anchor(a) -> int:
         return _anchor_events(a, me)
     if getattr(a, "harness", False):
         return _anchor_harness(a, me)
+    registry, panes = _registry(a), _panes(a)
     try:
-        p = do_anchor(me, _registry(a), _panes(a), plate=_plate(a))
+        p = do_anchor(me, registry, panes, plate=_plate(a),
+                      lead_status=_lead_status(registry, panes))
     except LookupError as e:
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED

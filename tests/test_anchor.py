@@ -4,9 +4,14 @@
   docstring that claims purity. Gas Town's primer mutates state from a hook,
   which is why "did I get primed?" became unanswerable. A comment saying "pure
   read" is exactly the kind of claim we keep finding untrue.
-- test_lead_down / test_lead_unknown: anchor's job is to say your stop events go
-  nowhere HERE, not when you stall. Both branches run, because a warning that
-  has never fired is not a warning.
+- test_lead_down / test_lead_unknown: anchor's job is to tell you WHERE your stop
+  events go HERE, not to leave you to discover it when you stall. Both branches
+  run, because a warning that has never fired is not a warning.
+- ...and the branches assert what the RENDER DOES NOT SAY as well as what it
+  does. anchor said "your stop events go nowhere" for two years about a tier
+  that was routing them correctly the whole time (aegis-j1dzp). A test that only
+  checks the new sentence is present passes on a render that still carries the
+  old lie beside it.
 """
 from __future__ import annotations
 import json
@@ -134,12 +139,113 @@ def test_lead_up(world):
 
 
 def test_lead_down_is_said_here_not_later(world):
-    """cli.md item 3: if your lead is down, anchor says so HERE."""
+    """cli.md item 3: if your lead is unreachable, anchor says so HERE.
+
+    And says WHAT HAPPENS, which is not the same claim. This line used to read
+    "your stop events go nowhere right now" — a statement about DELIVERY
+    inferred from a probe of LIVENESS — and it was FALSE: tier's Q3 rises the
+    event to the administrator with reason `lead-unreachable`. A worker read it,
+    reported it upward as fact, and a working mechanism was nearly rebuilt
+    (aegis-j1dzp). The assertion that the falsehood is ABSENT is the point of
+    this test; asserting the replacement wording alone would pass on a render
+    that said both.
+    """
     _, reg, trk = world
     panes = NullPanes(); panes._exists = False
     p = anchor("ellie", reg, panes, plate=lambda w, _t=trk: plate(_t, w))
     assert p.lead_up is False
-    assert "DOWN" in p.render()
+    out = p.render()
+    assert "UNREACHABLE" in out
+    assert "go nowhere" not in out
+    assert "arnold" in out                       # named the actual destination
+    assert "lead-unreachable" in out             # named the routing reason
+
+
+def test_lead_unreachable_names_the_administrator_route_stop_would_pick(world):
+    """anchor's claim and route_stop's behaviour, checked against each other.
+
+    Not a re-assertion of the string: the destination anchor PRINTS must be the
+    destination the router CHOOSES. These were computed separately before, which
+    is exactly how a diagnostic drifts from the mechanism it describes.
+    """
+    from shantytown.tier import route_stop
+    _, reg, trk = world
+    panes = NullPanes(); panes._exists = False
+    p = anchor("ellie", reg, panes, plate=lambda w, _t=trk: plate(_t, w))
+    routing = route_stop(reg, "ellie", lead_is_up=lambda _n: False)
+    assert routing.rose is True
+    assert routing.to == p.admin == "arnold"
+    assert routing.to in p.render()
+
+
+def test_lead_unreachable_with_no_administrator_says_stranded(tmp_path: Path):
+    """The ONE case where the old wording was true — and it must still be loud.
+
+    Fixing an overstatement must not swing into an understatement: with nobody
+    to rise to, route_stop RAISES, and the worker has to know.
+    """
+    crew = tmp_path / "crew"
+    _card(crew, "solo", role="worker", reports_to="boss", pane="%5")
+    _card(crew, "boss", role="lead", pane="%1")               # no administrator
+    panes = NullPanes(); panes._exists = False
+    p = anchor("solo", FilesRegistry(crew), panes)
+    assert p.admin is None
+    out = p.render()
+    assert "STRANDED" in out
+    assert "NO administrator" in out
+
+
+def test_lead_that_is_the_administrator_does_not_claim_a_rise(tmp_path: Path):
+    """route_stop returns to=lead for an administrator lead BEFORE it probes
+    liveness — there is nothing above to rise to, so anchor must not promise a
+    rise it cannot get. The event is addressed to them and waits on disk."""
+    crew = tmp_path / "crew"
+    _card(crew, "solo", role="worker", reports_to="boss", pane="%5")
+    _card(crew, "boss", role="administrator", pane="%1")
+    panes = NullPanes(); panes._exists = False
+    p = anchor("solo", FilesRegistry(crew), panes)
+    out = p.render()
+    assert "RISE TO" not in out
+    assert "persist on disk" in out
+
+
+def test_lead_detail_names_restart_vs_relaunch(world):
+    """The two causes of `lead-unreachable` want OPPOSITE remedies. When the
+    predicate supplies the distinction, anchor must print it — the coordinator
+    who cannot tell them apart absorbs both as noise (tier.LeadStatus)."""
+    from shantytown.tier import LeadStatus
+    _, reg, trk = world
+    p = anchor("ellie", reg, NullPanes(),
+               lead_status=lambda n: LeadStatus(False, f"{n} is UP but CANNOT DRAIN — RELAUNCH it"))
+    assert p.lead_up is False
+    out = p.render()
+    assert "CANNOT DRAIN" in out
+    assert "RELAUNCH" in out
+
+
+def test_plain_bool_predicate_carries_no_invented_detail(world):
+    """A predicate that returns a bare bool knows no reason. Absent detail stays
+    ABSENT — a fabricated cause on an escalation line is worse than none."""
+    _, reg, trk = world
+    p = anchor("ellie", reg, NullPanes(), lead_status=lambda _n: False)
+    assert p.lead_up is False
+    assert p.lead_detail == ""
+    assert "why:" not in p.render()
+
+
+def test_lead_up_predicate_means_it_will_drain(world):
+    """`up` is whatever the injected predicate says, not whatever the pane says.
+
+    NullPanes reports the pane exists; the predicate says it cannot drain. anchor
+    must follow the predicate — a live-but-deaf lead swallows events silently,
+    and rendering that as "your stop events go to them" is this same bug pointing
+    the other way.
+    """
+    from shantytown.tier import LeadStatus
+    _, reg, trk = world
+    p = anchor("ellie", reg, NullPanes(), lead_status=lambda _n: LeadStatus(False, "no drain hook"))
+    assert p.lead_up is False
+    assert "up. Your stop events go to them." not in p.render()
 
 
 def test_lead_state_unknown_is_not_up(world):
@@ -159,12 +265,43 @@ def test_lead_state_unknown_is_not_up(world):
     assert "up. Your stop events go to them." not in out
 
 
-def test_orphan_is_loud(world):
-    """An orphan's stop events go nowhere. That is the finding, not a footnote."""
+def test_orphan_is_loud_but_says_where_the_stop_actually_goes(world):
+    """Being an orphan is the finding. "Go NOWHERE" was not.
+
+    Same defect as the lead-down line and found with it: route_stop's Q4 sends a
+    lead-less worker's stop STRAIGHT to the administrator (rose=False). Loud
+    stays loud — nobody is triaging this agent's work — but the delivery claim
+    has to match the router.
+    """
     _, reg, trk = world
     p = anchor("arya", reg, NullPanes(), plate=lambda w, _t=trk: plate(_t, w))
     assert p.lead is None
-    assert "ORPHAN" in p.render()
+    out = p.render()
+    assert "ORPHAN" in out
+    assert "go NOWHERE" not in out
+    assert "arnold" in out
+
+
+def test_orphan_with_no_administrator_really_does_go_nowhere(tmp_path: Path):
+    """...and there the old wording was right, so it stays."""
+    crew = tmp_path / "crew"
+    _card(crew, "arya", role="worker")
+    p = anchor("arya", FilesRegistry(crew), NullPanes())
+    assert p.admin is None
+    out = p.render()
+    assert "ORPHAN" in out
+    assert "go NOWHERE" in out
+
+
+def test_administrator_is_not_told_its_stops_go_to_itself(tmp_path: Path):
+    """An administrator has no lead, so it lands in the orphan branch. Telling
+    it its stops route to itself is true-but-absurd; say the tier ends here."""
+    crew = tmp_path / "crew"
+    _card(crew, "boss", role="administrator", pane="%1")
+    p = anchor("boss", FilesRegistry(crew), NullPanes())
+    out = p.render()
+    assert "you ARE the administrator" in out
+    assert "go NOWHERE" not in out
 
 
 def test_card_naming_a_missing_lead_refuses(world):

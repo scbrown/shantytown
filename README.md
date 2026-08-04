@@ -223,12 +223,14 @@ plus every script on one fleet. Full write-up in [`docs/vision.md`](docs/vision.
   actually prints on screen. Not a command you remember to run — `st go` consults it and refuses
   rather than interrupt a working agent.
 - 🧭 **`st anchor` is a pure read.** Who you are, the one item on your plate, and whether the agent
-  your stop events route to is actually up. It never writes, and a test asserts that against the
-  filesystem rather than trusting the docstring.
+  your stop events route to will actually receive them — `up` means *will drain*, not "a pane
+  answers to that name". It never writes, and a test asserts that against the filesystem rather
+  than trusting the docstring.
 - 👥 **`st crew` reports work, not just liveness.** `up` is a launch fact; an agent three hours into
   a refactor and one sitting at an empty prompt both print `up`. The work column tells them apart.
 - 🔀 **Stop events route up a tier.** worker → lead → administrator. A lead absorbs what it can and
-  escalates what it can't; an orphan is told, loudly, that its events go nowhere.
+  escalates what it can't; an unreachable lead does not swallow anything — the event RISES to the
+  administrator with a reason, and is on disk before anyone reads it.
 - 🔌 **Pluggable trackers.** A tracker is two functions. Files today, beads tomorrow, yours next —
   *same dispatch code*, proven by a swap test rather than by an interface.
 - 🖥️ **tmux-native, socket-aware.** Bring your own panes. Named sockets are first-class, because bare
