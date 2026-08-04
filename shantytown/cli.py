@@ -5,7 +5,7 @@
     · roles [--check|set|sync] · init · new · start [--mode]
     · stop · log · context · doctor [--install]
     · tend [--install|--status|--reauth|--target] · attach [-r|--no-start]
-    · dashboard [admin] · subscribe · worktree [--gc] · stats
+    · dashboard [admin] · subscribe · worktree [--gc] · push [--branch] · stats
 
 Six of those flags are MACHINE-READABLE modes, added for an external status bar
 (anchor --short/--events/--harness, crew --count, crew --governor, inbox --count).
@@ -128,8 +128,8 @@ from .runtime import (asks_a_question, auth_expired, ClaudeRuntime, CapabilityEr
                       live_wiring, settings_for_role)
 from .tmux import Tmux, declared_socket
 from .workspace import (WorkspaceError, cleanup_worktree, ensure_workspace,
-                        ensure_worktree, tree_staleness, unlaunchable,
-                        upstream_ref, worktree_for)
+                        ensure_worktree, push_every_remote, tree_staleness,
+                        unlaunchable, upstream_ref, worktree_for)
 from .provision import ProvisionError, provision as provision_ws
 
 # `st new` liveness poll: how long to wait for the runtime to appear in the pane
@@ -775,6 +775,17 @@ def build_parser() -> argparse.ArgumentParser:
                     help="remove the worktree IFF unchanged — never discards "
                          "uncommitted or unpushed work")
 
+    ph = sub.add_parser("push",
+                        help="push your worktree branch to EVERY remote — the "
+                             "repo has two live peers and pushing one forks it")
+    ph.add_argument("repo",
+                    help="the shared checkout: a path, or a bare name under "
+                         "$GT_ROOT (~/gt), e.g. `shantytown` -> ~/gt/shantytown")
+    ph.add_argument("agent", nargs="?",
+                    help="whose worktree; defaults to $SHANTY_AGENT")
+    ph.add_argument("--branch", default="main",
+                    help="destination branch on each remote (default: main)")
+
     return ap
 
 
@@ -872,6 +883,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_subscribe(a)
     if a.cmd == "worktree":
         return _cmd_worktree(a)
+    if a.cmd == "push":
+        return _cmd_push(a)
     return _not_yet(a.cmd)
 
 
@@ -3706,6 +3719,73 @@ def _cmd_worktree(a) -> int:
     except WorkspaceError as e:
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED
+
+
+def _cmd_push(a) -> int:
+    """push <repo> [<agent>] — push this agent's branch to EVERY remote.
+
+    THE BUG THIS REMOVES (aegis-96few, ruled B by arnold 2026-08-04). shantytown
+    has two live remotes, neither a mirror, and each agent's `wt/<name>` branch is
+    configured to push to ONE of them — measured 11 agents to forge, 5 to origin.
+    So `git push origin wt/$me:main`, the one documented recipe, lands somewhere
+    different depending on WHOSE tree runs it, and any two agents on opposite
+    sides re-fork the repo the moment both push. Nobody is doing anything wrong:
+    every agent is correct from inside their own tree. That is why this is a
+    command and not a paragraph asking people to remember the second remote.
+
+    It forked twice in one day this way, and three of the commits left dark by the
+    first fork were fixes to the STALENESS DETECTOR — the mechanism whose whole job
+    is to tell an agent its tree is behind (aegis-lvc4b).
+
+    NEVER FORCES. A rejection here means the other remote moved and someone's work
+    is on it; converging never needs a force, so a force could only destroy work.
+    REFUSES, AND NAMES WHICH REMOTE REFUSED — with two live peers, "push rejected"
+    cannot be acted on, because "my branch is behind" and "the other remote moved"
+    have different next steps.
+    """
+    agent = a.agent or os.environ.get("SHANTY_AGENT")
+    if not agent:
+        print("  refused: no agent. `st push <repo> <agent>` or set "
+              "$SHANTY_AGENT.", file=sys.stderr)
+        return REFUSED
+    repo = _resolve_repo(a.repo)
+    try:
+        dest = worktree_for(repo, agent)
+    except WorkspaceError as e:
+        print(f"  refused: {e}", file=sys.stderr)
+        return REFUSED
+    if not Path(dest).is_dir():
+        print(f"  refused: no worktree at {dest} — `st worktree {a.repo} {agent}` "
+              f"first.", file=sys.stderr)
+        return REFUSED
+
+    branch = f"wt/{agent}"
+    outcomes = push_every_remote(dest, branch, a.branch)
+    if not outcomes:
+        print(f"  refused: {dest} has no remotes configured — nothing to push to.",
+              file=sys.stderr)
+        return REFUSED
+
+    for o in outcomes:
+        if o.ok:
+            print(f"  {o.remote}: {'already current' if o.up_to_date else 'pushed'}"
+                  f" {branch} -> {a.branch}")
+        else:
+            print(f"  ⚠ {o.reason}", file=sys.stderr)
+
+    refused = [o for o in outcomes if not o.ok]
+    if refused:
+        landed = [o.remote for o in outcomes if o.ok]
+        if landed:
+            # SAY THIS OUT LOUD. A partial push is the state most likely to be
+            # misread as "the push failed" and retried blindly, and the remotes
+            # are now diverged BY THIS COMMAND until the refusal is resolved.
+            print(f"  ⚠ PARTIAL: {', '.join(landed)} took it, "
+                  f"{', '.join(o.remote for o in refused)} did not. The remotes "
+                  f"are diverged until you resolve the refusal above. Nothing is "
+                  f"unwound — un-pushing is a rewrite.", file=sys.stderr)
+        return REFUSED
+    return OK
 
 
 def _cmd_subscribe(a) -> int:
