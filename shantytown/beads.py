@@ -22,6 +22,44 @@ from .inbox import is_blocked, is_message
 from .protocols import WorkItem
 
 
+# The deployment key naming stores BEYOND the primary. One name, declared once,
+# because three construction sites read it (cli._tracker, stop_event._plate_reader,
+# untracked.plate_reader) and three copies of a parse is the duplicated constant
+# this repo refuses everywhere else.
+EXTRA_REPOS_KEY = "SHANTY_BEADS_REPOS_EXTRA"
+
+
+def parse_extra_repos(value: "str | list | None") -> list[str]:
+    """Parse the extra-store config into a list of paths.
+
+    Accepts a JSON array or a separated string (os.pathsep, comma, or newline),
+    because env.json carries JSON while an exported env var carries text and the
+    same key has to survive both. Blank entries are dropped.
+
+    NEVER raises on a malformed value — it returns []. That is deliberate and it
+    is the conservative direction: a bad config here must degrade to TODAY'S
+    single-store behaviour, not take down the plate reader for every agent on
+    the fleet. A store you forgot to add is a bug someone notices; a stop-event
+    drain that crashes fleet-wide because one path had a stray comma is an
+    outage.
+    """
+    if not value:
+        return []
+    if isinstance(value, (list, tuple)):
+        parts = [str(v) for v in value]
+    else:
+        text = str(value).strip()
+        if text.startswith("["):
+            try:
+                loaded = json.loads(text)
+                parts = [str(v) for v in loaded] if isinstance(loaded, list) else []
+            except json.JSONDecodeError:
+                parts = []
+        else:
+            parts = re.split(r"[,\n" + re.escape(__import__("os").pathsep) + r"]", text)
+    return [p.strip() for p in parts if p and p.strip()]
+
+
 class BeadsTracker:
     # bd validates a title at <= 500 characters (measured 2026-07-20: a 500-char
     # title creates, 501 fails "title must be 500 characters or less"). Declared
@@ -32,7 +70,8 @@ class BeadsTracker:
     # (aegis-csuo).
     _TITLE_MAX = 500
 
-    def __init__(self, repo: str | None = None, timeout: int = 30):
+    def __init__(self, repo: str | None = None, timeout: int = 30,
+                 extra_repos: "list[str] | None" = None):
         # RESOLVED TO ABSOLUTE (GitHub #31). `repo` is handed to bd as `-C <dir>`,
         # so a RELATIVE value silently means "relative to whatever cwd invoked
         # st" — the same store read from the checkout and from an agent's
@@ -41,16 +80,66 @@ class BeadsTracker:
         # value enters the adapter.
         self.repo = str(Path(repo).expanduser().resolve()) if repo else None
         self.timeout = timeout
+        # EXTRA STORES (aegis-qmfa1). An agent whose work lives in a repo's own
+        # embedded store could never SELF-FEED: `hauls()` decides who is
+        # self-feeding, and a self-feeding worker is EXCLUDED from the Rule Zero
+        # feedable list — so an embedded-store agent got both halves wrong at
+        # once. Its haul was invisible, so it never advanced; and it correctly
+        # read as having no queue, so it landed back on the coordinator every
+        # cycle. Measured: ellie required a hand `st go` for every single na item
+        # while the rest of the fleet self-fed.
+        #
+        # Deliberately a LIST on the tracker and not a second tracker: `hauls()`
+        # and `plate()` are already store-agnostic (they take rows), so the union
+        # belongs at the one seam where rows are fetched. Everything above it is
+        # unchanged.
+        self.extra_repos = [
+            str(Path(p).expanduser().resolve()) for p in (extra_repos or []) if p
+        ]
+        # Primary first: it is the tie-break for an id that somehow resolves in
+        # two stores, and it keeps single-store behaviour bit-identical.
+        self.repos = ([self.repo] if self.repo else []) + [
+            p for p in self.extra_repos if p != self.repo
+        ]
 
-    def _bd(self, *args: str) -> subprocess.CompletedProcess:
+    def _bd_in(self, repo: "str | None", *args: str) -> subprocess.CompletedProcess:
+        """One `bd` invocation against ONE store. The only place bd is spawned."""
         cmd = ["bd"]
-        if self.repo:
-            cmd += ["-C", self.repo]
+        if repo:
+            cmd += ["-C", repo]
         cmd += list(args)
         return subprocess.run(cmd, capture_output=True, text=True, timeout=self.timeout)
 
+    def _bd(self, *args: str) -> subprocess.CompletedProcess:
+        """The PRIMARY store. Unchanged: writes and single-store reads land here."""
+        return self._bd_in(self.repo, *args)
+
+    def _bd_for(self, item_id: str, *args: str) -> subprocess.CompletedProcess:
+        """Run against whichever configured store actually holds `item_id`.
+
+        Primary first, then extras, returning the first success. On a total miss
+        the PRIMARY's failure is returned — so the error a caller sees still
+        names the store it would have expected, rather than an arbitrary extra.
+
+        The primary hop goes through `_bd`, NOT `_bd_in`, and that is load-bearing
+        rather than stylistic: `_bd` is the seam every existing test and the
+        conftest sentinel patch. Reaching past it to `_bd_in` made a test that
+        fakes a failing `bd show` silently execute the REAL bd instead — caught by
+        test_a_broken_enumeration_never_replaces_the_real_error, which passes on a
+        clean tree and failed here. Single-store behaviour must be bit-identical,
+        including which method a fake has to intercept.
+        """
+        first = self._bd(*args)
+        if first.returncode == 0 or not self.extra_repos:
+            return first
+        for repo in self.extra_repos:
+            r = self._bd_in(repo, *args)
+            if r.returncode == 0:
+                return r
+        return first
+
     def get(self, item_id: str) -> WorkItem:
-        r = self._bd("show", item_id, "--json")
+        r = self._bd_for(item_id, "show", item_id, "--json")
         if r.returncode != 0:
             # exit 2 territory: could not tell vs does not exist. Say which.
             #
@@ -130,7 +219,7 @@ class BeadsTracker:
             if v is None:
                 continue
             args.append(f"--{k.replace('_', '-')}={v}")
-        r = self._bd(*args)
+        r = self._bd_for(item_id, *args)
         if r.returncode != 0:
             raise RuntimeError(f"bd update {item_id} failed: {r.stderr.strip()[:120]}")
 
@@ -156,6 +245,44 @@ def _priority(d: dict) -> int | None:
 _PLATE_RANK = {"hooked": 0, "in_progress": 1}
 
 
+def rows(tracker: "BeadsTracker") -> list[dict]:
+    """Every row across EVERY store the tracker is configured for, unioned.
+
+    A MODULE FUNCTION, not a tracker method, and that is not cosmetic. The
+    Tracker interface is pinned at get/update/create by test_swap, whose own
+    words are the argument: "a shared contract widened by its owner is a
+    decision; widened at 2am to unblock yourself it is a bug." I am not that
+    contract's owner, and a fourth method here to make one command work is the
+    precise defect that guard already caught once (mine()). So this follows the
+    same shape arnold ruled for plate(): a per-backend reader taking the tracker,
+    injected where it is needed.
+
+    RAISES if any single store cannot be read, and never returns the partial
+    union. A reader that quietly drops one store returns a SHORTER answer at
+    exit 0 — indistinguishable from "that agent has no work", which is the exact
+    bug this exists to fix. Half a haul is not a haul; it is a wrong haul that
+    looks right.
+    """
+    extra = getattr(tracker, "extra_repos", None)
+    if not extra:
+        # BIT-IDENTICAL to the single-store path that came before, deliberately:
+        # one bd call through the same seam, so every existing caller and fake
+        # behaves exactly as it did.
+        r = tracker._bd("list", "--json", "--limit", "0")
+        if r.returncode != 0:
+            raise RuntimeError(f"bd list failed: {r.stderr.strip()[:120]}")
+        return json.loads(r.stdout) if r.stdout.strip() else []
+    out: list[dict] = []
+    for repo in tracker.repos:
+        r = tracker._bd_in(repo, "list", "--json", "--limit", "0")
+        if r.returncode != 0:
+            raise RuntimeError(
+                f"bd list failed for store {repo or '(default)'}: "
+                f"{r.stderr.strip()[:120]}")
+        out.extend(json.loads(r.stdout) if r.stdout.strip() else [])
+    return out
+
+
 def plate(tracker: "BeadsTracker", agent: str) -> "WorkItem | None":
     """The ONE thing on an agent's plate, or None. A module function, not a method.
 
@@ -174,15 +301,12 @@ def plate(tracker: "BeadsTracker", agent: str) -> "WorkItem | None":
     driving the harness. Ties broken deterministically (hooked before in_progress,
     then by id) so two runs agree.
     """
-    import json
-    r = tracker._bd("list", "--json", "--limit", "0")
-    if r.returncode != 0:
-        # could-not-look, not empty-plate. Raise so prime surfaces exit 2 rather
-        # than reporting "nothing on your plate" when it simply could not ask.
-        raise RuntimeError(f"bd list failed: {r.stderr.strip()[:120]}")
-    rows = json.loads(r.stdout) if r.stdout.strip() else []
+    # UNIONED across every configured store (aegis-qmfa1). list_rows() raises
+    # rather than returning a partial union, preserving this reader's rule that
+    # could-not-look must never render as empty-plate.
+    rows_ = rows(tracker)
     mine = [
-        x for x in rows
+        x for x in rows_
         if x.get("assignee") in (agent, agent.split("/")[-1])
         and x.get("status") != "closed"
         # A MESSAGE is not work (inbox.py). On THIS backend the exclusion is not
@@ -222,7 +346,16 @@ def items(tracker: "BeadsTracker") -> list[WorkItem]:
     stopwatch — see this module's docstring), and it RAISES rather than returning
     [] when bd could not answer: an inbox that reports "no messages" because it
     could not look is the could-not-tell-rendered-as-fine bug this repo names in
-    every other reader."""
+    every other reader.
+
+    DELIBERATELY NOT UNIONED across extra stores, unlike plate() (aegis-qmfa1).
+    The two answer different questions: a plate asks "what work is mine", which
+    genuinely spans stores; an inbox asks "what was DELIVERED to me", and
+    delivery has one destination by construction — `st inbox -d` writes to the
+    configured repo and nowhere else. Unioning here would spend one bd call per
+    extra store, against this module's stated connection budget, to look for
+    messages that cannot be there. Revisit only if delivery itself gains a
+    second destination."""
     r = tracker._bd("list", "--json", "--limit", "0")
     if r.returncode != 0:
         raise RuntimeError(f"bd list failed: {r.stderr.strip()[:120]}")
