@@ -2220,7 +2220,12 @@ def drain_message(agent: str, tier: int, pct: float | None) -> str:
     return (
         f"DRAIN ({tier}% usage tier, at {seen}): stop taking new work. "
         f"1) commit WIP in your OWN worktree/branch; "
-        f"2) git push (rejected? rebase on origin/main, retry, NEVER force); "
+        # `st push` and not `git push`: a repo can have two live remotes, and
+        # `git push <one>` forks it — measured twice in one day (aegis-96few).
+        # A drain is the worst moment for that: the work goes to one remote and
+        # the agent stops, so nobody is left to notice the half that is dark.
+        f"2) st push <repo> {agent} — pushes EVERY remote (rejected? fetch that "
+        f"remote, merge, retry; NEVER force); "
         f"3) st stop {agent} --reason '{DRAIN_OK} <repo>@<sha> ...' — that reason "
         f"IS the report, and unreported counts as NOT drained. "
         f"Cannot push? st stop {agent} --reason '{DRAIN_FAIL} <why>' and escalate "

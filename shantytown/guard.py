@@ -386,7 +386,9 @@ BLOCKED: '$hook' in the SHARED checkout $root
       cd "\\$(st worktree $repo $me)"
       git fetch origin && git rebase origin/main
       ... work, commit ...
-      git push origin wt/$me:main      # rejected? rebase and retry, NEVER force
+      st push $repo $me                # EVERY remote — pushing just one forks a
+                                       # repo that has two. Rejected? fetch that
+                                       # remote, merge, retry. NEVER force.
 
   Deliberate maintenance of the shared checkout only:
       {override_env}=1 git ...
