@@ -72,28 +72,48 @@ def test_refuses_when_a_live_agent_would_be_restructured(tmp_path, monkeypatch, 
     assert "REFUSED" in err and "sattler" in err
 
 
+# WHY THESE TWO DEMOTE `dearing` AND NOT `sattler` (aegis-ftmfn). They used to
+# demote the fleet's only administrator to a worker with no lead — which is an
+# ORPHAN, and the orphan guard now refuses it no matter what --force says. The
+# fixture was never the point of either test: both exist to pin the LIVENESS
+# guard, and a demotion that also cuts an agent loose cannot isolate it. So the
+# demotion is now of a lead who keeps its supervisor — a real restructure, no
+# orphan — and each test measures the one rule it names.
+#
+# The old fixture is not lost: it is the aegis-0v97 scenario verbatim ("would
+# have demoted the live administrator to an orphan worker"), and it now lives in
+# test_project_orphan_guard.py as the thing that MUST refuse.
+
 def test_same_change_is_allowed_when_the_agent_is_not_live(tmp_path, monkeypatch):
     """The guard keys on LIVENESS, not on the size of the change. An identical
     demotion of a stopped agent is ordinary projection and must not refuse."""
-    root = crew(tmp_path, sattler={"role": "administrator", "pane": "shanty-sattler"})
-    graph(monkeypatch, Agent(name="sattler", role="worker"))
+    root = crew(tmp_path,
+                sattler={"role": "administrator", "pane": "shanty-sattler"},
+                dearing={"role": "lead", "reports_to": "sattler", "pane": "shanty-dearing"})
+    graph(monkeypatch,
+          Agent(name="sattler", role="administrator"),
+          Agent(name="dearing", role="worker", reports_to="sattler"))
     panes(monkeypatch)  # nothing live
 
     rc = main(["--root", str(root), "roles", "sync"])
 
     assert rc == OK
-    assert role_of(root, "sattler") == "worker"
+    assert role_of(root, "dearing") == "worker"
 
 
 def test_force_overrides_the_refusal(tmp_path, monkeypatch):
-    root = crew(tmp_path, sattler={"role": "administrator", "pane": "shanty-sattler"})
-    graph(monkeypatch, Agent(name="sattler", role="worker"))
-    panes(monkeypatch, "shanty-sattler")
+    root = crew(tmp_path,
+                sattler={"role": "administrator", "pane": "shanty-sattler"},
+                dearing={"role": "lead", "reports_to": "sattler", "pane": "shanty-dearing"})
+    graph(monkeypatch,
+          Agent(name="sattler", role="administrator"),
+          Agent(name="dearing", role="worker", reports_to="sattler"))
+    panes(monkeypatch, "shanty-dearing")
 
     rc = main(["--root", str(root), "roles", "sync", "--force"])
 
     assert rc == OK
-    assert role_of(root, "sattler") == "worker"
+    assert role_of(root, "dearing") == "worker"
 
 
 def test_dry_run_writes_nothing_and_creates_no_ghost_cards(tmp_path, monkeypatch):

@@ -108,6 +108,91 @@ Routing is `route_stop`'s, reused rather than re-derived: `reports_to` first, th
 a worker with no lead, and a loud rise to the administrator when the lead itself is down (Q3). An
 agent whose tier has no escalation path is told so directly — it is the only party still reachable.
 
+## The survival band — who a throttle spares
+
+The tree says who a stop event reaches. It says nothing about **who is still running after a usage
+throttle**, and that is a separate axis: `survival`, one of `first | normal | support | last`, where
+`first` is shed first and `last` is shed last. **They are names, never numbers** — an integer rank
+requires everyone to remember which direction survives, and that is precisely what went wrong twice
+while this was designed.
+
+A band is **declared on a ROLE**, and an agent opts in by carrying that role in its stack:
+
+```toml
+[roles.support]
+survival = "support"
+```
+
+```
+st roles band <agent> <first|normal|support|last>     # --via ROLE, -n/--dry-run
+```
+
+**It writes a role, not a card field.** `traits` composes survival from the role stack, so a
+`survival` key on the card would be a second source for one axis — the two would disagree the first
+time anybody ran `roles set`, and the governor reads only the composed one.
+
+Four things it will not do quietly:
+
+- **guess the carrier.** The role that carries a band is found by asking the catalog, never by
+  name-matching: `[roles.drains-last] survival = "last"` is the shape a deployment actually writes.
+  If several roles declare the band it refuses and `--via` names one.
+- **leave a second band-carrier on the stack.** `survival` is single-valued, so asking for `normal`
+  on a card already carrying `drains-last` would compose back to `last` by precedence — silently,
+  with the command reporting success having done the opposite.
+- **invent a role.** A band no role declares is a refusal that prints the TOML to add. Minting one
+  would put a role in the catalog the deployment's own config does not mention.
+- **trust its own arithmetic.** It recomposes the resulting stack through the same function
+  `roles --check` prints from and refuses if that is not the band requested. An unranked conflict
+  composes to `?`, and `?` means the governor **fails open** — the agent runs through every tier.
+
+### `normal (UNSET)` is not a band
+
+An unbanded card and a card decided-`normal` **resolve identically** at the governor. That makes
+"nobody wrote this one down" indistinguishable from "we chose this", which is why `roles --check`
+prints the two differently and why banding an unset card says out loud that *nothing about a throttle
+changes* — what changes is that the band is now a decision on the record.
+
+That distinction is not academic. Twenty cards on this deployment were banded by hand-editing their
+`roles` arrays and **three were missed**, and nothing detected it, because the resolved behaviour was
+identical. `roles set` could not have helped: it writes the TREE POSITION, so `st roles set billy
+normal` is refused as a depth violation — correctly, since `normal` is not a place in the tree. The
+band simply had no verb.
+
+## `roles sync` will not manufacture an orphan
+
+`sync` projects the cards from a source (the graph, or a hierarchy file). Being the declared
+authority is not the same as being right, so it already prints a diff, writes nothing on `--dry-run`,
+and refuses to restructure agents that are **running** unless `--force`.
+
+None of that catches the worst outcome. Measured on this deployment, a sync from a stale graph
+printed this among seven rows:
+
+```
+LIVE ~ grant      worker -> worker, reports_to sattler -> —
+```
+
+It is the smallest row in the diff and the only catastrophic one: an em-dash in that column is an
+agent with **no lead**, which `roles --check` calls BROKEN precisely because its stop events have
+nowhere to go. So `sync` now asks `roles --check`'s own question — never a second definition — about
+the crew that *would exist*, and reports any card that is **not broken now and broken after**:
+
+```
+  and 1 card(s) would be NEWLY BROKEN — not broken now, broken after:
+  LIVE ! grant      ORPHAN
+```
+
+Printed on `--dry-run` too, because the dry-run is the run you make in order to decide.
+
+**`--force` does not clear it.** The two flags consent to different things: `--force` says *yes,
+restructure agents that are running*, which is a statement about timing; `--allow-breakage` says
+*yes, leave a card with nowhere to send its stop events*, which is a statement about the result and
+is true whether or not anything is running. Folding them together would mean the operator who
+cleared the first refusal was never asked the second — which is the exact near-miss this came from.
+
+**NEWLY broken, not broken.** A sync that refused whenever the result held any fault could never be
+used to *fix* one, and the operator's only recovery would be hand-editing cards — the projection
+model defeated.
+
 ## Open questions
 
 1. **Can a lead have leads?** Arbitrary depth is tempting and probably wrong. Two tiers solve the
