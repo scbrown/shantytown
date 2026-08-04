@@ -210,3 +210,81 @@ def test_the_tell_does_not_fire_on_an_EMPTY_window(tmp_path):
     out = _report(tmp_path)
     assert "no activity captured" in out
     assert "NO TOKENS CAPTURED" not in out, out
+
+
+# --- the tell must point at a command that ANSWERS -----------------------------
+#
+# `stats_report`'s fleet-wide warning tells the reader to run `st doctor`. When
+# that line was first written, doctor said NOTHING about the capture wiring — a
+# tell pointing at a dead end, in the exact place it was meant to help. These pin
+# the check that made the sentence true.
+#
+# It reads the ARTIFACT EACH AGENT RUNS WITH, not the emitter. The emitter's
+# behaviour is already guaranteed above; the question at 3am is whether the fix
+# has REACHED anybody, and only the on-disk consent file answers that — provision
+# writes it at launch, so a corrected st reaches an agent only when it relaunches.
+
+
+def _agent(name, ws):
+    import types
+    return types.SimpleNamespace(name=name, workspace=str(ws) if ws else None)
+
+
+def _workspace(tmp_path, name, *, stop_cmds=None):
+    ws = tmp_path / name
+    (ws / ".claude").mkdir(parents=True)
+    cfg = {"hooks": {"PostToolUse": [{"matcher": ".*", "hooks": [
+        {"type": "command", "command": "x -m shantytown.stats capture"}]}]}}
+    if stop_cmds is not None:
+        cfg["hooks"]["Stop"] = [{"hooks": [
+            {"type": "command", "command": c} for c in stop_cmds]}]
+    (ws / ".claude" / "settings.local.json").write_text(json.dumps(cfg))
+    return _agent(name, ws)
+
+
+def test_wiring_ok_when_every_agent_registers_capture_on_stop(tmp_path):
+    ags = [_workspace(tmp_path, n, stop_cmds=["py -m shantytown.stats capture --root /r"])
+           for n in ("tim", "billy")]
+    v, why = stats.capture_wiring(ags)
+    assert v == stats.WIRING_OK, why
+    assert "all 2" in why
+
+
+def test_wiring_BROKEN_names_the_agents_and_says_relaunch(tmp_path):
+    """The remedy matters as much as the finding: the code being fixed and the
+    fleet being fixed are different events, and a reader who does not know that
+    reads a correct deploy as a failed one."""
+    ags = [_workspace(tmp_path, "tim", stop_cmds=["py -m shantytown.stats capture"]),
+           _workspace(tmp_path, "billy", stop_cmds=None)]
+    v, why = stats.capture_wiring(ags)
+    assert v == stats.WIRING_BROKEN
+    assert "billy" in why and "tim" not in why.split(":")[-1]
+    assert "relaunch" in why
+
+
+def test_a_stop_registered_to_SOMETHING_ELSE_is_not_wired(tmp_path):
+    """Stop carries other hooks (stop_event send/drain, the quipu capture). The
+    presence of a Stop block proves nothing about the token branch."""
+    ags = [_workspace(tmp_path, "tim",
+                      stop_cmds=["py -m shantytown.stop_event send --root /r"])]
+    assert stats.capture_wiring(ags)[0] == stats.WIRING_BROKEN
+
+
+def test_an_unreadable_workspace_is_UNKNOWN_not_ok(tmp_path):
+    """A workspace we could not read is not a workspace that is wired. Same rule
+    as `hooks: ?` — never report a word you did not measure."""
+    assert stats.capture_wiring([_agent("x", None)])[0] == stats.WIRING_UNKNOWN
+    assert stats.capture_wiring(
+        [_agent("y", tmp_path / "nope")])[0] == stats.WIRING_UNKNOWN
+
+
+def test_an_empty_fleet_is_UNKNOWN_not_a_clean_bill(tmp_path):
+    """The empty-report false pass this repo keeps re-finding: 'all 0 agents are
+    wired' is a sentence that can only ever be true."""
+    assert stats.capture_wiring([])[0] == stats.WIRING_UNKNOWN
+
+
+def test_render_marks_each_verdict_distinctly():
+    marks = {stats.render_wiring(v, "w")[2]
+             for v in (stats.WIRING_OK, stats.WIRING_BROKEN, stats.WIRING_UNKNOWN)}
+    assert len(marks) == 3
