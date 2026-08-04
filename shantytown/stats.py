@@ -626,5 +626,67 @@ def main(argv=None) -> int:
     return 0
 
 
+# --- is the capture actually WIRED? (aegis-u5u98) ---------------------------
+
+WIRING_OK, WIRING_BROKEN, WIRING_UNKNOWN = "ok", "BROKEN", "unknown"
+
+
+def capture_wiring(agents) -> tuple[str, str]:
+    """(verdict, why) — do the agents' LIVE consent files register capture on Stop?
+
+    THIS EXISTS BECAUSE THE FIX IS NOT RETROACTIVE, and saying so in a commit
+    message helps nobody at 3am. `provision._with_capture_hook` writes the
+    registration on every launch, so a corrected st only reaches an agent when
+    that agent RELAUNCHES. Between the deploy and the relaunch, the code is right
+    and the fleet still captures nothing — and that interval is indistinguishable,
+    from `st stats` alone, from the bug not being fixed.
+
+    So this reads the ARTIFACT EACH AGENT IS ACTUALLY RUNNING WITH rather than
+    asking the emitter what it would write. The emitter's answer is already
+    guaranteed by its own tests; the question a human has at 3am is "has it
+    reached anybody yet", and only the on-disk consent file answers that.
+
+    UNKNOWN IS NOT OK. A workspace we could not read is not a workspace that is
+    wired — same rule the hooks leg of `roles --check` follows, and the one this
+    module's own report now follows for a token count it never measured.
+    """
+    wired, missing, unknown = [], [], []
+    for ag in agents:
+        ws = getattr(ag, "workspace", None)
+        name = getattr(ag, "name", "?")
+        if not ws:
+            unknown.append(name)
+            continue
+        p = Path(ws) / ".claude" / "settings.local.json"
+        try:
+            cfg = json.loads(p.read_text(encoding="utf-8"))
+            stop = cfg.get("hooks", {}).get("Stop") or []
+            cmds = [h.get("command", "") for b in stop for h in b.get("hooks", [])]
+        except Exception:      # noqa: BLE001 — unreadable is UNKNOWN, never ok
+            unknown.append(name)
+            continue
+        (wired if any("shantytown.stats capture" in c for c in cmds)
+         else missing).append(name)
+
+    if not wired and not missing and not unknown:
+        return WIRING_UNKNOWN, "no agent workspaces to check"
+    if unknown:
+        return WIRING_UNKNOWN, (
+            f"could not read the consent file for {len(unknown)}: "
+            f"{', '.join(sorted(unknown)[:6])}")
+    if missing:
+        return WIRING_BROKEN, (
+            f"{len(missing)} of {len(wired) + len(missing)} agents do NOT register "
+            f"`stats capture` on Stop, so they can record no tokens: "
+            f"{', '.join(sorted(missing)[:8])}. provision writes it at LAUNCH — "
+            f"these pick it up when they next relaunch.")
+    return WIRING_OK, f"all {len(wired)} agents register capture on Stop"
+
+
+def render_wiring(verdict: str, why: str) -> str:
+    mark = {WIRING_OK: "✓", WIRING_BROKEN: "✗", WIRING_UNKNOWN: "?"}[verdict]
+    return f"  {mark} capture   {why}"
+
+
 if __name__ == "__main__":
     sys.exit(main())

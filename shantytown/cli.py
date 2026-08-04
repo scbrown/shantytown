@@ -1729,6 +1729,7 @@ def _cmd_doctor(a) -> int:
     current, 1 something absent/stale, 2 something could-not-tell (quipu's broken
     --version, or an unreachable release source)."""
     from . import doctor as doc
+    from . import stats as stats_mod
 
     specs = doc.SPECS
     if getattr(a, "tool", None):
@@ -1752,10 +1753,22 @@ def _cmd_doctor(a) -> int:
 
     sock_v, sock_why = _socket_check(a)
 
+    # Is the metrics capture wired to the branch that writes TOKENS (aegis-u5u98)?
+    # Asked here because `st stats` told a reader to ask `st doctor` and doctor had
+    # nothing to say — a tell that points at a command which does not answer is a
+    # dead end in the exact place it was meant to help. Never fatal to doctor: a
+    # registry we cannot read is a `?` row, not a crash in the command an operator
+    # reaches for when things are already going wrong.
+    try:
+        wire_v, wire_why = stats_mod.capture_wiring(_registry(a).all())
+    except Exception:          # noqa: BLE001 — doctor never fails on this leg
+        wire_v, wire_why = stats_mod.WIRING_UNKNOWN, "registry unreadable"
+
     if not a.install:
         print(doc.report(healths))
         if self_h is not None:
             print(selfcheck.render(self_h))
+        print(stats_mod.render_wiring(wire_v, wire_why))
         print(_render_socket(sock_v, sock_why))
         code = _fold_socket(_doctor_exit(doc, healths, self_h), sock_v, doc)
         # The untracked-hook liveness leg (aegis-06ue4): out-of-band answer to
