@@ -2339,6 +2339,10 @@ def _cmd_inbox(a) -> int:
     # because dispatch and every st tend push sign their sends too and a security
     # marker that is written twice is a security marker that can drift. The
     # behaviour is unchanged — the two differential tests below still hold.
+    # KEEP WHAT THE CALLER ACTUALLY TYPED. The cap is checked against the
+    # ATTRIBUTED text, so the refusal below has to be able to say how much of the
+    # overrun is st's own signature — see _inbox_durable.
+    typed = msg
     msg = attribute(msg, _me(a))
     try:
         agent = _registry(a).get(a.agent)
@@ -2348,7 +2352,7 @@ def _cmd_inbox(a) -> int:
     panes = _panes(a)
 
     if getattr(a, "durable", False):
-        return _inbox_durable(a, agent, msg, panes)
+        return _inbox_durable(a, agent, msg, panes, typed=typed)
 
     # ROUTINE — unchanged. send-keys only, ephemeral.
     if agent.pane is None:
@@ -2370,7 +2374,7 @@ def _cmd_inbox(a) -> int:
     return OK
 
 
-def _inbox_durable(a, agent, msg: str, panes) -> int:
+def _inbox_durable(a, agent, msg: str, panes, typed: str | None = None) -> int:
     """Persist-then-deliver. The inbox write is the guarantee; the send is speed."""
     # BEADS BY DEFAULT for -d (dearing, qdal.2 follow-up). `-d` is the flag you
     # reach for when the message MUST survive your session dying. A local files
@@ -2398,6 +2402,23 @@ def _inbox_durable(a, agent, msg: str, panes) -> int:
         # and retrying it unchanged will fail identically. That is a REFUSED (1)
         # the agent must act on, and the exception says exactly how (aegis-csuo).
         print(f"  refused: {e}", file=sys.stderr)
+        # NAME THE PART THE CALLER DID NOT WRITE. The cap is measured against the
+        # ATTRIBUTED text, so a sender who trims to the advertised budget is
+        # refused AGAIN, with a number they cannot reconcile against anything they
+        # typed. Measured twice in a row while closing aegis-ftmfn: 491 typed chars
+        # came back as "durable message is 505 chars; this inbox carries at most
+        # 493", and the obvious repair — trim to 493 — fails identically.
+        #
+        # Nothing was lying. The refusal reported exactly what it measured, and it
+        # did not answer the question the caller had, which is "how long may MY
+        # text be". That is the same shape as every other trap this repo keeps
+        # finding: a true report of the wrong quantity.
+        overhead = len(msg) - len(typed) if typed is not None else 0
+        if overhead and e.budget is not None:
+            print(f"    {overhead} of those chars are the {msg[:overhead]!r} "
+                  f"signature st adds for you, so YOUR text has a budget of "
+                  f"{e.budget - overhead}; you typed {len(typed)}.",
+                  file=sys.stderr)
         return REFUSED
     except Exception as e:                        # bd/store unreachable, etc. — TRANSIENT
         print(f"  could not tell: durable persist FAILED for {agent.name} "
