@@ -225,6 +225,65 @@ class Tier:
 
 
 @dataclass(frozen=True)
+class Burndown:
+    """SPEND a budget that is about to be DESTROYED (aegis-yegfx).
+
+    Stiwi, 2026-08-04: *"we're about to have our 7 day limit reset. I want to
+    build in governor support for fully utilizing the limit before it resets."*
+
+    THE TIERS ARE TIME-BLIND, AND THAT IS THE BUG THIS FIXES. A tier compares a
+    consumption fraction to a constant with no reference to how much of the
+    window is LEFT. "70% consumed" is a warning at hour 20 of a week and is
+    meaningless at hour 165 — the budget refills either way, and every point not
+    spent before it does is destroyed, not saved. So the ladder is most
+    aggressive exactly when it should be most relaxed, and it gets worse every
+    week deterministically.
+
+    Measured 2026-08-04 15:28, which is why this exists: seven_day 86%, resetting
+    in 3h32m, floor P0-only, ZERO ready P0s of 213 ready beads, entire fleet
+    down. Fourteen points of a weekly budget were being *conserved* by spending
+    none of them, hours before they evaporated.
+
+        window   which budget this applies to
+        within   arm when that budget refills within this many seconds
+        reserve  percentage points to hold back BELOW the ceiling (see below)
+
+    WHAT IT SUSPENDS, AND WHAT IT CANNOT TOUCH. Burndown drops that window's
+    PRIORITY-FLOOR and TRAIT tiers. It never drops a `drain`, and there is no
+    config key that would let it: the drain is the bound on the whole mechanism.
+    At the 2026-08-04 reading — 86% with a 90% drain — the most this can spend
+    is four points, and that number is readable off the config rather than
+    argued from the code.
+
+    ITS FAIL-SAFE RUNS BACKWARDS FROM EVERY OTHER ONE IN THIS MODULE, and that
+    asymmetry is the thing to keep in mind when editing it. Everywhere else a
+    could-not-tell resolves toward KEEP RUNNING, because the failure to avoid is
+    a probe bug stopping the fleet. This is the one mechanism that RELAXES, so
+    here every could-not-tell must resolve toward KEEP THE TIER:
+
+        signal lost for the window   -> no burndown (a stale percentage must
+                                        never be able to open the taps)
+        no reset timestamp published -> no burndown (we cannot know it is
+                                        about to be destroyed, so assume not)
+        reset already past           -> no burndown (the producer has not
+                                        re-read; that is not a fresh budget)
+        pct at or above the ceiling  -> no burndown
+
+    A WRONG RESET TIMESTAMP IS THE FAILURE MODE, named on purpose. If the
+    producer publishes a reset that is EARLIER than the truth, burndown opens
+    the taps against a budget that really does still have to last — which is
+    precisely what the governor exists to prevent. That is the whole reason the
+    drain is untouchable and `reserve` exists: the damage is bounded to
+    (ceiling - pct) points no matter how wrong the clock is, and an operator who
+    does not trust the producer's clock raises `reserve` rather than turning the
+    feature off.
+    """
+    window: str
+    within: int
+    reserve: int = 0
+
+
+@dataclass(frozen=True)
 class Policy:
     """The whole [governor] table, resolved.
 
@@ -271,10 +330,34 @@ class Policy:
     # about total spend and about a blind signal; this is about the SHAPE of what
     # remains dispatchable under a floor, which is a different question.
     exempt: tuple[str, ...] = ()
+    # Windows whose tiers stand down near a reset, because the budget they are
+    # protecting is about to be destroyed rather than saved (aegis-yegfx). See
+    # the Burndown docstring — in particular that its fail-safe runs the OTHER
+    # WAY from everything else here.
+    burndowns: tuple[Burndown, ...] = ()
 
     @property
     def active(self) -> bool:
         return bool(self.tiers)
+
+    def burndown_for(self, window: str) -> Burndown | None:
+        for b in self.burndowns:
+            if b.window == window:
+                return b
+        return None
+
+    def burn_ceiling(self, window: str, burn: Burndown) -> float:
+        """The percentage burndown will not spend past, for `window`.
+
+        The window's LOWEST drain threshold, minus `reserve`; 100 - reserve if
+        this window declares no drain. Read off the tiers rather than configured
+        separately so the bound cannot drift away from the drain it is derived
+        from: an operator who moves the drain moves this, with nothing to
+        remember. A deployment that wants a tighter bound than its own drain
+        raises `reserve`.
+        """
+        drains = [t.at for t in self.tiers_for(window) if t.drains]
+        return (min(drains) if drains else 100) - burn.reserve
 
     def tier_at(self, level: int, window: str = FIVE_HOUR) -> Tier | None:
         """The tier at `level` IN `window`. Window-qualified since aegis-59hao:
@@ -969,6 +1052,41 @@ class Relaxed:
 
 
 @dataclass(frozen=True)
+class Burning:
+    """One window is IN BURNDOWN this pass — the observable (aegis-yegfx).
+
+    THIS RECORD EXISTS SO THE RELAXATION CANNOT BE SILENT. A governor that
+    quietly stops governing is indistinguishable from a governor that is broken,
+    and this repo has already paid for that once: aegis-yc864 was a display which
+    disagreed with enforcement, and the display was the one that lied. Burndown
+    is the only mechanism here that makes the fleet spend MORE, so it is the one
+    that most needs to say so on every surface, every pass.
+
+    It names the ceiling and the headroom because "the governor stood down" is
+    an alarming sentence on its own and a reasonable one with a bound attached.
+    """
+    window: str
+    pct: float
+    ceiling: float
+    resets_in: float
+    suspended: tuple = ()          # the tiers that would otherwise be in force
+
+    @property
+    def headroom(self) -> float:
+        """Points still spendable before the ceiling stops this."""
+        return max(0.0, self.ceiling - self.pct)
+
+    def render(self) -> str:
+        what = "; ".join(t.label() for t in self.suspended) or "no tier was in force"
+        return (f"governor BURNDOWN: {self.window} is {self.pct:.0f}% and its "
+                f"budget refills in {fmt_eta(self.resets_in)} — the points left "
+                f"are use-it-or-lose-it, so its tiers STAND DOWN ({what}). "
+                f"Spending is capped at {self.ceiling:.0f}% "
+                f"({self.headroom:.0f} points of headroom); the drain is NOT "
+                f"waived and re-engages the moment the reading reaches it.")
+
+
+@dataclass(frozen=True)
 class Verdict:
     """What the governor decided this pass, and on what evidence.
 
@@ -995,6 +1113,15 @@ class Verdict:
     # Windows that LEFT a tier on this pass. Empty on almost every pass, which is
     # the point: it is the ON ramp firing, and it is the thing to log.
     relaxed: tuple = ()
+    # Windows STANDING DOWN because their budget is about to be destroyed
+    # (aegis-yegfx). Distinct from `relaxed`: that one is a tier that stopped
+    # being justified by the reading, this one is a tier that IS justified by the
+    # reading and is being suspended anyway, because conserving a budget that
+    # refills in an hour conserves nothing. The tiers stay in `engaged`'s
+    # computation upstream and are filtered on the way out, so the hysteresis
+    # hold survives a burndown exactly as it survives a lost signal — burndown
+    # suppresses APPLICATION, never the decision.
+    burning: tuple = ()
     # {window: pct} — the reading each READABLE window was judged on this pass.
     #
     # WHY THIS EXISTS AT ALL (aegis-cjjdx). `pct` above is a single scalar taken
@@ -1532,13 +1659,57 @@ class Governor:
                          "see is indistinguishable from one with nothing to "
                          "report."))
 
+        # ---- BURNDOWN (aegis-yegfx) -----------------------------------------
+        # Which windows are about to have their budget DESTROYED rather than
+        # saved? Computed only from windows in `decided` — i.e. from readings we
+        # ACCEPTED — so a blind or stale window can never reach this. That is the
+        # inverted fail-safe the Burndown docstring is about: this is the one
+        # mechanism that relaxes, so every could-not-tell below resolves toward
+        # KEEPING the tier, which is the exact opposite of the rule the rest of
+        # this method follows.
+        burning: list[Burning] = []
+        for w, (wchosen, _, _, wpct) in decided.items():
+            burn = pol.burndown_for(w)
+            if burn is None:
+                continue
+            at = resets.get(w)
+            if at is None:
+                # No published reset. We cannot know the budget is about to be
+                # destroyed, so we must assume it is not — a missing input may
+                # cost promptness, never the guard.
+                continue
+            left = at - now
+            # `left <= 0` is a reset the producer has not re-read past yet, NOT a
+            # fresh budget. Treating it as one would open the taps on the reading
+            # least likely to be current.
+            if not 0 < left <= burn.within:
+                continue
+            ceiling = pol.burn_ceiling(w, burn)
+            if wpct >= ceiling:
+                continue
+            suspended = tuple(t for t in pol.engaged(wchosen) if not t.drains)
+            if not suspended:
+                # Nothing to stand down. Recording a burndown here would print an
+                # alarming line about a fleet that was never restricted.
+                continue
+            burning.append(Burning(window=w, pct=wpct, ceiling=ceiling,
+                                   resets_in=left, suspended=suspended))
+        burning_windows = {b.window for b in burning}
+
         # THE UNION. Verdict derives drains/floor/trait_tiers from `engaged`, so
         # simply concatenating each window's own cumulative set gives "the most
         # restrictive across all windows" with no comparison between budgets —
         # which is right, because two windows' percentages are not comparable.
         engaged_tiers: list[Tier] = []
         for w, (wchosen, _, _, _) in decided.items():
-            engaged_tiers.extend(pol.engaged(wchosen))
+            wtiers = pol.engaged(wchosen)
+            if w in burning_windows:
+                # DRAINS SURVIVE A BURNDOWN, always. The drain is what bounds the
+                # whole mechanism: it is where `burn_ceiling` is derived from, so
+                # letting burndown suspend it would remove the bound and the
+                # thing the bound is computed from in one step.
+                wtiers = tuple(t for t in wtiers if t.drains)
+            engaged_tiers.extend(wtiers)
 
         # A representative tier, for MESSAGING and `held` only — every actual
         # restriction is read off `engaged`. A drain outranks everything (it is
@@ -1574,6 +1745,8 @@ class Governor:
             f"{w} {p:.0f}%"
             + (f" (holding the {c.at}% tier; left below {c.at - pol.relax_margin}%)"
                if h else "")
+            + (" (BURNDOWN: tiers stood down, budget refills before it could be "
+               "spent)" if w in burning_windows else "")
             for w, (c, h, _, p) in decided.items()) or "no window readable"
 
         alarm = ""
@@ -1599,6 +1772,7 @@ class Governor:
                        by_window=by_window,
                        alarm=alarm, engaged=tuple(engaged_tiers),
                        resets=resets, relaxed=tuple(relaxed),
+                       burning=tuple(burning),
                        exempt=pol.exempt)
 
     def episode(self) -> float:
@@ -1849,8 +2023,9 @@ def render_drain(rows: list[Drained]) -> str:
 
 _GOV_KEYS = {"source", "window", "on_signal_lost", "relax_margin",
              "max_age_seconds", "url", "path", "username", "password_file",
-             "stub_pct", "tier", "exempt"}
+             "stub_pct", "tier", "exempt", "burndown"}
 _TIER_KEYS = {"at", "min_priority", "traits", "action", "window"}
+_BURN_KEYS = {"window", "within", "reserve"}
 
 
 def parse(tbl: dict) -> Policy:
@@ -1930,19 +2105,89 @@ def parse(tbl: dict) -> Policy:
     tiers = tuple(sorted((_tier(t) for t in raw_tiers), key=lambda t: t.at))
     seen = set()
     for t in tiers:
-        if t.at in seen:
+        # KEYED ON (window, at), NOT ON `at` ALONE. Every tier has been
+        # window-qualified since aegis-59hao and this check was not, so it
+        # rejected the one configuration the operator is most likely to want:
+        # the SAME ladder on both budgets. Stiwi's spoken intervals are
+        # 50/70/80/95, and writing them for both windows — which is exactly what
+        # this file's own comment claims it does — raised "declares `at = 50`
+        # twice" and refused to load. That made aegis-yegfx finding 1's
+        # recommendation, "restore the seven_day rungs to the spoken numbers",
+        # literally unconfigurable, and the workaround (offsetting the weekly
+        # ladder by 5 points) is the undocumented margin that finding is about.
+        # Two tiers at one threshold in DIFFERENT windows are not ambiguous:
+        # they are judged against different readings and both can engage.
+        if (t.window, t.at) in seen:
             raise GovernorError(
-                f"[[governor.tier]] declares `at = {t.at}` twice. Two tiers at one "
-                f"threshold cannot both engage, and which one wins would be a "
-                f"silent choice st made for you.")
-        seen.add(t.at)
+                f"[[governor.tier]] declares `at = {t.at}` twice for window "
+                f"{t.window!r}. Two tiers at one threshold in the same window "
+                f"cannot both engage, and which one wins would be a silent "
+                f"choice st made for you. (The same `at` in a DIFFERENT window "
+                f"is fine — they are judged against different budgets.)")
+        seen.add((t.window, t.at))
+
+    raw_burn = tbl.get("burndown", [])
+    if isinstance(raw_burn, dict):
+        raw_burn = [raw_burn]
+    if not isinstance(raw_burn, list):
+        raise GovernorError("[[governor.burndown]] must be an array of tables")
+    burndowns = tuple(_burndown(b) for b in raw_burn)
+    bseen = set()
+    for b in burndowns:
+        if b.window in bseen:
+            raise GovernorError(
+                f"[[governor.burndown]] declares window {b.window!r} twice; "
+                f"which `within` applied would be a silent choice st made for "
+                f"you.")
+        bseen.add(b.window)
+    # A burndown for a window with NO tiers governs nothing and is almost
+    # certainly a typo in the window name — the failure it produces otherwise is
+    # silence, which for this feature reads as "the budget was protected" when
+    # the truth is "nothing was ever configured".
+    windows_with_tiers = {t.window for t in tiers}
+    for b in burndowns:
+        if b.window not in windows_with_tiers:
+            raise GovernorError(
+                f"[[governor.burndown]] window = {b.window!r} has no "
+                f"[[governor.tier]] rows, so it can never stand anything down. "
+                f"Configured windows: "
+                f"{', '.join(sorted(windows_with_tiers)) or 'none'}.")
 
     return Policy(source=source, window=window.strip(), on_signal_lost=on_lost,
                   relax_margin=margin, max_age_seconds=max_age,
                   url=tbl.get("url"), path=tbl.get("path"),
                   username=tbl.get("username"),
                   password_file=tbl.get("password_file"), stub_pct=stub,
-                  tiers=tiers, exempt=tuple(exempt))
+                  tiers=tiers, exempt=tuple(exempt), burndowns=burndowns)
+
+
+def _burndown(spec) -> Burndown:
+    if not isinstance(spec, dict):
+        raise GovernorError(f"[[governor.burndown]] must be a table, got "
+                            f"{type(spec).__name__}")
+    unknown = sorted(set(spec) - _BURN_KEYS)
+    if unknown:
+        raise GovernorError(
+            f"unknown key(s) in [[governor.burndown]]: {', '.join(unknown)}; "
+            f"expected one of: {', '.join(sorted(_BURN_KEYS))}")
+    window = spec.get("window")
+    if not isinstance(window, str) or not window.strip():
+        raise GovernorError("[[governor.burndown]] needs `window` — WHICH budget "
+                            "stands down near its reset")
+    if "within" not in spec:
+        raise GovernorError(
+            f"[[governor.burndown]] window = {window!r} needs `within` — how "
+            f"many SECONDS before the reset the tiers stand down. There is no "
+            f"default on purpose: the right horizon is how long it takes this "
+            f"fleet to actually spend the headroom, which st cannot know.")
+    within = _int(spec, "within", 0, minimum=1)
+    reserve = _int(spec, "reserve", Burndown.reserve, minimum=0)
+    if reserve >= 100:
+        raise GovernorError(
+            f"[[governor.burndown]] reserve = {reserve} leaves no headroom at "
+            f"any reading, so the burndown could never arm — which is a silent "
+            f"way to disable it. Delete the row instead.")
+    return Burndown(window=window.strip(), within=within, reserve=reserve)
 
 
 def _int(tbl: dict, key: str, default: int, *, minimum: int) -> int:

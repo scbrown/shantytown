@@ -3313,6 +3313,21 @@ def _crew_governor(a) -> int:
         reset = "-" if left is None else str(max(0, int(left)))
         return f"{now}/{higher[0] if higher else '-'}/{reset}"
 
+    # BURNDOWN IS NAMED IN THE LABEL (aegis-yegfx), and it has to be, because the
+    # bar's honest-looking failure is silence: burndown removes this window's
+    # non-drain tiers, so `governing` goes None and the line renders exactly like
+    # a fleet that was never throttled. "Wide open because usage is low" and
+    # "wide open because a guard deliberately stood down" are different sentences
+    # to the operator reading the bar, and only one of them ends in an hour. This
+    # is the same class of bug as aegis-yc864 — a display that disagreed with
+    # enforcement — caught before shipping rather than after.
+    burn = ""
+    if verdict.burning:
+        burn = " ".join(
+            f"BURNDOWN[{b.window} capped {b.ceiling:.0f}% "
+            f"+{b.headroom:.0f}pts {int(b.resets_in)}s]"
+            for b in verdict.burning)
+
     label = ""
     if verdict.governing is not None:
         # NOT engaged[-1] (aegis-yc864). That was a POSITIONAL pick resting on
@@ -3321,7 +3336,8 @@ def _crew_governor(a) -> int:
         # from the same computation `admits` enforces, so this line cannot
         # disagree with `st go` again.
         label = verdict.governing.label()
-    print(f"ok {_pct(gov_mod.FIVE_HOUR)} {_pct(gov_mod.SEVEN_DAY)} {label}".rstrip())
+    print(f"ok {_pct(gov_mod.FIVE_HOUR)} {_pct(gov_mod.SEVEN_DAY)} "
+          f"{' '.join(x for x in (burn, label) if x)}".rstrip())
     return OK
 
 
@@ -4564,6 +4580,14 @@ def _tend_once(a, quiet: bool = False) -> int:
         for _relaxed in verdict.relaxed:
             print(f"  {_relaxed.render(os.environ.get(sup_mod.WAKE_ENV, ''), time.time())}",
                   file=sys.stderr)
+        # BURNDOWN (aegis-yegfx). Printed on EVERY pass it is armed, not just the
+        # pass it arms — this is the one mechanism that makes the fleet spend
+        # more, and a relaxation nobody can see is indistinguishable from a
+        # governor that stopped working. It is deliberately NOT on `alarm`:
+        # nothing is wrong, and routing it there would train an operator to
+        # ignore the field that means something IS.
+        for _burning in verdict.burning:
+            print(f"  {_burning.render()}", file=sys.stderr)
 
     def _respawn(card, session):
         runtime.start(card, session)
