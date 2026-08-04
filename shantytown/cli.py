@@ -2672,8 +2672,10 @@ def _cmd_go(a) -> int:
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED
     except HasOpenBlocker as e:
-        # `bd ready` already excludes an item with an unmet blocker; the dispatch
-        # path now agrees with it. Nothing written, nothing sent.
+        # The item's own `blocks` deps are unmet, read this pass. Nothing written,
+        # nothing sent. This comment used to say "`bd ready` already excludes an
+        # item with an unmet blocker; the dispatch path now agrees with it" —
+        # asserted, never checked, and measured false at least once (aegis-eqhf6).
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED
     except AlreadyAssigned as e:
