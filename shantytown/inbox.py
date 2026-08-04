@@ -228,6 +228,16 @@ class MessageTooLong(ValueError):
     persisted and nothing is silently truncated (aegis-csuo). The inbox is a thin
     pointer channel by design (see the module docstring), not a document store."""
 
+    def __init__(self, message: str, *, budget: int | None = None):
+        super().__init__(message)
+        # THE BUDGET, AS A NUMBER AND NOT ONLY AS PROSE. The cap is measured
+        # against the text this layer is handed, which is not always the text the
+        # human typed — cli attributes a `[from <who>] ` signature onto it first.
+        # A caller that wants to say how much budget the SENDER actually has must
+        # subtract its own overhead, and parsing that back out of the sentence
+        # would be a second source for one number.
+        self.budget = budget
+
 
 @runtime_checkable
 class Inbox(Protocol):
@@ -348,7 +358,8 @@ class TrackerInbox:
                 f"{budget} (it maps to a tracker item titled {PREFIX!r}, capped at "
                 f"{cap}). The inbox is a thin pointer channel, not a document store: "
                 f"put the substance in a bead and send a pointer "
-                f"(e.g. `st inbox {to} 'see <bead-id>'`), or `bd comment <id> --file`."
+                f"(e.g. `st inbox {to} 'see <bead-id>'`), or `bd comment <id> --file`.",
+                budget=budget,
             )
         fields = {"assignee": to, "labels": "inbox"}
         if frm:
