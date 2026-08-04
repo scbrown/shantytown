@@ -303,9 +303,27 @@ def _consent_for_role(text: str, role: str) -> str:
 
 
 def _with_capture_hook(text: str, root) -> str:
-    """Inject the metrics-capture PostToolUse hook into the workspace consent
-    settings, so EVERY provisioned agent captures tool usage (mcp__*, Skill,
-    CLI-via-Bash) from launch — aegis-rcyd.
+    """Inject the metrics-capture hook into the workspace consent settings, so
+    EVERY provisioned agent captures tool usage (mcp__*, Skill, CLI-via-Bash)
+    from launch — aegis-rcyd — AND its token totals on stop — aegis-u5u98.
+
+    BOTH EVENTS, because `capture` has two branches and only one was ever wired.
+    PostToolUse takes the tool branch; the TOKEN totals are written exclusively
+    on the Stop branch, which nothing registered. So tokens could not be recorded
+    at all, anywhere on the fleet, and had not been for twelve days when this was
+    found — while events kept flowing and made the store look healthy.
+
+    It read as a per-agent bug rather than a dead pipeline for a second reason,
+    fixed in stats.stats_report: the token query was unbounded by time, so four
+    agents with rows left over from the last day the Stop path fired still showed
+    totals under a `last 24h` header. Two halves of one illusion — a capture that
+    could not run, and a display that made its absence look selective.
+
+    ONE COMMAND, TWO EVENTS IS NOT DOUBLE-CAPTURE. The hazard named below is the
+    SAME event delivered from two settings sources; these are different events
+    with different payloads, and `capture` dispatches on the payload rather than
+    trusting the registration. The token write is an UPSERT keyed by session
+    holding ABSOLUTE totals, so re-firing is idempotent by construction.
 
     WHY HERE and not in --settings (claude_settings_for_role): this consent file
     is re-applied on EVERY launch (provision is idempotent, the launcher calls it
@@ -328,9 +346,12 @@ def _with_capture_hook(text: str, root) -> str:
         return text
     if not isinstance(cfg, dict):
         return text
-    cfg.setdefault("hooks", {})["PostToolUse"] = [
-        {"matcher": ".*", "hooks": [_capture_cmd(root)]}
-    ]
+    hooks = cfg.setdefault("hooks", {})
+    hooks["PostToolUse"] = [{"matcher": ".*", "hooks": [_capture_cmd(root)]}]
+    # NO MATCHER on Stop: Stop carries no tool name, and a matcher on an event
+    # that has nothing to match is the aegis-ac5x failure — a registration that
+    # looks specific and fires zero times.
+    hooks["Stop"] = [{"hooks": [_capture_cmd(root)]}]
     return json.dumps(cfg, indent=2) + "\n"
 
 
