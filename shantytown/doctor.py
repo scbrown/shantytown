@@ -29,8 +29,10 @@ import os
 import re
 import shutil
 import subprocess
+import time
 import urllib.request
 from dataclasses import dataclass
+from pathlib import Path
 
 # The single word for a tool's row. Each exists to stop one specific lie (above).
 ABSENT = "absent"       # binary not on PATH
@@ -469,3 +471,63 @@ def socket_health(registry_panes, seen_on_declared, seen_anywhere, declared):
         f"really be down. NOT claiming a socket fault: this check cannot tell "
         f"those two apart, and guessing is how a dead fleet gets reported as a "
         f"config error and vice versa.")
+
+
+# --- stray stashes in SHARED repos (aegis-pxzi4) ------------------------------
+
+STASH_CLEAN, STASH_FOUND, STASH_UNKNOWN = "clean", "found", "unknown"
+
+
+def stray_stashes(repos, *, run=_run) -> list[tuple[str, str, float, str]]:
+    """(repo, ref, age_days, label) for every entry in a shared repo's stash.
+
+    WHY DOCTOR ASKS THIS AT ALL. `refs/stash` is SHARED across every linked
+    worktree — the isolation that makes a worktree safe covers the index, HEAD
+    and the branch, and stops there. So one agent's `git stash list` shows
+    another's entries as if they were its own, and `pop`/`drop` would take or
+    destroy them. Measured 2026-08-04: I listed a sibling's stash from my own
+    worktree, twelve minutes after they made it.
+
+    There is NO stash hook, so this cannot be guarded the way commit/rebase/merge
+    are. Discovery is the only lever, and nobody runs `git stash list` in a repo
+    they did not stash in — which is precisely the case that matters.
+
+    THE FINDING IS "LOOK AT THIS", NEVER "CLEAN THIS UP". A long-lived stash in a
+    shared checkout is more likely to be the ONLY COPY of something than it is to
+    be litter: the live fleet's two entries are a preserved orphan from a
+    pre-ff-pull rescue and a deliberate pre-push set-aside. The entries a stranger
+    finds oldest are exactly the ones someone chose to keep, so age reads as
+    IMPORTANCE here, not as staleness — the opposite of every other age in this
+    module.
+
+    Repos are DISCOVERED by the caller, never configured; a hardcoded list is the
+    failure this file's other checks already name.
+    """
+    out = []
+    for repo in repos:
+        code, txt = run(("git", "-C", str(repo), "log", "-g",
+                         "--format=%gd\t%ct\t%gs", "refs/stash"))
+        if code != 0 or not txt.strip():
+            continue          # no stash ref at all is the overwhelmingly common case
+        for line in txt.strip().splitlines():
+            parts = line.split("\t", 2)
+            if len(parts) != 3:
+                continue
+            ref, ts, label = parts
+            try:
+                age = (time.time() - float(ts)) / 86400.0
+            except ValueError:
+                age = float("nan")
+            out.append((Path(repo).name, ref, age, label))
+    return out
+
+
+def render_stashes(found: list[tuple[str, str, float, str]], n_repos: int) -> str:
+    if not found:
+        # Stated, not self-hidden. "Checked and clean" and "never checked" must
+        # not render identically — the rule this whole module is built on.
+        return f"  ✓ stashes  none in {n_repos} shared repo(s)"
+    bits = "; ".join(f"{r} {age:.0f}d [{lbl[:52]}]" for r, _ref, age, lbl in found)
+    return (f"  ⚠ stashes  {len(found)} in shared repo(s) — VISIBLE TO EVERY "
+            f"worktree, so `git stash pop` here takes whoever's it is. INSPECT "
+            f"before clearing; a long-lived one is likely the only copy. {bits}")
