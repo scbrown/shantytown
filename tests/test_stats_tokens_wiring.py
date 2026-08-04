@@ -288,3 +288,29 @@ def test_render_marks_each_verdict_distinctly():
     marks = {stats.render_wiring(v, "w")[2]
              for v in (stats.WIRING_OK, stats.WIRING_BROKEN, stats.WIRING_UNKNOWN)}
     assert len(marks) == 3
+
+
+def test_an_UNKNOWN_does_not_swallow_the_BROKEN_beside_it(tmp_path):
+    """The verdict stays conservative; the SENTENCE reports both halves.
+
+    Measured live the moment this shipped: 3 unreadable workspaces rendered as
+    `? could not read the consent file for 3` and said NOTHING about the
+    seventeen that were provably not capturing. Letting the weaker finding hide
+    the actionable one is the bug this whole bead is about, one layer up.
+    """
+    ags = [_workspace(tmp_path, "billy", stop_cmds=None),
+           _workspace(tmp_path, "tim", stop_cmds=None),
+           _agent("goldblum", None)]
+    v, why = stats.capture_wiring(ags)
+    assert v == stats.WIRING_UNKNOWN, "a fleet we cannot fully read is never ok"
+    assert "do NOT register" in why, why      # the actionable half survives
+    assert "billy" in why and "tim" in why
+    assert "goldblum" in why                  # ...and so does the unreadable half
+
+
+def test_wired_agents_are_reported_even_when_some_are_unreadable(tmp_path):
+    ags = [_workspace(tmp_path, "tim", stop_cmds=["p -m shantytown.stats capture"]),
+           _agent("goldblum", None)]
+    v, why = stats.capture_wiring(ags)
+    assert v == stats.WIRING_UNKNOWN
+    assert "all 1 readable" in why and "goldblum" in why
