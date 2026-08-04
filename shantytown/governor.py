@@ -132,6 +132,37 @@ RESET_TS_METRIC = "claude_usage_reset_timestamp_seconds"
 # The producer's window labels. `five_hour`/`seven_day`, not `5h`/`7d`.
 FIVE_HOUR, SEVEN_DAY = "five_hour", "seven_day"
 
+# HOW LONG EACH WINDOW IS — AN INFERENCE FROM THE LABEL, NOT A READING (aegis-7kwtu).
+#
+# Pace needs elapsed_fraction, which needs the window's LENGTH, and the producer
+# does not publish it. Measured 2026-08-04 against the live Prometheus, the whole
+# `claude_usage_*` family is: utilization_pct, reset_timestamp_seconds,
+# cache_age_seconds, probe_timestamp_seconds, probe_success, accounts_*,
+# extra_credits_pct. There is no window-length series and no window-START series.
+# So the length is read off the LABEL, and `seven_day` -> 168h is a guess that the
+# producer has never confirmed.
+#
+# I TRIED TO MEASURE IT INSTEAD AND COULD NOT, WHICH IS WORTH RECORDING because the
+# obvious method looks like it should work: consecutive resets of one window are
+# exactly one window apart, so the length falls out of the reset series. It does
+# for `five_hour` — the series steps in clean 5.00h jumps. It does NOT for
+# `seven_day`: that series has held ONE value (2026-08-04 19:00) for its entire
+# retained history and has never rolled over even once.
+#
+# That is not a retention artifact, which was the first thing to rule out: `up{}`
+# retains back to 2026-07-05, while every `claude_usage_*` series begins
+# 2026-08-01 19:01. The producer is three days old and the window it publishes is
+# seven. So there is no second seven_day reset in existence yet to measure against,
+# and the first one to ever be observable lands at that 19:00 timestamp.
+#
+# WHICH IS WHY THE INFERENCE IS SELF-CHECKING RATHER THAN TRUSTED. `pace_ratio`
+# refuses to answer when `reset_at - now` exceeds the length it was given, because
+# that combination is proof the length is too SHORT (a window cannot have more time
+# left than it has in total). A wrong `seven_day` guess does not silently skew the
+# ratio — it makes the ratio undefined, and an undefined ratio changes nothing.
+# Override with `length` on the pace row if the producer is ever found to disagree.
+WINDOW_LENGTH_S: dict[str, int] = {FIVE_HOUR: 5 * 3600, SEVEN_DAY: 7 * 86400}
+
 SOURCES = ("prometheus", "textfile", "stub")
 WARN, FREEZE = "warn", "freeze"
 ON_SIGNAL_LOST = (WARN, FREEZE)
@@ -284,6 +315,107 @@ class Burndown:
 
 
 @dataclass(frozen=True)
+class Pace:
+    """Judge a window's tiers on BURN RATE, not on the calendar (aegis-7kwtu).
+
+    THE DEFECT THIS FIXES. A tier compares consumption to a constant with no
+    reference to how much of the window has ELAPSED, so identical readings mean
+    opposite things and are treated identically:
+
+        65% consumed at hour 20 of 168   -> 5.5x pace, a real emergency
+        65% consumed at hour 113 of 168  -> 0.96x pace, slightly UNDER linear
+
+    Measured 2026-08-02: week 67.5% elapsed, budget 65.0% consumed, pace 0.96x —
+    and the ENTIRE FLEET was stopped, 0 ready P0s of 213 ready beads, for ~54h. A
+    guard meant to catch OVERSPEND fired on textbook normal spend. This is not a
+    tuning accident and cannot be tuned away: any fixed threshold is crossed by an
+    on-pace burn at a predictable hour, every week, forever.
+
+    SO PACE IS A GATE, NOT A RUNG. It does not add restriction — it withholds the
+    window's existing non-drain tiers while the burn is ON PACE, and steps out of
+    the way the moment the burn is anomalous. The configured 50/70/80/95 are
+    untouched (Stiwi's spoken policy); what changes is that reaching 70% no longer
+    means anything on its own.
+
+        window  which budget this judges
+        ratio   engage the tiers only when consumed/elapsed EXCEEDS this
+        length  window length in seconds — omit to infer it from the label
+                (see WINDOW_LENGTH_S; the inference is self-checking)
+
+    FIVE_HOUR NEEDS NO PACE ROW. Five hours is short enough that absolute
+    thresholds behave sanely, and a fresh five-hour window is 0% consumed at 0%
+    elapsed — an undefined ratio at exactly the moment it is least useful. This is
+    a seven_day problem and the config should say so by staying silent.
+
+    HOW THIS COMPOSES WITH BURNDOWN — they do not fight, they are the same verb.
+    Both suspend a window's non-drain tiers; they differ only in what they notice
+    (burndown: the budget is about to be destroyed; pace: it was never being
+    overspent). Both run through the same suspension path below and both leave
+    DRAINS standing, because a drain bounds total spend and total spend is not a
+    pace question. A window can be in both at once and the result is the same
+    tiers standing down, reported twice — which is right, because they are two
+    independent reasons and an operator should see both.
+
+    THE FAIL-SAFE, WHICH RUNS THE OPPOSITE WAY FROM BURNDOWN'S — read this before
+    changing it, the bead predicted it as the likeliest bug in the feature.
+    Burndown RELAXES, so every could-not-tell resolves toward KEEPING the tier.
+    Pace is a gate on a relaxation, so a could-not-tell resolves toward the gate
+    being INERT: an undefined ratio leaves the tiers exactly as configured today.
+
+    That is deliberately NOT the literal reading of "resolve toward not engaging",
+    and the difference is worth stating because it is a real departure. Read
+    literally on a gate, an undefined ratio would stand the tiers DOWN — i.e. a
+    computation we could not do would REMOVE a spend guard, and a missing reset
+    timestamp would open the taps on an exhausted weekly budget. The directive the
+    constraint cites is `directive-governor-never-fails-into-drain`, and this
+    honours it exactly: pace never touches drains at all, in either direction. The
+    unbounded-loss direction here is relaxing, so that is the direction that must
+    require a positive reading.
+    """
+    window: str
+    ratio: float
+    length: int | None = None
+
+    def window_length(self) -> int | None:
+        """Seconds in this window, or None if nothing can supply it."""
+        return self.length or WINDOW_LENGTH_S.get(self.window)
+
+
+def pace_ratio(pct: float, reset_at: float | None, now: float,
+               length: int | None) -> tuple[float | None, str]:
+    """`consumed / elapsed` for one window, with WHY when it cannot be computed.
+
+    Returns `(ratio, why_not)` — exactly one of the two is meaningful. Every
+    undefined case returns a reason rather than a number, because a gate that
+    cannot say why it stood aside is indistinguishable from one that is broken.
+
+    The window START is not published; it is derived as `reset_at - length`, so
+    every input error lands on the same expression and is caught in one place.
+    """
+    if length is None or length <= 0:
+        return None, "no window length (unknown window label, and none configured)"
+    if reset_at is None:
+        return None, "the producer published no reset timestamp for this window"
+    left = reset_at - now
+    if left <= 0:
+        # Same rule burndown uses: a reset already past is a reading the producer
+        # has not caught up to, NOT a fresh budget. Deriving elapsed >= 1 from it
+        # would report a fully-elapsed window on the stalest number available.
+        return None, "the published reset is already past (producer has not re-read)"
+    if left > length:
+        # PROOF the length is wrong, not a maybe: a window cannot have more time
+        # remaining than it has in total. This is the guard that makes inferring
+        # seven_day -> 168h safe to do at all (see WINDOW_LENGTH_S).
+        return None, (f"reset is {fmt_eta(left)} away but the window is only "
+                      f"{fmt_eta(length)} long — the configured/inferred length "
+                      f"is too short to be right, so pace is not computed on it")
+    elapsed = 1.0 - (left / length)
+    if elapsed <= 0:
+        return None, "the window has not started"
+    return (pct / 100.0) / elapsed, ""
+
+
+@dataclass(frozen=True)
 class Policy:
     """The whole [governor] table, resolved.
 
@@ -335,6 +467,10 @@ class Policy:
     # the Burndown docstring — in particular that its fail-safe runs the OTHER
     # WAY from everything else here.
     burndowns: tuple[Burndown, ...] = ()
+    # Windows whose tiers are judged on BURN RATE rather than on the calendar
+    # (aegis-7kwtu). See the Pace docstring — in particular that its fail-safe
+    # runs the opposite way from Burndown's, which is the bug that bead predicted.
+    paces: tuple[Pace, ...] = ()
 
     @property
     def active(self) -> bool:
@@ -344,6 +480,12 @@ class Policy:
         for b in self.burndowns:
             if b.window == window:
                 return b
+        return None
+
+    def pace_for(self, window: str) -> Pace | None:
+        for p in self.paces:
+            if p.window == window:
+                return p
         return None
 
     def burn_ceiling(self, window: str, burn: Burndown) -> float:
@@ -1087,6 +1229,37 @@ class Burning:
 
 
 @dataclass(frozen=True)
+class Pacing:
+    """One window's tiers are WITHHELD because the burn is on pace (aegis-7kwtu).
+
+    Same argument as Burning: this mechanism makes the fleet spend MORE than the
+    configured ladder would, so it must say so on every surface, every pass. A
+    governor that quietly stops governing is indistinguishable from a broken one.
+
+    IT STATES BOTH NUMBERS, ALWAYS. A pace line reporting only "0.92x" is
+    uncheckable — an operator cannot tell a correct stand-down from a arithmetic
+    bug without seeing the consumed and elapsed fractions it came from. That is
+    the whole of design constraint 5, and it is also how the 2026-08-02 incident
+    would have been caught in one glance instead of ~54h.
+    """
+    window: str
+    pct: float
+    elapsed_pct: float
+    ratio: float
+    threshold: float
+    suspended: tuple = ()          # the tiers that would otherwise be in force
+
+    def render(self) -> str:
+        what = "; ".join(t.label() for t in self.suspended) or "no tier was in force"
+        return (f"governor PACE: {self.window} is {self.pct:.0f}% consumed at "
+                f"{self.elapsed_pct:.0f}% elapsed = {self.ratio:.2f}x pace, at or "
+                f"under the {self.threshold:.2f}x that would justify throttling — "
+                f"so its tiers STAND DOWN ({what}). This is a normal burn reaching "
+                f"a fixed threshold late in the window, not overspend; the drain is "
+                f"NOT waived and re-engages the moment the reading reaches it.")
+
+
+@dataclass(frozen=True)
 class Verdict:
     """What the governor decided this pass, and on what evidence.
 
@@ -1122,6 +1295,12 @@ class Verdict:
     # hold survives a burndown exactly as it survives a lost signal — burndown
     # suppresses APPLICATION, never the decision.
     burning: tuple = ()
+    # Windows whose tiers are WITHHELD because the burn is on pace (aegis-7kwtu).
+    # Same suppress-application-not-decision discipline as `burning`: the tiers are
+    # computed, the hysteresis hold is updated from them, and they are filtered on
+    # the way out — so a window that leaves pace re-applies its tier immediately
+    # without having forgotten which one it was in.
+    pacing: tuple = ()
     # {window: pct} — the reading each READABLE window was judged on this pass.
     #
     # WHY THIS EXISTS AT ALL (aegis-cjjdx). `pct` above is a single scalar taken
@@ -1745,6 +1924,41 @@ class Governor:
                                    resets_in=left, suspended=suspended))
         burning_windows = {b.window for b in burning}
 
+        # ---- PACE (aegis-7kwtu) ---------------------------------------------
+        # Is this window's climb ANOMALOUS, or is it just late in the week? Runs
+        # over `decided` for the same reason burndown does — only readings we
+        # ACCEPTED can reach it, so a stale percentage can never stand a tier down.
+        #
+        # THE FAIL-SAFE HERE IS INERTIA, NOT RELAXATION, and it is the opposite of
+        # burndown's on purpose (see the Pace docstring). Every branch that cannot
+        # produce a ratio simply does not append — leaving the window's tiers
+        # exactly as configured. A missing reset timestamp must never be the reason
+        # a spend guard comes off.
+        pacing: list[Pacing] = []
+        for w, (wchosen, _, _, wpct) in decided.items():
+            pace = pol.pace_for(w)
+            if pace is None:
+                continue
+            ratio, _why = pace_ratio(wpct, resets.get(w), now,
+                                     pace.window_length())
+            if ratio is None or ratio > pace.ratio:
+                # Undefined -> gate inert. Above the ratio -> genuinely
+                # overspending, which is what the tiers are FOR: leave them.
+                continue
+            suspended = tuple(t for t in pol.engaged(wchosen) if not t.drains)
+            if not suspended:
+                # Nothing in force to withhold. Reporting a stand-down of nothing
+                # would print an alarming line about an unrestricted fleet — the
+                # same trap burndown sidesteps immediately above.
+                continue
+            length = pace.window_length() or 0
+            left = (resets.get(w) or now) - now
+            pacing.append(Pacing(
+                window=w, pct=wpct,
+                elapsed_pct=100.0 * (1.0 - left / length) if length else 0.0,
+                ratio=ratio, threshold=pace.ratio, suspended=suspended))
+        pacing_windows = {p.window for p in pacing}
+
         # THE UNION. Verdict derives drains/floor/trait_tiers from `engaged`, so
         # simply concatenating each window's own cumulative set gives "the most
         # restrictive across all windows" with no comparison between budgets —
@@ -1752,11 +1966,18 @@ class Governor:
         engaged_tiers: list[Tier] = []
         for w, (wchosen, _, _, _) in decided.items():
             wtiers = pol.engaged(wchosen)
-            if w in burning_windows:
+            if w in burning_windows or w in pacing_windows:
                 # DRAINS SURVIVE A BURNDOWN, always. The drain is what bounds the
                 # whole mechanism: it is where `burn_ceiling` is derived from, so
                 # letting burndown suspend it would remove the bound and the
                 # thing the bound is computed from in one step.
+                #
+                # AND THEY SURVIVE PACE FOR A DIFFERENT REASON (aegis-7kwtu): a
+                # drain is about TOTAL SPEND, which is not a pace question at all.
+                # 96% consumed is the last of the budget however elegantly it was
+                # burned, and "but we were on pace" is not a reason to spend the
+                # remainder. One filter serves both because the rule is identical
+                # — only the reasons for standing the rest down differ.
                 wtiers = tuple(t for t in wtiers if t.drains)
             engaged_tiers.extend(wtiers)
 
@@ -1821,7 +2042,7 @@ class Governor:
                        by_window=by_window,
                        alarm=alarm, engaged=tuple(engaged_tiers),
                        resets=resets, relaxed=tuple(relaxed),
-                       burning=tuple(burning),
+                       burning=tuple(burning), pacing=tuple(pacing),
                        exempt=pol.exempt)
 
     def episode(self) -> float:
@@ -2072,9 +2293,10 @@ def render_drain(rows: list[Drained]) -> str:
 
 _GOV_KEYS = {"source", "window", "on_signal_lost", "relax_margin",
              "max_age_seconds", "url", "path", "username", "password_file",
-             "stub_pct", "tier", "exempt", "burndown"}
+             "stub_pct", "tier", "exempt", "burndown", "pace"}
 _TIER_KEYS = {"at", "min_priority", "traits", "action", "window"}
 _BURN_KEYS = {"window", "within", "reserve"}
+_PACE_KEYS = {"window", "ratio", "length"}
 
 
 def parse(tbl: dict) -> Policy:
@@ -2202,12 +2424,83 @@ def parse(tbl: dict) -> Policy:
                 f"Configured windows: "
                 f"{', '.join(sorted(windows_with_tiers)) or 'none'}.")
 
+    raw_pace = tbl.get("pace", [])
+    if isinstance(raw_pace, dict):
+        raw_pace = [raw_pace]
+    if not isinstance(raw_pace, list):
+        raise GovernorError("[[governor.pace]] must be an array of tables")
+    paces = tuple(_pace(p) for p in raw_pace)
+    pseen = set()
+    for p in paces:
+        if p.window in pseen:
+            raise GovernorError(
+                f"[[governor.pace]] declares window {p.window!r} twice; which "
+                f"`ratio` applied would be a silent choice st made for you.")
+        pseen.add(p.window)
+    # Same reasoning as the burndown check below it: a pace row for a window with
+    # no tiers has nothing to withhold, and the failure it produces is SILENCE —
+    # which for this feature reads as "the burn was judged and found anomalous"
+    # when the truth is "nothing was ever configured".
+    for p in paces:
+        if p.window not in windows_with_tiers:
+            raise GovernorError(
+                f"[[governor.pace]] window = {p.window!r} has no "
+                f"[[governor.tier]] rows, so it can never withhold anything. "
+                f"Configured windows: "
+                f"{', '.join(sorted(windows_with_tiers)) or 'none'}.")
+        # A pace row whose window length is neither configured nor inferable can
+        # never compute a ratio, so it would sit inert forever while LOOKING
+        # configured. Refuse at parse time rather than at 3am.
+        if Pace(window=p.window, ratio=p.ratio,
+                length=p.length).window_length() is None:
+            raise GovernorError(
+                f"[[governor.pace]] window = {p.window!r} has no known length, "
+                f"so pace can never be computed for it. Known windows: "
+                f"{', '.join(sorted(WINDOW_LENGTH_S))}. Set `length` (seconds) "
+                f"explicitly for a window st does not know.")
+
     return Policy(source=source, window=window.strip(), on_signal_lost=on_lost,
                   relax_margin=margin, max_age_seconds=max_age,
                   url=tbl.get("url"), path=tbl.get("path"),
                   username=tbl.get("username"),
                   password_file=tbl.get("password_file"), stub_pct=stub,
-                  tiers=tiers, exempt=tuple(exempt), burndowns=burndowns)
+                  tiers=tiers, exempt=tuple(exempt), burndowns=burndowns,
+                  paces=paces)
+
+
+def _pace(spec) -> Pace:
+    if not isinstance(spec, dict):
+        raise GovernorError(f"[[governor.pace]] must be a table, got "
+                            f"{type(spec).__name__}")
+    unknown = sorted(set(spec) - _PACE_KEYS)
+    if unknown:
+        raise GovernorError(
+            f"unknown key(s) in [[governor.pace]]: {', '.join(unknown)}; "
+            f"expected one of: {', '.join(sorted(_PACE_KEYS))}")
+    window = spec.get("window")
+    if not isinstance(window, str) or not window.strip():
+        raise GovernorError("[[governor.pace]] needs `window` — WHICH budget is "
+                            "judged on burn rate instead of on the calendar")
+    if "ratio" not in spec:
+        raise GovernorError(
+            f"[[governor.pace]] window = {window!r} needs `ratio` — how many "
+            f"times linear pace counts as OVERSPENDING. There is no default on "
+            f"purpose: 1.0 throttles any burn above dead-linear, which is most "
+            f"normal weeks, and the right value comes from this fleet's own "
+            f"history rather than from a number st picked.")
+    ratio = spec.get("ratio")
+    if isinstance(ratio, bool) or not isinstance(ratio, (int, float)):
+        raise GovernorError(f"[[governor.pace]] ratio must be a number, got "
+                            f"{ratio!r}")
+    if ratio <= 0:
+        raise GovernorError(
+            f"[[governor.pace]] ratio = {ratio} would withhold the tiers at every "
+            f"reading, which is a silent way to disable this window's ladder. "
+            f"Delete the tier rows instead if that is the intent.")
+    length = spec.get("length")
+    if length is not None:
+        length = _int(spec, "length", 0, minimum=1)
+    return Pace(window=window.strip(), ratio=float(ratio), length=length)
 
 
 def _burndown(spec) -> Burndown:
