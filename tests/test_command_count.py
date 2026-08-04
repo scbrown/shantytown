@@ -177,8 +177,23 @@ def test_the_surface_is_twenty():
     slot for `cancel` — Escape already cancels a tool call, and `input --dismiss`
     already sends Escape.
 
+    Grew to 23 with `push` — push the agent's branch to EVERY remote. This is the
+    one case where a verb exists because `git` cannot be told the truth about the
+    repo: a checkout can have two LIVE remotes that are peers rather than
+    mirrors, and `git push <one>` is then a correct-looking command that forks it.
+    Measured twice in one day, and the commits left dark by the first fork were
+    fixes to the staleness detector itself — the mechanism whose whole job is to
+    notice a tree is behind.
+
+    It is not a flag on `worktree` for the reason `tend` is not a flag on `crew`:
+    `worktree` provisions and reports, `push` publishes. And it cannot be a
+    documentation fix, because the recipe was already correct — each agent's
+    branch is configured to a different remote, so the same recipe lands in
+    different places depending on whose tree runs it and nobody is doing anything
+    wrong.
+
     Each command still earns its slot."""
-    assert len(_actual_subcommands()) == 22, (
+    assert len(_actual_subcommands()) == 23, (
         "the command count changed. If that's intended, update the number here and "
         "the cli.py docstring together — and say why the surface grew in docs/cli.md."
     )
