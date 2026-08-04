@@ -181,6 +181,24 @@ class BeadsTracker:
                 and (dep.get("status") or "") != "closed"
                 and dep.get("id")
             ),
+            # bd COUNTS every dependency row and RETURNS only the ones it could
+            # resolve, so the difference is exactly the rows we are blind to
+            # (aegis-kt7jr). Measured on aegis-8y80: `dependency_count: 3`,
+            # `len(dependencies): 1` — the two dropped rows include a `blocks`
+            # edge to gt-9h8wbq8, an id that resolves in NO store on this host.
+            #
+            # This costs NOTHING: both numbers are in the `bd show --json` this
+            # method already parses, so the one-tracker-read budget is unchanged.
+            # That matters — it is why the gap can be closed here rather than
+            # filed against a second round trip. Every OTHER bd view is blind:
+            # `bd dep list` omits the row and `bd dep tree` prints [READY].
+            #
+            # max(0, ...) because a tracker that reports fewer than it returns is
+            # saying something we have no model for, and a NEGATIVE count would
+            # render as a nonsense warning. Clamp, do not invent.
+            unreadable_deps=max(
+                0, int(d.get("dependency_count") or 0)
+                - len(d.get("dependencies") or [])),
         )
 
     def create(self, title: str, **fields) -> WorkItem:

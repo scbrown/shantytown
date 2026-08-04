@@ -158,8 +158,8 @@ class WorkItem:
                                   # "nobody set one" stays visible instead of
                                   # silently becoming P2.
     open_blockers: tuple = ()     # ids of `blocks`-type dependencies that are
-                                  # NOT yet closed — the reason `bd ready`
-                                  # excludes this item (internal-ref).
+                                  # NOT yet closed — the reason this item cannot
+                                  # be advanced (internal-ref).
                                   #
                                   # EMPTY MEANS "NONE KNOWN", NOT "READY". A
                                   # backend with no dependency model (files)
@@ -168,6 +168,26 @@ class WorkItem:
                                   # The dispatch guard therefore refuses on a
                                   # POSITIVE reading only — it never treats
                                   # empty as evidence of readiness.
+    unreadable_deps: int = 0      # how many dependency rows the tracker COUNTED
+                                  # but could not hand us (aegis-kt7jr).
+                                  #
+                                  # THE MISSING HALF OF THE SENTENCE ABOVE.
+                                  # `open_blockers` distinguishes "none" from
+                                  # "none known" — but only for deps the tracker
+                                  # RESOLVED. A `blocks` edge pointing at an id
+                                  # that exists in no reachable store is dropped
+                                  # from the array entirely, so it arrives here
+                                  # as "no blockers" and is indistinguishable
+                                  # from a clean item. Measured 2026-08-04:
+                                  # aegis-8y80 is blocked by gt-9h8wbq8, which
+                                  # resolves nowhere; every bd dependency view
+                                  # omits it and `bd dep tree` prints [READY].
+                                  #
+                                  # Non-zero means SOME DEPENDENCY IS INVISIBLE
+                                  # TO US — not that it blocks. We cannot know
+                                  # the dropped rows' type, so this must never
+                                  # manufacture a refusal (same discipline as
+                                  # above); it exists so the gap can be SAID.
 
 
 @runtime_checkable
