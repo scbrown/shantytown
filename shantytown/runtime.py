@@ -933,7 +933,17 @@ class ClaudeRuntime:
 
     def start(self, card: Agent, pane: str) -> None:
         """The seam: compose (may refuse) THEN deliver via Panes. Panes stays
-        runtime-blind — it only ever sees a finished string."""
+        runtime-blind — it only ever sees a finished string.
+
+        BARE BY DESIGN (aegis-5vxmz). This send carries no prose: it is the
+        LAUNCH COMMAND LINE, typed at a shell. `[from arnold] SHANTY_AGENT=…
+        claude …` is not an attributed message, it is a syntax error, and every
+        launch on the host would fail. Attribution belongs to the paths that send
+        something a reader could mistake for the operator speaking — and this
+        docstring's own first sentence is why the prefix is not applied at
+        Panes.send for everyone: the transport must keep seeing a finished
+        string. Pinned in tests/test_attribution_inventory.py.
+        """
         self._panes.send(pane, self.compose(card))
 
     def is_live(self, screen: str) -> bool:
@@ -1131,4 +1141,6 @@ class CodexRuntime:
         return launch
 
     def start(self, card: Agent, pane: str) -> None:
+        # BARE BY DESIGN — a launch command line, not prose. Same as
+        # ClaudeRuntime.start above (aegis-5vxmz).
         self._panes.send(pane, self.compose(card))
