@@ -3377,6 +3377,19 @@ def _crew_governor(a) -> int:
             f"+{b.headroom:.0f}pts {int(b.resets_in)}s]"
             for b in verdict.burning)
 
+    # PACE IS NAMED FOR THE SAME REASON (aegis-7kwtu) — it withholds the same
+    # non-drain tiers, so it has the same honest-looking failure: the bar goes
+    # quiet and reads as "never throttled". BOTH NUMBERS GO IN THE LABEL, not the
+    # ratio alone: an operator who sees `0.92x` cannot check it, and one who sees
+    # `90%/98%` can tell at a glance that a normal end-of-week burn is being
+    # correctly left alone rather than a guard having silently broken.
+    pace = ""
+    if verdict.pacing:
+        pace = " ".join(
+            f"PACE[{p.window} {p.pct:.0f}%used/{p.elapsed_pct:.0f}%elapsed "
+            f"={p.ratio:.2f}x <={p.threshold:.2f}x]"
+            for p in verdict.pacing)
+
     # EVERY ENGAGED RESTRICTION, not the governing one alone (aegis-upo93).
     #
     # NOT engaged[-1] either (aegis-yc864). That was a POSITIONAL pick resting on
@@ -3395,7 +3408,7 @@ def _crew_governor(a) -> int:
     # `Verdict.effect()` already use inside one.
     label = "; ".join(t.label() for t in verdict.restrictions)
     print(f"ok {_pct(gov_mod.FIVE_HOUR)} {_pct(gov_mod.SEVEN_DAY)} "
-          f"{' '.join(x for x in (burn, label) if x)}".rstrip())
+          f"{' '.join(x for x in (burn, pace, label) if x)}".rstrip())
     return OK
 
 
@@ -4653,6 +4666,12 @@ def _tend_once(a, quiet: bool = False) -> int:
         # ignore the field that means something IS.
         for _burning in verdict.burning:
             print(f"  {_burning.render()}", file=sys.stderr)
+        # Same surface, same reasoning, same deliberate omission from `alarm`
+        # (aegis-7kwtu): a fleet running because its burn is ON PACE is a fleet
+        # working as designed, and the operator needs to be able to SEE that
+        # without being told something is wrong.
+        for _pacing in verdict.pacing:
+            print(f"  {_pacing.render()}", file=sys.stderr)
 
     def _respawn(card, session):
         runtime.start(card, session)
