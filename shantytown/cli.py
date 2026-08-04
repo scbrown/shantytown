@@ -2790,6 +2790,20 @@ def _cmd_go(a) -> int:
         return REFUSED
     print(f"  {p.item_id} -> {p.agent}          in progress")
     print(f"  sent to pane {p.pane}")
+    if p.track_attempts > 1:
+        # THE LINE THAT MAKES AN INTERMITTENT FAULT COUNTABLE (aegis-8xc5w).
+        # go() now reads its tracker write back and re-writes on a verified loss,
+        # so this dispatch is CORRECT — the record and the pane agree. Saying
+        # nothing would be defensible and would be the mistake: a fault that is
+        # silently absorbed is a fault that never gets root-caused, and this one
+        # already spent days misattributed to the store because the only thing
+        # that ever saw it reported success. Print it where the operator is
+        # already looking, on stderr so nothing parsing the outcome line changes.
+        print(f"  ⚠ the tracker write did NOT land on the first attempt — it took "
+              f"{p.track_attempts} write+read-back rounds. The dispatch is "
+              f"recorded (this line means the read-back agreed in the end). Note "
+              f"the id and the store: this is the intermittent lost write, caught "
+              f"in the act.", file=sys.stderr)
     if p.unreadable_deps:
         # ON THE REAL RUN TOO, not only in --dry-run (aegis-kt7jr). A warning
         # that fires only in the preview is a warning for the careful path, and
@@ -3933,9 +3947,33 @@ def _cmd_project(a) -> int:
 def _resolve_repo(repo: str) -> Path:
     """A shared repo, as a path OR a bare name under $GT_ROOT (~/gt) — so both
     `st worktree /home/x/gt/quipu` and `st worktree quipu` reach the same tree,
-    matching scripts/crew-worktree.sh's `$GT_ROOT/$repo` resolution."""
+    matching scripts/crew-worktree.sh's `$GT_ROOT/$repo` resolution.
+
+    A BARE NAME IS ALWAYS $GT_ROOT/<name>, NEVER CWD-RELATIVE (aegis-k3i8t).
+    This used to carry an `or p.exists()` clause, evaluated against the CWD, and
+    it fired BEFORE the $GT_ROOT branch — so a bare name silently resolved to
+    `./<name>` whenever the cwd happened to contain a directory of that name.
+
+    That is not a rare coincidence, it is the normal case: a Python repo holds a
+    package directory named after the repo, so `./shantytown` exists inside every
+    shantytown checkout AND every shantytown worktree. `st push shantytown <me>`
+    — the documented form — therefore failed SPECIFICALLY in the tree you are
+    standing in when you push, which is the only place anyone runs it. Same for
+    quipu, hank, bobbin. Measured 2026-08-04: refused with "no worktree at
+    shantytown-wt/franklin" while that worktree existed; the absolute-path form
+    worked.
+
+    The refusal was the benign symptom. `st go <item> <agent> --worktree <repo>`
+    does not refuse — it calls ensure_worktree() on whatever comes back, so a
+    coordinator dispatching from inside a worktree CREATED a nested one and
+    handed the agent a wrong path, silently.
+
+    A relative path is still honoured, because a relative path has a separator
+    (`./quipu`, `../quipu`) — which is exactly what distinguishes "a path I mean
+    literally" from "a repo name". Bare names have one meaning, in every cwd.
+    """
     p = Path(repo).expanduser()
-    if p.is_absolute() or "/" in repo or p.exists():
+    if p.is_absolute() or "/" in repo:
         return p
     root = Path(os.environ.get("GT_ROOT", Path.home() / "gt"))
     return root / repo
