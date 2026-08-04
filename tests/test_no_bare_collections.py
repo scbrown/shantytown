@@ -68,6 +68,20 @@ BASELINE = {
     # Stop records read off disk; a partial directory read reads as "nobody
     # stopped", which is the aegis-19 blank-plate shape.
     ("stopped.py", "FilesStops", "all"),
+    # NOT AN ADAPTER — it reads nothing. `_Static` wraps a list the caller is
+    # already holding so `roles.check` can be asked its question about a
+    # HYPOTHETICAL crew (`roles sync`'s "would this manufacture an orphan",
+    # aegis-ftmfn). There is no external read, so there is no partial read to be
+    # indistinguishable from an empty one: the list IS the whole search space, by
+    # construction, which is precisely why its `empty_note` returns None.
+    #
+    # It is caught only because the lint keys on the METHOD NAME `all` — correctly:
+    # matching on the name is what makes the rule cheap and unavoidable, and a
+    # leading underscore on the class is not the exemption (that rule is for
+    # underscored METHODS). Baselined rather than renamed, because `all` is the
+    # name `check` calls and renaming it to dodge a lint would leave the next
+    # reader wondering which one is the real registry surface.
+    ("roles.py", "_Static", "all"),
 }
 
 

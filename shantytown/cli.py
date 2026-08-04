@@ -2,7 +2,7 @@
 
     anchor [--short|--events|--harness] · go · inbox [--count] · task
     · crew [--count|--governor] · input [--show|--clear|--dismiss] · ask · answer
-    · roles [--check|set|sync] · init · new · start [--mode]
+    · roles [--check|set|band|sync] · init · new · start [--mode]
     · stop · log · context · doctor [--install]
     · tend [--install|--status|--reauth|--target] · attach [-r|--no-start]
     · dashboard [admin] · subscribe · worktree [--gc] · push [--branch] · stats
@@ -99,6 +99,7 @@ from . import launchable
 from . import plate_publish
 from . import roles as roles_mod
 from . import scaffold
+from . import traits as traits_mod
 from . import triage as triage_mod
 from .deployment import deployment_default, resolve_root, root_note
 from .dispatch import (Dispatcher, TriageRefused, SendUnverified,
@@ -535,9 +536,34 @@ def build_parser() -> argparse.ArgumentParser:
                              "deployment declares under [roles.<name>]")
     rl_set.add_argument("--reports", default="", help="comma-separated reports for a lead/administrator")
     rl_set.add_argument("-n", "--dry-run", action="store_true")
+    # aegis-ftmfn: THE BAND HAD NO VERB. `roles set` writes the TREE POSITION, so
+    # `st roles set billy normal` is refused as a depth violation and the only way
+    # to band a card was to hand-edit its `roles` array. Three of twenty were
+    # missed that way — not decided differently, just never written down.
+    rl_band = rl_sub.add_parser(
+        "band", help="band <agent> <first|normal|support|last> — the SURVIVAL band")
+    rl_band.add_argument("agent")
+    # No `choices=` here either, for the reverse of rl_set's reason: the bands ARE
+    # a closed vocabulary (traits.SURVIVAL_BANDS), but argparse's rejection would
+    # print the four names without saying what they mean or which roles declare
+    # them. _cmd_band refuses with the ordering and the deployment's own roles.
+    rl_band.add_argument("band", metavar="BAND",
+                         help="first (shed first) | normal | support | last "
+                              "(shed last). The ORDER is the safety property — "
+                              "these are names, never numbers.")
+    rl_band.add_argument("--via", metavar="ROLE", default=None,
+                         help="which declared role to carry the band, when this "
+                              "deployment declares more than one")
+    rl_band.add_argument("-n", "--dry-run", action="store_true")
     rl_sync = rl_sub.add_parser("sync", help="materialize the crew cards FROM a source")
     rl_sync.add_argument("-n", "--dry-run", action="store_true", help="show the diff, write nothing")
     rl_sync.add_argument("--force", action="store_true", help="sync even if it restructures LIVE agents")
+    # aegis-ftmfn: a SECOND consent, deliberately not folded into --force. See
+    # _cmd_project — the two refusals answer different questions, and the measured
+    # incident is precisely an operator who would have answered only the first.
+    rl_sync.add_argument("--allow-breakage", action="store_true",
+                         help="sync even if it would NEWLY break a card's attachment "
+                              "to the tier (e.g. manufacture an ORPHAN)")
     # aegis-t4eve: the tier comes FROM a source, and sync says which one answered.
     # Omitted => ontology-first, file-fallback. Named => never silently substituted.
     rl_sync.add_argument("--from", dest="from_source", default=None,
@@ -844,6 +870,8 @@ def main(argv: list[str] | None = None) -> int:
             return _cmd_role(a)
         if roles_sub == "sync":
             return _cmd_project(a)
+        if roles_sub == "band":
+            return _cmd_band(a)
         return _cmd_roles(a)  # bare `roles`, `roles --check`, or `roles show`
     if a.cmd == "inbox":
         return _cmd_inbox(a)
@@ -3520,6 +3548,193 @@ def _cmd_roles(a) -> int:
             roles_mod.CANNOT_TELL: CANNOT_TELL}[rep.verdict]
 
 
+def _declarers(catalog, band: str) -> list[str]:
+    """Which declared roles carry this survival band. Sorted, possibly empty.
+
+    ASKED OF THE CATALOG, never matched by name. `[roles.drains-last] survival =
+    "last"` is the shape a deployment actually writes, so a role's NAME says
+    nothing about its band — the live config declares `normal` and `support` as
+    same-named roles and would make a name-matching bug invisible. This is the
+    same refusal test_roles_band's stub is built around.
+    """
+    out = []
+    for role in catalog.known():
+        try:
+            if getattr(catalog.of(role), traits_mod.SURVIVAL, None) == band:
+                out.append(role)
+        except Exception:      # noqa: BLE001 — UnknownRole / AmbiguousTrait / anything
+            continue
+    return sorted(out)
+
+
+def _cmd_band(a) -> int:
+    """band <agent> <first|normal|support|last> — DECLARE a card's survival band.
+
+    aegis-ftmfn. The band decides whether an agent is still running after a usage
+    throttle, and until now no verb wrote one. `roles set` writes the TREE
+    POSITION, so `st roles set billy normal` is refused as a depth violation
+    (correctly — `normal` is not a place in the tree), and the only remaining way
+    was to hand-edit the card's `roles` array. Twenty cards were banded that way
+    and three were missed. Nothing detected it, because a missing band and a band
+    decided-`normal` resolve identically at the governor.
+
+    IT WRITES A ROLE, NOT A FIELD, and that is not indirection for its own sake:
+    `traits` composes survival from the ROLE STACK, so a `survival` key on the
+    card would be a second source for one axis — the two would disagree the first
+    time anybody used `roles set`, and the governor reads only the composed one.
+    So this resolves the band to the role the DEPLOYMENT declares for it and puts
+    that role on the stack.
+
+    Three things it refuses to do quietly:
+      · guess, when several roles declare the band (--via names one)
+      · leave a second band-carrying role on the stack, where precedence would
+        silently resolve a band the operator did not ask for
+      · trust its own arithmetic — it RECOMPOSES the resulting stack through the
+        same function `roles --check` prints from, and refuses if that does not
+        come back as the band requested
+    """
+    catalog = _catalog(a)
+    band = a.band
+    if band not in traits_mod.SURVIVAL_BANDS:
+        print(f"  refused: unknown survival band {band!r}. The four, in order: "
+              f"{' < '.join(traits_mod.SURVIVAL_BANDS)} — `first` is shed FIRST "
+              f"and `last` is shed LAST.", file=sys.stderr)
+        return REFUSED
+
+    declares = _declarers(catalog, band)
+    if a.via is not None:
+        if a.via not in declares:
+            print(f"  refused: role {a.via!r} does not declare survival "
+                  f"{band!r}. Roles that do: {', '.join(declares) or '(none)'}",
+                  file=sys.stderr)
+            return REFUSED
+        declares = [a.via]
+    if not declares:
+        # A REFUSAL, NOT AN INVENTION. st could mint a role carrying the band,
+        # and that would put a role in the catalog that the deployment's own
+        # config file does not mention — the closed-enum problem this whole
+        # model exists to kill, re-created by the convenience verb.
+        print(f"  refused: no declared role carries survival {band!r}. Declare "
+              f"one in shantytown.toml:\n\n      [roles.{band}]\n      "
+              f"survival = \"{band}\"\n", file=sys.stderr)
+        return REFUSED
+    if len(declares) > 1:
+        print(f"  refused: {len(declares)} roles declare survival {band!r}: "
+              f"{', '.join(declares)}. Which one this card should carry is a "
+              f"deployment decision, not a guess — name it with "
+              f"--via <role>.", file=sys.stderr)
+        return REFUSED
+    carrier = declares[0]
+
+    files = FilesRegistry(a.root / "crew")
+    try:
+        card = files.get(a.agent)
+    except LookupError as e:
+        print(f"  refused: {e}", file=sys.stderr)
+        return REFUSED
+
+    before_band = roles_mod.band_of(catalog, card)
+    stack = list(card.effective_roles())
+
+    # DROP ANY OTHER BAND-CARRIER FIRST. Two banded roles on one stack is not an
+    # error — `survival` is a SINGLE axis and precedence resolves it — which is
+    # precisely the danger: asking for `normal` on a card already carrying
+    # `drains-last` would compose back to `last`, silently, and the command would
+    # report success having done the opposite of what it was told.
+    dropped = []
+    for r in list(stack):
+        try:
+            other = getattr(catalog.of(r), traits_mod.SURVIVAL, None)
+        except Exception:      # noqa: BLE001 — an unresolvable role is not a band-carrier we can drop
+            continue
+        if other is not None and r != carrier:
+            stack.remove(r)
+            dropped.append((r, other))
+    if carrier not in stack:
+        stack.append(carrier)
+
+    after = replace(card, roles=tuple(stack))
+    after_band = roles_mod.band_of(catalog, after)
+    if after_band != band:
+        # VERIFY BY MECHANISM, NOT BY THE WRITE HAVING SUCCEEDED. Everything above
+        # is reasoning about what the catalog will do; this asks it. A stacked
+        # conflict that nothing ranks composes to `?` here rather than a band, and
+        # `?` means the governor FAILS OPEN — the agent runs through every tier.
+        # Reporting "band set to first" over that would be the exact inversion.
+        print(f"  refused: writing {carrier!r} onto {a.agent}'s stack "
+              f"{stack} does NOT resolve to {band!r} — it resolves to "
+              f"{after_band!r}. Nothing written.", file=sys.stderr)
+        return REFUSED
+
+    print(f"  {a.agent}: band {before_band} -> {after_band}")
+    print(f"  roles   {list(card.effective_roles())} -> {stack}")
+    for r, b in dropped:
+        print(f"  dropped {r!r} (declared survival {b!r}) — one band per card")
+    if not card.roles:
+        # The migration, said out loud. An empty stack means NOBODY SAID, and
+        # writing one is a decision about more than the band: from here the card
+        # carries an explicit set, and `roles set` will no longer be the only
+        # thing describing it.
+        print(f"  note    {a.agent} carried no role stack (it read as its tree "
+              f"position, {card.role!r}); it now carries one explicitly.")
+    # `normal (UNSET)` and `normal` are the SAME ANSWER at the governor, and the
+    # comparison has to know that or the note never fires for the three cards
+    # that motivated this verb — which are exactly the unset ones.
+    if (before_band == after_band
+            or (before_band == roles_mod.UNSET_BAND and after_band == traits_mod.DEFAULT_BAND)):
+        # SAY THAT THE BEHAVIOUR DID NOT CHANGE, or this reads as a no-op and the
+        # next reader deletes it. `normal (UNSET)` -> `normal` changes nothing at
+        # the governor; what it changes is that the band is now a DECISION on the
+        # record instead of an absence, which is the only difference a reviewer
+        # could not previously see.
+        print(f"  note    the governor already resolved {a.agent} to this band. "
+              f"Nothing about a throttle changes — what changes is that it is "
+              f"now DECLARED rather than unset.")
+
+    if a.dry_run:
+        print("\n  --dry-run: nothing written.")
+        return OK
+    files.set(after)
+    print(f"  wrote   {a.root / 'crew' / (a.agent + '.json')}")
+    return OK
+
+
+def _would_break(files, graph_agents, catalog):
+    """The cards this sync would NEWLY break. `[(name, measured reason)]`.
+
+    Builds the crew that WOULD EXIST and asks `roles.faults` — the same function
+    `--check` is built on — about it. Two details make the hypothetical honest:
+
+      · a card the graph does not mention is CARRIED THROUGH UNCHANGED, because
+        that is what sync does with it. Leaving those out would ask the question
+        about a smaller crew than the one that results, and a lead is only
+        resolvable against the whole set: drop the untouched cards and every
+        remaining `reports_to` pointing at one turns into a false `lead is not in
+        the registry`.
+      · for a card that IS in the graph we replace role and reports_to ONLY,
+        mirroring FilesRegistry.set, which preserves every other field. Taking the
+        graph's Agent wholesale would silently blank the stacked role set and make
+        `unattached by role` — the one legitimate reason to have no lead — read as
+        an orphan.
+
+    Best-effort by construction, never fatal: an unreadable registry means we
+    could not ask, and returning "nothing would break" from here is a false
+    all-clear. It cannot happen quietly — every caller reached this line through
+    `files.get` already — but if it does, the caller's existing refusals stand.
+    """
+    try:
+        before = files.all()
+    except Exception:      # noqa: BLE001 — no registry to read; see docstring
+        return []
+    current = {c.name: c for c in before}
+    after = dict(current)
+    for ag in graph_agents:
+        cur = current.get(ag.name)
+        after[ag.name] = (replace(cur, role=ag.role, reports_to=ag.reports_to)
+                          if cur is not None else ag)
+    return roles_mod.newly_broken(before, list(after.values()), catalog)
+
+
 def _cmd_project(a) -> int:
     """Materialize the crew cards FROM the graph. quipu is the authority;
     the cards are a generated projection — writes go to the graph, reads may come
@@ -3651,17 +3866,62 @@ def _cmd_project(a) -> int:
         for nm, sup, is_live in dangling:
             print(f"  {'LIVE ' if is_live else '     '}! {nm:<10} still reports_to {sup}")
 
+    # WOULD THIS SYNC MANUFACTURE AN ORPHAN? (aegis-ftmfn) Asked of the crew that
+    # WOULD EXIST, using `roles --check`'s own definition — never a second one.
+    #
+    # This is not covered by any check above it, and the gap was measured. The
+    # diff showed `grant  worker -> worker, reports_to sattler -> —` on its own
+    # row: a change so small it reads as noise, and it is the one that leaves an
+    # agent with nowhere to send its stop events. Nothing said so. The dangling
+    # check next door is a different fault (a lead that got DEMOTED, not one that
+    # went away), and it only looks at cards absent from the graph. So the single
+    # outcome `--check` exists to catch was the one `sync` could not see.
+    #
+    # PRINTED EVEN ON --dry-run, and that is most of the value: a dry-run is what
+    # an operator runs to decide, and this finding is exactly the thing they
+    # cannot derive from the rows.
+    broke = _would_break(files, agents, _catalog(a))
+    if broke:
+        print(f"\n  and {len(broke)} card(s) would be NEWLY BROKEN — "
+              f"not broken now, broken after:")
+        for nm, why in broke:
+            print(f"  {'LIVE ' if live(nm) else '     '}! {nm:<10} {why}")
+
     if dry:
         print("\n  --dry-run: nothing written.\n")
         return OK
 
+    # BOTH refusals are reported, never one hiding behind the other — the same
+    # rule `roles._fold` states for two legs of one row. An operator who is told
+    # only about the live restructure adds --force, and the orphan lands silently
+    # on the retry.
+    refused = False
     if harm and not force:
+        refused = True
         print(f"\n  REFUSED: {len(harm)} LIVE agent(s) would be restructured: "
               f"{', '.join(sorted(harm))}.", file=sys.stderr)
         print("  They are running right now. Projecting would change their role or "
               "supervisor underneath them.", file=sys.stderr)
         print("  Reconcile the graph first, or re-run with --force if you mean it.\n",
               file=sys.stderr)
+    if broke and not getattr(a, "allow_breakage", False):
+        refused = True
+        # DELIBERATELY NOT --force. The two flags consent to different things:
+        # --force says "yes, restructure agents that are running", which is a
+        # statement about TIMING. This says "yes, leave a card with nowhere to
+        # send its stop events", which is a statement about the RESULT, and it is
+        # true whether or not anything is running. Folding it into --force would
+        # mean the operator who cleared the first refusal was never asked the
+        # second — which is exactly the measured near-miss: the live-restructure
+        # guard was the only thing standing between `sync --force` and an orphan
+        # it never mentioned.
+        print(f"\n  REFUSED: {len(broke)} card(s) would be NEWLY BROKEN: "
+              f"{', '.join(nm for nm, _ in broke)}.", file=sys.stderr)
+        print("  `roles --check` calls this broken because such a card has nowhere "
+              "to send its stop events.", file=sys.stderr)
+        print("  --force does NOT cover this. Fix the source, or re-run with "
+              "--allow-breakage if you mean it.\n", file=sys.stderr)
+    if refused:
         return REFUSED
 
     for ag in sorted(agents, key=lambda x: x.name):
