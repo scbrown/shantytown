@@ -670,17 +670,32 @@ def capture_wiring(agents) -> tuple[str, str]:
 
     if not wired and not missing and not unknown:
         return WIRING_UNKNOWN, "no agent workspaces to check"
-    if unknown:
-        return WIRING_UNKNOWN, (
-            f"could not read the consent file for {len(unknown)}: "
-            f"{', '.join(sorted(unknown)[:6])}")
+
+    # AN UNKNOWN MUST NOT SWALLOW A BROKEN. The VERDICT stays conservative — a
+    # fleet we could not fully read is `?`, never `ok` — but the SENTENCE reports
+    # both halves, because they have different remedies and a reader who sees only
+    # "could not read 3" learns nothing about the seventeen that are provably not
+    # capturing. Letting the weaker finding hide the actionable one is the bug this
+    # whole bead is about, one layer up; `roles --check`'s worst-wins verdict is
+    # the right rule for a VERDICT and the wrong rule for the line beside it.
+    bits = []
     if missing:
-        return WIRING_BROKEN, (
-            f"{len(missing)} of {len(wired) + len(missing)} agents do NOT register "
-            f"`stats capture` on Stop, so they can record no tokens: "
+        bits.append(
+            f"{len(missing)} of {len(wired) + len(missing)} readable agents do NOT "
+            f"register `stats capture` on Stop, so they can record no tokens: "
             f"{', '.join(sorted(missing)[:8])}. provision writes it at LAUNCH — "
-            f"these pick it up when they next relaunch.")
-    return WIRING_OK, f"all {len(wired)} agents register capture on Stop"
+            f"these pick it up when they next relaunch")
+    elif wired:
+        bits.append(f"all {len(wired)} readable agents register capture on Stop")
+    if unknown:
+        bits.append(f"could not read the consent file for {len(unknown)}: "
+                    f"{', '.join(sorted(unknown)[:6])}")
+
+    if unknown:
+        return WIRING_UNKNOWN, "; ".join(bits)
+    if missing:
+        return WIRING_BROKEN, bits[0]
+    return WIRING_OK, bits[0]
 
 
 def render_wiring(verdict: str, why: str) -> str:
