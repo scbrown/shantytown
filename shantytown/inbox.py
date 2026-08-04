@@ -151,6 +151,67 @@ def is_blocked(status) -> bool:
     return (status or "").strip().lower() == "blocked"
 
 
+def is_deferred(status) -> bool:
+    """Is this bead DEFERRED — a standing decision NOT to work it now?
+
+    is_blocked's sibling, and the argument transfers verbatim: serving it CYCLES
+    the agent. The plate hands over an item somebody deliberately set aside, the
+    agent burns a turn discovering that, stops, and the next stop event hands it
+    straight back. If anything the case is stronger than blocked's — `blocked`
+    can be an accident of a dependency edge, `deferred` is always somebody's
+    explicit call.
+
+    MEASURED 2026-08-04 on the live aegis store: 41 deferred beads, 38 of them
+    ASSIGNED, and `st anchor ellie` served her aegis-dg5 (deferred) ahead of
+    eight workable items — because plate precedence is (hooked, in_progress,
+    everything-else) and "everything else" silently included deferred.
+
+    SAME SCOPE AS is_blocked, measured the same way rather than assumed: `bd
+    ready` already excludes deferred (checked live 2026-08-04 — 394 ready, all
+    394 `open`), so hauls / dispatchable / Rule Zero read through `bd ready` and
+    were never leaking. `bd list` is what the plate readers use, and it DOES
+    carry deferred. A filter on the ready-based paths would be a branch that
+    cannot execute, so it is deliberately not there.
+
+    NOT WIRED INTO DISPATCH, unlike `blocked` — and that asymmetry is the
+    judgment, not an omission. dispatch.Blocked refuses because serving writes
+    `status=in_progress` and would launder away a gate the dispatcher has no
+    standing to lift: blocked means the item cannot be advanced by ANYONE, for a
+    reason external to whoever is dispatching. Deferred means "not now", and a
+    coordinator typing `st go <item> <agent>` IS the deliberate revision of that
+    priority call, naming the item by hand. The plate exclusion is about
+    AUTOMATIC service; an explicit dispatch is not automatic and cannot cycle
+    anyone. Revisit only if deferral gains an external gate (aegis-8ly5a wants
+    the blocker KIND recorded at defer time — if a `deferred` ever means "waiting
+    on something outside us", it needs dispatch's refusal too).
+
+    Shape-tolerant for the same reason as is_blocked: beads.plate holds a dict
+    row, files.plate a WorkItem.
+    """
+    if isinstance(status, dict):
+        status = status.get("status")
+    return (status or "").strip().lower() == "deferred"
+
+
+def is_unworkable(status) -> bool:
+    """Is this status one that must never occupy a plate at all?
+
+    THE ONE CALL BOTH PLATE READERS MAKE, and composing it here rather than
+    chaining `not is_blocked(...) and not is_deferred(...)` at each reader is the
+    whole point. Two predicates times two backends is four edit sites, so the
+    next unworkable status gets added to three of them and the fourth is the
+    leak — which is exactly the drift the two-implementation rule and
+    test_plate_equivalence exist to catch, arrived at one status later. With this
+    seam, a new status is ONE edit and both backends move together by
+    construction.
+
+    The named predicates stay public and unchanged: `is_blocked` has consumers
+    that mean blocked SPECIFICALLY (notify's blocked-stale sweep, dispatch's
+    refusal) and must not silently start meaning deferred too.
+    """
+    return is_blocked(status) or is_deferred(status)
+
+
 def _body_of(title: str) -> str:
     t = (title or "").lstrip()
     for p in (PREFIX, _LEGACY_PREFIX):
