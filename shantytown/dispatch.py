@@ -109,6 +109,21 @@ class HasOpenBlocker(Exception):
     dispatch must not put work on a plate that nobody can advance. An item whose
     blocker is still open is exactly that, and it was the one variant left.
 
+    THE MESSAGE STATES WHAT THIS PROCESS MEASURED, AND NOTHING ABOUT bd
+    (aegis-eqhf6). It used to end "`bd ready` already excludes it for this
+    reason" — an assertion about ANOTHER TOOL'S behaviour, made by code that
+    never asked it. On 2026-08-04 sattler hit a case where `bd ready` DID offer a
+    bead this refused, and that sentence sent the diagnosis somewhere else
+    entirely: it reads as "the two agree, so your ready list must be stale",
+    which is a claim st has no standing to make. The refusal now says where its
+    own reading came from and names the disagreement as the finding, because a
+    refusal that explains itself with someone else's guarantee is unfalsifiable
+    by the person reading it.
+
+    (`bd ready` is in fact usually right — swept 2026-08-04, 332 ready beads, 15
+    carrying `blocks` edges, 14 blockers closed and correctly ready. Being
+    usually right is not the point: st cannot tell, so it must not say.)
+
     MEASURED 2026-08-02: a P1 was dispatched to an agent while `bd ready`
     correctly EXCLUDED it, because its blocker — a filed, open telemetry gap —
     was unmet. The agent could not advance it for precisely the reason the
@@ -131,10 +146,12 @@ class HasOpenBlocker(Exception):
         names = ", ".join(self.blockers)
         super().__init__(
             f"{item_id} is gated by {len(self.blockers)} unmet blocker(s): {names}. "
-            f"Refusing to serve it to {requested} — `bd ready` already excludes it "
-            f"for this reason, and dispatching it anyway puts work on a plate that "
-            f"cannot be advanced. Close the blocker, or drop the dependency if it "
-            f"is no longer real (`bd dep remove {item_id} <blocker>`), then dispatch."
+            f"Refusing to serve it to {requested} — dispatching it puts work on a "
+            f"plate that cannot be advanced. Read from this item's own `blocks` "
+            f"dependencies, just now. If `bd ready` offered you this item, the two "
+            f"disagree and THAT is worth a bead — do not assume either is stale. "
+            f"Close the blocker, or drop the dependency if it is no longer real "
+            f"(`bd dep remove {item_id} <blocker>`), then dispatch."
         )
 
 
@@ -343,10 +360,16 @@ class Dispatcher:
         if item.status == "blocked":
             raise Blocked(item_id, agent_name)
         # ...AND AN UNMET BLOCKER IS THE SAME REFUSAL (internal-ref). Third
-        # variant of the one hole: `bd ready` already excludes an item whose
-        # `blocks` dependency is open, and the dispatch path never asked. Only a
-        # POSITIVE reading refuses — an empty list means "none known" (the files
-        # backend has no dependency model at all), never "ready".
+        # variant of the one hole: an item whose `blocks` dependency is open
+        # cannot be advanced, and the dispatch path never asked. Only a POSITIVE
+        # reading refuses — an empty list means "none known" (the files backend
+        # has no dependency model at all), never "ready".
+        #
+        # This used to justify itself with "`bd ready` already excludes" such an
+        # item. Dropped, not softened (aegis-eqhf6): the refusal is correct on
+        # its OWN reading of this item's dependencies, and borrowing another
+        # tool's guarantee for it made the check look redundant with bd rather
+        # than independent of it — which is the opposite of why it exists.
         if getattr(item, "open_blockers", ()):
             raise HasOpenBlocker(item_id, agent_name, item.open_blockers)
         # Do not STEAL work someone is already doing (aegis-uvw5, the 7yeb shape).
