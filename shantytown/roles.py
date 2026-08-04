@@ -28,6 +28,18 @@ UNVERIFIED = "unverified"
 # check.
 ROOT_ROLE = "administrator"
 
+# WHAT AN UNBANDED CARD PRINTS AS — a NAME, so the one place that has to ask "is
+# this the same band the governor already resolved?" cannot do it by re-spelling
+# the string. `st roles band billy normal` is behaviourally a no-op against this
+# value and a real change against any other, and getting that comparison wrong
+# in either direction is a lie: silence about a throttle that just changed, or a
+# claim of change where there was none.
+#
+# Deliberately NOT a band. It is `normal` plus the fact that NOBODY WROTE IT
+# DOWN, which is the distinction the whole band column exists to make visible.
+from .traits import DEFAULT_BAND as _DEFAULT_BAND      # noqa: E402
+UNSET_BAND = f"{_DEFAULT_BAND} (UNSET)"
+
 
 @dataclass
 class Row:
@@ -347,9 +359,71 @@ def check(registry: Registry, emitted=None, live=None, catalog=None) -> Report:
     return Report(rows)
 
 
-def _band(catalog, a: Agent) -> str:
+class _Static:
+    """A registry over a list you already hold. Not public — it exists so the
+    functions below can ask `check` its question about a HYPOTHETICAL crew.
+
+    `empty_note` returns None for the same reason FilesRegistry's does: the list
+    IS the entire search space, so an empty one is a complete observation and not
+    a place a misconfiguration can hide.
+    """
+
+    def __init__(self, agents: list[Agent]):
+        self._agents = list(agents)
+
+    def all(self) -> list[Agent]:
+        return list(self._agents)
+
+    def empty_note(self) -> str | None:
+        return None
+
+
+def faults(agents: list[Agent], catalog=None) -> dict[str, str]:
+    """`name -> the measured reason` for every card that is NOT correctly attached.
+
+    A thin wrapper over `check`, and that is the entire point: there must be
+    exactly ONE definition of "this card has nowhere to send its stop events".
+    `--check` reports it after the fact; `roles sync` (via `newly_broken` below)
+    has to ask the same question about a crew that does not exist yet. If the two
+    computed it separately, a disagreement between them would be unattributable —
+    the identical argument `required_stop_directions` makes one screen up, and
+    the reason ORPHAN is not re-spelled as an `if` in cli.py.
+
+    Structural leg only: `emitted` and `live` are questions about artifacts and
+    running processes, which a hypothetical crew does not have.
+    """
+    rep = check(_Static(agents), catalog=catalog)
+    return {r.agent: (r.note or r.verdict) for r in rep.rows if r.verdict != OK}
+
+
+def newly_broken(before: list[Agent], after: list[Agent],
+                 catalog=None) -> list[tuple[str, str]]:
+    """Cards this change would break that are not broken NOW. `[(name, reason)]`.
+
+    NEWLY, not merely broken, and the asymmetry is load-bearing (aegis-ftmfn). A
+    sync that refused whenever the resulting crew held any fault could never be
+    used to FIX one — the store would be wedged by its own guard, and the operator's
+    only recovery would be hand-editing the cards, which is the projection model
+    defeated. So the question is not "is the result clean" but "does this make it
+    worse", which is answerable and is what the operator is actually consenting to.
+
+    A card that does not exist yet counts as not-broken before: minting a NEW card
+    with no lead is manufacturing an orphan just as surely as demoting one into it.
+    """
+    was = faults(before, catalog)
+    now = faults(after, catalog)
+    return [(name, reason) for name, reason in sorted(now.items())
+            if name not in was]
+
+
+def band_of(catalog, a: Agent) -> str:
     """The survival band the USAGE GOVERNOR will resolve for this card, as the
     text to print. "" when nothing was measured.
+
+    PUBLIC for the reason `required_stop_directions` and `live_verdict` are:
+    `st roles band` now asks the identical question, to print what a card
+    resolves to before and after a write. Two implementations of "what band is
+    this card" would let the verb report a band the roster does not show.
 
     WHY THE ROSTER SHOWS THIS AT ALL (aegis-upo93). A `traits` tier spins down
     every agent whose band is below the one it spares, and the band is composed
@@ -380,7 +454,10 @@ def _band(catalog, a: Agent) -> str:
     except Exception:      # noqa: BLE001 — UnknownRole / AmbiguousTrait / anything
         return "? (the governor fails OPEN — this agent runs)"
     from .traits import SURVIVAL
-    return str(getattr(composed, SURVIVAL, None) or "normal (UNSET)")
+    return str(getattr(composed, SURVIVAL, None) or UNSET_BAND)
+
+
+_band = band_of        # the in-module name, unchanged
 
 
 def _unattached(catalog, role: str) -> bool:

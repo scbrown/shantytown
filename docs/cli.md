@@ -23,7 +23,10 @@ st ask <agent>                the QUESTION they're blocked on: prompt, the comma
                               approved, and the numbered options VERBATIM. read-only.
 st answer <agent> <N>         select option N. refuses on a pane that isn't on a picker,
                               echoes what it selected, and records who answered.
-st roles [--check|set|sync]   the hierarchy: show it, verify it, write it, import it
+st roles [--check|set|band|sync]
+                              the hierarchy: show it, verify it, write it, import it.
+                              `band <agent> <first|normal|support|last>` writes the
+                              SURVIVAL band — which agents a usage throttle spares.
 st init                       scaffold a NEW deployment (wizard): store, cards, hooks, config
 st new <agent>                create an agent from a card
 st start [--mode lite|heavy]  BOOT the town by mode: the admin alone, or every card. idempotent
