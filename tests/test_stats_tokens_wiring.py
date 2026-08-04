@@ -1,0 +1,212 @@
+"""Tokens: the capture must be WIRED to fire, and the report must not lie about
+what it measured (aegis-u5u98).
+
+THE LOAD-BEARING TEST IS `test_the_capture_hook_is_registered_on_BOTH_events`.
+Everything else is a specimen; that one is the invariant, and it is written
+against `stats.capture`'s own branch structure rather than against a literal
+settings dict — a registration that does not reach the branch that writes tokens
+is the bug, whatever the JSON looks like.
+
+WHAT ACTUALLY HAPPENED, because the report's shape is why it took twelve days.
+`capture` has two branches: PostToolUse writes an events row, and the STOP branch
+is the only thing that ever writes a token row. Only PostToolUse was registered.
+So no token could be recorded anywhere on the fleet — and the store still looked
+healthy, because events kept flowing from the branch that WAS wired.
+
+It presented as a per-agent quirk (2 of 11 agents recording, 9 confident zeros)
+for a second, independent reason: `stats_report` bounded the events query by the
+window and the token query by NOTHING. The only agents showing totals were the
+handful with rows left over from the last day the Stop path ever fired, printed
+under a `last 24h` header. The bug report reasonably went looking for what made
+those agents special. Nothing did — the window did.
+
+Two halves of one illusion: a capture that could not run, and a display that made
+its absence look selective. Both are pinned below, and `test_a_stale_row_is_not
+_counted_in_the_window` is the one that would have refused to let the first hide.
+"""
+from __future__ import annotations
+
+import io
+import json
+import sqlite3
+import sys
+import time
+
+from shantytown import provision, stats
+from shantytown.runtime import _capture_cmd
+
+
+# --- the invariant: the write path is reachable ---------------------------------
+
+
+def test_the_capture_hook_is_registered_on_BOTH_events(tmp_path):
+    """THE test. Tokens are written ONLY on the Stop branch, so a capture wired
+    to PostToolUse alone can never record one — which is exactly what shipped."""
+    out = json.loads(provision._with_capture_hook("{}", tmp_path))
+    hooks = out["hooks"]
+    cmd = _capture_cmd(tmp_path)["command"]
+
+    assert any(h["command"] == cmd for b in hooks["PostToolUse"]
+               for h in b["hooks"]), "the events branch lost its registration"
+    assert "Stop" in hooks, (
+        "capture is not registered on Stop — the ONLY branch that writes a token "
+        "row. This is the whole of aegis-u5u98.")
+    assert any(h["command"] == cmd for b in hooks["Stop"]
+               for h in b["hooks"]), "Stop is registered to something else"
+
+
+def test_the_stop_registration_carries_NO_matcher(tmp_path):
+    """A Stop payload has no tool name. A matcher on an event with nothing to
+    match is the aegis-ac5x failure — a registration that looks specific and
+    fires zero times, which is indistinguishable from the bug being fixed here."""
+    stop = json.loads(provision._with_capture_hook("{}", tmp_path))["hooks"]["Stop"]
+    assert all("matcher" not in b for b in stop), stop
+
+
+def test_the_two_registrations_are_the_SAME_command(tmp_path):
+    """One capture, two events. If these ever drift apart, one branch is being
+    fed by a command that resolves a different interpreter or a different store
+    root — the failure `_capture_cmd`'s baked-in --root exists to prevent."""
+    hooks = json.loads(provision._with_capture_hook("{}", tmp_path))["hooks"]
+    post = [h["command"] for b in hooks["PostToolUse"] for h in b["hooks"]]
+    stop = [h["command"] for b in hooks["Stop"] for h in b["hooks"]]
+    assert post == stop
+
+
+def test_a_non_dict_template_still_passes_through(tmp_path):
+    """Provisioning must never fail because of the stats layer."""
+    assert provision._with_capture_hook("not json", tmp_path) == "not json"
+    assert provision._with_capture_hook("[1,2]", tmp_path) == "[1,2]"
+
+
+# --- end to end: a stop payload actually lands a token row ----------------------
+
+
+def _capture(root, payload, monkeypatch):
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(payload)))
+    return stats.main(["capture", "--root", str(root)])
+
+
+def test_a_stop_payload_records_tokens_AND_a_stop_event(tmp_path, monkeypatch):
+    monkeypatch.setenv("SHANTY_AGENT", "arnold")
+    monkeypatch.delenv("ST_STATS_PUSHGATEWAY", raising=False)
+    tp = tmp_path / "t.jsonl"
+    tp.write_text(json.dumps(
+        {"message": {"usage": {"input_tokens": 11, "output_tokens": 22}}}) + "\n")
+    assert _capture(tmp_path, {"session_id": "s9", "hook_event_name": "Stop",
+                               "transcript_path": str(tp)}, monkeypatch) == 0
+    db = sqlite3.connect(tmp_path / "stats.sqlite")
+    assert db.execute("SELECT input_toks, output_toks FROM tokens").fetchone() == (11, 22)
+    # stops=0 across the fleet was the visible symptom sitting right next to the
+    # zeros, and nothing connected them. Both come from this one branch.
+    assert db.execute("SELECT COUNT(*) FROM events WHERE kind='stop'").fetchone()[0] == 1
+
+
+# --- the report must not lie about the window ----------------------------------
+
+
+def _store(tmp_path, *, ev_age_h, tok_age_h=None, agent="tim"):
+    """Events inside the window; optionally a token row at some age."""
+    now = time.time()
+    db = sqlite3.connect(tmp_path / "stats.sqlite")
+    db.executescript(stats._SCHEMA)
+    db.execute("INSERT INTO events(ts, agent, kind, session) VALUES (?,?,?,?)",
+               (now - ev_age_h * 3600, agent, "tool", "s1"))
+    if tok_age_h is not None:
+        db.execute("INSERT INTO tokens(session, agent, input_toks, output_toks,"
+                   " updated) VALUES (?,?,?,?,?)",
+                   ("s1", agent, 5, 500, now - tok_age_h * 3600))
+    db.commit()
+    db.close()
+    return now
+
+
+def _report(tmp_path, since_h=24.0):
+    buf = io.StringIO()
+    stats.stats_report(tmp_path, since_h=since_h, out=buf)
+    return buf.getvalue()
+
+
+def test_a_stale_row_is_not_counted_in_the_window(tmp_path):
+    """THE specimen. Events 1h old, a token row 300h old, header says 24h.
+
+    Before the fix this printed `tokens_out=500` — an all-time total under a
+    24-hour heading — and that is precisely what made a dead pipeline look like a
+    handful of agents mysteriously still working.
+    """
+    _store(tmp_path, ev_age_h=1, tok_age_h=300)
+    out = _report(tmp_path)
+    assert "tokens_out=500" not in out, out
+    assert "tokens=?" in out, out
+
+
+def test_a_row_INSIDE_the_window_is_reported_normally(tmp_path):
+    """Non-vacuity: the fix must not simply suppress every token."""
+    _store(tmp_path, ev_age_h=1, tok_age_h=1)
+    out = _report(tmp_path)
+    assert "tokens_in=5 tokens_out=500" in out, out
+    assert "tokens=?" not in out
+
+
+def test_NO_ROW_is_not_a_zero(tmp_path):
+    """`tokens_out=0` is a MEASUREMENT — this agent ran and produced nothing —
+    and it rendered identically to 'nothing ever recorded a token'. One invites a
+    shrug, the other is a broken pipeline. Same rule as `hooks: ?` and `?/?/?`."""
+    _store(tmp_path, ev_age_h=1, tok_age_h=None)
+    out = _report(tmp_path)
+    assert "tokens=? (none captured)" in out, out
+    assert "tokens_out=0" not in out, out
+
+
+def test_a_measured_ZERO_still_prints_as_zero(tmp_path):
+    """The distinction has to cut both ways or it is just a relabelling."""
+    now = time.time()
+    db = sqlite3.connect(tmp_path / "stats.sqlite")
+    db.executescript(stats._SCHEMA)
+    db.execute("INSERT INTO events(ts, agent, kind, session) VALUES (?,?,?,?)",
+               (now - 3600, "tim", "tool", "s1"))
+    db.execute("INSERT INTO tokens(session, agent, input_toks, output_toks,"
+               " updated) VALUES (?,?,?,?,?)", ("s1", "tim", 0, 0, now - 3600))
+    db.commit(); db.close()
+    out = _report(tmp_path)
+    assert "tokens_in=0 tokens_out=0" in out, out
+    assert "tokens=?" not in out
+
+
+# --- the tell ------------------------------------------------------------------
+
+
+def test_a_fleet_wide_absence_says_so_ONCE(tmp_path):
+    """Twenty agents each printing `tokens=?` is one fault, not twenty gaps, and
+    the reader needs a sentence saying so and naming where to look. This is the
+    'ship the way to tell it is alive' half — the outage was silent for twelve
+    days precisely because nothing ever said this."""
+    now = time.time()
+    db = sqlite3.connect(tmp_path / "stats.sqlite")
+    db.executescript(stats._SCHEMA)
+    for ag in ("tim", "billy", "grant"):
+        db.execute("INSERT INTO events(ts, agent, kind, session) VALUES (?,?,?,?)",
+                   (now - 3600, ag, "tool", "s" + ag))
+    db.commit(); db.close()
+    out = _report(tmp_path)
+    assert "NO TOKENS CAPTURED FOR ANY AGENT" in out, out
+    assert "Stop hook" in out, "the tell must name the branch that writes tokens"
+
+
+def test_the_tell_stays_QUIET_when_anything_was_captured(tmp_path):
+    """A warning that fires when the thing is working gets switched off within a
+    day. One agent recording is enough to prove the pipeline is alive."""
+    _store(tmp_path, ev_age_h=1, tok_age_h=1, agent="ellie")
+    out = _report(tmp_path)
+    assert "NO TOKENS CAPTURED" not in out, out
+
+
+def test_the_tell_does_not_fire_on_an_EMPTY_window(tmp_path):
+    """No activity at all is already reported by its own line. Adding a token
+    alarm there would alarm about a fleet that simply was not running."""
+    db = sqlite3.connect(tmp_path / "stats.sqlite")
+    db.executescript(stats._SCHEMA)
+    db.commit(); db.close()
+    out = _report(tmp_path)
+    assert "no activity captured" in out
+    assert "NO TOKENS CAPTURED" not in out, out

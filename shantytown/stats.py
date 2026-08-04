@@ -520,12 +520,45 @@ def stats_report(root: Path, agent: str | None = None, since_h: float = 24.0,
         print(f"st stats — last {since_h:g}h", file=out)
         if not rows:
             print("  (no activity captured in the window)", file=out)
+        measured = 0
         for ag, ev, files, stops in rows:
-            inp, outt = conn.execute(
-                "SELECT COALESCE(SUM(input_toks),0),COALESCE(SUM(output_toks),0)"
-                " FROM tokens WHERE agent=?", (ag,)).fetchone()
+            # BOUNDED BY THE SAME WINDOW AS THE EVENTS BESIDE IT (aegis-u5u98).
+            # This query had NO time filter while the events query had one, so
+            # the line read `st stats — last 24h` and printed ALL-TIME token
+            # totals next to 24h event counts. That is what turned a total,
+            # fleet-wide, 12-day capture outage into something that looked like
+            # a per-agent quirk: the only agents showing tokens were the four
+            # with rows left over from the last day the Stop path ever fired,
+            # and the bug report reasonably went hunting for what made those
+            # four special. Nothing did. The window did.
+            n, inp, outt = conn.execute(
+                "SELECT COUNT(*), COALESCE(SUM(input_toks),0),"
+                " COALESCE(SUM(output_toks),0)"
+                " FROM tokens WHERE agent=? AND updated>?", (ag, cutoff)).fetchone()
+            measured += n
+            # NO ROW IS NOT A ZERO, and this is the whole reason the outage was
+            # invisible for twelve days. `tokens_out=0` is a MEASUREMENT — it
+            # says this agent ran and produced nothing — and it renders
+            # identically to "nothing has ever recorded a token for this agent".
+            # One invites a shrug, the other is a broken pipeline. Same rule
+            # `roles --check` follows with `hooks: ?`, and `crew --governor`
+            # with `?/?/?`: never print a word you did not measure.
+            toks = (f"tokens_in={inp} tokens_out={outt}" if n
+                    else "tokens=? (none captured)")
             print(f"  {ag:<14} events={ev:<6} files={files:<4} stops={stops:<4}"
-                  f" tokens_in={inp} tokens_out={outt}", file=out)
+                  f" {toks}", file=out)
+        if rows and not measured:
+            # THE TELL. Every agent reading `tokens=?` is a fleet-wide fault,
+            # not twenty independent gaps, and it has exactly one cause worth
+            # naming: tokens are written ONLY on the Stop branch of `capture`,
+            # so if nothing registers that hook nothing can ever record one.
+            # Without this line the reader sees twenty question marks and no
+            # sentence telling them it is one thing and where to look.
+            print("  ⚠ NO TOKENS CAPTURED FOR ANY AGENT in this window. Tokens are"
+                  " recorded only on the Stop hook; events (above) come from"
+                  " PostToolUse and prove the store itself is healthy. Check that"
+                  " `shantytown.stats capture` is registered on Stop —"
+                  " `st doctor` reports it.", file=out)
         sk = conn.execute(
             f"SELECT skill, COUNT(*) FROM events WHERE skill IS NOT NULL"
             f" AND ts>? {where} GROUP BY skill ORDER BY 2 DESC LIMIT 10",
