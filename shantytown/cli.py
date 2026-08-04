@@ -108,6 +108,8 @@ from .dispatch import (Dispatcher, TriageRefused, SendUnverified,
 from . import forgejo as forgejo_mod
 from . import governor as gov_mod
 from . import guard as guard_mod
+from . import attribution as attribution_mod
+from .attribution import attribute
 from .events import FilesEvents
 from .inbox import FilesInbox, MessageTooLong, TrackerInbox
 from .triage import Action
@@ -314,8 +316,11 @@ def _me(a) -> str | None:
 
 
 def _wire(a) -> Dispatcher:
+    # sender=_me(a): `st go` signs the dispatch with whoever ran it (aegis-5vxmz).
+    # One resolution, the same one `st inbox` attributes with — a coordinator must
+    # not be one name on a message and another on the work it hands out.
     return Dispatcher(_registry(a), _tracker(a), _panes(a),
-                      governor=_dispatch_gate(a))
+                      governor=_dispatch_gate(a), sender=_me(a))
 
 
 def _governor(a):
@@ -1055,6 +1060,10 @@ def _observe_live(runtime, panes, session) -> bool:
                 runtime.trust_prompt(screen):
             print(f"  first-run TRUST prompt in {session} — accepting the "
                   f"workspace the card already elected.", file=sys.stderr)
+            # BARE BY DESIGN (aegis-5vxmz). This is an ANSWER to a prompt the
+            # runtime is showing — a single keystroke's worth of text consumed by
+            # a chooser, not a message anyone reads. Signing it would answer a
+            # different question. Pinned in tests/test_attribution_inventory.py.
             panes.send(session, runtime.trust_answer())
             answered = True
         if _LIVE_DELAY:
@@ -2256,9 +2265,13 @@ def _cmd_inbox(a) -> int:
     # Prefix only when we KNOW who is sending. An unattributable send stays bare
     # rather than claiming a name it cannot support — inventing a sender is worse
     # than omitting one.
-    _from = _me(a)
-    if _from:
-        msg = f"[from {_from}] {msg}"
+    #
+    # THE FORMAT MOVED OUT (aegis-5vxmz). It was an inline f-string here while
+    # inbox was the only attributed path; it is now attribution.attribute,
+    # because dispatch and every st tend push sign their sends too and a security
+    # marker that is written twice is a security marker that can drift. The
+    # behaviour is unchanged — the two differential tests below still hold.
+    msg = attribute(msg, _me(a))
     try:
         agent = _registry(a).get(a.agent)
     except LookupError as e:
@@ -3683,7 +3696,14 @@ def _cmd_subscribe(a) -> int:
             try:
                 card = registry.get(admin)
                 if card.pane and panes.exists(card.pane):
-                    panes.send(card.pane, f"governed workflow assigned: {item.id} — {title}")
+                    # Signed as the ROUTER, not as a person (aegis-5vxmz). No
+                    # human composed this line — it is quipu's governed-workflow
+                    # event turned into an assignment — and "governed workflow
+                    # assigned: <id>" arriving unsigned in a coordinator's pane
+                    # reads as the operator handing out work.
+                    panes.send(card.pane, attribute(
+                        f"governed workflow assigned: {item.id} — {title}",
+                        attribution_mod.ST_EVENTS))
                     mailed = f", mailed {admin}"
             except LookupError:
                 pass

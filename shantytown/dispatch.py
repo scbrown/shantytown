@@ -13,6 +13,7 @@ import time
 from dataclasses import dataclass, field
 
 from . import stores
+from .attribution import attribute
 from .protocols import Panes, Registry, Tracker
 from .triage import Action, Decision, triage
 
@@ -271,10 +272,17 @@ class Plan:
 
 class Dispatcher:
     def __init__(self, registry: Registry, tracker: Tracker, panes: Panes,
-                 governor=None):
+                 governor=None, sender: str | None = None):
         self.registry = registry
         self.tracker = tracker
         self.panes = panes
+        # WHO IS DISPATCHING (aegis-5vxmz). None means "could not establish", and
+        # that stays BARE — see attribution.attribute. Injected rather than read
+        # from the environment here because a Dispatcher constructed in a test or
+        # by a future caller must not silently inherit whatever $SHANTY_AGENT the
+        # surrounding process happens to carry: the sender is a fact the CALLER
+        # knows, and a transport that guesses it is the failure this prevents.
+        self.sender = sender
         # governor(item) -> "" | a refusal string. INJECTED, and None by default,
         # so the dispatcher keeps working with no config, no metric and no
         # Prometheus — the usage governor is a policy this module CONSULTS, never
@@ -375,6 +383,23 @@ class Dispatcher:
             # the item id in the pane, and a long note must not push it out of
             # what we can read back.
             text += f" — NOTE: {flat}"
+        # ATTRIBUTE LAST, so the prefix leads the line (aegis-5vxmz), and HERE in
+        # plan() rather than at the send for the same reason the store tag rides
+        # here: it must go through the same triage gate, the same verify, and it
+        # must show in --dry-run. An attribution that only appears on the real run
+        # is absent from the preview an operator reads to decide the dispatch is
+        # right — and this is the payload most worth signing, because it is the
+        # one that tells an agent to START WORKING.
+        #
+        # MEASURED SAFE, not assumed (2026-08-04): nothing parses this text.
+        # `triage.triage(panes, target, new_work)` accepts new_work and never
+        # reads it (only `unrelated()` does, and triage does not call it);
+        # `verify` greps the pane for the ITEM ID, which the prefix does not
+        # touch; and a grep of ~/.gt and ~/.claude found "on your hook" only in
+        # primer PROSE, no matcher. The bead flagged this contract as the reason
+        # to stop — it holds, and the check is written down so the next person
+        # does not have to re-derive it.
+        text = attribute(text, self.sender)
         return Plan(
             item_id=item_id,
             agent=agent_name,
