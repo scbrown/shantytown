@@ -235,9 +235,13 @@ def _tracker(a, default="files"):
     """
     b = _backend(a, default)
     if b == "beads":
-        return beads_mod.BeadsTracker(repo=getattr(a, "repo", None)
-                                      or _deployment_default(a, "SHANTY_BEADS_REPO")
-                                      or _default_bd_repo(a))
+        return beads_mod.BeadsTracker(
+            repo=getattr(a, "repo", None)
+            or _deployment_default(a, "SHANTY_BEADS_REPO")
+            or _default_bd_repo(a),
+            # aegis-qmfa1: embedded-store work must be visible to the plate/haul.
+            extra_repos=beads_mod.parse_extra_repos(
+                _deployment_default(a, beads_mod.EXTRA_REPOS_KEY)))
     if b == "forgejo":
         # --repo is owner/name here (the forge's coordinates), not a directory.
         from .forgejo import ForgejoTracker

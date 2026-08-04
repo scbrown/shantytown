@@ -190,8 +190,13 @@ def _plate_reader(root: Path):
     _backend()'s baseline; a beads repo comes from SHANTY_BEADS_REPO.
     """
     if (deployment_default(root, "SHANTY_BACKEND") or "files") == "beads":
-        from .beads import BeadsTracker, plate as beads_plate
-        tracker = BeadsTracker(repo=deployment_default(root, "SHANTY_BEADS_REPO"))
+        from .beads import (BeadsTracker, EXTRA_REPOS_KEY, parse_extra_repos,
+                            plate as beads_plate)
+        tracker = BeadsTracker(
+            repo=deployment_default(root, "SHANTY_BEADS_REPO"),
+            # aegis-qmfa1: the haul advance fires from here. A plate that cannot
+            # see an embedded store reports that agent idle at every stop.
+            extra_repos=parse_extra_repos(deployment_default(root, EXTRA_REPOS_KEY)))
         return lambda who: beads_plate(tracker, who)
     return lambda who: files_plate(FilesTracker(root / "items"), who)
 
