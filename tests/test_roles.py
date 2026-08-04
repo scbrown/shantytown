@@ -49,7 +49,12 @@ def test_broken_orphan(tmp_path: Path):
     assert rep.verdict == roles.BROKEN
     out = rep.render()
     assert "ORPHAN" in out
-    assert "BLOCKED: 1 agent's stop events go nowhere." in out
+    assert "BLOCKED: 1 agent is not correctly attached to the tier" in out
+    # ORPHAN is a real structural fault and stays BROKEN — but the summary must
+    # not assert a delivery outcome it never measured. dearing's stop actually
+    # goes STRAIGHT to arnold (route_stop Q4); "go nowhere" was false, and the
+    # same sentence in `st anchor` cost a rebuild scare (aegis-j1dzp).
+    assert "go nowhere" not in out
 
 
 def test_broken_self_reference(tmp_path: Path):
