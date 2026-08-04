@@ -591,14 +591,149 @@ def test_the_tend_line_is_SILENT_when_no_reset_is_published(tmp_path):
     assert "resets in" not in v.render(clock())
 
 
-def test_the_soonest_reset_is_the_one_reported(tmp_path):
-    """95 minutes beside 70 hours: the answer to 'how long am I throttled' is 95
-    minutes. Reporting the weekly one would be true and useless."""
+# --- WHICH reset, when TWO windows are engaged (aegis-qhi9a) -----------------
+# THIS BLOCK REPLACES `test_the_soonest_reset_is_the_one_reported`, which asserted
+# the OPPOSITE on these exact numbers: "95 minutes beside 70 hours: the answer to
+# 'how long am I throttled' is 95 minutes." Its own fixture disproves it — see the
+# simulation inside the first test below, which is why that simulation is IN the
+# test rather than in this comment. Reversed on dearing's ruling on aegis-qhi9a:
+# show the reset that lifts the GOVERNING restriction. Recorded rather than
+# quietly deleted, because a test that encoded a bug is evidence about how the bug
+# survived cjjdx's fix — the suite agreed with it.
+
+
+def test_the_reset_reported_is_the_one_that_LIFTS_THE_FLOOR_not_the_soonest(tmp_path):
+    """aegis-qhi9a, measured live: `dispatch only P0 and above · five_hour resets
+    in 1h20m`. Both true, and together they say the floor lifts in 1h20m.
+
+    It does not, and this test proves that rather than asserting it: five_hour@70
+    and seven_day@65 BOTH declare min_priority=0, so refilling five_hour leaves
+    the P0 floor exactly where it was for another two and a half days.
+    """
     clock = _Clock()
     v = _evaluate(tmp_path, clock, {FIVE: 75, SEVEN: 70},
                   {FIVE: clock() + 5700, SEVEN: clock() + 252_000})
+    assert v.floor == 0
+    assert v.next_reset(clock())[0] == SEVEN
+    assert "seven_day resets in 2d 22h" in v.render(clock())
+    assert "five_hour resets" not in v.render(clock())
+
+
+def test_the_floor_really_does_SURVIVE_the_soonest_window_refilling(tmp_path):
+    """The load-bearing half of the test above, and the reason the old assertion
+    was wrong rather than merely a different preference.
+
+    Same ladder, but five_hour has actually refilled — usage 0, the best case the
+    soonest reset could possibly deliver. If reporting five_hour were right, the
+    restriction would be gone here. It is not: seven_day@65 is still engaged and
+    the floor is still P0. A claim about what a reset LIFTS is checkable by
+    evaluating the state after it, so it is checked.
+    """
+    clock = _Clock()
+    after = _evaluate(tmp_path, clock, {FIVE: 0, SEVEN: 70},
+                      {FIVE: clock() + 18_000, SEVEN: clock() + 246_300})
+    assert [t.window for t in after.engaged] == [SEVEN]
+    assert after.floor == 0
+    assert after.effect() == "dispatch only P0 and above"
+
+
+# The floor tier in the SOON window and a weaker tier in the far one — the mirror
+# of the ladder above, so the two tests together prove the rule is "the one
+# holding the floor" and not "always the later one".
+_FLOOR_IS_FIVE_HOUR = """
+[governor]
+source = "stub"
+relax_margin = 5
+
+[[governor.tier]]
+at = 70
+window = "five_hour"
+min_priority = 0
+
+[[governor.tier]]
+at = 65
+window = "seven_day"
+min_priority = 1
+"""
+
+
+def test_the_SOONEST_reset_is_reported_when_it_IS_the_one_holding_the_floor(tmp_path):
+    """THE CONTROL. Without it, the test above cannot distinguish "reports the
+    window that lifts the restriction" from "reports the latest window" — and the
+    latter would be a new bug of the same family, overstating instead of
+    understating. Here seven_day is engaged and refills LAST, but it only declares
+    P1 under a P0 floor, so it is not holding anything up and its refill is not
+    the answer.
+    """
+    clock = _Clock()
+    v = _evaluate(tmp_path, clock, {FIVE: 75, SEVEN: 70},
+                  {FIVE: clock() + 5700, SEVEN: clock() + 252_000},
+                  text=_FLOOR_IS_FIVE_HOUR)
+    assert {t.window for t in v.engaged} == {FIVE, SEVEN}   # both engaged
+    assert v.floor == 0
     assert v.next_reset(clock())[0] == FIVE
     assert "five_hour resets in 1h35m" in v.render(clock())
+
+
+# The floor in the SOON budget, a who-runs tier in the FAR one — the shape where
+# the reported lift time is outlived by a restriction of a different kind.
+_TRAITS_OUTLAST = """
+[governor]
+source = "stub"
+relax_margin = 5
+
+[[governor.tier]]
+at = 70
+window = "five_hour"
+min_priority = 0
+
+[[governor.tier]]
+at = 65
+window = "seven_day"
+traits = ["support"]
+
+[roles.support]
+attachment = "reports-to"
+survival = "support"
+lane = ["monitoring"]
+"""
+
+
+def test_an_UNREADABLE_holding_window_reports_NOTHING_rather_than_the_readable_one(tmp_path):
+    """Silence, not the window we happen to be able to see. seven_day holds the
+    floor jointly and publishes no reset, so the lift time is genuinely unknown —
+    and naming five_hour's would state a time with no basis behind it, which is
+    the manufactured confidence this whole area keeps being bitten by.
+    """
+    clock = _Clock()
+    v = _evaluate(tmp_path, clock, {FIVE: 75, SEVEN: 70}, {FIVE: clock() + 5700})
+    assert v.floor == 0
+    assert v.holding_windows() == {FIVE, SEVEN}
+    assert v.next_reset(clock()) is None
+    assert "resets in" not in v.render(clock())
+
+
+def test_a_TRAIT_tier_in_a_longer_budget_can_OUTLAST_the_reported_lift(tmp_path):
+    """A KNOWN LIMIT, pinned so it is visible rather than rediscovered.
+
+    `next_reset` answers "when does the BINDING restriction lift" — dearing's
+    ruling — and the binding restriction is the floor. A who-runs tier engaged in
+    a different budget is a restriction of another KIND (the aegis-upo93
+    distinction) and can survive the time reported here. `restrictions` is the
+    field that shows the whole stack.
+
+    Not asserted as desirable — asserted as CURRENT, so that if it is ever ruled
+    the other way this test is the thing that fails and names the decision.
+    """
+    clock = _Clock()
+    v = _evaluate(tmp_path, clock, {FIVE: 75, SEVEN: 70},
+                  {FIVE: clock() + 5700, SEVEN: clock() + 252_000},
+                  text=_TRAITS_OUTLAST)
+    assert v.floor == 0
+    assert [t.traits for t in v.trait_tiers] == [("support",)]
+    assert v.next_reset(clock())[0] == FIVE          # the floor's window
+    # ...and the trait restriction is still in force well past it.
+    assert "only support crew runs" in v.effect()
 
 
 def test_an_UNENGAGED_window_is_not_the_one_you_are_waiting_on(tmp_path):
