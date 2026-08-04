@@ -245,6 +245,7 @@ class Plan:
     text: str = ""
     note: str = ""
     store: str = ""   # the `[st store: ...]` tag riding the payload (aegis-81zyb)
+    sender: str = ""  # who the payload is signed as, "" = unsigned (aegis-5vxmz)
 
     def render(self) -> str:
         lines = [
@@ -266,6 +267,21 @@ class Plan:
             # was typed — a --dry-run that hides the transformation is not a
             # preview of the dispatch.
             lines.append(f"  would: carry note -> {self.note!r}")
+        # WHO IT WILL BE SIGNED AS (aegis-5vxmz). Same argument as the store line
+        # above, and the same workaround for the same fact: render() shows the
+        # note but never the payload, so an attribution carried only in `text`
+        # reaches the AGENT and not the person authorising the send.
+        #
+        # PRINTED IN BOTH DIRECTIONS, and the unsigned one is the direction that
+        # matters. send-keys types at the same prompt the human uses, so an
+        # unsigned dispatch does not arrive anonymous — it arrives looking like
+        # the OPERATOR handing out work. An operator reading a preview that went
+        # quiet on the subject would have no way to know that is what they were
+        # about to authorise, and silence would read as "nothing to report".
+        lines.append(
+            f"  would: sign as -> {self.sender}" if self.sender else
+            "  would: sign as -> NOBODY — this dispatch arrives UNSIGNED, which "
+            "reads as the operator (set $SHANTY_AGENT)")
         lines.append("  would NOT: create a convoy, spawn a session, wait for ack")
         return "\n".join(lines)
 
@@ -408,6 +424,7 @@ class Dispatcher:
             text=text,
             note=flat,
             store=tag,
+            sender=self.sender or "",
         )
 
     def triage(self, item_id: str, agent_name: str, note: str | None = None) -> Decision:

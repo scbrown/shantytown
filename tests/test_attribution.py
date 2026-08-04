@@ -75,15 +75,35 @@ def test_an_unattributable_dispatch_stays_BARE(world):
     assert panes.sent == [("%5", "Work is on your hook: item-1 — Restore the den")]
 
 
-def test_the_prefix_survives_into_dry_run_and_triage(world):
-    """WHY plan() SIGNS AND NOT go(). --dry-run is the preview an operator reads to
-    decide the dispatch is right, and triage judges the same payload. An
-    attribution that only appears on the real run is absent from both, so the
-    thing reviewed is not the thing sent."""
+def test_the_prefix_is_on_the_payload_plan_hands_to_triage_and_the_send(world):
+    """WHY plan() SIGNS AND NOT go(). plan()'s text is what triage judges and what
+    the send delivers; signing at the send would mean the payload reviewed is not
+    the payload sent."""
     reg, trk = world
     d = Dispatcher(reg, trk, NullPanes(screen=""), sender="arnold")
     assert d.plan("item-1", "ellie").text.startswith("[from arnold] ")
     assert trk.get("item-1").status == "open", "plan() must not write"
+
+
+def test_dry_run_TELLS_THE_OPERATOR_who_the_dispatch_will_be_signed_as(world):
+    """render() deliberately shows the note and the store but NEVER the payload
+    (its own comment says so), so putting the prefix in `text` alone reaches the
+    agent and not the person authorising the send. Same workaround the store tag
+    already uses: its own line."""
+    reg, trk = world
+    d = Dispatcher(reg, trk, NullPanes(screen=""), sender="arnold")
+    assert "would: sign as -> arnold" in d.plan("item-1", "ellie").render()
+
+
+def test_dry_run_says_UNSIGNED_OUT_LOUD_rather_than_going_quiet(world):
+    """The control, and the case that actually matters. An unsigned dispatch does
+    not arrive anonymous — it arrives looking like the OPERATOR handing out work.
+    A preview that simply omitted the line when there was no sender would read as
+    'nothing to report' about the one thing worth reporting."""
+    reg, trk = world
+    render = Dispatcher(reg, trk, NullPanes(screen="")).plan("item-1", "ellie").render()
+    assert "UNSIGNED" in render, render
+    assert "sign as -> arnold" not in render
 
 
 def test_the_prefix_does_not_break_the_send_verify(world):
