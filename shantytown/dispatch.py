@@ -6,7 +6,17 @@ connections during RESOLUTION, before any write. Underneath,
 dispatch is tmux send-keys.
 
 This module does: one registry read, one tracker read, one tracker write,
-one send. That is the budget, and it is asserted in the tests.
+one tracker READ-BACK, one send. That is the budget, and it is asserted in
+the tests.
+
+The read-back is the fourth call and it was bought deliberately (aegis-8xc5w):
+`st go` printed "-> in progress" while the row stayed `open` and unassigned,
+INTERMITTENTLY, on the same binary and store that had worked minutes earlier.
+The send had landed; only the tracker write vanished, at exit 0. A budget is a
+guard against resolution churn — 63 connections to answer one question — not a
+reason to report a write nobody confirmed. One extra read per dispatch is the
+cheapest thing in this module and it is the only thing that can tell a
+coordinator which dispatches actually took.
 """
 from __future__ import annotations
 import time
@@ -27,6 +37,44 @@ from .triage import Action, Decision, triage
 _VERIFY_HISTORY = 200
 _VERIFY_ATTEMPTS = 5
 _VERIFY_DELAY = 0.3
+
+# The tracker write is written, READ BACK, and only re-attempted on a read-back
+# that PROVES it did not land (aegis-8xc5w).
+#
+# This is not the blind retry the fleet forbids, and the distinction is the whole
+# design. The standing rule ("commit result indeterminate" — do not retry on
+# sight) governs a write whose outcome is UNKNOWN, where a retry may double-apply.
+# Here the outcome is known, by reading the row: it did not change. And these two
+# fields are idempotent — status=in_progress and assignee=<agent> set twice are
+# the same assignment, unlike a create, which mints a second object. Verified
+# absence plus an idempotent write is the one case where a retry is the correct
+# move rather than the reckless one.
+_TRACK_ATTEMPTS = 3
+_TRACK_DELAY = 0.2
+
+
+def _applied(got, want) -> bool:
+    """Did the read-back row reflect what we asked the tracker to write?
+
+    DELIBERATELY FORGIVING, and the asymmetry is the design. This predicate gates
+    an exit-2 "could not tell" on a dispatch that has ALREADY been delivered to an
+    agent, so a false negative here does real damage: it reports a healthy
+    dispatch as broken and sends a coordinator hand-repairing a record that is
+    already correct. A false POSITIVE costs us only the detection we had none of
+    yesterday.
+
+    So it answers the narrow question the fault actually poses — did the row
+    CHANGE — and not "does the tracker spell things the way I do". The measured
+    failure is unmistakable at this altitude: status still `open`, assignee still
+    empty. A tracker that namespaces a name (`aegis/ellie` for `ellie`) has
+    recorded the same assignment and must not be called a loss.
+    """
+    if got is None:
+        return False
+    g, w = str(got).strip(), str(want).strip()
+    if not g:
+        return False
+    return g == w or g.split("/")[-1] == w.split("/")[-1]
 
 
 def flatten_note(note: str) -> str:
@@ -77,10 +125,45 @@ class DispatchedButUntracked(Exception):
         super().__init__(
             f"{item_id} WAS DELIVERED to {agent} ({pane}) and verified on the "
             f"pane, but the tracker write FAILED "
-            f"({type(cause).__name__}: {str(cause)[:120]}). The agent has the work "
+            # 400, not 120 (aegis-8xc5w). The cap was fine for a one-line store
+            # error ("bd unreachable") and it truncated the read-back report
+            # mid-word — "store still says Non" — losing exactly the half a reader
+            # acts on: which fields disagree and what the row actually holds. A
+            # message whose job is to be repaired by hand must not be clipped to
+            # the length of the least informative failure it can carry.
+            f"({type(cause).__name__}: {str(cause)[:400]}). The agent has the work "
             f"and the tracker does not know it. Do NOT re-run `st go` — that would "
             f"deliver it twice. Record it by hand instead, then confirm with "
             f"`st anchor {agent}`.")
+
+
+class TrackerWriteLost(Exception):
+    """The tracker write reported SUCCESS and the row did not change (aegis-8xc5w).
+
+    Never raised to a caller on its own — go() wraps it in DispatchedButUntracked,
+    because by the time we get here the send is a fact and that is the exception
+    that says so. It exists as its own type so the wrapped `cause` names WHICH
+    kind of tracker failure happened: a loud one (bd exited non-zero, the store
+    said no) or this one, where nothing said no and nothing changed.
+
+    That distinction is the finding. Measured 2026-08-03 against an embedded
+    store: `st go` printed the dispatch, the pane received the work, and
+    `bd show` returned the item still `open` with no assignee — while a direct
+    `bd update` against the SAME store seconds later stuck immediately. So the
+    write is ATTEMPTED (go() calls it unconditionally after a verified send) and
+    it is SWALLOWED (update() raises on a non-zero bd, and nothing raised). A
+    tool that reports what it intended rather than what happened is why this was
+    misattributed to the store for days.
+    """
+
+    def __init__(self, item_id: str, missing: dict, attempts: int):
+        self.item_id, self.missing, self.attempts = item_id, missing, attempts
+        detail = ", ".join(
+            f"{k}: wanted {w!r}, store still says {g!r}"
+            for k, (g, w) in sorted(missing.items()))
+        super().__init__(
+            f"tracker reported success and the read-back disagrees after "
+            f"{attempts} attempt(s) — {detail}")
 
 
 class SendUnverified(Exception):
@@ -266,6 +349,15 @@ class Plan:
     unreadable_deps: int = 0   # dependency rows the tracker counted but could
                                # not resolve, so we cannot tell if they block
                                # (aegis-kt7jr)
+    track_attempts: int = 0    # how many write+read-back rounds the tracker
+                               # update actually needed. 0 on --dry-run (nothing
+                               # was written), 1 on a healthy dispatch, >1 when a
+                               # write reported success and did NOT land
+                               # (aegis-8xc5w). COUNTED, not merely survived: an
+                               # intermittent fault that is silently retried is
+                               # an intermittent fault nobody can ever root-cause,
+                               # and this is the only place in the fleet that sees
+                               # one happen.
 
     def render(self) -> str:
         lines = [
@@ -512,11 +604,54 @@ class Dispatcher:
         # a transaction across a pane and a tracker, which we do not have. It CAN
         # stop being reported as a generic "could not tell": the send is a FACT by
         # this point, and the operator needs to know it landed and what to repair.
+        #
+        # AND THE WRITE IS READ BACK (aegis-8xc5w). `except Exception` below only
+        # ever caught a tracker that SAID it failed. The measured fault says
+        # nothing: bd exits 0, the row does not change, and this function then
+        # returns a Plan that the CLI prints as "-> in progress". The item stays
+        # open and unassigned, re-enters `bd ready`, and is dispatched again to
+        # somebody else — the duplicate-work failure the assignee guard exists to
+        # prevent, arriving underneath it. Verify by reading the row, never by the
+        # tool's success message.
         try:
-            self.tracker.update(item_id, **p.updates)  # 1 tracker write (last)
+            p.track_attempts = self._track(item_id, p.updates)
         except Exception as e:                         # noqa: BLE001 — any store failure
             raise DispatchedButUntracked(item_id, agent_name, p.pane, e) from e
         return p
+
+    def _track(self, item_id: str, updates: dict) -> int:
+        """Write the tracker, READ IT BACK, and return the attempt that stuck.
+
+        Raises TrackerWriteLost if the row still does not reflect the dispatch
+        after _TRACK_ATTEMPTS. go() turns that into DispatchedButUntracked, which
+        is the honest report: the agent HAS the work and no record says so.
+
+        A raised `tracker.update` is NOT retried and never has been — it
+        propagates on the spot. A loud failure has already told us something
+        (unknown id, store unreachable) and re-running it just asks the same
+        question again. Only the SILENT loss — exit 0, row unchanged — earns a
+        second attempt, and only because the read-back proved there is nothing to
+        double-apply. See _TRACK_ATTEMPTS for why that is not the blind retry the
+        fleet forbids.
+        """
+        missing: dict = {}
+        for attempt in range(1, _TRACK_ATTEMPTS + 1):
+            if attempt > 1:
+                # Reached ONLY on a verified loss. If the fault is contention
+                # with something else touching the same working set, the pause is
+                # the point; if it is not, three attempts cost 0.4s and we find
+                # out from the counter rather than from a coordinator's guess.
+                time.sleep(_TRACK_DELAY)
+            self.tracker.update(item_id, **updates)
+            item = self.tracker.get(item_id)
+            missing = {
+                k: (getattr(item, k, None), v)
+                for k, v in updates.items()
+                if not _applied(getattr(item, k, None), v)
+            }
+            if not missing:
+                return attempt
+        raise TrackerWriteLost(item_id, missing, _TRACK_ATTEMPTS)
 
     def verify(self, pane: str, item_id: str) -> bool:
         """Did the send land? Read the pane back and look for the item id.

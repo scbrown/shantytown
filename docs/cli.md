@@ -233,7 +233,7 @@ note-less dispatch: sending the work without its caveat is the failure this flag
 `st go` must be **under one second**, and the test asserts the *mechanism*, not the stopwatch:
 
 ```
-tracker calls:  <= 2
+tracker calls:  <= 3   (resolve, write, READ THE WRITE BACK)
 connections:    <= 1 per backend
 sends:          1
 waits for ack:  0
@@ -242,6 +242,21 @@ waits for ack:  0
 Count the connections. A stopwatch on a shared host is exactly the kind of number that flatters — the
 `gt sling` regression would have passed a "feels fine" check on a quiet night. **The observable is the
 count.**
+
+**The ceiling moved from 2 to 3, once, and only to buy a read-back.** `st go` was printing
+`-> in progress` while the tracker row stayed `open` and unassigned — intermittently, on the same
+binary and store that had worked minutes earlier. The send landed; only the write vanished, at exit
+0. So the item never entered the worker's haul, `st crew` showed them idle right after a successful
+dispatch, and the bead re-entered `bd ready` to be handed to somebody else — duplicate work arriving
+underneath the assignee guard built to prevent it.
+
+The distinction that keeps the budget meaningful: it was written against **resolution churn** — 63
+sequential connections to answer one question before any write. A single read that confirms the write
+landed is not that. **A budget is a guard against work that buys nothing, not a reason to report a
+write nobody confirmed.** Anything wanting a fourth call has to make its own case.
+
+A dispatch that needed more than one write+read-back round still succeeds, and says so on stderr —
+the fault is intermittent, and one that is silently absorbed is one nobody can ever root-cause.
 
 ## Reading a pane: a dim suggestion is not queued input
 

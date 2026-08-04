@@ -2762,6 +2762,20 @@ def _cmd_go(a) -> int:
         return REFUSED
     print(f"  {p.item_id} -> {p.agent}          in progress")
     print(f"  sent to pane {p.pane}")
+    if p.track_attempts > 1:
+        # THE LINE THAT MAKES AN INTERMITTENT FAULT COUNTABLE (aegis-8xc5w).
+        # go() now reads its tracker write back and re-writes on a verified loss,
+        # so this dispatch is CORRECT — the record and the pane agree. Saying
+        # nothing would be defensible and would be the mistake: a fault that is
+        # silently absorbed is a fault that never gets root-caused, and this one
+        # already spent days misattributed to the store because the only thing
+        # that ever saw it reported success. Print it where the operator is
+        # already looking, on stderr so nothing parsing the outcome line changes.
+        print(f"  ⚠ the tracker write did NOT land on the first attempt — it took "
+              f"{p.track_attempts} write+read-back rounds. The dispatch is "
+              f"recorded (this line means the read-back agreed in the end). Note "
+              f"the id and the store: this is the intermittent lost write, caught "
+              f"in the act.", file=sys.stderr)
     if p.unreadable_deps:
         # ON THE REAL RUN TOO, not only in --dry-run (aegis-kt7jr). A warning
         # that fires only in the preview is a warning for the careful path, and
