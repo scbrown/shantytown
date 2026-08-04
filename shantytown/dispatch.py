@@ -263,6 +263,9 @@ class Plan:
     note: str = ""
     store: str = ""   # the `[st store: ...]` tag riding the payload (aegis-81zyb)
     sender: str = ""  # who the payload is signed as, "" = unsigned (aegis-5vxmz)
+    unreadable_deps: int = 0   # dependency rows the tracker counted but could
+                               # not resolve, so we cannot tell if they block
+                               # (aegis-kt7jr)
 
     def render(self) -> str:
         lines = [
@@ -299,6 +302,19 @@ class Plan:
             f"  would: sign as -> {self.sender}" if self.sender else
             "  would: sign as -> NOBODY — this dispatch arrives UNSIGNED, which "
             "reads as the operator (set $SHANTY_AGENT)")
+        if self.unreadable_deps:
+            # SAY WHAT WE COULD NOT SEE (aegis-kt7jr). The blocker check ran and
+            # was INCOMPLETE, which is a third answer beside "clear" and
+            # "blocked" — and the only place it can be reported, because every bd
+            # dependency view drops these rows silently and `bd dep tree` prints
+            # [READY] over them. Named in the preview an operator reads to decide
+            # the dispatch is right, for the same reason the store tag is.
+            lines.append(
+                f"  would: ⚠ {self.unreadable_deps} dependency row(s) UNREADABLE "
+                f"— counted by the tracker, resolvable in no store reachable from "
+                f"here. If one of them is a `blocks` edge, this item is NOT ready "
+                f"and nothing can tell you so (`bd show {self.item_id} --json`: "
+                f"compare dependency_count against dependencies)")
         lines.append("  would NOT: create a convoy, spawn a session, wait for ack")
         return "\n".join(lines)
 
@@ -448,6 +464,13 @@ class Dispatcher:
             note=flat,
             store=tag,
             sender=self.sender or "",
+            # Carried, NEVER raised (aegis-kt7jr). We cannot know the dropped
+            # rows' type, so refusing here would refuse work over what might be a
+            # `relates-to` link — the exact "cannot-tell manufacturing a refusal"
+            # this module's blocker guard commits against in its own docstring.
+            # Reported instead, so the incompleteness is visible to the human who
+            # CAN go look. If that trade is ever re-ruled, this is the line.
+            unreadable_deps=int(getattr(item, "unreadable_deps", 0) or 0),
         )
 
     def triage(self, item_id: str, agent_name: str, note: str | None = None) -> Decision:

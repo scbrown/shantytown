@@ -2752,6 +2752,19 @@ def _cmd_go(a) -> int:
         return REFUSED
     print(f"  {p.item_id} -> {p.agent}          in progress")
     print(f"  sent to pane {p.pane}")
+    if p.unreadable_deps:
+        # ON THE REAL RUN TOO, not only in --dry-run (aegis-kt7jr). A warning
+        # that fires only in the preview is a warning for the careful path, and
+        # this one exists precisely because nothing else on any path reports it.
+        # stderr: it is not the dispatch result, and a caller parsing stdout for
+        # the outcome must not have to learn a new line.
+        # The bead citation stays in THIS comment and out of the printed string
+        # (aegis-kt7jr): shantytown is a public repo and a reader outside this
+        # homelab cannot resolve an aegis- id. Caught by the ratchet, not by me.
+        print(f"  ⚠ {p.unreadable_deps} dependency row(s) on {p.item_id} are "
+              f"UNREADABLE — counted by the tracker, resolvable in no store from "
+              f"here. If one is a `blocks` edge, this item was NOT ready and the "
+              f"blocker check could not see it.", file=sys.stderr)
     if p.note:
         # Echo the note AS SENT. If flattening changed it, the sender finds out
         # here rather than from a confused worker.

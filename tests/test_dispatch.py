@@ -356,6 +356,25 @@ class _BlockedTracker(CountingTracker):
         return replace(item, open_blockers=self._blockers)
 
 
+class _PartlyReadableTracker(FilesTracker):
+    """A tracker that COUNTED more dependency rows than it could hand back — the
+    aegis-kt7jr shape, where a `blocks` edge points at an id that resolves in no
+    reachable store and bd drops the row from `dependencies` while still counting
+    it in `dependency_count`."""
+
+    def __init__(self, root, unreadable):
+        super().__init__(root)
+        self._unreadable = unreadable
+        self.updates = 0
+
+    def update(self, item_id, **fields):
+        self.updates += 1
+        return super().update(item_id, **fields)
+
+    def get(self, item_id):
+        return replace(super().get(item_id), unreadable_deps=self._unreadable)
+
+
 def _blocked_world(tmp_path, blockers, *, assignee="", status="open"):
     reg_dir = tmp_path / "crew2"; reg_dir.mkdir()
     (reg_dir / "ellie.json").write_text(json.dumps(
@@ -401,6 +420,108 @@ def test_the_refusal_states_ITS_OWN_reading_and_asserts_NOTHING_about_bd(tmp_pat
     assert "bd ready" not in msg or "disagree" in msg, (
         "the refusal may only mention `bd ready` to name the DISAGREEMENT as a "
         f"finding — never to vouch for what bd did: {msg}")
+
+
+# --- dependencies the tracker COUNTED but could not hand us (aegis-kt7jr) ----
+# Measured 2026-08-04: aegis-8y80 sat in `bd ready` blocked by gt-9h8wbq8, an id
+# that resolves in NO store on this host. `bd show --json` said dependency_count
+# 3 and returned 1; `bd dep list` omitted the row; `bd dep tree` printed [READY]
+# over it. st built open_blockers from that same array, so BOTH tools agreed the
+# item was clear — which is why nothing caught it. The count mismatch is the only
+# signal that exists anywhere, and it is in the call st already makes.
+
+def _unreadable_world(tmp_path, n):
+    reg = tmp_path / "crew3"; reg.mkdir()
+    (reg / "ellie.json").write_text(json.dumps({"role": "worker", "pane": "%5"}))
+    trk = _PartlyReadableTracker(tmp_path / "items3", n)
+    trk.update("item-1", title="t", status="open")
+    trk.updates = 0
+    panes = NullPanes()
+    return Dispatcher(FilesRegistry(reg), trk, panes), trk, panes
+
+
+def test_an_item_with_UNREADABLE_dependencies_is_dispatched_but_SAYS_SO(tmp_path):
+    """It DISPATCHES — we cannot know the dropped rows' type, so refusing would
+    refuse work over what might be a `relates-to` link, which is the
+    cannot-tell-manufacturing-a-refusal this module commits against. What it must
+    not do is stay SILENT, because silence here is indistinguishable from a clean
+    item and that is the whole defect."""
+    d, trk, panes = _unreadable_world(tmp_path, 2)
+    p = d.go("item-1", "ellie")
+    assert panes.sent, "refused on a cannot-tell — see the docstring"
+    assert trk.get("item-1").status == "in_progress"
+    assert p.unreadable_deps == 2
+    assert "UNREADABLE" in p.render()
+
+
+def test_an_item_whose_dependencies_ALL_RESOLVED_says_nothing(tmp_path):
+    """THE CONTROL, and the one that makes the test above worth having. A warning
+    that fires on every dispatch is a warning nobody reads by the second day —
+    the same vigilance-fatigue argument notify.py makes for its dedup."""
+    d, trk, panes = _unreadable_world(tmp_path, 0)
+    p = d.go("item-1", "ellie")
+    assert p.unreadable_deps == 0
+    assert "UNREADABLE" not in p.render()
+
+
+def _canned_bd(row):
+    """The REAL BeadsTracker.get parsing a canned `bd show --json` payload.
+
+    Deliberately not a local re-implementation of the arithmetic: a test that
+    recomputes what the code computes passes forever while the code drifts under
+    it, which is the same class of non-evidence as a verifier never seen failing.
+    The suite forbids a real `bd` subprocess (conftest), so the subprocess is
+    what gets faked — not the logic under test.
+    """
+    from shantytown.beads import BeadsTracker
+    from types import SimpleNamespace
+
+    class _Fake(BeadsTracker):
+        def _bd(self, *args):
+            return SimpleNamespace(returncode=0, stdout=json.dumps(row), stderr="")
+
+    return _Fake().get(row.get("id", "x"))
+
+
+def test_the_count_mismatch_is_read_the_way_bd_ACTUALLY_REPORTED_it():
+    """Pinned to the MEASURED shape, not a guess about bd's schema: on aegis-8y80
+    `bd show --json` returned dependency_count 3 with ONE resolved row, so the
+    two invisible rows are 3 - 1. If bd ever changes which of the two numbers it
+    truncates, this is the test that notices."""
+    item = _canned_bd({
+        "id": "aegis-8y80", "title": "t", "status": "open",
+        "dependency_count": 3,
+        "dependencies": [{"id": "aegis-0v2v", "dependency_type": "discovered-from",
+                          "status": "closed"}],
+    })
+    assert item.unreadable_deps == 2
+    assert item.open_blockers == (), "the dropped blocks edge is invisible — that IS the bug"
+
+
+def test_a_tracker_returning_MORE_than_it_counted_is_clamped_not_negative():
+    """A backend reporting fewer deps than it returns is saying something we have
+    no model for. Clamp to 0 — a negative count would render as a nonsense
+    warning, and inventing a meaning for it would be worse than ignoring it."""
+    item = _canned_bd({
+        "id": "x", "title": "t", "status": "open", "dependency_count": 0,
+        "dependencies": [{"id": "a", "dependency_type": "relates-to"}],
+    })
+    assert item.unreadable_deps == 0
+
+
+def test_a_fully_readable_item_reports_ZERO_unreadable(tmp_path):
+    """The control on the PARSER, distinct from the control on the render above.
+    Everything resolved must produce 0, or the warning fires on every dispatch
+    and stops being read."""
+    item = _canned_bd({
+        "id": "y", "title": "t", "status": "open", "dependency_count": 2,
+        "dependencies": [
+            {"id": "a", "dependency_type": "blocks", "status": "closed"},
+            {"id": "b", "dependency_type": "relates-to", "status": "open"},
+        ],
+    })
+    assert item.unreadable_deps == 0
+    assert item.open_blockers == ()
 
 
 def test_reassign_does_not_bypass_an_unmet_blocker(tmp_path):
