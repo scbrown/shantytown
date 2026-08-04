@@ -38,6 +38,9 @@ class Row:
     note: str = ""
     hooks: str = UNVERIFIED   # the second leg; see check(emitted=...)
     live: str = UNVERIFIED    # the third leg; see check(live=...)
+    # WHICH SURVIVAL BAND THE USAGE GOVERNOR WILL RESOLVE for this card
+    # (aegis-upo93). "" = not measured (no catalog was passed), never a value.
+    band: str = ""
 
 
 @dataclass
@@ -67,6 +70,13 @@ class Report:
             # as a finding.
             if r.live == OK:
                 hooks += " live: ok"
+            # THE BAND THAT DECIDES WHETHER THIS CARD SURVIVES A THROTTLE
+            # (aegis-upo93). Shown on every measured row, including the ordinary
+            # ones, because the question a reader brings to this table under a
+            # traits tier is "who is still running" and the answer must not
+            # require reading twenty JSON files. Absent = not measured.
+            if r.band:
+                hooks += f" band: {r.band}"
             tail = {OK: hooks,
                     BROKEN: f"*** {r.note or 'BROKEN'} ***",
                     CANNOT_TELL: f"*** CANNOT TELL: {r.note} ***"}[r.verdict]
@@ -317,7 +327,47 @@ def check(registry: Registry, emitted=None, live=None, catalog=None) -> Report:
             lv, note = _live_verdict(a, agents, live)
             rows[-1].live = lv
             _fold(rows[-1], lv, note)
+
+        # NOT A VERDICT, and deliberately not folded into one. A band is a
+        # deployment's choice, never a fault — this leg reports, it does not judge.
+        rows[-1].band = _band(catalog, a)
     return Report(rows)
+
+
+def _band(catalog, a: Agent) -> str:
+    """The survival band the USAGE GOVERNOR will resolve for this card, as the
+    text to print. "" when nothing was measured.
+
+    WHY THE ROSTER SHOWS THIS AT ALL (aegis-upo93). A `traits` tier spins down
+    every agent whose band is below the one it spares, and the band is composed
+    from the card's ROLE STACK through the catalog — so "will this agent survive
+    a throttle" was a question no surface answered and every operator had to
+    reconstruct from JSON. At the tier that engaged, sixteen of twenty cards were
+    being shed and the only way to learn which sixteen was to run the governor's
+    own resolution by hand.
+
+    `normal (UNSET)` IS THE POINT OF THIS FUNCTION, not a formatting detail. The
+    deployment config says it in its own words: an unbanded card and a card
+    decided-`normal` resolve identically, which makes "nobody wrote this one
+    down" indistinguishable from "we chose this" — the governor cannot tell, and
+    neither can a reviewer. This is the surface where a reviewer can.
+
+    `?` IS COULD-NOT-TELL, and it is a different answer from any band. The
+    governor FAILS OPEN on every could-not-tell (Verdict.excludes), so a `?` row
+    is an agent that keeps running through a traits tier — the opposite of a
+    shed. Rendering it as a band would say precisely the wrong thing.
+    """
+    if catalog is None:
+        return ""
+    roles = tuple(getattr(a, "effective_roles", lambda: ())() or ())
+    if not roles:
+        return ""
+    try:
+        composed = catalog.of(list(roles))
+    except Exception:      # noqa: BLE001 — UnknownRole / AmbiguousTrait / anything
+        return "? (the governor fails OPEN — this agent runs)"
+    from .traits import SURVIVAL
+    return str(getattr(composed, SURVIVAL, None) or "normal (UNSET)")
 
 
 def _unattached(catalog, role: str) -> bool:
