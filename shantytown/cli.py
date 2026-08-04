@@ -3673,9 +3673,33 @@ def _cmd_project(a) -> int:
 def _resolve_repo(repo: str) -> Path:
     """A shared repo, as a path OR a bare name under $GT_ROOT (~/gt) — so both
     `st worktree /home/x/gt/quipu` and `st worktree quipu` reach the same tree,
-    matching scripts/crew-worktree.sh's `$GT_ROOT/$repo` resolution."""
+    matching scripts/crew-worktree.sh's `$GT_ROOT/$repo` resolution.
+
+    A BARE NAME IS ALWAYS $GT_ROOT/<name>, NEVER CWD-RELATIVE (aegis-k3i8t).
+    This used to carry an `or p.exists()` clause, evaluated against the CWD, and
+    it fired BEFORE the $GT_ROOT branch — so a bare name silently resolved to
+    `./<name>` whenever the cwd happened to contain a directory of that name.
+
+    That is not a rare coincidence, it is the normal case: a Python repo holds a
+    package directory named after the repo, so `./shantytown` exists inside every
+    shantytown checkout AND every shantytown worktree. `st push shantytown <me>`
+    — the documented form — therefore failed SPECIFICALLY in the tree you are
+    standing in when you push, which is the only place anyone runs it. Same for
+    quipu, hank, bobbin. Measured 2026-08-04: refused with "no worktree at
+    shantytown-wt/franklin" while that worktree existed; the absolute-path form
+    worked.
+
+    The refusal was the benign symptom. `st go <item> <agent> --worktree <repo>`
+    does not refuse — it calls ensure_worktree() on whatever comes back, so a
+    coordinator dispatching from inside a worktree CREATED a nested one and
+    handed the agent a wrong path, silently.
+
+    A relative path is still honoured, because a relative path has a separator
+    (`./quipu`, `../quipu`) — which is exactly what distinguishes "a path I mean
+    literally" from "a repo name". Bare names have one meaning, in every cwd.
+    """
     p = Path(repo).expanduser()
-    if p.is_absolute() or "/" in repo or p.exists():
+    if p.is_absolute() or "/" in repo:
         return p
     root = Path(os.environ.get("GT_ROOT", Path.home() / "gt"))
     return root / repo
