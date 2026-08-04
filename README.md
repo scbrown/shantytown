@@ -24,7 +24,7 @@
 *Create a work item. Tell an agent to go get it. That's the whole idea.*
 
 [![dispatch 3.4s](https://img.shields.io/badge/dispatch-3.4s-brightgreen)](#-measured-against-gas-town)
-[![22 commands](https://img.shields.io/badge/commands-22-blue)](#-the-whole-surface)
+[![23 commands](https://img.shields.io/badge/commands-23-blue)](#-the-whole-surface)
 [![tests](https://img.shields.io/badge/tests-1553%20passing-blue)](#-principles)
 [![python](https://img.shields.io/badge/python-3.11%2B-blue)](#-install)
 [![dependencies none](https://img.shields.io/badge/dependencies-none-blue)](#-install)
@@ -197,7 +197,7 @@ stop.* Here is what the gate measured.
 
 | | `gt sling` | `st go` | |
 |---|---:|---:|---|
-| Commands | ~110 | **22** | *a small, deliberate fraction of the surface, by measured use* |
+| Commands | ~110 | **23** | *a small, deliberate fraction of the surface, by measured use* |
 | dispatch (dry-run) | 51.54 s | **0.15 s** | **~344× faster** |
 | dispatch (real) | > 120 s ⏱️ | **3.40 s** | **≥35× faster** |
 | Dolt connections | 63 | **3** | **21× fewer** |
@@ -293,6 +293,7 @@ st attach [agent]                 attach to a crew member — STARTING them if d
 st dashboard [admin]              live, tier-scoped view: roster/state/work, self-refreshing
 st subscribe                      watch quipu entity events; route governed workflows to the admin
 st worktree <repo> [agent]        provision an agent's isolated worktree off a SHARED project repo
+st push <repo> [agent]            push your branch to EVERY remote — pushing one forks a repo with two
 st stats [agent]                  what the crew actually did: files, skills, tokens (local store)
 ```
 
@@ -455,7 +456,7 @@ error, it just stops new facts from joining the old ones.
 |---|---|
 | [`docs/vision.md`](docs/vision.md) | what this replaces, and how we'll know it failed |
 | [`docs/design.md`](docs/design.md) | the shape: dispatch, triage, trackers, panes |
-| [`docs/cli.md`](docs/cli.md) | the twenty commands, the boot modes, and the anchor |
+| [`docs/cli.md`](docs/cli.md) | the commands, the boot modes, and the anchor |
 | [`docs/agent-card.md`](docs/agent-card.md) | identity — the graph is the truth, the card is a projection |
 | [`docs/roles.md`](docs/roles.md) | worker / lead / administrator, and why a lead absorbs |
 | [`docs/adapters.md`](docs/adapters.md) | first-class defaults, pluggable everything |
