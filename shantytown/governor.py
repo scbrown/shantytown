@@ -1147,14 +1147,40 @@ class Verdict:
         at = self.resets.get(window)
         return None if at is None else at - now
 
+    def holding_windows(self) -> set[str]:
+        """The windows that must ALL refill before the GOVERNING restriction lifts.
+
+        Derived from the same computation `admits` enforces and `governing`
+        displays — never a second opinion about which restriction is in force.
+        Order matches `governing`: a drain outranks any floor, then the strictest
+        declared floor, then a who-runs restriction.
+
+        The set is usually one window. It is more than one when two tiers in
+        DIFFERENT budgets declare the SAME strictest restriction — and that case
+        is the whole reason this returns a set rather than a tier. Each of them
+        holds the restriction up on its own, so the restriction survives until the
+        LAST of them refills; picking either one alone understates it.
+        """
+        if self.drains:
+            return {t.window for t in self.engaged if t.drains and t.window}
+        floor = self.floor
+        if floor is not None:
+            # `== floor`, not `is not None`: a tier declaring P1 under a P0 floor
+            # is NOT holding the floor up, and its refill changes nothing a
+            # dispatcher can act on. This is the same distinction cjjdx drew
+            # between engaged and unengaged, one level finer.
+            return {t.window for t in self.engaged
+                    if t.min_priority == floor and t.window}
+        trait_windows = {t.window for t in self.trait_tiers if t.window}
+        if trait_windows:
+            return trait_windows
+        g = self.governing
+        return {g.window} if g is not None and g.window else set()
+
     def next_reset(self, now: float) -> tuple[str, float] | None:
-        """(window, seconds) until the throttle LIFTS, or None if unknowable.
+        """(window, seconds) until the GOVERNING restriction lifts, or None.
 
-        The soonest reset among the windows that are ENGAGED — not the soonest
-        reset overall. Refilling a budget that is not constraining anything
-        changes nothing an operator can act on.
-
-        THE BUG THIS FIXES (aegis-cjjdx). This used to take `min()` over every
+        THE FIRST BUG THIS FIXED (aegis-cjjdx). It used to take `min()` over every
         readable window. Measured live 2026-08-02: `five_hour` was NOT engaged
         (`at: null`) and refilled in 3h18m, while `seven_day` WAS engaged at 45%
         and refilled in 56.6h. `st crew` therefore told the coordinator the fleet
@@ -1162,22 +1188,51 @@ class Verdict:
         wrong window, understating by 17x, for a fleet that was actually
         restricted to P1-and-above for two and a half days.
 
-        That error runs in the most expensive direction there is. "Clears after
-        lunch" is a decision to WAIT; "clears in 2.4 days" is a decision to
-        re-prioritise the board or accept a mostly-idle crew. The old docstring's
-        reasoning — that the soonest refill is the one you are waiting on — is
-        correct ONLY when every window in the running is actually holding you.
+        THE SECOND, WHICH THE FIRST FIX DID NOT REACH (aegis-qhi9a). Restricting
+        to ENGAGED windows is necessary and not sufficient: with TWO windows
+        engaged, the soonest of them need not be the one holding the restriction
+        up either. Measured live 2026-08-02 by dearing:
 
-        Returns None when nothing engaged has a readable reset, which is the
-        honest answer: a blind window must never become "resets at 0", and an
-        unengaged one must never become "this is why you are throttled".
+            seven_day usage 65% · 65% tier · dispatch only P0 and above
+                                           · five_hour resets in 1h20m
+
+        Every number true, and read together they say the P0 floor lifts in
+        1h20m. It does not: the floor comes from the seven_day tier ~54h out, and
+        five_hour dropping below its own threshold leaves seven_day@65 engaged
+        and the floor exactly where it was. This is the same failure as cjjdx —
+        a true number answering an ADJACENT question — which is why the same
+        reader found it, and it is why the ruling is `holding_windows` above
+        rather than another filter on `resets`: the display now derives the
+        answer from the enforcement, instead of approximating it.
+
+        Which reset to show when two windows are engaged was a JUDGEMENT, not a
+        correction, so it was ruled rather than assumed: dearing, on the bead —
+        the one that lifts the GOVERNING restriction, named.
+
+        MAX, NOT MIN, over the holding windows. They each hold the restriction on
+        their own, so it stands until the last of them refills. min() would
+        reintroduce the very bug this fixes one level in.
+
+        Returns None when ANY holding window has no readable reset. That is the
+        honest answer and it is deliberately not "report the one we can see": a
+        window we cannot read might be the long pole, so naming the readable one
+        would state a lift time we have no basis for — the same manufactured
+        confidence as a blind window becoming "resets at 0". Silence is already
+        this file's convention for unknowable (see `reset_note`).
+
+        KNOWN LIMIT, stated rather than left to be rediscovered: when a floor and
+        a TRAIT tier are engaged in different budgets, this reports the floor's
+        window, so a who-runs restriction in a longer budget can outlast the time
+        given here. `restrictions` (aegis-upo93) is the field that shows the whole
+        stack; this one answers "when does the binding restriction lift".
         """
-        engaged_windows = {t.window for t in self.engaged if t.window}
-        holding = {w: at for w, at in self.resets.items() if w in engaged_windows}
+        holding = self.holding_windows()
         if not holding:
             return None
-        w = min(holding, key=lambda k: holding[k])
-        return w, holding[w] - now
+        if any(w not in self.resets for w in holding):
+            return None
+        w = max(holding, key=lambda k: self.resets[k])
+        return w, self.resets[w] - now
 
     @property
     def drains(self) -> bool:
