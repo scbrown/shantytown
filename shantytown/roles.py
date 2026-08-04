@@ -86,9 +86,22 @@ class Report:
         unknown = sum(1 for r in self.rows if r.verdict == CANNOT_TELL)
         L.append("")
         if broken:
-            L.append(f"  BLOCKED: {broken} agent's stop events go nowhere."
+            # It used to assert the CONSEQUENCE here — "stop events go nowhere" —
+            # which is the same sin the COULD-NOT-TELL branch below already
+            # renounces, one row up: a summary guessing at an outcome it did not
+            # measure. It generalised over FOUR different BROKEN causes and was
+            # false for at least two of them. An ORPHAN's stop goes STRAIGHT to
+            # the administrator (route_stop's Q4, rose=False) and a self-
+            # reporting card makes route_stop RAISE — neither is silence. The
+            # same sentence in `st anchor` was reported upward as fact and a
+            # working mechanism was nearly rebuilt on the strength of it
+            # (aegis-j1dzp). Say the structural fact, which is what check()
+            # actually established; each row already carries its measured reason.
+            L.append(f"  BLOCKED: {broken} agent is not correctly attached to "
+                     f"the tier — see the reason on its row above."
                      if broken == 1 else
-                     f"  BLOCKED: {broken} agents' stop events go nowhere.")
+                     f"  BLOCKED: {broken} agents are not correctly attached to "
+                     f"the tier — see the reason on each row above.")
         if unknown:
             # Never let this render as a pass. It is the reason exit 2 exists.
             #

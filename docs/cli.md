@@ -97,8 +97,14 @@ Four things, and each one has to earn its line:
 
 1. **Identity from the card.** Not from an env var, not from a file in the workspace. One source.
 2. **The work.** One item, or none. A surface that prints a backlog is a dashboard.
-3. **Where your stop events go**, and **whether that agent is up**. If your lead is down, anchor says
-   so *here* — not when you stall and discover it.
+3. **Where your stop events go**, and **whether that agent will receive them**. If your lead is
+   unreachable, anchor says so *here* — not when you stall and discover it — and it says what
+   happens next: the event RISES to the administrator with reason `lead-unreachable` and persists
+   on disk. It reports the routing rather than inferring it: the destination comes from
+   `tier.find_administrator` and reachability from the router's own predicate, so this line cannot
+   contradict what `route_stop` will actually do. It used to, and asserted the opposite of the
+   truth: workers were told their stop events went nowhere while every one of them was rising to
+   the administrator as designed. `up` here means **will drain**, not "a pane answers to that name".
 4. **Context and knowledge** — bobbin and quipu, first-class, and both optional. With the `none`
    adapters, those two sections vanish and anchor still works.
 
@@ -399,7 +405,7 @@ $ st roles --check
   ellie       worker         reports_to: malcolm      hooks: ok live: ok
   dearing     worker         reports_to: —            *** ORPHAN ***
 
-  BLOCKED: 1 agent's stop events go nowhere.
+  BLOCKED: 1 agent is not correctly attached to the tier — see the reason on its row above.
 ```
 
 Three outcomes: **ok**, **broken**, **cannot tell**. If it can't read a card it says so and exits
