@@ -97,3 +97,30 @@ def _no_real_pointer(tmp_path_factory, monkeypatch):
     """
     monkeypatch.setenv("XDG_CONFIG_HOME",
                        str(tmp_path_factory.mktemp("xdg-isolated")))
+
+
+@pytest.fixture(autouse=True)
+def _no_ambient_agent(monkeypatch):
+    """No test may inherit the RUNNER'S identity. Third instance of the class
+    above, and it had already bitten (aegis-5vxmz).
+
+    `st inbox` began signing messages with `$SHANTY_AGENT` (eb26be0). The
+    launcher exports that variable into every crew agent's session, so from that
+    commit five tests asserted on a message body whose content depended on WHO
+    RAN THE SUITE:
+
+        assert sent == [("%1", "go read st-1")]        # what CI sees
+        assert sent == [("%1", "[from tim] go read st-1")]   # what a crew agent sees
+
+    Measured 2026-08-04 on origin/main: green in CI and on a developer laptop,
+    five red for every one of ~10 crew agents on this host. That is the worst
+    orientation for a failure — the people most likely to be editing this code
+    are the only ones who see it, and they see it as damage they just caused. It
+    cost one investigation to establish it was neither.
+
+    Deleting rather than pinning to a fixed name: absent is the state that makes
+    an attribution test's CONTROL meaningful ("an unattributable send stays
+    bare"), and a test that wants a sender says so — monkeypatch.setenv in the
+    test body runs after this fixture and wins.
+    """
+    monkeypatch.delenv("SHANTY_AGENT", raising=False)

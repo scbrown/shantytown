@@ -43,6 +43,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 from . import triage as triage_mod
+from .attribution import ST_TEND, attribute
 from .protocols import Agent
 from .runtime import asks_a_question, auth_expired
 from .tier import route_stop
@@ -101,7 +102,10 @@ def wake_recipient(reg, panes, worker: str, message: str) -> str | None:
         return None
     if not recipient.pane or not panes.exists(recipient.pane):
         return None
-    panes.send(recipient.pane, message)
+    # ATTRIBUTED (aegis-5vxmz). This lands in a coordinator's pane in the
+    # imperative — "⚠ <worker> is BLOCKED and needs you" — at the same prompt
+    # the operator types at. Unsigned, it reads as Stiwi telling them to go look.
+    panes.send(recipient.pane, attribute(message, ST_TEND))
     return recipient.name
 
 
@@ -219,7 +223,12 @@ def push_to_own_pane(reg, panes, agent: str, message: str) -> str | None:
         return None
     if not card.pane or not panes.exists(card.pane):
         return None
-    panes.send(card.pane, message)
+    # ATTRIBUTED (aegis-5vxmz) — and this is the one that most needed it. The
+    # cycle prompt orders an agent to CHECKPOINT AND /clear, and the haul
+    # messages that also ride this helper hand out work. Both are exactly the
+    # kind of instruction an agent would obey without question BECAUSE it looked
+    # like it came from the operator.
+    panes.send(card.pane, attribute(message, ST_TEND))
     return agent
 
 
@@ -468,7 +477,7 @@ def push_to_admin(reg, panes, message: str) -> str | None:
         return None
     if not card.pane or not panes.exists(card.pane):
         return None
-    panes.send(card.pane, message)
+    panes.send(card.pane, attribute(message, ST_TEND))   # aegis-5vxmz
     return admin
 
 
@@ -916,7 +925,7 @@ class StalledAlerter:
         try:
             if not ag.pane or not self._panes.exists(ag.pane):
                 return False
-            self._panes.send(ag.pane, message)
+            self._panes.send(ag.pane, attribute(message, ST_TEND))  # aegis-5vxmz
             return True
         except Exception:
             return False
