@@ -142,3 +142,120 @@ def test_refresh_worktree_keeps_a_dirty_worktree_and_says_so(tmp_path):
 def test_refresh_worktree_on_a_non_repo_is_a_string_not_a_crash(tmp_path):
     warn = cli._refresh_worktree(tmp_path / "nope")
     assert isinstance(warn, str)                  # never raises
+
+
+# --- a second REMOTE holding work this tree does not have (aegis-96few) -------
+#
+# WHAT THESE ARE, PRECISELY: regression guards on CONSUMPTION, not proof of a fix.
+#
+# `upstream_ref` computes a divergence note, and tests/test_staleness.py already
+# proves it PRODUCES one. Nothing asserted that a caller SHOWS it — and three call
+# sites spell it `ref, _ =`, discarding it on exactly the branches that print a
+# reassuring "current with <ref>" line. Measured 2026-08-04: the note does reach
+# the operator today, but only because `_refresh_worktree` independently carries
+# it; the discard sites are harmless by luck of a second path, not by design.
+#
+# So these lock in the OBSERVABLE — a second remote that is ahead reaches a human
+# — without asserting which code path delivered it. If `_refresh_worktree` ever
+# stops carrying the note, the `ref, _ =` sites will silently stop reporting and
+# these go red. That is the failure they exist to catch: a repo 0-behind and clean
+# against the remote it tracks, while another remote holds commits running nowhere
+# (shantytown, 3 days, 4 dark commits, 3 of them fixes to the staleness detector
+# itself).
+#
+# NOTE FOR WHOEVER EDITS THESE: I first wrote them against a `ref, note =` change
+# of my own and they passed — then passed IDENTICALLY with that change reverted,
+# because the note was already arriving by the other path. A test that cannot
+# distinguish the fix from its absence is the bug this repo keeps re-finding. The
+# converged case below is what makes these falsifiable; do not delete it.
+
+def _two_remotes_second_ahead(tmp_path: Path) -> Path:
+    """A shared checkout whose `main` tracks origin/main, plus a SECOND remote
+    holding a commit origin does not have — the shanty fork, in miniature."""
+    origin = tmp_path / "origin.git"
+    forge = tmp_path / "forge.git"
+    for bare in (origin, forge):
+        bare.mkdir()
+        _git(bare, "init", "-q", "--bare", "-b", "main")
+
+    repo = _shared_repo(tmp_path, name="proj")
+    _git(repo, "remote", "add", "origin", str(origin))
+    _git(repo, "remote", "add", "forge", str(forge))
+    _git(repo, "push", "-q", "origin", "main")
+    _git(repo, "push", "-q", "forge", "main")
+    _git(repo, "branch", "--set-upstream-to=origin/main", "main")
+
+    # one commit that reaches ONLY forge — dark to anyone tracking origin
+    (repo / "dark.txt").write_text("a fix nobody is running\n")
+    _git(repo, "add", "dark.txt")
+    _git(repo, "commit", "-q", "-m", "fix: dark on forge only")
+    _git(repo, "push", "-q", "forge", "main")
+    _git(repo, "reset", "-q", "--hard", "HEAD~1")   # local returns to origin's tip
+    _git(repo, "fetch", "-q", "--all")
+    return repo
+
+
+def _converge(repo: Path):
+    """Make origin carry forge's commit too — the same fixture, no divergence."""
+    _git(repo, "push", "-q", "origin", "refs/remotes/forge/main:refs/heads/main")
+    _git(repo, "fetch", "-q", "--all")
+
+
+def _dispatch(tmp_path, monkeypatch, repo):
+    root = _root(tmp_path)
+    panes = NullPanes(screen="")
+    monkeypatch.setattr(cli, "Tmux", lambda *a, **k: panes)
+    rc = main(["--root", str(root), "go", "item-1", "ellie", "--worktree", str(repo)])
+    return rc, panes
+
+
+def test_dispatch_reports_a_second_remote_that_is_ahead(tmp_path, monkeypatch, capsys):
+    repo = _two_remotes_second_ahead(tmp_path)
+    rc, panes = _dispatch(tmp_path, monkeypatch, repo)
+    assert rc == OK
+    cap = capsys.readouterr()
+    assert panes.sent, "nothing was dispatched — this test is not exercising the path"
+
+    everywhere = cap.out + cap.err + "".join(t for _p, t in panes.sent)
+    assert "forge/main" in everywhere, (
+        "a second remote holding work this tree does not have was NOT reported; "
+        f"got: {everywhere!r}")
+    assert "ahead" in everywhere
+    # and it reaches the AGENT, not just the operator's terminal
+    assert "forge/main" in "".join(t for _p, t in panes.sent), \
+        "the divergence stayed on the console and never rode the dispatch"
+
+
+def test_dispatch_is_SILENT_when_the_two_remotes_agree(tmp_path, monkeypatch, capsys):
+    """The falsifier. Without this, the assertion above passes for a build that
+    shouts unconditionally — which is the same as one that never checked."""
+    repo = _two_remotes_second_ahead(tmp_path)
+    _converge(repo)
+    rc, panes = _dispatch(tmp_path, monkeypatch, repo)
+    assert rc == OK
+    cap = capsys.readouterr()
+    everywhere = cap.out + cap.err + "".join(t for _p, t in panes.sent)
+    assert "ahead" not in everywhere, f"converged remotes still warned: {everywhere!r}"
+
+
+def test_st_worktree_reports_a_second_remote_that_is_ahead(tmp_path, capsys):
+    """`st worktree` is the command that prints the bare 'current with <ref>'
+    line — the one a human reads as an all-clear before starting work."""
+    repo = _two_remotes_second_ahead(tmp_path)
+    root = _root(tmp_path)
+    rc = main(["--root", str(root), "worktree", str(repo), "ellie"])
+    assert rc == OK
+    cap = capsys.readouterr()
+    assert "forge/main" in cap.out + cap.err, \
+        f"st worktree did not report the divergence: {cap.out + cap.err!r}"
+
+
+def test_st_worktree_is_SILENT_when_the_two_remotes_agree(tmp_path, capsys):
+    repo = _two_remotes_second_ahead(tmp_path)
+    _converge(repo)
+    root = _root(tmp_path)
+    rc = main(["--root", str(root), "worktree", str(repo), "ellie"])
+    assert rc == OK
+    cap = capsys.readouterr()
+    assert "ahead" not in cap.out + cap.err, \
+        f"converged remotes still warned: {cap.out + cap.err!r}"
