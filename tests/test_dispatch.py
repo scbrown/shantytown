@@ -380,6 +380,29 @@ def test_an_item_with_an_UNMET_blocker_is_refused(tmp_path):
     assert trk.updates == 0, "wrote status on an unservable item"
 
 
+def test_the_refusal_states_ITS_OWN_reading_and_asserts_NOTHING_about_bd(tmp_path):
+    """aegis-eqhf6. The message used to end "`bd ready` already excludes it for
+    this reason" — an assertion about another tool's behaviour, made by code that
+    never asked it.
+
+    On 2026-08-04 sattler hit a case where `bd ready` DID offer a bead this
+    refused, and that sentence aimed the diagnosis away from the disagreement:
+    it reads as "the two agree, so your ready list must be stale". st cannot
+    tell whether bd excluded anything, so it must not say — and this test is on
+    the ABSENCE of the claim, because the wording that replaced it will drift and
+    the prohibition should survive that.
+    """
+    d, trk, panes = _blocked_world(tmp_path, ("item-blocker",))
+    from shantytown.dispatch import HasOpenBlocker
+    with pytest.raises(HasOpenBlocker) as ei:
+        d.go("item-1", "ellie")
+    msg = str(ei.value)
+    assert "already excludes" not in msg, msg
+    assert "bd ready" not in msg or "disagree" in msg, (
+        "the refusal may only mention `bd ready` to name the DISAGREEMENT as a "
+        f"finding — never to vouch for what bd did: {msg}")
+
+
 def test_reassign_does_not_bypass_an_unmet_blocker(tmp_path):
     """reassign takes work from a live holder; it does not make blocked work
     workable."""
