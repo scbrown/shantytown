@@ -25,6 +25,7 @@ could become NOISE — because a tag the fleet learns to skip is not a fix:
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -54,6 +55,14 @@ class StoreTracker:
 
     def update(self, item_id: str, **fields) -> None:
         self.updates.append((item_id, fields))
+        # AND IT APPLIES THEM (aegis-8xc5w). This double used to record the call
+        # and change nothing, which is now indistinguishable from the swallowed
+        # write `go` exists to catch — the read-back rejected it, correctly. A
+        # double standing in for a HEALTHY tracker in a test about something else
+        # has to behave like one; a tracker that accepts and does not apply is a
+        # subject, not a stand-in, and it has its own tests.
+        self.item = replace(self.item, **{
+            k: v for k, v in fields.items() if hasattr(self.item, k)})
 
 
 def _store(path: Path, database: str | None = "beads_aegis", mode: str = "server",
