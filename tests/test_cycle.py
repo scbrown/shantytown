@@ -108,14 +108,41 @@ def test_the_prompt_lands_on_the_agents_own_pane(tmp_path):
     assert pane == "shanty-gennaro", "the cycle prompt must go to the agent itself"
 
 
-def test_the_prompt_checkpoints_BEFORE_clearing():
+def test_the_prompt_checkpoints_BEFORE_cycling():
     msg = _cycle_message()
-    # It is an INSTRUCTION, not a bare keystroke: there is no standalone `/clear`
-    # at the start, and CHECKPOINT is named before /clear appears.
+    # It is an INSTRUCTION, not a bare keystroke, and CHECKPOINT comes first.
     assert not msg.strip().startswith("/clear")
     assert "CHECKPOINT" in msg
-    assert msg.index("CHECKPOINT") < msg.index("/clear"), "checkpoint must precede clear"
-    assert "BEFORE /clear" in msg
+    assert msg.index("CHECKPOINT") < msg.index("st cycle"), \
+        "checkpoint must precede the cycle"
+
+
+def test_the_prompt_NO_LONGER_PRESCRIBES_CLEAR():
+    """THE INSTRUCTION ITSELF WAS THE BUG (aegis-3laza).
+
+    This message used to end "run /clear to reset context". That is measurably
+    harmful: `/clear` drops the session out of bypass into MANUAL, so the agent
+    comes back undispatchable and `st crew` correctly reports it so. Measured on
+    malcolm — the automatic remedy needed its own remedy, and this driver was
+    handing it out on a timer, fleet-wide.
+
+    The test asserts the NEGATIVE deliberately. A prompt that merely also mentions
+    `st cycle` while still telling the agent to /clear would pass a positive-only
+    check and change nothing about what the agent actually does."""
+    msg = _cycle_message()
+    assert "st cycle --self" in msg, "the prompt must name the safe verb"
+    assert "Do NOT run /clear" in msg, "it must actively warn AGAINST the old remedy"
+    # No surviving instruction to run it. The only permitted mention is the warning.
+    for phrase in ("THEN run /clear", "then /clear", "run /clear to"):
+        assert phrase not in msg, f"the prompt still tells the agent to {phrase!r}"
+
+
+def test_the_prompt_says_why_clear_is_wrong_not_just_that_it_is():
+    """An instruction an agent cannot check is one it will override under pressure.
+    The prompt carries the mechanism — bypass -> MANUAL — so a reader can tell this
+    is a real constraint and not a style preference."""
+    msg = _cycle_message()
+    assert "bypass" in msg and "MANUAL" in msg
 
 
 # --- dedup: once per episode, re-armed on recovery --------------------------

@@ -199,17 +199,35 @@ def agent_states(agents, panes, runtime) -> dict:
 
 def _cycle_message() -> str:
     # An INSTRUCTION the agent executes, NOT a bare `/clear` keystroke. The agent
-    # checkpoints FIRST, then clears — a raw /clear would drop unsaved work
-    # (h562's rule). Pushed as a user turn to the agent's own Claude, which then
-    # does checkpoint -> /clear -> resume, in that order.
+    # checkpoints FIRST — a raw /clear drops unsaved work (h562's rule). Pushed as
+    # a user turn to the agent's own Claude.
+    #
+    # IT NO LONGER PRESCRIBES `/clear`, AND THAT IS THE POINT (aegis-3laza).
+    #
+    # This message used to end "run /clear to reset context", and that instruction
+    # is measurably harmful: `/clear` DROPS THE SESSION OUT OF BYPASS INTO MANUAL.
+    # Measured on malcolm — clearing a saturated agent fixed the context and
+    # created a second blocker, after which `st crew` correctly reported it
+    # not-reliably-dispatchable. So the automatic remedy needed its own remedy, and
+    # this driver was handing it out on a timer, fleet-wide, twelve times in one
+    # session.
+    #
+    # `st cycle --self` records a request that `st tend` honours by STOP + RELAUNCH
+    # instead, which restores what /clear destroys: bypass, the MCP kit, skills,
+    # journaling, and a verification that the stop hooks are live on the new
+    # process. The agent keeps working until tend picks the request up — nothing is
+    # lost if it never fires.
     return (
         "⚠ st tend: you are PAST THE 400k CYCLE THRESHOLD. CYCLE NOW, and in this "
         "order: (1) CHECKPOINT — write your current state to your active bead "
         "(what you are mid-task on, decisions already made, the exact next step) "
-        "with `bd comment <id> --file <notes>`; (2) THEN run /clear to reset "
-        "context; (3) THEN resume from the bead. Do the checkpoint BEFORE /clear "
-        "— a bare /clear loses whatever was not written down. (auto-prompt from "
-        "st tend, once per saturation episode.)")
+        "with `bd comment <id> --file <notes>`; (2) THEN run `st cycle --self -r "
+        "'<that same checkpoint, one line>'`. Do NOT run /clear — it drops you out "
+        "of bypass into MANUAL and you come back undispatchable. `st cycle` stops "
+        "and relaunches you instead, which KEEPS bypass, your MCP kit, your skills "
+        "and your hooks, and re-dispatches your plate item automatically. Keep "
+        "working until it fires. (auto-prompt from st tend, once per saturation "
+        "episode.)")
 
 
 def push_to_own_pane(reg, panes, agent: str, message: str) -> str | None:
