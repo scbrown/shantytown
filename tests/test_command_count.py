@@ -193,7 +193,7 @@ def test_the_surface_is_twenty():
     wrong.
 
     Each command still earns its slot."""
-    assert len(_actual_subcommands()) == 23, (
+    assert len(_actual_subcommands()) == 24, (
         "the command count changed. If that's intended, update the number here and "
         "the cli.py docstring together — and say why the surface grew in docs/cli.md."
     )
@@ -222,3 +222,24 @@ def test_the_canonical_spellings_still_work():
     `roles set` / `roles sync` dispatch to the same functions they always did."""
     assert {"roles"} <= _actual_subcommands()
     assert cli._cmd_role is not None and cli._cmd_project is not None
+
+
+def test_the_prose_number_in_the_docstring_matches_the_parser():
+    """THE ONE COPY OF THE COUNT NOTHING WAS CHECKING (found while adding `cycle`).
+
+    This file pins two things: the SET of commands (docstring list vs parser) and a
+    bare integer in the test above. It never pinned the ENGLISH WORD in the first
+    line of cli.py's docstring — and that word had silently drifted to "Twenty-two"
+    while the parser wired twenty-three.
+
+    That is precisely the defect this file was written to prevent, one level up:
+    'a number nobody enforces is a comment.' The list was enforced, so the drift
+    hid in the sentence ABOVE the list — the line a reader actually quotes. Now the
+    word is checked too, so all three copies have to move together."""
+    words = {20: "twenty", 21: "twenty-one", 22: "twenty-two", 23: "twenty-three",
+             24: "twenty-four", 25: "twenty-five", 26: "twenty-six"}
+    n = len(_actual_subcommands())
+    doc_first_line = (cli.__doc__ or "").splitlines()[0].lower()
+    assert words[n] in doc_first_line, (
+        f"the parser wires {n} commands but cli.py's docstring opens with "
+        f"{doc_first_line!r} — update the word, not just the list.")

@@ -1,11 +1,12 @@
-"""st — the CLI. Twenty-two commands, and the count is load-bearing: each earns its slot.
+"""st — the CLI. Twenty-four commands, and the count is load-bearing: each earns its slot.
 
     anchor [--short|--events|--harness] · go · inbox [--count] · task
     · crew [--count|--governor] · input [--show|--clear|--dismiss] · ask · answer
     · roles [--check|set|band|sync] · init · new · start [--mode]
     · stop · log · context · doctor [--install]
     · tend [--install|--status|--reauth|--target] · attach [-r|--no-start]
-    · dashboard [admin] · subscribe · worktree [--gc] · push [--branch] · stats
+    · dashboard [admin] · subscribe · cycle [--self|--allow-loss] · worktree [--gc]
+    · push [--branch] · stats
 
 Six of those flags are MACHINE-READABLE modes, added for an external status bar
 (anchor --short/--events/--harness, crew --count, crew --governor, inbox --count).
@@ -92,6 +93,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from . import beads as beads_mod
+from . import cycle as cycle_mod
 from . import bootstrap as boot_mod
 from . import config
 from . import harness as harness_mod
@@ -792,6 +794,31 @@ def build_parser() -> argparse.ArgumentParser:
     sb.add_argument("--server", default=None,
                     help="quipu server (default $QUIPU_SERVER)")
 
+    cy = sub.add_parser("cycle",
+                        help="clear an agent's context WITHOUT destroying its "
+                             "runtime: checkpoint -> stop -> relaunch -> "
+                             "re-dispatch. `/clear` drops bypass; this does not")
+    cy.add_argument("agent", nargs="?",
+                    help="who to cycle; with --self, defaults to $SHANTY_AGENT")
+    cy.add_argument("-r", "--reason", default="",
+                    help="THE CHECKPOINT, and it is required: what you are "
+                         "mid-task on, decisions already made, the exact next "
+                         "step. Unwritten context is the only thing a cycle "
+                         "destroys")
+    cy.add_argument("--self", dest="self_", action="store_true",
+                    help="REQUEST your own cycle. An agent cannot cycle itself "
+                         "in-process (the stop kills the session doing the "
+                         "stopping), so this records a request `st tend` honours")
+    cy.add_argument("--allow-loss", action="store_true",
+                    help="cycle even though a tree holds uncommitted or unpushed "
+                         "work. Named separately from any --force ON PURPOSE, so "
+                         "reaching past another refusal cannot disarm this one")
+    # `--dry-run` is on every command that writes, from commit one — and this one
+    # kills a live session, so it is not optional here. It also has to run the
+    # GUARD before printing "would", or the preview an operator reads to authorise
+    # a cycle would be silent about the work it is about to strand.
+    cy.add_argument("-n", "--dry-run", action="store_true")
+
     wt = sub.add_parser("worktree",
                         help="provision (or gc) an agent's isolated worktree off "
                              "a SHARED project repo — so agents never share an "
@@ -913,6 +940,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_dashboard(a)
     if a.cmd == "subscribe":
         return _cmd_subscribe(a)
+    if a.cmd == "cycle":
+        return _cmd_cycle(a)
     if a.cmd == "worktree":
         return _cmd_worktree(a)
     if a.cmd == "push":
@@ -4000,6 +4029,154 @@ def _resolve_repo(repo: str) -> Path:
     return root / repo
 
 
+def _cmd_cycle(a) -> int:
+    """cycle <agent> — clear context WITHOUT destroying the runtime (aegis-3laza).
+
+    `/clear` is the wrong primitive and this fleet paid for it five times in one
+    session. It cannot be invoked BY the agent that needs it; it drops the session
+    out of bypass into MANUAL, so the remedy needs its own remedy; and the depth
+    signal meant to trigger it read `ok` for an agent that was self-reporting
+    saturation.
+
+    The sequence that works — found by hand five separate times before it was a
+    verb — is stop-with-a-reason then relaunch, because `st new` RESTORES what
+    `/clear` destroys: bypass, the MCP kit, skills, journaling, and a verification
+    that the stop hooks are live on the new process.
+
+    ORDER: assess -> stop -> launch -> re-dispatch. The guard runs first and to
+    completion, because everything after it is irreversible from here.
+    """
+    from . import cycle as cycle_mod
+
+    agent_name = a.agent or os.environ.get("SHANTY_AGENT", "")
+    if not agent_name:
+        print("  refused: no agent. `st cycle <agent>`, or `--self` with "
+              "$SHANTY_AGENT set.", file=sys.stderr)
+        return REFUSED
+
+    # --self is a REQUEST, and it cannot be anything else. The stop would kill the
+    # session running this very command, so a self-cycle that tried to complete
+    # in-process would die halfway through — after the stop, before the relaunch,
+    # which is the one outcome worse than not cycling at all.
+    if getattr(a, "self_", False):
+        if not a.reason.strip():
+            print("  refused: --self needs your checkpoint. You are the only one "
+                  "who can write it, and it is the only thing the cycle destroys. "
+                  "`st cycle --self -r '<what you are mid-task on, decisions "
+                  "already made, the exact next step>'`", file=sys.stderr)
+            return REFUSED
+        if a.dry_run:
+            print(f"  would: request a cycle for {agent_name}")
+            return OK
+        cycle_mod.Requests(a.root).request(agent_name, a.reason.strip())
+        print(f"  {agent_name}: cycle REQUESTED — checkpoint recorded.")
+        print(f"  `st tend` performs it. You stay up until it does, so keep "
+              f"working; nothing is lost if it never fires.")
+        return OK
+
+    try:
+        card = _registry(a).get(agent_name)
+    except LookupError as e:
+        print(f"  refused: {e}", file=sys.stderr)
+        return REFUSED
+
+    # THE GUARD. fetch=True is load-bearing and is the trap the bead names: a tree
+    # judged against a STALE remote-tracking ref reports commits as stranded when
+    # they are already on origin, and a cycle verb that refuses on a phantom gets
+    # routed around and then trusted by nobody. tree_staleness(fetch=True) also
+    # prunes, which closes the opposite and worse error — a deleted upstream ref
+    # laundering an orphaned commit into "safe".
+    trees = _agent_trees(a, card, sweep=True)
+    verdict = cycle_mod.assess(
+        agent_name, trees, a.reason,
+        staleness=lambda t: tree_staleness(t, fetch=True),
+        allow_loss=a.allow_loss)
+    if not verdict.ok:
+        print(f"  refused: {verdict.render()}", file=sys.stderr)
+        return REFUSED
+    if verdict.risks:
+        # --allow-loss was used. SAY WHAT IS BEING SPENT — an override that prints
+        # nothing turns a decision into a habit.
+        print("  ⚠ proceeding over work that will be stranded (--allow-loss):",
+              file=sys.stderr)
+        for r in verdict.risks:
+            print(f"      {r.render()}", file=sys.stderr)
+
+    if a.dry_run:
+        print(f"  would: stop {agent_name} (reason: {verdict.checkpoint})")
+        print(f"  would: relaunch {agent_name} — bypass, MCP kit, skills, hooks")
+        print(f"  would: re-dispatch its plate item back to it")
+        return OK
+
+    # STOP, through the real command so its ownership guards apply unchanged: st
+    # only reaps what st launched, and an unstamped session belongs to another
+    # orchestrator. A cycle must not become a second way to kill a foreign pane.
+    stop_args = argparse.Namespace(**vars(a))
+    stop_args.agent = agent_name
+    stop_args.reason = f"{cycle_mod.CYCLE_REASON}: {verdict.checkpoint}"
+    if (rc := _cmd_stop(stop_args)) != OK:
+        print(f"  refused: {agent_name} was not stopped — NOT relaunching. "
+              f"A cycle that launches over a session it could not stop is how "
+              f"you get two of the same agent.", file=sys.stderr)
+        return rc
+
+    # RELAUNCH through the one shared launcher, so the cycle cannot acquire a
+    # cheaper version of the pre-flight that `new`/`start`/`attach` all pay.
+    panes = _panes(a)
+    rc = _launch(a, card, panes, _runtime(a, panes))
+    if rc != OK:
+        print(f"  could not tell: {agent_name} was stopped but the relaunch did "
+              f"not verify (exit {rc}). Its checkpoint is on the stop record. "
+              f"`st new {agent_name}` to retry — do NOT assume it is up.",
+              file=sys.stderr)
+        return CANNOT_TELL
+
+    cycle_mod.Requests(a.root).clear(agent_name)   # only now: the cycle happened
+    print(f"  {agent_name}: CYCLED — context cleared, runtime intact.")
+    _redispatch_after_cycle(a, agent_name)
+    return OK
+
+
+def _redispatch_after_cycle(a, agent_name: str) -> None:
+    """Put the agent's plate item back on its hook after a relaunch.
+
+    Today the coordinator hand-re-dispatches after every cycle, which is most of
+    what made cycling expensive: five cycles in one session, five manual
+    re-dispatches, each one a turn.
+
+    BEST-EFFORT AND LOUD, never fatal. The cycle itself has already succeeded by
+    the time this runs — the agent is up with its runtime intact — so a failure
+    here must report and stop, not unwind a good relaunch. A fresh agent with no
+    plate item runs `st anchor` and finds its own work; that is a slower path, not
+    a broken one.
+    """
+    try:
+        tracker = _tracker(a)
+        item = beads_mod.plate(tracker, agent_name) if hasattr(
+            beads_mod, "plate") else None
+    except Exception as e:  # noqa: BLE001 — a tracker fault must not fail the cycle
+        print(f"  note: could not read {agent_name}'s plate to re-dispatch "
+              f"({e}). It will pick its work up from `st anchor`.",
+              file=sys.stderr)
+        return
+    if item is None:
+        print(f"  note: {agent_name} had no plate item to re-dispatch.")
+        return
+    try:
+        d = _dispatcher(a)
+        # reassign=True: the item is ALREADY assigned to this agent — that is the
+        # whole point — so the assignee guard would otherwise refuse the very
+        # re-dispatch the cycle exists to automate.
+        d.go(item.id, agent_name, reassign=True,
+             note="resumed after a context cycle — your checkpoint is on the "
+                  "stop record")
+        print(f"  re-dispatched {item.id} -> {agent_name}")
+    except Exception as e:  # noqa: BLE001
+        print(f"  note: {agent_name} is UP but {item.id} was not re-dispatched "
+              f"({e}). Send it by hand: `st go {item.id} {agent_name} "
+              f"--reassign`.", file=sys.stderr)
+
+
 def _cmd_worktree(a) -> int:
     """worktree <repo> [<agent>] [--gc] — st PROVISIONS the isolated worktree so
     the agent never runs `git worktree add` by hand (aegis-h2rr).
@@ -5183,8 +5360,33 @@ def _tend_once(a, quiet: bool = False) -> int:
             Path(a.root), _registry(a), panes, refresh=_refresh_clone,
             log=_log).sweep(agents, runtime))
         if cycled:
-            print(f"  ⚠ prompted {len(cycled)} saturated agent(s) to checkpoint "
-                  f"+ /clear: {', '.join(cycled)}", file=sys.stderr)
+            print(f"  ⚠ prompted {len(cycled)} saturated agent(s) to cycle: "
+                  f"{', '.join(cycled)}", file=sys.stderr)
+        # HONOUR SELF-REQUESTED CYCLES (aegis-3laza). An agent cannot cycle itself
+        # in-process — the stop kills the session running the stop — so `st cycle
+        # --self` can only record a request, and this is what honours it. It is the
+        # half that removes three of the five measured failures: the agent that
+        # KNOWS it is degrading no longer has to wait for a coordinator to notice.
+        #
+        # Deliberately AFTER the saturation sweep, so an agent that just asked for
+        # a cycle is not also prompted for one in the same pass.
+        for who, checkpoint in _sweep(
+                "cycle-requests",
+                lambda: sorted(cycle_mod.Requests(a.root).pending().items())) or []:
+            rc_c = _sweep(f"cycle:{who}", lambda w=who, c=checkpoint: _cmd_cycle(
+                argparse.Namespace(**{**vars(a), "cmd": "cycle", "agent": w,
+                                      "reason": c, "self_": False,
+                                      "allow_loss": False, "dry_run": False})))
+            # The request is cleared by _cmd_cycle ONLY on a completed cycle, so a
+            # refusal (dirty tree, no checkpoint) leaves it pending and the agent
+            # is retried next pass rather than silently dropped. That is the right
+            # direction: a request that evaporates on the first refusal is worse
+            # than no request, because the agent stops asking.
+            if rc_c != OK:
+                print(f"  ⚠ tend: {who} REQUESTED a cycle and it did not complete "
+                      f"(exit {rc_c}) — the request stays pending. Usually a dirty "
+                      f"or unpushed tree; run `st cycle {who} -r '...'` to see it.",
+                      file=sys.stderr)
         # ALERT THE IDLE FLEET (aegis-nk0e): the SOFT half of Rule Zero. If free
         # feedable workers and dispatchable beads coexist, push the coordinator —
         # a coordinator forgetting to dispatch is the same invisible failure w0kk
