@@ -286,14 +286,40 @@ while read -r _lref lsha _rref rsha; do
       rawmsgs+=$(git log -1 --format=%B "$c" 2>/dev/null)$'\n'
     done
   else
-    # Branch update: diff against the remote tip — pre-existing content is excluded
-    # by construction.
-    addedlines=$(git diff "$rsha" "$lsha" -- . "${GUARD_EXCLUDE[@]}" 2>/dev/null | grep -E '^\+' || true)
-    tf=$(ticket_files "$rsha" "$lsha")
+    # Branch update. PER-COMMIT, not the net diff of the range (aegis-gsbs1).
+    #
+    # This was `git diff "$rsha" "$lsha"`, and the difference is the whole bug.
+    # A push publishes every OBJECT in the range, not the range's net result — so
+    # a range containing (leak, then scrub) has a clean net diff while still
+    # publishing the leaking blob, reachable by sha forever. Self-reported by
+    # arnold after exactly that: the guard refused his first push correctly, he
+    # added a scrub COMMIT because the leaking commit had already reached the
+    # internal forge and could no longer be amended, and the second push PASSED
+    # while `braino@vati` went into public history at bb40959.
+    #
+    # The trap punished the right instinct: a scrub commit is what a careful
+    # author reaches for FIRST when refused, and the guard's own remedy text said
+    # "amend" — which is unavailable once the commit exists on another remote.
+    #
+    # The NEW REF path above has always scanned per-commit for this same reason;
+    # this branch was simply the weaker half of one guard. `rsha..lsha` is exactly
+    # the set of commits this push would add, so pre-existing content stays
+    # excluded by construction and the quietness that keeps the guard installed is
+    # preserved.
+    newcommits=$(git rev-list "$rsha..$lsha" 2>/dev/null)
+    if [ -z "$newcommits" ]; then
+      continue   # nothing new (e.g. a forced no-op) — nothing to scan
+    fi
+    addedlines=""
+    rawmsgs=""
     ticketlines=""
-    [ -n "$tf" ] && ticketlines=$(printf '%s\n' "$tf" | tr '\n' '\0' \
-      | xargs -0 git diff "$rsha" "$lsha" -- 2>/dev/null | grep -E '^\+' || true)
-    rawmsgs=$(git log --format=%B "$rsha..$lsha" 2>/dev/null)
+    for c in $newcommits; do
+      addedlines+=$(git show --format= "$c" -- . "${GUARD_EXCLUDE[@]}" 2>/dev/null | grep -E '^\+' || true)$'\n'
+      tf=$(ticket_files "$c")
+      [ -n "$tf" ] && ticketlines+=$(printf '%s\n' "$tf" | tr '\n' '\0' \
+        | xargs -0 git show --format= "$c" -- 2>/dev/null | grep -E '^\+' || true)$'\n'
+      rawmsgs+=$(git log -1 --format=%B "$c" 2>/dev/null)$'\n'
+    done
   fi
   # ADDED lines only (+ prefix), so pre-existing occurrences never trip it.
   added=$(printf '%s\n' "$addedlines" | grep -nE "$PATTERNS" || true)
@@ -319,7 +345,21 @@ done
 if [ "$violations" -ne 0 ]; then
   cat >&2 <<'EOM'
 
-  Scrub them and amend, or push to the internal forge instead.
+  Fix by REWRITING the offending commit — amend, or rebase -i and edit it —
+  or push to the internal forge instead.
+
+  A LATER SCRUB COMMIT WILL NOT FIX THIS, and this text used to imply it would.
+  A push publishes every OBJECT in the range, not the range's net result, so
+  (leak, then scrub) still puts the leaking blob in public history where it is
+  reachable by sha forever. This guard now scans each commit in the range, so it
+  will keep refusing until the leak is out of the COMMITS, not merely out of the
+  tip. That is deliberate: it is the difference between the identifier being
+  published and not (aegis-gsbs1).
+
+  If the leaking commit has already reached ANOTHER remote and cannot be
+  rewritten, you are past what this guard can prevent — that is a decision about
+  public history, not a hook to argue with. File it and get authority.
+
   Pre-existing occurrences are deliberately NOT flagged — this refuses only what
   the push ADDS, so it stays quiet enough to stay installed.
   Override for a deliberate, reviewed publish:  git push --no-verify
