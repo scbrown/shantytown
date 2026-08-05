@@ -101,6 +101,19 @@ class Agent:
                                   # that made the field necessary, rebuilt inside
                                   # the fix. Absent reads as "nobody recorded it",
                                   # which is true and leads you to look further.
+    chrome: bool = False          # opt-in --chrome for THIS agent (aegis-neffw).
+                                  # DEFAULT FALSE ON PURPOSE, and the reason is
+                                  # measured: without --no-chrome a first-run
+                                  # claude stops at a "Claude in Chrome extension
+                                  # detected" consent prompt that BLOCKS the ready
+                                  # UI, so `st new`'s verify never sees live and
+                                  # returns could-not-tell for an agent that is
+                                  # fine (aegis-84z1, the prod 0-path fix).
+                                  # Per-card rather than global for a second
+                                  # reason: Anthropic's own doc says enabling
+                                  # Chrome loads 40+ browser tools into EVERY
+                                  # session's context. One flag on the agents that
+                                  # need a browser, not on all seven.
     dangerous: bool = False       # opt-in --dangerously-skip-permissions for THIS
                                   # agent. Per-agent, never global — a crew worker
                                   # that must act without permission prompts sets

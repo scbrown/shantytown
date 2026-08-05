@@ -1111,7 +1111,7 @@ def _runtime(a, panes):
     return ClaudeRuntime(panes, _default_settings(a.root), root=a.root)
 
 
-def _observe_live(runtime, panes, session) -> bool:
+def _observe_live(runtime, panes, session, card=None) -> bool:
     """Poll capture() until the runtime is OBSERVED live, or give up (-> 2).
 
     This proves the PROCESS came up — NOT that hooks fired. The hooks guarantee is
@@ -1119,6 +1119,7 @@ def _observe_live(runtime, panes, session) -> bool:
     inspection (arnold: that is GT's unanswerable 'did I get primed?'). A green
     verify here must never be read as 'hooks registered'."""
     answered = False
+    chrome_answered = False
     for _ in range(_LIVE_ATTEMPTS):
         screen = panes.capture(session)
         if runtime.is_live(screen):
@@ -1140,6 +1141,25 @@ def _observe_live(runtime, panes, session) -> bool:
             # different question. Pinned in tests/test_attribution_inventory.py.
             panes.send(session, runtime.trust_answer())
             answered = True
+        # THE CHROME CONSENT GATE (aegis-neffw), and it is the trust gate's twin.
+        # Live-fire 2026-08-05: `claude --chrome` shows the folder-trust dialog,
+        # then a SECOND screen consenting to the browser integration, and that one
+        # blocks the ready UI too — is_live False, so `st new` returns
+        # could-not-tell for an agent that is one keystroke from fine. That is the
+        # aegis-84z1 0-path failure, reachable again the moment a card opts in.
+        #
+        # GATED ON card.chrome, deliberately. A card that did not ask for a browser
+        # must never have one confirmed on its behalf; if that screen appears on a
+        # non-chrome card it is a genuine surprise and `waiting_for_human` should
+        # report it, not the launcher paper over it.
+        elif (not chrome_answered and getattr(card, "chrome", False)
+              and getattr(runtime, "chrome_prompt", None)
+              and runtime.chrome_prompt(screen)):
+            print(f"  first-run CHROME consent in {session} — accepting the "
+                  f"browser integration this card already elected "
+                  f"(chrome = true).", file=sys.stderr)
+            panes.send(session, runtime.chrome_answer())
+            chrome_answered = True
         if _LIVE_DELAY:
             time.sleep(_LIVE_DELAY)
     return False
@@ -1270,7 +1290,7 @@ def _launch(a, card, panes, runtime, *, dry_run: bool = False) -> int:
     # be written leaves the agent reporting `unknown`, which is the truth. It must
     # never turn a successful launch into a failure.
     _launched_now(a, card.name, _default_settings(a.root)(card))
-    if _observe_live(runtime, panes, session):
+    if _observe_live(runtime, panes, session, card):
         return _verify_live_hooks(a, card, runtime, panes, session)
     # Not observed live. Distinguish "waiting for a human" (a first-run consent
     # prompt) from "unknown" — both are could-not-tell (2), but they need
@@ -5792,7 +5812,7 @@ def _tend_reauth(a) -> int:
 
     unverified = []
     for card in relaunch:
-        if not _observe_live(runtime, panes, card.pane):
+        if not _observe_live(runtime, panes, card.pane, card):
             unverified.append(card.name)
     if unverified:
         print(f"  could not tell: {len(unverified)} relaunched agent(s) not "
