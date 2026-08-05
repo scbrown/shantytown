@@ -2874,6 +2874,56 @@ def _cmd_go(a) -> int:
     return OK
 
 
+def _unassigned_open(a):
+    """(count, top_priority_count, note) for OPEN beads in nobody's haul.
+
+    `(None, None, why)` means COULD NOT TELL — never `(0, ...)`. A roster that
+    prints "0 unassigned" because bd was unreachable is the could-not-tell-
+    rendered-as-fine bug this repo names in every other reader, in the one number
+    a coordinator would use to decide there is nothing to route.
+
+    WHY THIS BELONGS ON THE ROSTER (aegis-jqcs3). Hauls feed from READY beads
+    ASSIGNED to a worker, so an unassigned bead is queued nowhere: it does not
+    self-feed, no stop event advances to it, and it surfaces only if somebody
+    runs `bd ready` and picks it by hand. Measured 2026-08-05: 114 of 635 open
+    beads had no assignee — a third of the board in nobody's queue, including
+    three P1s — while `st crew` reported free/busy and the fleet twice read as
+    "nothing dispatchable".
+
+    IT CANNOT EXCLUDE `decision-needed`, AND SAYS SO RATHER THAN PRETENDING.
+    A decision-gated bead must not be handed to a worker as implementer work
+    (aegis-2og7d), so unassigned is its CORRECT state and it is not unrouted work.
+    Filtering it out is impossible here: `WorkItem` carries no labels and the
+    beads adapter never parses them, because the Tracker protocol is three
+    functions and deliberately does not grow (aegis-gqr8). Measured on the live
+    store: 113 unassigned, of which 4 are decision-needed — a 3.5% overcount,
+    named in the output so the reader can discount it knowingly instead of
+    discovering it and discounting the whole number.
+
+    (The first version of this function DID filter on `it.labels`. It was tested
+    against a fixture that had been given a `labels` attribute by the test itself,
+    so five green tests proved the filter worked on data that does not exist. The
+    live cross-check against `bd` is what caught it — 113 here against 109 there.)
+    """
+    try:
+        trk = _tracker(a, "beads")
+        rows = beads_mod.items(trk)
+    except Exception as e:            # noqa: BLE001 — unreachable/misconfigured store
+        return None, None, str(e)[:90]
+
+    n = top = 0
+    for it in rows:
+        if (getattr(it, "status", "") or "").lower() != "open":
+            continue
+        if (getattr(it, "assignee", None) or "").strip():
+            continue
+        n += 1
+        pr = getattr(it, "priority", None)
+        if pr is not None and pr <= 1:
+            top += 1
+    return n, top, ""
+
+
 def _cmd_crew(a) -> int:
     """crew — who exists, what state, what role, WHAT SETTINGS, and WHO IS FREE.
 
@@ -3043,6 +3093,19 @@ def _cmd_crew(a) -> int:
               "interrupts work.")
     if busy:
         print(f"  {len(busy)} busy: {', '.join(busy)}")
+    # WHO CAN TAKE THIS is only half the dispatcher's question; the other half is
+    # WHAT IS NOT QUEUED ANYWHERE. See _unassigned_open (aegis-jqcs3).
+    n_un, n_p1, why = _unassigned_open(a)
+    if n_un is None:
+        print(f"  ? unassigned-open: could not ask the tracker ({why}) — this is "
+              f"NOT zero")
+    elif n_un:
+        p1 = f", {n_p1} of them P1 or above" if n_p1 else ""
+        print(f"  {n_un} open bead(s) in NOBODY'S haul{p1} — unassigned, so they "
+              f"self-feed to no one and no stop event advances to them. "
+              f"`bd list --status open` and route by domain.")
+        print(f"    (includes any `decision-needed` beads, which are correctly "
+              f"unassigned — st cannot read labels, see _unassigned_open.)")
     # THROTTLED-IDLE IS NOT IDLE (aegis-diasw). `3 free` means "three agents can
     # take work"; under an engaged priority floor it may mean "three agents that
     # nothing is allowed to reach". Those are opposite instructions to a
