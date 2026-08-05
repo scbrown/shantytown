@@ -242,6 +242,13 @@ GUARD_EXCLUDE=(
   ':(exclude,glob)**/no_internal_identifiers.rs'
   ':(exclude,glob)**/test_internal_identifier_ratchet.py'
   ':(exclude,glob)**/test_no_internal_ids_in_output.py'
+  # A guard's own TEST must be able to name the patterns it asserts on — same
+  # reason this script and the ratchet tests above are excluded. Added when the
+  # guard refused the very commit that fixed it (aegis-gsbs1): the test needs a
+  # literal internal-forge URL for its "internal remote stays permissive" case.
+  # Its leak FIXTURE is still assembled from runtime fragments, so the only
+  # literal here is the one the test cannot avoid.
+  ':(exclude,glob)**/test-push-guard-range-scope.sh'
 )
 
 REMOTE_URL="${2:-}"
