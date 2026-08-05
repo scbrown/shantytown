@@ -835,7 +835,22 @@ class ClaudeRuntime:
     # UI, so is_live correctly returns False and st new reports could-not-tell (2).
     # The real fix is to launch past it (a settings/config that pre-answers), which
     # is entangled with what role-set emits — tracked separately, not guessed here.
-    CONSENT_MARKERS = ("Claude in Chrome extension detected", "keep browser tools off")
+    # THE CONSENT SCREEN'S WORDING CHANGED AND THESE STOPPED MATCHING (aegis-neffw).
+    # The first two were measured against an older claude and are kept — an older
+    # binary is still a binary somebody runs. But on claude 2.1.220, live-fire
+    # 2026-08-05, the real screen says none of them: it reads "Claude in Chrome
+    # works with the Chrome extension to let you control your..." and links
+    # clau.de/chrome/permissions. So `waiting_for_human` returned FALSE while a
+    # consent screen was demonstrably blocking the ready UI, and `st new` would
+    # have reported could-not-tell WITHOUT being able to name the cause — the
+    # third state this constant exists to make sayable.
+    #
+    # A marker list is a claim about somebody else's UI text, and it rots silently:
+    # it keeps returning a confident False. Pinned now by a test carrying the
+    # captured 2.1.220 screen, so the next wording change goes red instead of quiet.
+    CONSENT_MARKERS = ("Claude in Chrome extension detected", "keep browser tools off",
+                       "Claude in Chrome works with the Chrome extension",
+                       "clau.de/chrome/permissions")
     # THE FOLDER-TRUST GATE, measured 2026-07-20 and bigger than it looks: a
     # FRESH workspace makes Claude Code ask "Do you trust the files in this
     # folder?" and that dialog BLOCKS the ready UI until a human answers. It is
@@ -986,6 +1001,23 @@ class ClaudeRuntime:
         renders a different dialog answers its own, and nobody hardcodes a "1"
         into the launcher."""
         return "1"
+
+    def chrome_prompt(self, screen: str) -> bool:
+        """Is the Chrome-consent screen up? Same shape as `trust_prompt`, and the
+        launcher may answer it for the SAME reason: a card that set `chrome = true`
+        already elected the browser integration, so confirming re-affirms a decision
+        the operator made when they wrote the card rather than making a new one.
+
+        Gated on the CARD at the call site, never here — a card that did not ask
+        for chrome must never have a browser confirmed on its behalf, and this
+        predicate cannot see the card."""
+        return any(m in screen for m in self.CONSENT_MARKERS)
+
+    def chrome_answer(self) -> str:
+        """The keystroke that accepts: bare Enter. Next to the markers for the same
+        reason `trust_answer` is — a runtime that renders a different dialog answers
+        its own, and nobody hardcodes a keystroke into the launcher."""
+        return ""
 
     def waiting_for_human(self, screen: str) -> bool:
         """A THIRD state between live and failed: a first-run prompt (e.g. the

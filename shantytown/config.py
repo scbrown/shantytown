@@ -499,7 +499,7 @@ def _crew_list(path: Path, mode: str, spec) -> list[str]:
 # The card fields a human may DECLARE. `pane` is included but optional — omitted,
 # it is generated (tier.pane_for), which is the whole point of that change.
 _CREW_KEYS = {"role", "reports_to", "pane", "workspace", "workspace_source",
-              "model", "harness", "dangerous", "retired"}
+              "model", "harness", "dangerous", "retired", "chrome"}
 
 
 def _crew(path: Path, tbl: dict, declared: set[str] | None = None) -> dict:
@@ -540,7 +540,7 @@ def _crew(path: Path, tbl: dict, declared: set[str] | None = None) -> dict:
                 f"{path}: [crew.{name}] role = {role!r} is not one of "
                 f"{', '.join(sorted(allowed))}. Declare it as [roles.{role}] in "
                 f"this file to use it here.")
-        for flag in ("dangerous", "retired"):
+        for flag in ("dangerous", "retired", "chrome"):
             if flag in spec and not isinstance(spec[flag], bool):
                 raise ConfigError(f"{path}: [crew.{name}] {flag} must be true or "
                                   f"false, got {spec[flag]!r}")
@@ -551,6 +551,7 @@ def _crew(path: Path, tbl: dict, declared: set[str] | None = None) -> dict:
             workspace_source=spec.get("workspace_source"),
             model=spec.get("model"), harness=spec.get("harness"),
             dangerous=bool(spec.get("dangerous", False)),
+            chrome=bool(spec.get("chrome", False)),
             # None when the TOML does not mention it (aegis-6hfmi) — a registry
             # entry that is silent about retirement must not clear one that the
             # card records. `retired = false` in the TOML still un-retires.
