@@ -297,13 +297,18 @@ def _resolve(data: dict, path: Path) -> Config:
         raise ConfigError(f"{path}: startup.mode = {mode!r} is not a defined mode; "
                           f"defined: {known}")
 
+    # Parsed BEFORE the crew table, because `[crew.<name>] role` is validated
+    # against what `[roles.*]` declares (GitHub #37). No ordering hazard: both
+    # tables come out of the same already-parsed `data`.
+    declared_roles = _roles(path, _table(path, data, "roles"))
     return Config(mode=mode, modes=modes,
                   hibernate=_hibernate(path, _table(path, data, "hibernate")),
                   fleet=_fleet(path, _table(path, data, "fleet")),
-                  crew=_crew(path, _table(path, data, "crew")),
+                  crew=_crew(path, _table(path, data, "crew"),
+                             declared=set(declared_roles)),
                   env=_env(path, _table(path, data, "env")),
                   tmux_socket=_tmux_socket(path, _table(path, data, "tmux")),
-                  roles=_roles(path, _table(path, data, "roles")),
+                  roles=declared_roles,
                   precedence=_precedence(path, _table(path, data, "precedence")),
                   governor=_governor(path, _table(path, data, "governor")),
                   session_budget=_session_budget(
@@ -497,7 +502,7 @@ _CREW_KEYS = {"role", "reports_to", "pane", "workspace", "workspace_source",
               "model", "harness", "dangerous", "retired"}
 
 
-def _crew(path: Path, tbl: dict) -> dict:
+def _crew(path: Path, tbl: dict, declared: set[str] | None = None) -> dict:
     """[crew.<name>] -> Agent, a HUMAN-AUTHORED registry (GitHub #11).
 
     A legitimate source of truth, not a cache: a deployment with no ontology and
@@ -508,8 +513,21 @@ def _crew(path: Path, tbl: dict) -> dict:
     Validated the same way everything else in this file is: an unknown key is
     REFUSED, because a silently-dropped `workspace` is an agent launched in the
     wrong directory with no error anywhere.
+
+    `declared` is the set of role names `[roles.*]` declares in the SAME FILE
+    (GitHub #37). Without it this gate read `role not in VALID_ROLES`, and that
+    was the last place the closed enum still decided what may exist: a deployment
+    could declare `[roles.advisor]` and then be REFUSED for assigning it to a crew
+    member three lines further down, while `st roles set <agent> advisor` — which
+    goes through the catalog — succeeded. Two paths to one fact, disagreeing, and
+    the file-authored one lost.
+
+    `None` means "nobody passed the roles table" and falls back to the built-in
+    three, which is what a caller constructing a crew with no config gets. That is
+    a degradation to the previous behaviour, never to a wider one.
     """
     from .tier import VALID_ROLES, pane_for
+    allowed = set(VALID_ROLES) | set(declared or ())
     out: dict[str, Agent] = {}
     for name, spec in tbl.items():
         if not isinstance(spec, dict):
@@ -517,9 +535,11 @@ def _crew(path: Path, tbl: dict) -> dict:
                               f"{type(spec).__name__}")
         _refuse_unknown(path, f"crew.{name}", spec, _CREW_KEYS)
         role = spec.get("role", "worker")
-        if role not in VALID_ROLES:
-            raise ConfigError(f"{path}: [crew.{name}] role = {role!r} is not one "
-                              f"of {', '.join(VALID_ROLES)}")
+        if role not in allowed:
+            raise ConfigError(
+                f"{path}: [crew.{name}] role = {role!r} is not one of "
+                f"{', '.join(sorted(allowed))}. Declare it as [roles.{role}] in "
+                f"this file to use it here.")
         for flag in ("dangerous", "retired"):
             if flag in spec and not isinstance(spec[flag], bool):
                 raise ConfigError(f"{path}: [crew.{name}] {flag} must be true or "
