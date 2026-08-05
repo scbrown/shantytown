@@ -3427,6 +3427,19 @@ def _effective_target(asked: int | None, cap: int | None) -> int | None:
     return min(vals) if vals else None
 
 
+def _target_source(asked: int | None, cap: int | None) -> str | None:
+    """Which knob produced the effective target, for tend's held message.
+
+    Returns the governor phrasing only when the CAP is what actually binds — if
+    the operator asked for something stricter, `--target` is the honest answer.
+    Ties go to the governor: a cap the operator happens to match is still the
+    thing that would stop them raising it.
+    """
+    if cap is not None and (asked is None or cap <= asked):
+        return "the governor's max_agents cap:"
+    return None
+
+
 def _crew_governor(a) -> int:
     """`st crew --governor` — the capacity verdict, machine-readable, one line.
 
@@ -5340,6 +5353,10 @@ def _tend_once(a, quiet: bool = False) -> int:
         # behaviour every existing deployment has today.
         target=_effective_target(getattr(a, "target", None),
                                  None if verdict is None else verdict.max_agents),
+        # Name the SOURCE of that number in tend's held message, so an operator
+        # is not sent hunting for a `--target` flag they never passed.
+        target_src=_target_source(getattr(a, "target", None),
+                                  None if verdict is None else verdict.max_agents),
         governed=(None if verdict is None
                   else lambda card: verdict.excludes(card, _catalog(a))),
         # The same record `st crew` reads to print "stopped ON PURPOSE", so the

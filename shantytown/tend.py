@@ -266,7 +266,8 @@ class Tender:
     def __init__(self, panes, runtime, launches, *, spawn=None, refresh=None,
                  refresh_trees=None,
                  ensure=ensure_workspace, log=None, gaps=None, crashes=None,
-                 retire=None, now=None, target=None, governed=None,
+                 retire=None, now=None, target=None, target_src=None,
+                 governed=None,
                  catalog=None, stops=None):
         self._panes = panes
         self._runtime = runtime
@@ -301,6 +302,12 @@ class Tender:
         # target: how many agents this fleet should have LIVE. None = every
         # non-retired card, which is what a pass has always meant.
         self._target = target
+        # WHERE the target came from, for the held message only (aegis-3vt4h).
+        # "--target 6 is already met" sent an operator hunting for a flag they
+        # never passed, when the 6 was the governor's `max_agents`. A report that
+        # names the wrong SOURCE is the aegis-yc864 shape one layer down: the
+        # number is right and the explanation is not.
+        self._target_src = target_src
         # governed(card) -> "" | why this card must not come up. The usage
         # governor's tier, injected exactly like every other policy here so a
         # test drives 45/55/75/85/97 through a whole pass with no Prometheus.
@@ -428,7 +435,8 @@ class Tender:
         # indistinguishable from one the supervisor failed to notice.
         if allowed is not None and card.name not in allowed:
             return Finding(card.name, "down", BELOW_TARGET,
-                           f"held: --target {self._target} is already met "
+                           f"held: {self._target_src or '--target'} "
+                           f"{self._target} is already met "
                            f"(not a fault — raise the target to bring it up)")
         return self._respawn(card, dry_run)
 
