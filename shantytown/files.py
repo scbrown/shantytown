@@ -58,6 +58,7 @@ class FilesRegistry:
             workspace_source=d.get("workspace_source"),
             harness=d.get("harness"),
             dangerous=d.get("dangerous", False),
+            chrome=d.get("chrome", False),
             # No default: a card that does not carry `retired` reads None —
             # "nobody said" — so a read/write round-trip cannot invent a
             # retirement decision the card never recorded (aegis-6hfmi).
@@ -109,6 +110,10 @@ class FilesRegistry:
             existing["harness"] = agent.harness
         if agent.dangerous:
             existing["dangerous"] = agent.dangerous
+        # Same write-only-when-true shape as `dangerous` above: launch config the
+        # tier does not own, so a `role set` preserves it rather than clearing it.
+        if agent.chrome:
+            existing["chrome"] = agent.chrome
         # retired is written only when EXPRESSED — but False still writes, so
         # un-retiring stays expressible and this is not a one-way door. That was
         # the original intent; the bug was that "not expressed" and "expressed

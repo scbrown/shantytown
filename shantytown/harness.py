@@ -109,7 +109,14 @@ class ClaudeHarness:
         # makes a 6-agent fleet addressable rather than a wall of anonymous panes.
         # Default, not opt-in — an agent you forgot to enable it on is exactly the
         # one you will need to reach.
-        flags = f"--no-chrome --remote-control {card.name}"
+        # OPT-IN PER CARD (aegis-neffw, Stiwi asked for the capability). The
+        # DEFAULT stays --no-chrome, so every agent that does not ask for a
+        # browser keeps the aegis-84z1 fix: flipping this globally re-breaks
+        # `st new`'s liveness verify fleet-wide, which is the exact 0-path
+        # failure 84z1 was filed to repair. `--chrome` is one agent's decision on
+        # one card, never a default anybody inherits.
+        chrome = "--chrome" if card.chrome else "--no-chrome"
+        flags = f"{chrome} --remote-control {card.name}"
         # --dangerously-skip-permissions is OPT-IN per agent (card.dangerous), never
         # global — a crew worker that must act without prompts sets it on its own
         # card; nobody else inherits it (the pilot, aegis-qdal.5).
