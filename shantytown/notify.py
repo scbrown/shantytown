@@ -605,7 +605,17 @@ class IdleFleetAlerter:
             ready_beads = self._bd_ready()
         except Exception:
             return []
-        queues = feed_check.hauls(ready_beads)
+        # in_progress counts as a haul (aegis-ap4gm) — same reason as the
+        # feed_check gate: an item the worker already started is its next work,
+        # and `bd ready` structurally cannot report it.
+        # in_progress counts as a haul (aegis-ap4gm) — same reason as the
+        # feed_check gate: an item the worker already started is its next work,
+        # and `bd ready` structurally cannot report it. Fails open.
+        try:
+            active = feed_check.bd_in_progress(feed_check.bd_cwd(self._reg))
+        except Exception:      # noqa: BLE001
+            active = []
+        queues = feed_check.hauls(ready_beads, active)
         hauling_newly = [w for w in newly if w in queues]
         unhauled_free = [w for w in free if w not in queues]
         newly = [w for w in newly if w not in queues]

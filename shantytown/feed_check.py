@@ -246,7 +246,7 @@ def dispatchable(free: set, ready_beads) -> list[tuple[str, str]]:
     return out
 
 
-def hauls(ready_beads) -> dict[str, list[str]]:
+def hauls(ready_beads, in_progress_beads=()) -> dict[str, list[str]]:
     """worker name -> the READY beads already assigned to them: each worker's
     own queue (the HAUL, in tracker-native terms — aegis-wjgt).
 
@@ -262,9 +262,21 @@ def hauls(ready_beads) -> dict[str, list[str]]:
     unread `inbox:` items read as "its next work is already determined" — it
     vanished from the coordinator's free list and got dispatched nothing, while
     the gate that exists to stop the fleet going idle counted it as busy. Same
-    predicate as the plate readers and the haul advance (inbox.is_message)."""
+    predicate as the plate readers and the haul advance (inbox.is_message).
+
+    IN_PROGRESS ITEMS COME FIRST, and they were previously absent ENTIRELY
+    (aegis-ap4gm). An item the worker ALREADY STARTED is the strongest possible
+    next-item signal — stronger than anything merely ready — so it ranks ahead.
+
+    Only ASSIGNED ones are taken. An in_progress bead with an EMPTY assignee is a
+    different defect and must not be papered over here: re-pooling (`bd update
+    -a ""`) clears the assignee and leaves the status at in_progress, so the bead
+    is in no haul, on no plate and out of `bd ready` — it leaves the board
+    entirely, and the agent that handed it back did everything right. Pretending
+    someone owns it would hide that; the fix is resetting the status to `open`.
+    """
     out: dict[str, list[str]] = {}
-    for b in ready_beads:
+    for b in list(in_progress_beads) + list(ready_beads):
         assignee = b.get("assignee")
         # A message is not a queue; NEITHER is a decision-gated bead. A worker
         # whose only ready item is a decision-needed bead has NO real queue, so
@@ -274,8 +286,14 @@ def hauls(ready_beads) -> dict[str, list[str]]:
                 or is_decision(b.get("labels"))):
             continue
         name = assignee.split("/")[-1]
-        if name:
-            out.setdefault(name, []).append(b.get("id", "?"))
+        if not name:
+            continue
+        bid = b.get("id", "?")
+        # De-dup defensively. The two sources are disjoint by bd's own status
+        # semantics today; this must not yield a doubled queue entry if that
+        # ever stops being true.
+        if bid not in out.setdefault(name, []):
+            out[name].append(bid)
     return out
 
 
@@ -420,7 +438,20 @@ def gate_inputs(root, reg, panes, runtime, me: str | None = None, admits=None):
     # — holding the coordinator's stop hostage over one is the exact inverse
     # of Rule Zero's purpose. The gate blocks only for (idle unhauled
     # workers) x (unassigned ready work).
-    free = [w for w in free if w not in hauls(ready_beads)]
+    # IN_PROGRESS COUNTS AS A HAUL (aegis-ap4gm). `bd ready` cannot see an item
+    # someone already started, so a worker holding one read as unhauled AND idle
+    # and the coordinator was asked to feed work it already owned. Fails open to
+    # the old, narrower answer if the extra bd call fails.
+    # IN_PROGRESS COUNTS AS A HAUL (aegis-ap4gm). `bd ready` cannot see an item
+    # someone already started, so a worker holding one read as unhauled AND idle
+    # and the coordinator was asked to feed work it already owned. Fail open to
+    # the old, narrower answer: this widens a queue, so a bd hiccup must degrade
+    # to today's behaviour, never wedge the gate the whole crew loop hangs on.
+    try:
+        active = bd_in_progress(bd_cwd(reg))
+    except Exception:      # noqa: BLE001 — see fail-open above
+        active = []
+    free = [w for w in free if w not in hauls(ready_beads, active)]
     if not free:
         return [], [], []
     # THE GOVERNOR IS ASKED LAST, over the beads that survived every other
