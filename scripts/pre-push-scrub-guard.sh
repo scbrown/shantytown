@@ -167,10 +167,21 @@ if [ "${1:-}" = "--selftest" ]; then
         echo "ok   live patterns are ERE-clean"
       fi
       # Non-vacuity. This is the assertion that was missing: the rule must FIRE.
-      if printf '10.0.0.1\n' | grep -qE "$LIVE"; then
-        echo "ok   live patterns detect a generic private address"
+      # One probe per RFC1918 arm, because it was ONE arm that was dead and a
+      # single probe would have kept missing the other two.
+      #
+      # These addresses are deliberately ones NOT IN USE on any estate this guard
+      # protects — top-of-range in each block. They exercise every arm and publish
+      # nothing about anyone's topology, which is what lets them live in a public
+      # repository without a path exclusion.
+      probe_fail=0
+      for probe in 10.255.255.1 172.31.255.1 192.168.255.1; do
+        printf '%s\n' "$probe" | grep -qE "$LIVE" || { echo "FAIL live patterns miss a private-range arm"; probe_fail=1; }
+      done
+      if [ "$probe_fail" -eq 0 ]; then
+        echo "ok   live patterns detect all three private ranges"
       else
-        echo "FAIL live patterns do NOT detect 10.0.0.1 — an arm is dead"; fail=1
+        fail=1
       fi
       # ...and must still not cry wolf, or it gets switched off.
       if printf '8.8.8.8 is a public resolver\n' | grep -qE "$LIVE"; then
