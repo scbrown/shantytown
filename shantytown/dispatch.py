@@ -349,6 +349,11 @@ class Plan:
     unreadable_deps: int = 0   # dependency rows the tracker counted but could
                                # not resolve, so we cannot tell if they block
                                # (aegis-kt7jr)
+    orphaned_in_progress: bool = False
+    # This item was in_progress with NO assignee when we picked it up
+    # (aegis-ap4gm). Not a refusal — dispatching it is the repair — but the
+    # receiving agent is resuming somebody's abandoned work and the payload
+    # otherwise reads like a fresh start.
     track_attempts: int = 0    # how many write+read-back rounds the tracker
                                # update actually needed. 0 on --dry-run (nothing
                                # was written), 1 on a healthy dispatch, >1 when a
@@ -394,6 +399,12 @@ class Plan:
             f"  would: sign as -> {self.sender}" if self.sender else
             "  would: sign as -> NOBODY — this dispatch arrives UNSIGNED, which "
             "reads as the operator (set $SHANTY_AGENT)")
+        if self.orphaned_in_progress:
+            lines.append(
+                "  would: ⚠ RESUME an ORPHAN — this item is in_progress with NO "
+                "assignee, i.e. started and handed back. The assignee guard does "
+                "not fire (it keys on a field that is empty), so nothing else "
+                "would tell you.")
         if self.unreadable_deps:
             # SAY WHAT WE COULD NOT SEE (aegis-kt7jr). The blocker check ran and
             # was INCOMPLETE, which is a third answer beside "clear" and
@@ -494,6 +505,23 @@ class Dispatcher:
         holder = (item.assignee or "").strip()
         if not reassign and holder and holder != agent_name:
             raise AlreadyAssigned(item_id, holder, agent_name)
+        # THE GUARD ABOVE IS NOT WEAK HERE — IT IS BYPASSED (aegis-ap4gm, sattler).
+        # `and holder` means an EMPTY assignee never conflicts, so an item that is
+        # in_progress with NOBODY on it sails through silently. That state is not
+        # ordinary: something STARTED this and it was re-pooled or abandoned
+        # (`bd update -a ""` clears the assignee and leaves the status), so the
+        # next agent is picking up somebody's half-done work while the payload
+        # reads like fresh work.
+        #
+        # Measured tonight: an unassigned in_progress bead was dispatched, `st go`
+        # accepted SILENTLY, and it ended safely only because the receiving agent
+        # refused it on its premise. No mechanism caught it.
+        #
+        # CARRIED, NOT RAISED — the same trade `unreadable_deps` makes below, and
+        # for the same reason: dispatching it is the REPAIR (it acquires an owner),
+        # so refusing would block the remedy. What was missing was not a refusal,
+        # it was the fact reaching a human and the receiving agent.
+        orphaned = (item.status or "").strip() == "in_progress" and not holder
         # THE USAGE GOVERNOR (aegis-hdqej), last of the precondition refusals and
         # deliberately last: a CLOSED or STOLEN item is wrong to dispatch at any
         # usage level, and reporting "the 70% tier refused this" about a bead that
@@ -546,6 +574,13 @@ class Dispatcher:
         # primer PROSE, no matcher. The bead flagged this contract as the reason
         # to stop — it holds, and the check is written down so the next person
         # does not have to re-derive it.
+        # THE RECEIVING AGENT IS THE ONE WHO CANNOT OTHERWISE TELL (aegis-ap4gm).
+        # An orphaned in_progress item arrives looking exactly like fresh work.
+        # Appended BEFORE attribution so the signature stays last.
+        if orphaned:
+            text += (" — NOTE: this item was already in_progress with NO assignee: "
+                     "you are RESUMING work somebody started and handed back, not "
+                     "starting it. Read its comments before acting.")
         text = attribute(text, self.sender)
         return Plan(
             item_id=item_id,
@@ -563,6 +598,7 @@ class Dispatcher:
             # Reported instead, so the incompleteness is visible to the human who
             # CAN go look. If that trade is ever re-ruled, this is the line.
             unreadable_deps=int(getattr(item, "unreadable_deps", 0) or 0),
+            orphaned_in_progress=orphaned,
         )
 
     def triage(self, item_id: str, agent_name: str, note: str | None = None) -> Decision:
