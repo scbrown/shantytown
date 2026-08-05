@@ -1,5 +1,5 @@
-braino@vati:/tmp/claude-1000/-home-braino-gt-beads-aegis-crew-arnold/06141638-48
-fd-416f-9335-706ec6b66791/scratchpad/chrometest$ cd /tmp/claude-1000/-home-brain
+  [shell prompt line redacted — host/user/path are not part of the fixture]
+  [shell prompt line redacted — host/user/path are not part of the fixture]
 o-gt-beads-aegis-crew-arnold/06141638-48fd-416f-9335-706ec6b66791/scratchpad/chr
 ometest && claude --chrome --remote-control probe
 
