@@ -3415,6 +3415,18 @@ def _until(verdict) -> str:
             f"{gov_mod.fmt_when(left)}.")
 
 
+def _effective_target(asked: int | None, cap: int | None) -> int | None:
+    """The stricter of an operator's `--target` and the governor's cap.
+
+    None from either side means "no opinion", so this is a min over the values
+    actually declared and stays None when neither is. It NEVER raises a target:
+    a cap can only shrink a fleet, and `--target 20` under `max_agents = 6`
+    means six.
+    """
+    vals = [v for v in (asked, cap) if v is not None]
+    return min(vals) if vals else None
+
+
 def _crew_governor(a) -> int:
     """`st crew --governor` — the capacity verdict, machine-readable, one line.
 
@@ -3554,8 +3566,14 @@ def _crew_governor(a) -> int:
     # label may now contain `; `, which is the separator `Tier.label()` and
     # `Verdict.effect()` already use inside one.
     label = "; ".join(t.label() for t in verdict.restrictions)
+    # THE FLEET CAP IS PRINTED SEPARATELY because the baseline is not a tier and
+    # would otherwise be invisible here (aegis-3vt4h) — it engages at 0% usage,
+    # when `restrictions` is empty and every other field says "wide open". A cap
+    # that silently holds a fleet at 6 while the bar reads unrestricted is the
+    # aegis-yc864 shape: a display disagreeing with enforcement.
+    cap = "" if verdict.max_agents is None else f"CAP[{verdict.max_agents} agents]"
     print(f"ok {_pct(gov_mod.FIVE_HOUR)} {_pct(gov_mod.SEVEN_DAY)} "
-          f"{' '.join(x for x in (burn, pace, label) if x)}".rstrip())
+          f"{' '.join(x for x in (cap, burn, pace, label) if x)}".rstrip())
     return OK
 
 
@@ -5314,7 +5332,14 @@ def _tend_once(a, quiet: bool = False) -> int:
         crashes=sup_mod.CrashLog(Path(a.root)),
         retire=lambda name: _retire_card(a, name),
         log=lambda msg: print(f"  {msg}", file=sys.stderr),
-        target=getattr(a, "target", None),
+        # THE EFFECTIVE TARGET: the STRICTER of what the operator asked for and
+        # what the governor caps (aegis-3vt4h). `--target` is a request; the cap
+        # is a budget constraint, and a request cannot exceed a constraint. Either
+        # may be None (no cap), so this is a min over what is actually declared —
+        # and with neither declared it stays None, which is the whole-roster
+        # behaviour every existing deployment has today.
+        target=_effective_target(getattr(a, "target", None),
+                                 None if verdict is None else verdict.max_agents),
         governed=(None if verdict is None
                   else lambda card: verdict.excludes(card, _catalog(a))),
         # The same record `st crew` reads to print "stopped ON PURPOSE", so the
