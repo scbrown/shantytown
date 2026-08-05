@@ -187,3 +187,21 @@ def test_the_tier_label_names_the_cap(tmp_path):
     """A restriction that cannot state itself is indistinguishable from a bug."""
     pol = _policy(tmp_path)
     assert "at most 2 agents live" in pol.tier_at(80, FIVE).label()
+
+
+def test_the_held_message_names_the_GOVERNOR_not_a_flag_nobody_passed():
+    """A report that names the wrong SOURCE is the aegis-yc864 shape one layer
+    down: the number is right and the explanation is not. "--target 6 is already
+    met" sent an operator hunting for a flag they never passed, when the 6 came
+    from the governor's cap.
+
+    Ties go to the governor: a cap the operator happens to match is still the
+    thing that would stop them raising it.
+    """
+    from shantytown.cli import _target_source as src
+    assert src(None, None) is None          # no cap, no ask -> tend's own wording
+    assert src(20, None) is None            # operator only -> "--target"
+    assert "max_agents" in (src(None, 6) or "")   # cap only -> the governor
+    assert "max_agents" in (src(20, 6) or "")     # cap BINDS -> the governor
+    assert src(3, 6) is None, "operator asked stricter — --target is honest"
+    assert "max_agents" in (src(6, 6) or ""), "tie goes to the governor"
