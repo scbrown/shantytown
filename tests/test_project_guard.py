@@ -187,3 +187,63 @@ def test_zero_agents_from_a_reachable_graph_is_could_not_tell(tmp_path, monkeypa
     err = capsys.readouterr().err
     assert rc == cli.CANNOT_TELL
     assert "ZERO CrewMembers" in err and "namespace" in err
+
+
+# ── consistency is not correctness (aegis-uymsl) ─────────────────────────────
+
+def test_a_clean_quipu_match_says_it_is_CONSISTENCY_not_correctness(
+        tmp_path, monkeypatch, capsys):
+    """"20 cards match the graph. Nothing to do." read as validation, and it is a
+    ROUND TRIP: `roles sync` is what projects the graph's crew facts FROM the
+    cards, so a clean match proves the sync worked and nothing else.
+
+    Measured on the live fleet: this printed 20/20 clean and a direct SPARQL count
+    agreed at 20, while the operator's actual roster decision existed in no
+    machine-readable form at all. Two instruments agreeing is not two instruments
+    being right — and the sibling defect above (0 cards from a wrong namespace
+    reported as success) is the same shape one step earlier."""
+    root = crew(tmp_path, sattler={"role": "worker", "pane": "shanty-sattler"})
+    graph(monkeypatch, Agent(name="sattler", role="worker"))
+    panes(monkeypatch, "shanty-sattler")
+
+    rc = main(["--root", str(root), "roles", "sync"])
+
+    cap = capsys.readouterr()
+    assert rc == OK
+    assert "Nothing to do" in cap.out, "the existing outcome line must survive"
+    assert "CONSISTENCY, not correctness" in cap.err
+    # It must name the REASON and the REMEDY, not merely hedge. A warning that
+    # says "this might not be right" teaches nothing and gets tuned out.
+    assert "projected FROM these cards" in cap.err
+    assert "--from file:" in cap.err
+
+
+def test_a_clean_FILE_match_does_NOT_warn(tmp_path, monkeypatch, capsys):
+    """THE DISCRIMINATING CONTROL, and without it the test above proves nothing.
+
+    A file IS an independent referent — someone wrote the roster down, so matching
+    against it is a real check and warning about it would be false. If this test
+    ever fails, the warning has become unconditional noise, which is how a true
+    caveat trains people to ignore it."""
+    from shantytown.hierarchy import FileHierarchy
+
+    h = tmp_path / "hierarchy.json"
+    h.write_text(json.dumps({"sattler": None, "ian": "sattler"}))
+    # Build the cards FROM the file's own derivation, so the match is clean by
+    # construction whatever roles derive_agents assigns — the test is about the
+    # warning, not about role inference.
+    d = tmp_path / "crew"; d.mkdir()
+    for ag in FileHierarchy(h).all():
+        (d / f"{ag.name}.json").write_text(json.dumps(
+            {"role": ag.role, "reports_to": ag.reports_to,
+             "pane": f"shanty-{ag.name}"}))
+    panes(monkeypatch)
+
+    rc = main(["--root", str(tmp_path), "roles", "sync", "--from", f"file:{h}"])
+
+    cap = capsys.readouterr()
+    assert rc == OK
+    assert "Nothing to do" in cap.out
+    assert "CONSISTENCY, not correctness" not in cap.err, (
+        "a file source is a real referent — warning here would be false, and a "
+        "warning that fires on the good case is one nobody reads on the bad one")
