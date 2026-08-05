@@ -119,3 +119,43 @@ def test_a_second_top_level_package_would_not_break_the_build(tmp_path):
         assert dist_info.startswith("shantytown-")
     finally:
         os.chdir(cwd)
+
+
+# --- THE TWO VERSION CONSTANTS MUST AGREE (aegis-k7j6u) ----------------------
+# Recorded as a follow-up when v0.1.0 was cut and left unguarded: "The two
+# version constants are kept in sync BY HAND with no guard. A first release
+# should not also change how versions are resolved, so I did not refactor
+# `__version__` to read from package metadata in the same commit. Next bump is
+# the moment that drift bites."
+#
+# This is that next bump, so here is the guard. It deliberately does NOT do the
+# refactor either — reading `__version__` from importlib.metadata is the right
+# end state and it changes how a SOURCE-TREE run resolves its version, which is
+# exactly the thing `deployed_sha()` exists to keep honest. A cheap assert buys
+# the safety now without touching resolution, and it fails on the bump rather
+# than in whatever later session notices `st --version` disagreeing with the
+# wheel it came from.
+
+def test_the_two_version_constants_agree():
+    """`pyproject.toml: version` and `shantytown.__version__` are independently
+    hardcoded, and NOTHING made them agree.
+
+    Bumping one and forgetting the other ships a wheel whose metadata says one
+    version while the CLI it installs prints another — and the Release workflow
+    would not catch it: its "Tag matches the declared version" step reads
+    pyproject, so a stale `__version__` sails through a fully green release.
+    That is the same-output-two-worlds shape this repo keeps finding, in the one
+    number whose whole job is to tell two builds apart.
+    """
+    import re
+    declared = re.search(r'(?m)^version\s*=\s*"([^"]+)"',
+                         (ROOT / "pyproject.toml").read_text())
+    assert declared, "pyproject.toml has no top-level version"
+    module = re.search(r'(?m)^__version__\s*=\s*"([^"]+)"',
+                       (ROOT / "shantytown" / "__init__.py").read_text())
+    assert module, "shantytown/__init__.py has no __version__"
+    assert declared.group(1) == module.group(1), (
+        f'pyproject.toml says {declared.group(1)!r} but '
+        f'shantytown.__version__ says {module.group(1)!r}. Bump BOTH — the '
+        f'Release workflow only checks the tag against pyproject, so a stale '
+        f'__version__ ships a wheel whose CLI misreports its own version.')
