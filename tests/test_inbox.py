@@ -252,12 +252,20 @@ def _dry_send(argv, env, root):
 
     `--root` is not optional here, and the reason is a two-day CI outage. These
     two tests originally ran the CLI with no root at all, so it fell back to
-    store DISCOVERY — $SHANTY_ROOT, a `.shanty` walking up, then the pointer file
-    at ~/.config/shantytown/root. On any developer machine that pointer resolves
-    to the real fleet store, which HAS a `dearing` card, so the command succeeded
-    and the tests passed. In CI there is no pointer and no store: the CLI refuses
-    with "no such agent: dearing" on STDERR, `_dry_send` returns only stdout, and
-    both assertions compare against an empty string.
+    store DISCOVERY, and the leg that answered was **$SHANTY_ROOT**: every crew
+    agent in this deployment runs with it exported at the live store, and
+    `_dry_send` copied os.environ into the subprocess while stripping only
+    SHANTY_AGENT. So the CLI found a real store with a real `dearing` card and
+    succeeded. In CI there is no SHANTY_ROOT and no store: it refuses with "no
+    such agent: dearing" on STDERR, `_dry_send` returns only stdout, and both
+    assertions compare against an empty string.
+
+    (The first diagnosis of this blamed the POINTER file at
+    ~/.config/shantytown/root. That was WRONG — conftest's `_no_real_pointer`
+    had already isolated the pointer, which should have been the tell. The repro
+    cleared HOME *and* SHANTY_ROOT in one command and credited HOME. Varying one
+    at a time: ambient passes, SHANTY_ROOT-cleared FAILS, HOME-cleared passes.
+    conftest's `_no_ambient_store_root` now closes that leg for every test.)
 
     They therefore passed for everyone, forever, and failed on every CI run from
     the day CI was created (2026-08-02) until 2026-08-05 — ~20 consecutive red
