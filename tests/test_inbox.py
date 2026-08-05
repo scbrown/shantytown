@@ -247,23 +247,58 @@ def test_a_backend_with_no_title_cap_carries_a_long_message(tmp_path: Path):
 # is what makes the first mean anything, because a test that only ever asserts
 # the prefix cannot distinguish "attributed correctly" from "prefixes always".
 
-def _dry_send(argv, env):
+def _dry_send(argv, env, root):
+    """Run the CLI in a subprocess against a store THIS TEST BUILT.
+
+    `--root` is not optional here, and the reason is a two-day CI outage. These
+    two tests originally ran the CLI with no root at all, so it fell back to
+    store DISCOVERY — $SHANTY_ROOT, a `.shanty` walking up, then the pointer file
+    at ~/.config/shantytown/root. On any developer machine that pointer resolves
+    to the real fleet store, which HAS a `dearing` card, so the command succeeded
+    and the tests passed. In CI there is no pointer and no store: the CLI refuses
+    with "no such agent: dearing" on STDERR, `_dry_send` returns only stdout, and
+    both assertions compare against an empty string.
+
+    They therefore passed for everyone, forever, and failed on every CI run from
+    the day CI was created (2026-08-02) until 2026-08-05 — ~20 consecutive red
+    runs on main. Same shape as the bobbin-on-PATH test that made the suite
+    unexecutable anywhere bobbin was absent: a test coupled to the author's
+    environment does not test the software, it tests the author's laptop.
+
+    Also strips SHANTY_ROOT rather than only SHANTY_AGENT, so an exported root in
+    the developer's shell cannot silently re-introduce the same coupling.
+    """
     import subprocess, sys, os
-    e = dict(os.environ); e.pop("SHANTY_AGENT", None); e.update(env)
-    return subprocess.run([sys.executable, "-m", "shantytown.cli", *argv],
-                          capture_output=True, text=True, env=e).stdout
+    e = dict(os.environ)
+    for k in ("SHANTY_AGENT", "SHANTY_ROOT"):
+        e.pop(k, None)
+    e.update(env)
+    return subprocess.run(
+        [sys.executable, "-m", "shantytown.cli", "--root", str(root), *argv],
+        capture_output=True, text=True, env=e).stdout
 
 
-def test_a_pane_message_names_its_sender():
+def _store_with_dearing(tmp_path):
+    """The minimum store the dry-run path needs: a card with a pane. `--dry-run`
+    returns before any tmux call, so no pane has to exist."""
+    crew = tmp_path / "crew"
+    crew.mkdir(parents=True, exist_ok=True)
+    (crew / "dearing.json").write_text(json.dumps(
+        {"role": "lead", "reports_to": "sattler", "pane": "shanty-dearing"}))
+    return tmp_path
+
+
+def test_a_pane_message_names_its_sender(tmp_path):
     out = _dry_send(["inbox", "dearing", "hello", "--dry-run"],
-                    {"SHANTY_AGENT": "sattler"})
+                    {"SHANTY_AGENT": "sattler"}, _store_with_dearing(tmp_path))
     assert "[from sattler] hello" in out, out
 
 
-def test_an_unattributable_send_stays_BARE_rather_than_inventing_a_name():
+def test_an_unattributable_send_stays_BARE_rather_than_inventing_a_name(tmp_path):
     """The control. Claiming a sender we cannot establish is worse than none —
     a wrong name is authority laundering, which is the exact harm the prefix
     exists to prevent."""
-    out = _dry_send(["inbox", "dearing", "hello", "--dry-run"], {})
+    out = _dry_send(["inbox", "dearing", "hello", "--dry-run"], {},
+                    _store_with_dearing(tmp_path))
     assert "hello" in out, out
     assert "[from" not in out, out
