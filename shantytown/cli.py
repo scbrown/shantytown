@@ -3944,7 +3944,34 @@ def _cmd_project(a) -> int:
                 dangling.append((nm, card.reports_to, live(nm)))
 
     if not changes:
-        print(f"\n  already projected: {len(agents)} cards match the graph. Nothing to do.\n")
+        print(f"\n  already projected: {len(agents)} cards match the graph. Nothing to do.")
+        # CONSISTENCY IS NOT CORRECTNESS, AND THIS LINE READ AS BOTH (aegis-uymsl).
+        #
+        # Sibling of the zero-agents false pass fixed above, and the same defect
+        # one step along: there, "0 cards match. Nothing to do." reported a wrong
+        # namespace as success; here, "20 cards match. Nothing to do." reports a
+        # ROUND TRIP as validation.
+        #
+        # When the source is QUIPU, the graph's crew facts are what THIS COMMAND
+        # projects FROM the cards. So a clean match proves the sync worked — it
+        # cannot detect a roster that was wrong when it was written, because the
+        # thing it is checked against was written from it. Measured on this fleet:
+        # `st roles sync --dry-run` reported 20/20 clean and a SPARQL count agreed
+        # at 20, while the operator's actual decision existed in no machine-readable
+        # form at all. Two instruments agreeing is not two instruments being right.
+        #
+        # A FILE source is different and is deliberately not warned about: it is an
+        # independent referent someone wrote down, so a match against it is a real
+        # check. That is the whole reason to configure one, and this message is
+        # where an operator finds that out.
+        if src_info.kind == "quipu":
+            print("  ⚠ CONSISTENCY, not correctness: the graph's crew facts are "
+                  "projected FROM these cards, so this compares the copy to the "
+                  "copy. It proves the sync worked; it CANNOT tell you the roster "
+                  "is the one that was decided. Configure an independent referent "
+                  "— `st roles sync --from file:<path>` — and this becomes a real "
+                  "check.", file=sys.stderr)
+        print()
         return OK
 
     print(f"\n  {len(changes)} card(s) would change:\n")
