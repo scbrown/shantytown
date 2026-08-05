@@ -141,6 +141,50 @@ if [ "${1:-}" = "--selftest" ]; then
   done
   if printf 'ssh://git@forge.invalid/x/y.git' | grep -qE "$INTERNAL_HOST_RE"; then echo "ok   recognises the internal forge"; else echo "FAIL internal forge unrecognised"; fail=1; fi
   if printf 'git@github.com:scbrown/x.git' | grep -qE "$INTERNAL_HOST_RE"; then echo "FAIL treats github as internal"; fail=1; else echo "ok   treats github as public"; fi
+  # ── THE LIVE CONFIG, not a stand-in (aegis-m3jpf) ──────────────────────────
+  # Everything above asserts on a SYNTHETIC pattern, and this file used to say
+  # that proving the mechanism was "the only thing this file is now responsible
+  # for". That scoping IS the defect it let through.
+  #
+  # The governed private-IPv4 rule reaches this guard as `\d{1,3}` — PCRE. POSIX
+  # ERE has no `\d`, so grep -E reads it as a literal letter d, and the arm
+  # required a `d` inside an IP address: it matched NOTHING, for five public
+  # repos, while every control above passed. A test that cannot fail for the
+  # reason the system can is not a test of the system.
+  #
+  # So these assert on the LOADED config. The probes stay generic — RFC1918 space
+  # is universal and discloses nothing about any estate — because the failure
+  # being caught is a DIALECT failure, not a content one. The estate's own names
+  # are never needed and never appear.
+  if [ -r "$CONF" ]; then
+    LIVE=$(sed -n 's/^patterns=//p' "$CONF")
+    if [ -z "$LIVE" ]; then
+      echo "FAIL live config has no patterns= line"; fail=1
+    else
+      if printf '%s' "$LIVE" | grep -qE '\\[dDwWsSpPQEK]|\(\?'; then
+        echo "FAIL live patterns carry a PCRE construct grep -E cannot read"; fail=1
+      else
+        echo "ok   live patterns are ERE-clean"
+      fi
+      # Non-vacuity. This is the assertion that was missing: the rule must FIRE.
+      if printf '10.0.0.1\n' | grep -qE "$LIVE"; then
+        echo "ok   live patterns detect a generic private address"
+      else
+        echo "FAIL live patterns do NOT detect 10.0.0.1 — an arm is dead"; fail=1
+      fi
+      # ...and must still not cry wolf, or it gets switched off.
+      if printf '8.8.8.8 is a public resolver\n' | grep -qE "$LIVE"; then
+        echo "FAIL live patterns fire on public address space"; fail=1
+      else
+        echo "ok   live patterns silent on public space"
+      fi
+    fi
+  else
+    # An absent config is NOT a pass. A guard with no live config has nothing to
+    # say about the live config and must say so rather than print ok.
+    echo "SKIP live-config controls — no config at \$CONF (this is NOT a pass)"
+  fi
+
   # The unconfigured path must be VISIBLE, never silent.
   out=$(SCRUB_PATTERNS_FILE=/nonexistent "$0" --check-unconfigured 2>&1 >/dev/null)
   case "$out" in *"NOT CONFIGURED"*) echo "ok   unconfigured is loud" ;; *) echo "FAIL unconfigured is silent"; fail=1 ;; esac
