@@ -233,6 +233,12 @@ class Tier:
     traits: tuple[str, ...] = ()
     action: str | None = None
     window: str = FIVE_HOUR
+    # How many agents may be LIVE while this tier holds (aegis-3vt4h). A fourth
+    # kind of restriction, and the only one that acts on the SIZE of the fleet
+    # rather than on what it is allowed to do. Composes like min_priority:
+    # strictest (lowest) wins across engaged tiers, and a tier that declares none
+    # inherits the one below it.
+    max_agents: int | None = None
 
     @property
     def drains(self) -> bool:
@@ -249,6 +255,8 @@ class Tier:
             bits.append(f"dispatch only P{self.min_priority} and above")
         if self.traits:
             bits.append(f"only {'/'.join(self.traits)} crew runs")
+        if self.max_agents is not None:
+            bits.append(f"at most {self.max_agents} agents live")
         if self.drains:
             bits.append("FULL STOP — every agent pushes its work, then stops")
         what = "; ".join(bits) or "no restriction declared"
@@ -462,6 +470,30 @@ class Policy:
     # about total spend and about a blind signal; this is about the SHAPE of what
     # remains dispatchable under a floor, which is a different question.
     exempt: tuple[str, ...] = ()
+    # THE FLEET-SIZE CAP, and the only governor input that is NOT read from a
+    # meter (aegis-3vt4h). Stiwi, 2026-08-04: *"have the governor add a cap, we
+    # clearly need a mechanism."*
+    #
+    # WHY A BASELINE AND NOT ONLY TIERS. Every other restriction here engages as
+    # usage CLIMBS, which means all of them are silent at 0%. The failure this
+    # exists to stop happens at 0%: a budget resets, the fleet is relaunched to
+    # its full roster because nothing forbids it, and the roster is sized to the
+    # number of cards that exist rather than to what the budget can carry.
+    # Measured 2026-08-04, immediately after a weekly rollover: 16 agents burned
+    # ~37%/hr of the five_hour budget against ~10%/hr sustainable — tripping the
+    # 50% floor every ~80 minutes, idling most of the fleet, clearing, and
+    # tripping again. A sawtooth that reads as a busy fleet and is capacity
+    # burning budget to no purpose.
+    #
+    # IT IS STATIC, DELIBERATELY, AND THEREFORE ALWAYS APPLIES. It is a number an
+    # operator wrote down, not a reading — so unlike every tier it survives a lost
+    # signal, and `on_signal_lost` does not weaken it. That is the right
+    # direction: a probe failure must never be able to STOP the crew (the
+    # module's fail-safe), but neither should it be able to UNCAP it.
+    #
+    # None = uncapped, and that is the default: a deployment that has never heard
+    # of this key keeps the behaviour it has today.
+    max_agents: int | None = None
     # Windows whose tiers stand down near a reset, because the budget they are
     # protecting is about to be destroyed rather than saved (aegis-yegfx). See
     # the Burndown docstring — in particular that its fail-safe runs the OTHER
@@ -1317,6 +1349,12 @@ class Verdict:
     # that was working. A display bug that manufactures a plausible false bug
     # report is more dangerous than one that merely confuses.
     by_window: dict = field(default_factory=dict)
+    # The BASELINE fleet-size cap, copied off the policy (aegis-3vt4h). Carried on
+    # the verdict rather than read from the policy at the call site for the same
+    # reason `exempt` is: a Verdict must be able to explain every restriction it
+    # implies without the caller needing a second object. Read it through
+    # `max_agents`, which resolves it against the engaged tiers.
+    cap: int | None = None
     # Agents the PRIORITY FLOOR does not apply to. Copied off the policy so a
     # Verdict stays self-contained — every other field a refusal needs to explain
     # itself is here, and "why was this one let through" is the same question.
@@ -1432,6 +1470,28 @@ class Verdict:
         """
         floors = [t.min_priority for t in self.engaged if t.min_priority is not None]
         return min(floors) if floors else None
+
+    @property
+    def max_agents(self) -> int | None:
+        """How many agents may be LIVE: the STRICTEST of the baseline and every
+        engaged tier's own cap (aegis-3vt4h). None = uncapped.
+
+        THE BASELINE SURVIVES A LOST SIGNAL AND THE TIER CAPS DO NOT, which is
+        the whole reason both exist. `cap` is a static number an operator wrote
+        in the config; it needs no reading, so a dead probe cannot uncap the
+        fleet. Tier caps ride `engaged`, which is already empty when blind — so a
+        probe failure relaxes toward the BASELINE, never toward unlimited.
+
+        Note the direction differs from `floor`'s neighbours by intent: this can
+        only ever SHRINK a fleet, and shrinking is not the dangerous direction for
+        a spend guard. The module's fail-safe forbids a probe bug STOPPING the
+        crew (`never fail into drain`); a cap does not stop anyone — it declines
+        to start more, and `tend` never kills to reach it.
+        """
+        caps = [t.max_agents for t in self.engaged if t.max_agents is not None]
+        if self.cap is not None:
+            caps.append(self.cap)
+        return min(caps) if caps else None
 
     @property
     def governing(self) -> Tier | None:
@@ -1931,6 +1991,12 @@ class Governor:
             # number failure wearing the other hat.
             return Verdict(
                 reading=reading, pct=reading.pct, signal_lost=True, frozen=frozen,
+                # THE BASELINE CAP SURVIVES A LOST SIGNAL (aegis-3vt4h). Every
+                # tier is dropped here because a remembered tier must not be
+                # applied to an unmeasured present — but `cap` was never measured
+                # in the first place, so blindness is not a reason to relax it.
+                # A dead probe must not be able to uncap the fleet.
+                cap=pol.max_agents,
                 why=lost,
                 alarm=(f"USAGE SIGNAL LOST: {lost}. "
                        + ("on_signal_lost = \"freeze\": no new work is being "
@@ -2098,7 +2164,7 @@ class Governor:
                        alarm=alarm, engaged=tuple(engaged_tiers),
                        resets=resets, relaxed=tuple(relaxed),
                        burning=tuple(burning), pacing=tuple(pacing),
-                       exempt=pol.exempt)
+                       cap=pol.max_agents, exempt=pol.exempt)
 
     def episode(self) -> float:
         """The current tier's episode key — what a drain dedupes against."""
@@ -2353,8 +2419,8 @@ def render_drain(rows: list[Drained]) -> str:
 
 _GOV_KEYS = {"source", "window", "on_signal_lost", "relax_margin",
              "max_age_seconds", "url", "path", "username", "password_file",
-             "stub_pct", "tier", "exempt", "burndown", "pace"}
-_TIER_KEYS = {"at", "min_priority", "traits", "action", "window"}
+             "stub_pct", "tier", "exempt", "burndown", "pace", "max_agents"}
+_TIER_KEYS = {"at", "min_priority", "traits", "action", "window", "max_agents"}
 _BURN_KEYS = {"window", "within", "reserve"}
 _PACE_KEYS = {"window", "ratio", "length"}
 
@@ -2525,7 +2591,27 @@ def parse(tbl: dict) -> Policy:
                   username=tbl.get("username"),
                   password_file=tbl.get("password_file"), stub_pct=stub,
                   tiers=tiers, exempt=tuple(exempt), burndowns=burndowns,
-                  paces=paces)
+                  paces=paces, max_agents=_cap(tbl, "[governor]"))
+
+
+def _cap(spec, where: str) -> int | None:
+    """`max_agents` -> int | None, shared by [governor] and [[governor.tier]].
+
+    ZERO IS REFUSED, on purpose. `max_agents = 0` would be a silent full stop
+    with none of the drain protocol's guarantees — no push, no report, no record
+    of intent — and an operator who means that has `action = "drain"`. A cap is
+    for sizing a fleet, never for stopping one.
+    """
+    v = spec.get("max_agents")
+    if v is None:
+        return None
+    if isinstance(v, bool) or not isinstance(v, int) or v < 1:
+        raise GovernorError(
+            f"{where} max_agents must be an integer >= 1 (how many agents may be "
+            f"LIVE), got {v!r}. Use `action = \"drain\"` to stop a fleet — a cap "
+            f"of 0 would stop it with none of the drain protocol's guarantees "
+            f"that work was pushed first.")
+    return v
 
 
 def _pace(spec) -> Pace:
@@ -2641,12 +2727,18 @@ def _tier(spec) -> Tier:
             f"tier on a window nothing publishes would never engage, and a "
             f"threshold that can never fire reads exactly like one that is "
             f"simply never reached.")
-    if prio is None and not traits and action is None:
+    # `max_agents` is the FOURTH kind of restriction (aegis-3vt4h) and had to be
+    # added here too: a tier that caps the fleet and declares nothing else is a
+    # real policy, not an empty one. Leaving it out of this check would have made
+    # a size-only tier unconfigurable — the same class of bug as the (window, at)
+    # dedupe that made Stiwi's spoken ladder unwritable.
+    cap = _cap(spec, f"[[governor.tier]] at = {at}:")
+    if prio is None and not traits and action is None and cap is None:
         raise GovernorError(
             f"[[governor.tier]] at = {at} restricts NOTHING — no min_priority, no "
-            f"traits, no action. A tier that engages and changes no behaviour "
-            f"would read as a policy in force while the fleet spends exactly as "
-            f"it did before.")
+            f"traits, no max_agents, no action. A tier that engages and changes "
+            f"no behaviour would read as a policy in force while the fleet spends "
+            f"exactly as it did before.")
     return Tier(at=at, min_priority=prio,
                 traits=tuple(t.strip() for t in traits), action=action,
-                window=window)
+                window=window, max_agents=cap)
