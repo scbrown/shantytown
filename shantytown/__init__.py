@@ -1,5 +1,5 @@
 """shantytown — a small harness for running a crew of coding agents."""
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 
 def deployed_sha() -> str:
