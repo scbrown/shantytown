@@ -100,6 +100,46 @@ def _no_real_pointer(tmp_path_factory, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_ambient_store_root(monkeypatch):
+    """No test may see the operator's $SHANTY_ROOT — the OTHER leg of the same
+    resolver, and the one that was still open.
+
+    `_no_real_pointer` above closes the resolver's last-but-one leg. `resolve_root`
+    has four, and the ENV leg sits second, ahead of both the walk-up and the
+    pointer:
+
+        --root  ->  $SHANTY_ROOT  ->  walk up for .shanty  ->  pointer  ->  cwd
+
+    So isolating the pointer while leaving $SHANTY_ROOT alone guards the leg that
+    is usually empty and leaves the leg that is usually SET. Every crew agent in
+    this deployment runs with SHANTY_ROOT exported at the live store, which means
+    every agent's local `pytest` had a real deployment one env var away.
+
+    MEASURED, and it is why this exists rather than being a tidy-up (aegis-k7j6u).
+    Two tests in test_inbox.py drove the CLI in a SUBPROCESS with no `--root`,
+    copying os.environ. They passed for every developer and failed on every CI run
+    from the day CI was created — ~20 consecutive red runs on main — because CI has
+    no SHANTY_ROOT and no store, so the CLI refused on stderr while the helper read
+    stdout, and the assertion compared against ''.
+
+    The first diagnosis of that blamed the pointer file. It was wrong, and it was
+    wrong in the way this fixture is about: the repro cleared HOME *and*
+    SHANTY_ROOT in one command and credited HOME. Varying one at a time:
+
+        ambient env             -> pass
+        SHANTY_ROOT cleared     -> FAIL     <- the cause
+        HOME cleared            -> pass     <- the pointer was never it
+
+    Deleting rather than repointing: a test that means to exercise the env leg sets
+    it itself (test_socket_and_root.py does, via monkeypatch, which runs after this
+    fixture and therefore wins). An absent variable gives every box the same answer
+    — "nothing in the environment names a store" — which is CI's answer, and the
+    whole point is that a local green should mean what a CI green means.
+    """
+    monkeypatch.delenv("SHANTY_ROOT", raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _no_ambient_agent(monkeypatch):
     """No test may inherit the RUNNER'S identity. Third instance of the class
     above, and it had already bitten (aegis-5vxmz).
