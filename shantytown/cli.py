@@ -2874,6 +2874,16 @@ def _cmd_go(a) -> int:
               f"recorded (this line means the read-back agreed in the end). Note "
               f"the id and the store: this is the intermittent lost write, caught "
               f"in the act.", file=sys.stderr)
+    if p.orphaned_in_progress:
+        # ON THE REAL RUN TOO, not only in --dry-run — same argument as
+        # unreadable_deps below (aegis-ap4gm). This is the state where the
+        # assignee guard is BYPASSED rather than weak: it keys on assignee, and
+        # an orphan's is empty, so `st go` accepted one silently tonight.
+        print(f"  ⚠ {p.item_id} was in_progress with NO assignee — {p.agent} is "
+              f"RESUMING work that was started and handed back, not starting it. "
+              f"The assignee guard cannot see this (it keys on a field that is "
+              f"empty). If that is not what you meant, the item's status wants "
+              f"resetting to `open`.", file=sys.stderr)
     if p.unreadable_deps:
         # ON THE REAL RUN TOO, not only in --dry-run (aegis-kt7jr). A warning
         # that fires only in the preview is a warning for the careful path, and
