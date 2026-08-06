@@ -159,6 +159,19 @@ class Harness(Protocol):
     # the thing it is checking — one program's mechanism, applied to everybody.
     settings_env_var: "str | None"
 
+    # BLOCKING-PICKER CHROME for this program — the footer text that says "this
+    # pane is stopped, waiting for a person" (see runtime.awaiting_answer).
+    #
+    # EMPTY IS A LEGITIMATE VALUE and means NOBODY HAS WATCHED ONE, never "this
+    # program has no pickers". A marker never observed matching is not a marker
+    # (READY_MARKERS' rule); the honest state for an unwatched program is a loud
+    # could-not-tell, not a confident guess.
+    #
+    # Matched TAIL-ONLY by the caller, which is what makes it safe for these to
+    # be ordinary English: a picker's chrome is a FOOTER, and the same words
+    # further up a pane are an agent TALKING about pickers, not sitting on one.
+    picker_markers: "tuple[str, ...]"
+
     def settings_in_cmdline(self, cmdline: str) -> "str | None":
         """The settings artifact a RUNNING process was launched with, read off
         its command line — or None if this launch is not one of ours. This is
@@ -211,6 +224,13 @@ class ClaudeHarness:
     # A FLAG, not an export — so there is nothing to recover from the environment
     # and the reconstructed launch line is just argv.
     settings_env_var = None
+    # Claude Code's picker chrome is NOT repeated here. It lives on ClaudeRuntime
+    # (QUESTION_MARKERS / TRUST_MARKERS), where it is also used by the consent and
+    # trust auto-answer paths, and awaiting_answer already checks it directly.
+    # Copying it across would create a second definition of the same strings, and
+    # the failure mode of a rotted marker is silence — CONSENT_MARKERS rotted once
+    # already and the test that caught it exists for that reason.
+    picker_markers = ()
 
     def launch(self, card: Agent, settings_path: str, root=None) -> str:
         # --no-chrome: crew agents do not use the Chrome integration, and WITHOUT
@@ -413,6 +433,45 @@ class CodexHarness:
     """
 
     name = "codex"
+
+    # MEASURED off a live codex pane on this host, 2026-08-06, with
+    # `tmux capture-pane -p` — not read from source and not guessed. This is the
+    # gap the module docstring above names ("there is no codex on this host to
+    # watch, so none are written"); there is one now, and it was watched.
+    #
+    #   /model picker, verbatim:
+    #       Select Model and Effort
+    #       Access legacy models by running codex -m <model_name> or in your …
+    #     › 1. gpt-5.6-sol (current)  Latest frontier agentic coding model.
+    #       …
+    #       Press enter to confirm or esc to go back
+    #
+    #   directory-trust dialog, verbatim:
+    #       Do you trust the contents of this directory? …
+    #     › 1. Yes, continue
+    #       2. No, quit
+    #       Press enter to continue
+    #
+    # Note the picker marks its SELECTED OPTION with `›` — codex's analogue of the
+    # `❯` that made an answered picker read as TYPED input on a claude pane. Same
+    # trap, different glyph.
+    #
+    # WHY THE FOOTER AND NOT THE TITLE: "Select Model and Effort" is one picker;
+    # the footer is the widget's, so it covers pickers nobody has enumerated. The
+    # attribute capture shows the footer dimmed as ONE run (`ESC[2m` at the start
+    # of the line) rather than coloured per word, so unlike Claude Code's footers
+    # it survives stripping intact — checked, because a per-word-coloured marker
+    # silently stops matching and that trap is documented on READY_MARKERS.
+    #
+    # ⚠ THE RATE-LIMIT / MODEL-SWITCH PROMPT IS **NOT** IN THIS LIST AS A MEASURED
+    # FACT. It could not be reproduced without exhausting the account's quota. It
+    # is very likely the same picker widget and therefore already covered by the
+    # footer above — but that is INFERRED, and this file's whole rule is that an
+    # unobserved marker is not a marker. To settle it, capture a pane the moment
+    # one appears and add what is actually on it.
+    picker_markers = ("Press enter to confirm or esc to go back",
+                      "Do you trust the contents of this directory",
+                      "1. Yes, continue")
 
     @property
     def settings_env_var(self) -> str:
@@ -684,6 +743,26 @@ def settings_env_vars() -> tuple[str, ...]:
     return tuple(dict.fromkeys(
         v for h in all_harnesses()
         if (v := getattr(h, "settings_env_var", None))))
+
+
+def picker_markers() -> tuple[str, ...]:
+    """Blocking-picker chrome across EVERY harness this build implements.
+
+    A union rather than a per-card lookup, and that is a fact about the current
+    deployment rather than a preference: ClaudeRuntime is instantiated for every
+    card regardless of its harness (four call sites, none of them conditional),
+    so the pane predicates run Claude Code's markers against codex panes. A codex
+    agent stopped on a picker therefore matched nothing and reported `?` — honest,
+    unactionable, and precisely the state aegis-qxc2 forbids an agent to sit in.
+
+    The union is safe for the same reason the existing markers are: matching is
+    TAIL-ONLY, so the cost of carrying another program's footer strings is that an
+    agent which prints one at the very bottom of its pane is called `waiting`. The
+    asymmetry is worth stating plainly — a false `waiting` costs a coordinator one
+    glance, while the false negative it replaces cost an agent an entire session.
+    """
+    return tuple(dict.fromkeys(
+        m for h in all_harnesses() for m in getattr(h, "picker_markers", ())))
 
 
 def get(name: str | None) -> Harness:

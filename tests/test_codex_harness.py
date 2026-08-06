@@ -378,6 +378,98 @@ def test_a_codex_pane_that_dropped_to_bash_STILL_reports_the_zombie():
     assert wiring.settings_path is None
 
 
+# Captured VERBATIM off a live codex pane on this host with `tmux capture-pane
+# -p`, 2026-08-06. Kept as fixtures rather than paraphrased because the whole
+# value of a marker is that it matches what the program actually draws — a
+# paraphrase would test the paraphrase.
+CODEX_MODEL_PICKER = """\
+  Select Model and Effort
+  Access legacy models by running codex -m <model_name> or in your config.toml
+
+› 1. gpt-5.6-sol (current)  Latest frontier agentic coding model.
+  2. gpt-5.6-terra          Balanced agentic coding model for everyday work.
+  3. gpt-5.6-luna           Fast and affordable agentic coding model.
+
+  Press enter to confirm or esc to go back
+"""
+
+CODEX_TRUST_DIALOG = """\
+> You are in /home/x/ws
+
+  Do you trust the contents of this directory? Working with untrusted contents
+  comes with higher risk of prompt injection.
+
+› 1. Yes, continue
+  2. No, quit
+
+  Press enter to continue
+"""
+
+# The healthy case, also verbatim — a codex agent idling with its input box up.
+CODEX_IDLE = """\
+• No actionable request was included.
+
+› Summarize recent commits
+
+  gpt-5.6-terra default · /home/x/ws
+"""
+
+
+@pytest.mark.parametrize("screen,what", [
+    (CODEX_MODEL_PICKER, "the /model picker"),
+    (CODEX_TRUST_DIALOG, "the directory-trust dialog"),
+])
+def test_a_codex_agent_on_a_BLOCKING_PICKER_is_seen(screen, what):
+    """The picker is the state the crew rules forbid an agent to sit in, and a
+    codex agent could sit in it invisibly: the pane predicates run Claude Code's
+    marker strings against every card, and codex's pickers share none of that
+    text — so `st crew` said `?` and `st input` said NO-BOX. `?` is honest and
+    unactionable; it does not tell a coordinator an agent is stalled on a
+    question only a person can answer.
+
+    This is the defect that ended dearing's session, and it is ours, not
+    codex's."""
+    rt = ClaudeRuntime(NullPanes(), lambda _c: None)
+    assert rt.awaiting_answer(screen) is True, f"{what} was not seen"
+
+
+def test_an_IDLE_codex_agent_is_NOT_called_blocked():
+    """The other direction, and the one that decides whether the verdict stays
+    worth reading. A detector that fires on healthy agents trains a coordinator
+    to scroll past it, and then the real one is missed too — the same way the
+    zombie warning went from alarming to ignorable."""
+    rt = ClaudeRuntime(NullPanes(), lambda _c: None)
+    assert rt.awaiting_answer(CODEX_IDLE) is False
+
+
+def test_codex_picker_markers_are_matched_TAIL_ONLY():
+    """These strings are ordinary English — this very test file contains them —
+    so a whole-screen match would report any agent DISCUSSING a picker as sitting
+    on one. Every text predicate here is tail-only for that reason, one of them
+    after a healthy agent was classified wedged for printing a traceback."""
+    rt = ClaudeRuntime(NullPanes(), lambda _c: None)
+    buried = CODEX_MODEL_PICKER + "\n".join(f"line {i}" for i in range(20))
+    assert rt.awaiting_answer(buried) is False, (
+        "a picker scrolled far up the pane is history, not a live block")
+
+
+def test_trailing_blank_padding_does_not_hide_a_codex_picker():
+    """codex draws its picker high and leaves the rest of the pane blank —
+    measured, the capture came back with ~20 empty lines under it. A fixed window
+    off the raw bottom would miss every one of them, which is how an earlier
+    padding case slipped through on a claude pane."""
+    rt = ClaudeRuntime(NullPanes(), lambda _c: None)
+    assert rt.awaiting_answer(CODEX_MODEL_PICKER + "\n" * 25) is True
+
+
+def test_the_markers_are_DERIVED_from_the_registry_not_listed_in_the_predicate():
+    """Same shape as settings_env_vars: a program is covered by declaring its own
+    measured chrome, not by editing the predicate. An empty tuple is a legitimate
+    value meaning NOBODY HAS WATCHED ONE — never "this program has no pickers"."""
+    assert set(CODEX.picker_markers) <= set(harness_mod.picker_markers())
+    assert CLAUDE.picker_markers == ()      # claude's live on ClaudeRuntime
+
+
 def test_the_operator_keeps_everything_st_did_not_emit():
     """Same merge rule as Claude Code's (harness.merge_one_level), one format
     over — including `[hooks.state]`, which is codex's own trust ledger and

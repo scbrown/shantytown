@@ -1125,12 +1125,24 @@ class ClaudeRuntime:
         the launcher did not answer it and that agent is stopped dead waiting for
         a person. Reporting it as `?` would be the very bug this predicate closes,
         one dialog over.
+
+        EVERY HARNESS'S PICKERS COUNT, not only Claude Code's. This class is
+        instantiated for every card regardless of its harness, so until that
+        changes the markers above are matched against codex panes too — and
+        codex's pickers share none of that text, so an agent stopped on one
+        reported `?`. That is the same honest-and-useless verdict this predicate
+        was written to remove, one program over. harness.picker_markers() is the
+        union across the registry, so a program is covered by declaring its own
+        measured chrome rather than by editing this method.
         """
+        from . import harness as harness_mod
         lines = screen.splitlines()
         while lines and not lines[-1].strip():
             lines.pop()
         tail = "\n".join(lines[-self._QUESTION_TAIL_LINES:])
-        return any(m in tail for m in self.QUESTION_MARKERS + self.TRUST_MARKERS)
+        markers = (self.QUESTION_MARKERS + self.TRUST_MARKERS
+                   + harness_mod.picker_markers())
+        return any(m in tail for m in markers)
 
     def read_question(self, screen: str):
         """READ the blocking picker: its prompt, and its options verbatim (w30p2).
