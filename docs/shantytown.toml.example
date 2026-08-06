@@ -181,6 +181,46 @@ max_load_per_core = 4.0
 # socket = "shanty"
 
 # ---------------------------------------------------------------------------
+# [harness] — WHICH AGENT PROGRAM, for cards that do not say.
+#
+# Claude Code is ONE harness, not the shape of the world. Two ship — `claude` and
+# `codex` — and a card names its own with `harness = "..."`. This table is for the
+# cards that DON'T: setting it per card is right for one exception and wrong for a
+# fleet, where the same string ends up in twenty files and drifts in nineteen.
+#
+# MOST SPECIFIC WINS: the card, then this role rule, then this default, then
+# `claude`. The same precedence shape [precedence.<axis>] uses below, because it is
+# the same question — who decided this, and how narrowly? A card that names its
+# program is never moved by a config written afterwards.
+#
+# BOTH HALVES ARE VALIDATED AT LOAD, and each catches a different silent failure. An
+# unimplemented harness NAME is refused, because a typo in `default` moves every card
+# in the fleet and would otherwise surface as `st new` failing agent by agent — a
+# fleet-wide config error reported as a per-agent launch failure. A ROLE nobody has
+# is refused for the reason every table here refuses unknown keys: a rule that
+# applies to nobody reads as applied.
+#
+# WHY NOT `[roles.<name>] harness = ...`, which is where you looked first: that table
+# is the trait vocabulary and its axis names are validated against the ontology, so a
+# key there is a typo rather than an extension. Launch config is not a trait — it
+# does not compose, does not stack, and has nothing to rank.
+#
+# A codex card can hold ANY role, including lead and administrator: codex delivers
+# blocking stop hooks, which is the capability the tier gates on (docs/adapters.md
+# carries the evidence and the version caveat). Two things it does not get yet, both
+# named there: `st new`'s liveness verify reads Claude Code's pane markers, so a
+# codex launch reports could-not-tell rather than live; and the matcher-scoped
+# guards are not emitted for it.
+# ---------------------------------------------------------------------------
+
+# [harness]
+# default = "codex"
+
+# [harness.by_role]
+# lead = "claude"
+# administrator = "claude"
+
+# ---------------------------------------------------------------------------
 # [roles.<name>] — YOUR role vocabulary, as traits.
 #
 # st ships three roles because its built-in PROCESS is defined for three: depth-2,

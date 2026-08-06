@@ -956,7 +956,7 @@ class ClaudeRuntime:
         # harness was not claude. Forwarding keeps one literal declaration (on the
         # harness) and makes this answer honest for a card naming another program.
         from . import harness as harness_mod
-        return harness_mod.for_card(card).hooks(card)
+        return harness_mod.for_card(card, root=self._root).hooks(card)
 
     def compose(self, card: Agent) -> str:
         """Build the launch string, or RAISE. Never returns a settings-less launch.
@@ -974,7 +974,7 @@ class ClaudeRuntime:
         # the CARD names for everything program-specific. One resolve, so the gate
         # and the launch cannot disagree about which program this is.
         from . import harness as harness_mod
-        program = harness_mod.for_card(card)           # UnknownHarness -> refuse
+        program = harness_mod.for_card(card, root=self._root)   # UnknownHarness -> refuse
         # Launch site: the card may already be on disk (a prior `role set`), so
         # only "Nothing launched." is true here — not "Nothing written" (w5l9).
         require_capability(program, card, consequence="Nothing launched.")

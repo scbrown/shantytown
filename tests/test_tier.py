@@ -71,7 +71,7 @@ def test_role_set_refuses_a_lead_whose_harness_cannot_host_it(tmp_path, monkeypa
     written — the refusal adapters.md documented, which previously only fired at
     `st new` launch (after the card was already on disk)."""
     from shantytown.runtime import CapabilityError
-    monkeypatch.setattr("shantytown.harness.for_card", lambda card: _NonBlockingHarness())
+    monkeypatch.setattr("shantytown.harness.for_card", lambda card, root=None: _NonBlockingHarness())
     r = reg(tmp_path, malcolm={"role": "worker"})
 
     with pytest.raises(CapabilityError, match="blocking stop hooks") as ei:
@@ -89,7 +89,7 @@ def test_role_set_dry_run_surfaces_the_capability_refusal(tmp_path, monkeypatch)
     """The gate is a property of the PLAN, not the write, so --dry-run shows it
     too — uniform with the hierarchy refusals."""
     from shantytown.runtime import CapabilityError
-    monkeypatch.setattr("shantytown.harness.for_card", lambda card: _NonBlockingHarness())
+    monkeypatch.setattr("shantytown.harness.for_card", lambda card, root=None: _NonBlockingHarness())
     r = reg(tmp_path, malcolm={"role": "worker"})
     with pytest.raises(CapabilityError, match="blocking stop hooks"):
         role_set(r, "malcolm", "lead", dry_run=True)
@@ -99,7 +99,7 @@ def test_role_set_worker_is_not_gated(tmp_path, monkeypatch):
     """The gate keys on the NEW role needing stop delivery: demoting/keeping a
     worker on a non-blocking harness is fine — only lead/administrator receive."""
     from shantytown.protocols import Agent
-    monkeypatch.setattr("shantytown.harness.for_card", lambda card: _NonBlockingHarness())
+    monkeypatch.setattr("shantytown.harness.for_card", lambda card, root=None: _NonBlockingHarness())
     r = reg(tmp_path, malcolm={"role": "lead", "reports_to": "arnold"},
             arnold={"role": "administrator"})
     # malcolm -> worker: a worker needs no stop capability, so the non-blocking

@@ -887,6 +887,34 @@ Two consequences worth knowing before you put `"harness": "codex"` on a card:
   *could-not-tell* (2) rather than a confident wrong answer. The agent is launched; the verify is
   the part that cannot see it.
 
+### Mixing programs across one crew
+
+A card names its own program, and `[harness]` answers for the ones that don't:
+
+```toml
+[harness]
+default = "codex"            # the fleet runs codex
+
+[harness.by_role]
+lead = "claude"              # …except the roles that receive stop events
+administrator = "claude"
+```
+
+**Most specific wins: card → role → fleet → `claude`.** A card that names its program is never
+moved by a config written afterwards — the table is for the silent, and a resolved default is
+never written back onto the card (that would be a claim nobody made, and it would survive the
+config being changed back).
+
+Both halves are validated at load. An unimplemented harness name is refused, because a typo in
+`default` moves every card in the fleet and would otherwise surface as `st new` failing agent by
+agent. A role nobody has is refused too — a rule that applies to nobody reads as applied.
+
+Mixed fleets work because the tier is program-blind: a codex worker sends its stop event with
+`python -m shantytown.stop_event send` and a Claude Code lead drains it, since those hook commands
+are shantytown's own CLI rather than either program's. The artifacts are per **(harness, role)**,
+so `st roles set` on a mixed crew writes `worker.settings.json` *and*
+`codex/worker/config.toml`, and `st roles --check` reads both formats back.
+
 Every codex fact in the implementation was read out of codex's own source, with the file named
 beside it (`shantytown/codex.py`), because a guess about another CLI's flags is exactly the kind of
 code that looks shipped and has never run. The Claude Code path is pinned byte-for-byte against the
