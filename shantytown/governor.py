@@ -503,6 +503,25 @@ class Policy:
     # (aegis-7kwtu). See the Pace docstring — in particular that its fail-safe
     # runs the opposite way from Burndown's, which is the bug that bead predicted.
     paces: tuple[Pace, ...] = ()
+    # WHICH SERIES THIS GOVERNOR READS (aegis-5ve1h). Was a module constant, and
+    # a constant is correct only while every agent spends the same provider's
+    # budget. A second harness is a second ACCOUNT, so the series name has to
+    # travel with the policy that reads it. Default = the Claude names, so a
+    # deployment that never writes this is unaffected.
+    metric: str = USAGE_METRIC
+    account_metric: str = ACCOUNT_USAGE_METRIC
+    # Sibling governors, keyed by HARNESS (aegis-5ve1h). The harness IS the
+    # account boundary — which program runs decides whose quota is spent — so
+    # that is the key, not the role or the agent.
+    #
+    # EMPTY IS THE DEFAULT AND MEANS "one governor, as today". Same rule as
+    # [model] and [harness]: a deployment that has never heard of this table
+    # behaves byte-for-byte as it did.
+    #
+    # NOT RECURSIVE: a by_harness policy may not declare its own by_harness. One
+    # level is the whole domain (a card runs exactly one program), and nesting
+    # would invite a resolution order nobody can hold in their head.
+    by_harness: dict = field(default_factory=dict)
 
     @property
     def active(self) -> bool:
@@ -2419,7 +2438,8 @@ def render_drain(rows: list[Drained]) -> str:
 
 _GOV_KEYS = {"source", "window", "on_signal_lost", "relax_margin",
              "max_age_seconds", "url", "path", "username", "password_file",
-             "stub_pct", "tier", "exempt", "burndown", "pace", "max_agents"}
+             "stub_pct", "tier", "exempt", "burndown", "pace", "max_agents",
+             "metric", "by_harness"}
 _TIER_KEYS = {"at", "min_priority", "traits", "action", "window", "max_agents"}
 _BURN_KEYS = {"window", "within", "reserve"}
 _PACE_KEYS = {"window", "ratio", "length"}
@@ -2591,7 +2611,117 @@ def parse(tbl: dict) -> Policy:
                   username=tbl.get("username"),
                   password_file=tbl.get("password_file"), stub_pct=stub,
                   tiers=tiers, exempt=tuple(exempt), burndowns=burndowns,
-                  paces=paces, max_agents=_cap(tbl, "[governor]"))
+                  paces=paces, max_agents=_cap(tbl, "[governor]"),
+                  metric=_metric(tbl, "metric", USAGE_METRIC),
+                  account_metric=_metric(tbl, "account_metric",
+                                         ACCOUNT_USAGE_METRIC),
+                  by_harness=_by_harness(tbl.get("by_harness")))
+
+
+def _metric(tbl: dict, key: str, default: str) -> str:
+    """A series name from config, or the built-in Claude one.
+
+    NOT validated against a known list — the series a deployment publishes is the
+    deployment's business, and st has no way to know which recording rules exist
+    on someone's Prometheus. A wrong name fails the way a missing series already
+    fails: SIGNAL LOST, which alarms. That is the correct failure and it already
+    has machinery.
+    """
+    v = tbl.get(key, default)
+    if not isinstance(v, str) or not v.strip():
+        raise GovernorError(f"[governor] {key} must be a non-empty series name, "
+                            f"got {v!r}")
+    return v.strip()
+
+
+def _by_harness(raw) -> dict:
+    """[governor.by_harness.<name>] -> {harness: Policy} (aegis-5ve1h).
+
+    ONE GOVERNOR PER ACCOUNT, and the harness is the account boundary: which
+    program a card runs decides whose quota it spends. Before this, one policy
+    reading `claude:usage_utilization_pct:max` governed every agent — which on a
+    mixed fleet is wrong twice at once. It FALSE-THROTTLES the other harness (its
+    provider's budget is untouched, and it gets drained anyway) and it lets that
+    harness's real spend run BLIND, because no configured probe reads it. The
+    second failure is the dangerous one: the governor's own fail-safe alarms on a
+    STALE probe, never on a provider nobody configured a probe for, so it reads
+    green while unbounded.
+
+    THE HARNESS NAME IS VALIDATED against what this build implements, exactly as
+    [harness] does — `[governor.by_harness.codx]` must not be accepted, apply to
+    nobody, and read as applied. That is the silently-dropped key this file
+    refuses to have.
+
+    NOT RECURSIVE: a nested `by_harness` is REFUSED rather than ignored. One
+    level covers the whole domain (a card runs exactly one program), and a
+    silently-dropped second level would be a governor an operator believes is
+    configured.
+    """
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise GovernorError(f"[governor.by_harness] must be a table, got "
+                            f"{type(raw).__name__}")
+    from . import harness as harness_mod
+    known = sorted(h.name for h in harness_mod.all_harnesses())
+    out = {}
+    for name, sub in raw.items():
+        if name not in known:
+            raise GovernorError(
+                f"[governor.by_harness.{name}] is not a harness this build "
+                f"implements; known: {', '.join(known)}. Refusing to hold a "
+                f"governor for a program that cannot be launched — it would "
+                f"apply to nobody and read as applied.")
+        if not isinstance(sub, dict):
+            raise GovernorError(f"[governor.by_harness.{name}] must be a table, "
+                                f"got {type(sub).__name__}")
+        if "by_harness" in sub:
+            raise GovernorError(
+                f"[governor.by_harness.{name}] may not declare its own "
+                f"by_harness — one level is the whole domain, since a card runs "
+                f"exactly one program.")
+        out[name] = parse(sub)
+    return out
+
+
+def policy_for(policy: Policy, harness_name: str | None) -> Policy:
+    """THE governor that applies to an agent running `harness_name`.
+
+    Resolution is one step and deliberately shallow: the by_harness entry if the
+    deployment declared one, else the base policy. No inheritance of tiers from
+    the base into a sibling — a governor is a COMPLETE policy or it is not
+    declared, because a half-inherited tier list is the thing nobody can reason
+    about at 3am while the fleet is draining.
+
+    WHAT THIS DOES *NOT* DECIDE, and the caller must: what happens when a fleet
+    runs a harness with NO governor declared and the base policy reads another
+    provider's number. Falling through to the base is what this returns, and on a
+    mixed fleet that is the blind-spend failure wearing a default's clothing —
+    so callers are expected to treat "base policy, foreign harness" as SIGNAL
+    LOST rather than as governed. That decision is a call-site one (`unconfigured`
+    below names it) and is not silently made here.
+    """
+    if harness_name and harness_name in policy.by_harness:
+        return policy.by_harness[harness_name]
+    return policy
+
+
+def unconfigured(policy: Policy, harness_name: str | None) -> bool:
+    """Is `harness_name` spending a budget NO governor in this config reads?
+
+    True only when the deployment is actually governing (tiers declared) AND
+    runs more than one harness AND this one has no entry. A single-harness
+    deployment is not unconfigured — its one governor reads its one provider,
+    which is every deployment before aegis-5ve1h.
+
+    This is the predicate the call sites owe an alarm to. It exists as its own
+    function, rather than inline at each site, because "which agents are
+    ungoverned right now" is a question an operator asks directly and a summary
+    line has to answer.
+    """
+    if not policy.tiers or not policy.by_harness:
+        return False
+    return bool(harness_name) and harness_name not in policy.by_harness
 
 
 def _cap(spec, where: str) -> int | None:
