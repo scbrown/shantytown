@@ -211,6 +211,63 @@ def render(settings: dict, existing: str = "") -> str:
     return dumps(merge_one_level(current, settings))
 
 
+def trust_projects(existing: str, workspaces) -> str:
+    """`existing` config.toml with each workspace recorded as a TRUSTED project.
+
+    WHAT THIS PREVENTS, and it is not a nicety (aegis-wc43h). codex asks
+    "Do you trust the contents of this directory?" the FIRST time it opens a
+    given (CODEX_HOME, directory) pair, and blocks on a two-option picker whose
+    option 2 is `No, quit`. An agent launched into that dialog is NOT running —
+    the pane's process is the runtime, so every liveness check that looks at the
+    process says it is fine. Then a dispatch types a line into that picker and
+    sends Enter, the picker resolves, codex EXITS, and the pane falls back to the
+    login shell. From that moment every message routed to the agent is executed
+    by bash. Measured end to end on this host: two agents died exactly that way.
+
+    The dialog is shown ONCE per pairing, which is what made it look
+    nondeterministic and cost five correctly-refuted hypotheses: it reproduces on
+    a FRESH pairing and never again in the same one. So an agent that survives is
+    not evidence of a fix, only of having answered already — and any new card, or
+    any change of workspace or CODEX_HOME, is armed again.
+
+    Trust is keyed by (home, directory). CODEX_HOME here is per-ROLE while a
+    workspace is per-AGENT, so a role's config needs one entry per agent
+    workspace and the caller must pass the workspaces of the cards it just wrote.
+
+    RETURNS `existing` UNCHANGED when every workspace is already trusted. This is
+    not an optimisation: render() is a parse-and-re-emit, so it drops an
+    operator's comments and key order (see there). Rewriting a file we had
+    nothing to add to would spend that cost on every `roles set`.
+    """
+    wanted = [str(w) for w in workspaces if w]
+    if not wanted:
+        return existing
+    try:
+        current = tomllib.loads(existing) if existing.strip() else {}
+    except (ValueError, TypeError):
+        # Unparseable config: refuse to rewrite it. We would be guessing at the
+        # operator's file, and a config we cannot read is one we must not clobber
+        # — the same judgement render() makes, in the safer direction, because
+        # here there is no emission that has to happen regardless.
+        return existing
+    projects = current.get("projects")
+    if not isinstance(projects, dict):
+        projects = {}
+    missing = [w for w in wanted
+               if not (isinstance(projects.get(w), dict)
+                       and projects[w].get("trust_level") == "trusted")]
+    if not missing:
+        return existing
+    merged = dict(projects)
+    for w in missing:
+        entry = dict(merged[w]) if isinstance(merged.get(w), dict) else {}
+        # Only the one key. An operator may have other per-project settings here
+        # and they are theirs; this records trust and states nothing else.
+        entry["trust_level"] = "trusted"
+        merged[w] = entry
+    return dumps({**current, "projects": merged})
+
+
 def stop_directions(text: str) -> set[str] | None:
     """Which stop directions this config.toml carries — {"send"}, {"send",
     "drain"}, … — or None for CANNOT TELL.

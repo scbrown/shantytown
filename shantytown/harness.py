@@ -189,12 +189,19 @@ class Harness(Protocol):
         compose invariant, asked of the program that owns the syntax."""
         ...
 
-    def provision(self, settings_path: str, root=None) -> "list[str]":
+    def provision(self, settings_path: str, root=None,
+                  workspaces=()) -> "list[str]":
         """Anything the artifact alone cannot do, run after it is written.
         Returns human-readable notes for the operator (empty is the normal
         answer). It exists because codex needs one — its home directory holds
         credentials as well as config — and inventing that seam at the call site
-        would have made the emitter know which harness it was serving."""
+        would have made the emitter know which harness it was serving.
+
+        `workspaces` are the workspace directories of the cards this artifact was
+        just written for. codex needs them because it gates on a per-(home,
+        directory) TRUST DIALOG, and an agent launched into that dialog is not
+        running at all (see codex.trust_projects). A harness that does not gate
+        on the directory ignores them."""
         ...
 
     def hooks(self, card: Agent) -> "HookSpec":
@@ -398,10 +405,14 @@ class ClaudeHarness:
     def carries_settings(self, launch: str, settings_path: str) -> bool:
         return "--settings" in launch
 
-    def provision(self, settings_path: str, root=None) -> list[str]:
+    def provision(self, settings_path: str, root=None,
+                  workspaces=()) -> list[str]:
         # Nothing. Claude Code reads the file the flag names and needs no second
         # artifact beside it — the workspace-level wiring (.mcp.json, the consent
         # settings) is provision.py's job and predates the harness split.
+        # `workspaces` is ignored: Claude Code's folder-trust dialog is answered
+        # at LAUNCH by the launcher (TRUST_MARKERS), not recorded in the settings
+        # file, so there is nothing to write here.
         return []
 
     def hooks(self, card: Agent) -> "HookSpec":
@@ -589,8 +600,11 @@ class CodexHarness:
         # and the invariant must not read that as a settings-less launch.
         return self.settings_in_cmdline(launch) == str(Path(settings_path).resolve())
 
-    def provision(self, settings_path: str, root=None) -> list[str]:
-        """Link the operator's codex credentials into the home we just wrote.
+    def provision(self, settings_path: str, root=None,
+                  workspaces=()) -> list[str]:
+        """Link the operator's credentials, and record the workspaces as TRUSTED.
+
+        TWO THINGS THE FILE ALONE CANNOT DO, and both fail silently-but-fatally.
 
         THE TRAP THIS ANSWERS, and it would be silent: CODEX_HOME is not only
         where config.toml lives, it is where codex keeps auth.json. Pointing an
@@ -603,28 +617,60 @@ class CodexHarness:
         store never holds a credential — which matters because this store is a
         git repo in every deployment we know of.
 
+        TRUST is the second, and it is the more dangerous of the two. codex gates
+        a directory it has not seen behind a blocking two-option dialog whose
+        option 2 is `No, quit`. An agent launched into it is NOT running, while
+        every check that reads the pane's PROCESS says it is. A dispatch then
+        types into that picker, Enter resolves it, codex exits, and the pane
+        falls back to a login shell that executes all subsequent fleet traffic.
+        Recording the workspace here — where the home is being written anyway —
+        means the dialog never appears. See codex.trust_projects for the
+        measurement and for why this looked nondeterministic for so long.
+
         Best-effort and never fatal: it reports rather than raises, because the
         artifact it is finishing has already been written, and an emitter that
         turned a successful `role set` into a traceback over a symlink would be
         a worse bug than the one it warns about.
         """
+        notes: list[str] = []
         home = Path(settings_path).parent
+
+        # TRUST FIRST: an unauthenticated agent is visible and recoverable, an
+        # agent that quits on its dialog leaves an executing shell behind. Done
+        # before the early `return` the credentials branch can take, so a store
+        # with no codex login still gets its trust records written.
+        if workspaces:
+            try:
+                cfg = Path(settings_path)
+                before = cfg.read_text() if cfg.exists() else ""
+                after = codex_mod().trust_projects(before, workspaces)
+                if after != before:
+                    cfg.write_text(after)
+            except OSError as e:
+                notes.append(
+                    f"could not record trusted workspaces in {settings_path} "
+                    f"({e}); an agent launched there may stop on codex's "
+                    f"'Do you trust the contents of this directory?' dialog, "
+                    f"which a dispatch can answer as 'No, quit'.")
+
         source = _codex_credentials()
         if source is None:
-            return [f"no codex auth.json found — agents using {home} will launch "
-                    f"UNAUTHENTICATED. Run `codex login` (or set CODEX_HOME to a "
-                    f"logged-in home before emitting) and re-run `st roles set`."]
+            return notes + [
+                f"no codex auth.json found — agents using {home} will launch "
+                f"UNAUTHENTICATED. Run `codex login` (or set CODEX_HOME to a "
+                f"logged-in home before emitting) and re-run `st roles set`."]
         link = home / "auth.json"
         try:
             if link.is_symlink() and link.readlink() == source:
-                return []
+                return notes
             if link.is_symlink() or link.exists():
                 link.unlink()
             link.symlink_to(source)
         except OSError as e:
-            return [f"could not link {link} -> {source} ({e}); agents using {home} "
-                    f"will launch UNAUTHENTICATED."]
-        return []
+            notes.append(
+                f"could not link {link} -> {source} ({e}); agents using {home} "
+                f"will launch UNAUTHENTICATED.")
+        return notes
 
     def hooks(self, card: Agent) -> "HookSpec":
         """codex DELIVERS BLOCKING STOP HOOKS, and this reverses a claim this
