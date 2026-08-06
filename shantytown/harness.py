@@ -172,6 +172,20 @@ class Harness(Protocol):
     # further up a pane are an agent TALKING about pickers, not sitting on one.
     picker_markers: "tuple[str, ...]"
 
+    # CHROME THAT MEANS "WHAT I JUST SENT IS STILL IN THE INPUT BOX, UNSUBMITTED".
+    #
+    # A send is two facts, and st has always reported the first as if it were the
+    # second: the KEYSTROKES went to the pane, and the message was SUBMITTED. On a
+    # TUI that absorbs a large write as a paste, the first is true and the second
+    # is false — the body sits in the box, the agent never sees it, and the sender
+    # is told it was delivered. Same false-success family as the other checks this
+    # fleet has paid for: the tool reported exactly what it did, and what it did
+    # was not what the caller asked.
+    #
+    # Empty means NOBODY HAS MEASURED THIS PROGRAM'S SIGNATURE — never "this
+    # program always submits". Matched tail-only by the caller.
+    stranded_markers: "tuple[str, ...]"
+
     def settings_in_cmdline(self, cmdline: str) -> "str | None":
         """The settings artifact a RUNNING process was launched with, read off
         its command line — or None if this launch is not one of ours. This is
@@ -238,6 +252,11 @@ class ClaudeHarness:
     # the failure mode of a rotted marker is silence — CONSENT_MARKERS rotted once
     # already and the test that caught it exists for that reason.
     picker_markers = ()
+    # Claude Code submits what st types; no stranded-paste signature has been
+    # observed. Empty means UNMEASURED, not "cannot happen" — if a long send is
+    # ever seen sitting in its box, the marker goes here and the check below
+    # starts covering it with no other change.
+    stranded_markers = ()
 
     def launch(self, card: Agent, settings_path: str, root=None) -> str:
         # --no-chrome: crew agents do not use the Chrome integration, and WITHOUT
@@ -483,6 +502,12 @@ class CodexHarness:
     picker_markers = ("Press enter to confirm or esc to go back",
                       "Do you trust the contents of this directory",
                       "1. Yes, continue")
+
+    # MEASURED on this host: a single `send-keys -l` of >1000 chars is absorbed
+    # as a paste and rendered in the input box as `[Pasted Content N chars]`,
+    # which the trailing Enter does NOT commit. The count varies with the body,
+    # so the marker is the stable prefix.
+    stranded_markers = ("[Pasted Content",)
 
     @property
     def settings_env_var(self) -> str:
@@ -809,6 +834,19 @@ def picker_markers() -> tuple[str, ...]:
     """
     return tuple(dict.fromkeys(
         m for h in all_harnesses() for m in getattr(h, "picker_markers", ())))
+
+
+def stranded_markers() -> tuple[str, ...]:
+    """Chrome meaning "the body I just sent is still in the input box".
+
+    Union across the registry, same reason as picker_markers(): the pane readers
+    are handed no harness, so a per-program check would only cover the program
+    that happens to be the default. Tail-only matching keeps the cost of carrying
+    another program's chrome to a false "not delivered" — which is the safe
+    direction here, because the failure it replaces is a false "delivered".
+    """
+    return tuple(dict.fromkeys(
+        m for h in all_harnesses() for m in getattr(h, "stranded_markers", ())))
 
 
 def get(name: str | None) -> Harness:

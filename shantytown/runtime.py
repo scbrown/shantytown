@@ -108,6 +108,42 @@ def asks_a_question(rt, screen: str) -> bool:
     return bool(ask(screen)) if callable(ask) else False
 
 
+def input_stranded(screen: str) -> bool:
+    """Is a body sitting UNSUBMITTED in this pane's input box? (aegis-wcjuz)
+
+    A send is TWO facts and st reported the first as if it were the second: the
+    keystrokes reached the pane, and the message was SUBMITTED. On a TUI that
+    absorbs a large write as a paste the first is true and the second is false —
+    the body sits in the box, the agent never sees it, and the sender is told it
+    was delivered. Measured: a 1024-char brief to a lead, holding a GO ruling on
+    a live deploy, sat unread while the coordinator believed it was working.
+
+    A MODULE FUNCTION, not a Runtime method, because it must be askable on the
+    send path where there is no Runtime in hand — and because the answer comes
+    from the harness registry rather than from any one program's chrome.
+
+    TAIL-ONLY, like every other text predicate here: the same string further up
+    the pane is an agent that PRINTED it (this repo's own source contains it), not
+    an agent holding it. Blank padding is dropped first — a TUI that draws its box
+    high and pads below would otherwise push the box out of the window.
+
+    FALSE MEANS "no stranded marker found", which for a program whose signature
+    nobody has measured is the same as "cannot tell". That asymmetry is
+    deliberate: this can only ever DOWNGRADE a claimed success to an honest
+    could-not-tell, never invent one, so failing to know leaves the old behaviour
+    exactly as it was.
+    """
+    from . import harness as harness_mod
+    markers = harness_mod.stranded_markers()
+    if not markers:
+        return False
+    lines = screen.splitlines()
+    while lines and not lines[-1].strip():
+        lines.pop()
+    tail = "\n".join(lines[-ClaudeRuntime._QUESTION_TAIL_LINES:])
+    return any(m in tail for m in markers)
+
+
 def reads_a_question(rt, screen: str):
     """Ask `rt` to READ the picker on this screen, or None if it cannot (w30p2).
 
