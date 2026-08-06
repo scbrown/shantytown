@@ -211,7 +211,7 @@ def test_both_legs_are_reported_neither_hides_the_other(tmp_path):
     _card(crew, "w1", role="worker", reports_to="lead", pane="p-w1")
     reg = FilesRegistry(crew)
     rep = roles.check(reg,
-                      emitted=lambda role: None,     # leg two: cannot tell
+                      emitted=lambda card: None,     # leg two: cannot tell
                       live=_live_from({"p-lead": set()}))   # leg three: broken
     row = next(r for r in rep.rows if r.agent == "lead")
     assert "no readable stop hooks emitted" in row.note

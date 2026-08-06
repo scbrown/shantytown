@@ -1,0 +1,369 @@
+"""THE SECOND HARNESS (codex) — and, per docs/adapters.md, the proof the first
+did not leak.
+
+These tests are deliberately of two kinds, and the difference matters when one
+of them goes red:
+
+  CLAIMS ABOUT CODEX — the launch string, the config.toml shape, the blocking
+  Stop contract. Every one was read out of openai/codex `main` on 2026-08-06 and
+  is cited in shantytown/codex.py's header. There is no codex binary on the
+  build host, so these tests pin what we BELIEVE about somebody else's program;
+  they cannot prove codex agrees. When codex changes, they go red for the right
+  reason (a claim we made) and the fix is to re-read the source, not to loosen
+  the assert.
+
+  CLAIMS ABOUT US — that the seam is actually generic: the emitter, the
+  resolver, the compose invariant, the live reader and the artifact reader all
+  go through the harness and none of them assume Claude Code's file name, format
+  or flag. These are the ones that would have been green while the interface was
+  a lie, which is exactly why the second implementation exists.
+
+The end-to-end at the bottom is the one that matters most: emit -> resolve ->
+compose -> read the routing back off the composed command line. That path
+crosses every place Claude Code used to be hardcoded.
+"""
+from __future__ import annotations
+import json
+import tomllib
+from pathlib import Path
+
+import pytest
+
+from shantytown import cli, codex, harness as harness_mod
+from shantytown.files import FilesRegistry
+from shantytown.protocols import Agent
+from shantytown.runtime import (ClaudeRuntime, live_wiring, require_capability,
+                                settings_path_in_cmdline, stop_directions_in)
+from shantytown.tmux import NullPanes
+
+CODEX = harness_mod.get("codex")
+CLAUDE = harness_mod.get("claude")
+
+
+# --- the launch (claims about codex) -------------------------------------------
+
+def test_a_relative_settings_path_still_becomes_an_absolute_home(tmp_path):
+    """The launch `cd`s into the workspace before the env applies, and codex does
+    not fail on a home that is not there — it quietly uses an empty one: no
+    hooks, no auth, an agent that starts and is governed by nothing."""
+    rel = "settings/codex/worker/config.toml"
+    launch = CODEX.launch(Agent(name="ellie", role="worker", workspace="/w"), rel)
+    assert f"CODEX_HOME={Path(rel).resolve().parent} " in launch
+    assert CODEX.carries_settings(launch, rel)      # the invariant still holds
+
+
+def test_the_launch_points_at_the_config_by_CODEX_HOME_not_a_flag():
+    """codex has no `--settings`. It reads config.toml out of its home, so the
+    pointer is an env export naming that DIRECTORY — and the invariant "a
+    composed launch always carries its settings" is answered by the harness
+    rather than by grepping for Claude Code's flag."""
+    card = Agent(name="ellie", role="worker")
+    p = "/s/codex/worker/config.toml"
+    launch = CODEX.launch(card, p)
+    assert "CODEX_HOME=/s/codex/worker " in launch
+    assert "--settings" not in launch
+    assert CODEX.carries_settings(launch, p)
+    # and it comes back out again — this is what the live reader uses.
+    assert CODEX.settings_in_cmdline(launch) == p
+
+
+def test_the_launch_carries_the_same_identity_env_as_claude():
+    """SHANTY_AGENT/BOBBIN_ROLE/BEADS_ACTOR/ST_ROLES are not Claude Code's — they
+    are how a shantytown agent knows who it is, and dropping one on a second
+    harness is how a codex agent's bd events all get written as $USER (GitHub
+    #24) or its role set stops reaching it (#37)."""
+    card = Agent(name="ada", role="lead", domain="ops", reports_to="arnold")
+    launch = CODEX.launch(card, "/s/codex/lead/config.toml", root="/tmp/r")
+    for expected in ("SHANTY_ROOT=/tmp/r", "SHANTY_AGENT=ada", "BOBBIN_ROLE=lead",
+                     "BEADS_ACTOR=ada", "ST_ROLES=lead", "ST_ROLE_DOMAIN=ops",
+                     "ST_REPORTS_TO=arnold"):
+        assert expected in launch, f"{expected} missing from {launch}"
+
+
+def test_hook_trust_is_bypassed_and_that_is_the_point():
+    """codex will not run a hook it has no persisted trust record for
+    (codex.py fact 4). Emitting a role's whole stop routing into a program that
+    then declines to run it is the declared-but-inert failure this repo exists
+    to not ship, so the flag is a DEFAULT here — unlike every other
+    `dangerously-` flag, which stays per-card below."""
+    launch = CODEX.launch(Agent(name="ellie", role="worker"), "/s/c/w/config.toml")
+    assert "--dangerously-bypass-hook-trust" in launch
+    # It is NOT the approvals/sandbox bypass, which is a different flag and a
+    # different decision.
+    assert "--dangerously-bypass-approvals-and-sandbox" not in launch
+
+
+def test_the_permission_bypass_is_per_card_exactly_like_claudes():
+    plain = CODEX.launch(Agent(name="ellie", role="worker"), "/s/c/w/config.toml")
+    danger = CODEX.launch(Agent(name="ellie", role="worker", dangerous=True),
+                          "/s/c/w/config.toml")
+    assert "--dangerously-bypass-approvals-and-sandbox" not in plain
+    assert "--dangerously-bypass-approvals-and-sandbox" in danger
+
+
+def test_the_cards_model_and_workspace_are_honoured():
+    card = Agent(name="ellie", role="worker", model="gpt-5-codex", workspace="/w")
+    launch = CODEX.launch(card, "/s/c/w/config.toml")
+    assert "--model gpt-5-codex" in launch          # GitHub #17/#9, one harness over
+    assert launch.startswith("cd /w && ")
+
+
+def test_a_chrome_card_is_REFUSED_not_silently_stripped():
+    """codex has no browser integration. Honouring the field by ignoring it would
+    launch an agent whose card claims a capability its process does not have —
+    the same class of failure as launching a different program than the card
+    asked for, which is what UnknownHarness already refuses."""
+    card = Agent(name="ellie", role="worker", chrome=True)
+    with pytest.raises(harness_mod.Unsupported, match="chrome"):
+        CODEX.launch(card, "/s/c/w/config.toml")
+
+
+def test_st_new_turns_that_refusal_into_exit_1_not_a_traceback(tmp_path, capsys,
+                                                              monkeypatch):
+    """The refusal has to reach the operator the way every other one does. A new
+    exception type that nothing catches is an exit-1 path that exits 2 with a
+    stack trace (the bug aegis-85ox fixed for UnknownHarness)."""
+    root = tmp_path / ".shanty"
+    (root / "crew").mkdir(parents=True)
+    (root / "crew" / "ellie.json").write_text(json.dumps(
+        {"role": "worker", "harness": "codex", "pane": "crew-ellie", "chrome": True}))
+    cli._emit_role_settings(root, {"worker"}, harness_name="codex")
+    monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: NullPanes(live=set()))
+
+    class _Args:
+        cmd, agent, root_how = "new", "ellie", "explicit"
+        dry_run, session, force = True, None, False
+        def __init__(self, root):
+            self.root = root
+    rc = cli._cmd_new(_Args(root))
+    assert rc == cli.REFUSED
+    assert "refused:" in capsys.readouterr().err
+
+
+# --- the capability (the claim that changed) -----------------------------------
+
+def test_codex_declares_blocking_stop_so_a_lead_is_hostable():
+    """This REVERSES what this repo used to say. codex's Stop hook parses
+    decision:block + reason and feeds the reason back to the model as a
+    continuation prompt (codex.py fact 3), which is the whole capability. The
+    gate is keyed on the declaration and never on a program name, so it opens
+    here without anything in tier.py or runtime.py knowing what codex is."""
+    assert CODEX.hooks(Agent(name="x", role="lead")).blocking_stop is True
+    require_capability(CODEX, Agent(name="x", role="administrator"))   # must not raise
+
+
+def test_role_set_lets_a_codex_card_become_a_lead(tmp_path):
+    from shantytown.tier import role_set
+    crew = tmp_path / "crew"
+    crew.mkdir()
+    (crew / "malcolm.json").write_text(json.dumps({"role": "worker", "harness": "codex"}))
+    (crew / "ellie.json").write_text(json.dumps({"role": "worker", "harness": "codex"}))
+    reg = FilesRegistry(crew)
+    role_set(reg, "malcolm", "lead", reports=["ellie"])      # gate must not refuse
+    assert reg.get("malcolm").role == "lead"
+    assert reg.get("malcolm").harness == "codex"             # and the field survived
+
+
+# --- the artifact (claims about us: the seam is generic) -----------------------
+
+def test_the_artifact_is_a_config_toml_in_a_directory_per_role():
+    """CODEX_HOME names a DIRECTORY and codex reads a fixed filename inside it,
+    so the harness's name carries directories — which is the thing the emitter
+    used to assume it never would."""
+    assert CODEX.settings_name("worker") == "codex/worker/config.toml"
+    assert CODEX.agent_settings_name("ada") == "codex/agent-ada/config.toml"
+    # and claude's are untouched — nine live agents launch from these names.
+    assert CLAUDE.settings_name("worker") == "worker.settings.json"
+    assert CLAUDE.agent_settings_name("ada") == "agent-ada.settings.json"
+
+
+def test_the_emitted_config_is_TOML_that_parses_back_to_what_we_meant():
+    """The writer is ours (zero dependencies, and the stdlib reads TOML but does
+    not write it), so it is proved by ROUND TRIP rather than by eye. Its first
+    bug was a double-declared table that looked fine in the output and made the
+    file unloadable."""
+    settings = codex.settings_for_role("lead", root="/tmp/r")
+    text = codex.render(settings)
+    assert tomllib.loads(text) == settings
+
+
+@pytest.mark.parametrize("role,expected", [("worker", {"send"}),
+                                           ("lead", {"send", "drain"}),
+                                           ("administrator", {"drain"})])
+def test_the_stop_routing_is_the_same_routing_claude_gets(role, expected):
+    """The routing table is SHANTYTOWN's (runtime.role_stop_hooks), shared by
+    both harnesses. A second copy is how a lead comes to send on one program and
+    drain on the other."""
+    text = codex.render(codex.settings_for_role(role, root="/tmp/r"))
+    assert codex.stop_directions(text) == expected
+    from shantytown.runtime import claude_settings_for_role
+    claude = CLAUDE.read_stop_directions(
+        json.dumps(claude_settings_for_role(role, root="/tmp/r")))
+    assert codex.stop_directions(text) == claude
+
+
+def test_the_matcher_scoped_guards_are_NOT_emitted_and_that_is_deliberate():
+    """A matcher is a claim about the host program's TOOL NAMES. Claude Code's
+    are "Bash" and "mcp__.*"; codex's are unmeasured. Emitting the guards with
+    the wrong vocabulary would not be a weaker guard, it would be a guard that
+    never runs while reading as wired — this repo has already paid that bill
+    once (aegis-ac5x/18e0). Pinned so nobody "completes" the emitter by copying
+    Claude Code's matchers across."""
+    settings = codex.settings_for_role("worker", root="/tmp/r")
+    for event in codex.MATCHERS_NOT_EMITTED:
+        assert event not in settings["hooks"], (
+            f"{event} is matcher-scoped and codex's tool vocabulary is unmeasured "
+            f"— see codex.MATCHERS_NOT_EMITTED before adding it")
+    # the matcher-free events ARE emitted, so the omission is narrow.
+    assert set(settings["hooks"]) == {"SessionStart", "Stop"}
+
+
+def test_the_operator_keeps_everything_st_did_not_emit():
+    """Same merge rule as Claude Code's (harness.merge_one_level), one format
+    over — including `[hooks.state]`, which is codex's own trust ledger and
+    emphatically not ours to rewrite."""
+    existing = ('model = "gpt-5-codex"\n\n[shell_environment_policy]\n'
+                'inherit = "all"\n\n[hooks.state]\nmine = "kept"\n')
+    text = codex.render(codex.settings_for_role("worker", root="/tmp/r"), existing)
+    data = tomllib.loads(text)
+    assert data["model"] == "gpt-5-codex"
+    assert data["shell_environment_policy"] == {"inherit": "all"}
+    assert data["hooks"]["state"] == {"mine": "kept"}
+    assert codex.stop_directions(text) == {"send"}       # ours still landed
+
+
+def test_a_stale_stop_direction_does_NOT_survive_a_re_emission():
+    """The other half of the merge rule, and the reason it is not a plain deep
+    merge: st OWNS the events it emits. A lead demoted to worker must not keep
+    draining."""
+    was_lead = codex.render(codex.settings_for_role("lead", root="/tmp/r"))
+    now_worker = codex.render(codex.settings_for_role("worker", root="/tmp/r"), was_lead)
+    assert codex.stop_directions(now_worker) == {"send"}
+
+
+def test_an_unreadable_artifact_is_CANNOT_TELL_never_no_hooks():
+    """None is not an empty set — the contract every harness's reader owes. A
+    file we could not parse is not a file with no hooks, and rendering that as a
+    pass is the defect the whole readback exists to catch."""
+    assert codex.stop_directions("this is not toml {{{") is None
+    assert codex.stop_directions('model = "x"') is None          # no hooks at all
+    assert codex.stop_directions("") is None
+
+
+def test_neither_harness_claims_the_others_file():
+    """What makes the sniffing readers (stop_directions_in,
+    settings_path_in_cmdline) safe: each reader is format-anchored and answers
+    None rather than guessing, so first-match is a decision, not a coin toss."""
+    from shantytown.runtime import claude_settings_for_role
+    claude_text = json.dumps(claude_settings_for_role("lead", root="/tmp/r"))
+    codex_text = codex.render(codex.settings_for_role("lead", root="/tmp/r"))
+    assert CODEX.read_stop_directions(claude_text) is None
+    assert CLAUDE.read_stop_directions(codex_text) is None
+    assert CLAUDE.settings_in_cmdline("CODEX_HOME=/s/c/w codex") is None
+    assert CODEX.settings_in_cmdline("claude --settings /s/w.settings.json") is None
+
+
+# --- provisioning: the file alone is not enough --------------------------------
+
+def test_the_operators_codex_login_is_LINKED_into_the_home_we_wrote(tmp_path,
+                                                                    monkeypatch):
+    """CODEX_HOME holds auth.json as well as config.toml, so pointing an agent at
+    a home the store owns points it at a home with no login — an agent that
+    starts, looks live, and cannot call a model. A SYMLINK, never a copy: the
+    token stays in one place, `codex login` refreshes the whole fleet at once,
+    and the store (a git repo in every deployment we know of) never holds a
+    credential."""
+    real = tmp_path / "dot-codex"
+    real.mkdir()
+    (real / "auth.json").write_text('{"token": "secret"}')
+    monkeypatch.setenv("CODEX_HOME", str(real))
+    root = tmp_path / ".shanty"
+    [path] = cli._emit_role_settings(root, {"worker"}, harness_name="codex")
+    assert CODEX.provision(str(path), root=root) == []
+    link = path.parent / "auth.json"
+    assert link.is_symlink() and link.readlink() == real / "auth.json"
+    assert not link.is_file() or link.read_text() == '{"token": "secret"}'
+
+
+def test_a_missing_login_is_SAID_not_silently_survived(tmp_path, monkeypatch):
+    """The failure this exists to prevent is invisible at launch time, so the
+    emitter has to be the one that says it."""
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "nowhere"))
+    root = tmp_path / ".shanty"
+    [path] = cli._emit_role_settings(root, {"worker"}, harness_name="codex")
+    notes = CODEX.provision(str(path), root=root)
+    assert notes and "UNAUTHENTICATED" in notes[0]
+
+
+# --- end to end: every place Claude Code used to be hardcoded ------------------
+
+def test_emit_resolve_compose_and_read_the_routing_back(tmp_path):
+    """THE ONE THAT MATTERS. A codex card, from `role set`'s emission to a
+    composed launch to the stop directions read back off that launch's command
+    line. It crosses the emitter (name + format), the resolver (which file), the
+    compose invariant (how the launch points at it), the cmdline reader (finding
+    it on a running process) and the artifact reader (parsing it) — all five of
+    which were Claude Code wearing a generic name before codex existed.
+    """
+    root = tmp_path / ".shanty"
+    [path] = cli._emit_role_settings(root, {"lead"}, harness_name="codex")
+    assert path == root / "settings" / "codex" / "lead" / "config.toml"
+
+    card = Agent(name="ada", role="lead", harness="codex", workspace="/w")
+    rt = ClaudeRuntime(NullPanes(), cli._default_settings(root), root=root)
+    launch = rt.compose(card)                       # resolver + gate + invariant
+    assert "codex --dangerously-bypass-hook-trust" in launch
+
+    # what a `ps` on the live pane would show, read back through the generic
+    # readers — neither of which is told which harness it is looking at.
+    assert settings_path_in_cmdline(launch) == str(path.resolve())
+    assert stop_directions_in(path) == {"send", "drain"}
+    wiring = live_wiring("pane", lambda _p: launch)
+    assert wiring.directions == {"send", "drain"}
+    assert wiring.settings_path == str(path.resolve())
+
+
+def test_role_set_emits_the_artifact_the_CARD_will_actually_read(tmp_path, capsys):
+    """MEASURED WHILE WIRING CODEX UP, on a live store: `st roles set` on a codex
+    card wrote Claude Code's `worker.settings.json` and nothing the agent reads.
+
+    The cause was one field. tier.plan_role_set builds FRESH Agents for its
+    writes and dropped `harness`; files.set() re-merged it from disk, so the
+    persisted card was right and every in-memory reader of the plan was wrong —
+    the emitter here, and the capability gate, which asks harness.for_card of a
+    card whose harness it just dropped."""
+    root = tmp_path / ".shanty"
+    (root / "crew").mkdir(parents=True)
+    (root / "crew" / "ada.json").write_text(json.dumps(
+        {"role": "worker", "harness": "codex", "pane": "crew-ada"}))
+    assert cli.main(["--root", str(root), "roles", "set", "ada", "worker"]) == cli.OK
+    assert (root / "settings" / "codex" / "worker" / "config.toml").is_file()
+    assert not (root / "settings" / "worker.settings.json").exists(), \
+        "emitted Claude Code's artifact for a codex card"
+    # and the card kept its program (the #9 bug, one field over)
+    assert FilesRegistry(root / "crew").get("ada").harness == "codex"
+
+
+def test_a_store_can_run_both_programs_at_once(tmp_path):
+    """Two harnesses, same role, two artifacts, neither overwriting the other.
+    Settings were per-ROLE; which artifact a card reads is decided by the PROGRAM
+    it runs, so `worker` on codex and `worker` on claude are two files."""
+    root = tmp_path / ".shanty"
+    [claude_path] = cli._emit_role_settings(root, {"worker"})
+    [codex_path] = cli._emit_role_settings(root, {"worker"}, harness_name="codex")
+    assert claude_path != codex_path
+    assert json.loads(claude_path.read_text())["hooks"]["Stop"]
+    assert tomllib.loads(codex_path.read_text())["hooks"]["Stop"]
+    resolve = cli._default_settings(root)
+    assert resolve(Agent(name="ellie", role="worker")) == str(claude_path)
+    assert resolve(Agent(name="ada", role="worker", harness="codex")) == str(codex_path)
+
+
+def test_the_claude_artifact_is_byte_identical_to_what_it_always_was(tmp_path):
+    """The refactor half. Moving the merge and the serialization onto the harness
+    must not move one byte of the file nine live agents' hooks are wired from."""
+    from shantytown.runtime import settings_for_role
+    root = tmp_path / ".shanty"
+    [path] = cli._emit_role_settings(root, {"lead"})
+    assert path.read_text() == json.dumps(
+        settings_for_role("lead", root=root), indent=2, sort_keys=True)

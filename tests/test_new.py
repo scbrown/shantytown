@@ -22,14 +22,27 @@ READY = "… Welcome to Claude Code …\n? for shortcuts"
 class _NonBlockingHarness:
     """Registered but cannot deliver blocking stop hooks — lets the capability gate
     be exercised end-to-end through `st new` on a program the CARD names. That path
-    is the one aegis-85ox says a directly-constructed CodexRuntime never covers."""
-    name = "codex-test"
+    is the one aegis-85ox says a directly-constructed StoplessRuntime never covers."""
+    name = "stopless-test"
 
     def launch(self, card, settings_path, root=None):
-        return f"SHANTY_AGENT={card.name} codex-test --settings {settings_path}"
+        return f"SHANTY_AGENT={card.name} stopless-test --settings {settings_path}"
 
     def settings(self, role, root=None):
         return {}
+
+    # The artifact half of the seam: a harness names its own settings file, so a
+    # double that goes through the real resolver has to answer too. These borrow
+    # Claude Code's names because _world() writes that file — what is under test
+    # is the capability gate, not a second file format.
+    def settings_name(self, role):
+        return f"{role}.settings.json"
+
+    def agent_settings_name(self, agent):
+        return f"agent-{agent}.settings.json"
+
+    def carries_settings(self, launch, settings_path):
+        return "--settings" in launch
 
     def hooks(self, card):
         from shantytown.runtime import HookSpec
@@ -129,8 +142,8 @@ def test_new_refuses_a_lead_on_a_non_blocking_harness(tmp_path, monkeypatch, cap
     """The capability gate THROUGH THE CLI, on the harness the card selects. Before
     aegis-85ox the CLI's hardcoded ClaudeRuntime (blocking_stop=True) rubber-stamped
     this lead and emitted lead settings for a tier that would absorb nothing."""
-    monkeypatch.setitem(harness_mod._HARNESSES, "codex-test", _NonBlockingHarness())
-    root = _world(tmp_path, role="lead", harness="codex-test")
+    monkeypatch.setitem(harness_mod._HARNESSES, "stopless-test", _NonBlockingHarness())
+    root = _world(tmp_path, role="lead", harness="stopless-test")
     panes = NullPanes(live=set())
     monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: panes)
     rc = cli._cmd_new(_Args(root=root))
@@ -144,13 +157,13 @@ def test_new_ALLOWS_a_worker_on_a_non_blocking_harness(tmp_path, monkeypatch, ca
     """The gate OPENS too: a worker needs no stop delivery, so the same non-blocking
     harness hosts it — and the composed launch names the CARD's program, proving
     compose went through card.harness rather than claude's argv."""
-    monkeypatch.setitem(harness_mod._HARNESSES, "codex-test", _NonBlockingHarness())
-    root = _world(tmp_path, role="worker", harness="codex-test")
+    monkeypatch.setitem(harness_mod._HARNESSES, "stopless-test", _NonBlockingHarness())
+    root = _world(tmp_path, role="worker", harness="stopless-test")
     panes = NullPanes(live=set())
     monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: panes)
     rc = cli._cmd_new(_Args(root=root, dry_run=True))
     assert rc == cli.OK
-    assert "codex-test --settings" in capsys.readouterr().out
+    assert "stopless-test --settings" in capsys.readouterr().out
 
 
 def test_new_refuses_when_settings_cannot_be_materialized(tmp_path, monkeypatch, capsys):
