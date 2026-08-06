@@ -44,15 +44,24 @@ class _Recorder:
 
         class _R:
             returncode = 0
+            # Empty: `foreground()` finds no matching pane and answers None =
+            # CANNOT TELL, so the dead-pane guard allows the send. These tests
+            # are about chunking, and a fixture that silently tripped a
+            # different guard would be testing that guard instead.
+            stdout = ""
         return _R()
+
+    def sendkeys(self):
+        """Only the calls that actually type — `foreground()` queries tmux too."""
+        return [c for c in self.calls if "send-keys" in c]
 
     def literals(self):
         """The text of each `send-keys -l` call, in order."""
-        return [c[c.index("-l") + 1] for c in self.calls if "-l" in c]
+        return [c[c.index("-l") + 1] for c in self.sendkeys() if "-l" in c]
 
     def keys(self):
         """Non-literal key sends (the submits)."""
-        return [c[-1] for c in self.calls if "-l" not in c]
+        return [c[-1] for c in self.sendkeys() if "-l" not in c]
 
 
 def _send(monkeypatch, text):
@@ -110,7 +119,7 @@ def test_the_submit_is_still_ONE_Enter_and_it_is_LAST(monkeypatch):
     would commit a partial body as its own turn."""
     rec = _send(monkeypatch, "y" * 3000)
     assert rec.keys() == ["Enter"]
-    assert "-l" not in rec.calls[-1], "the last thing sent was not the submit"
+    assert "-l" not in rec.sendkeys()[-1], "the last thing typed was not the submit"
 
 
 # --- the second half: never claim a delivery you did not observe -------------
@@ -147,3 +156,60 @@ def test_the_markers_are_DERIVED_from_the_registry():
     tuple means NOBODY HAS MEASURED THIS PROGRAM — never "it always submits"."""
     assert "[Pasted Content" in harness_mod.stranded_markers()
     assert harness_mod.get("claude").stranded_markers == ()
+
+
+# --- the dead pane must not become a shell that runs the fleet's mail ---------
+#
+# aegis-ikj4t. When a runtime exits, its pane falls back to the login shell and
+# st keeps routing to it, so every inbound message is EXECUTED BY BASH. Observed
+# live: another agent's escalation text and an ack recipe ran as shell commands.
+# Nothing destructive ran by luck of the wording, not by design.
+
+import pytest
+
+from shantytown.tmux import NullPanes, PaneNotAgent, SHELL_COMMANDS
+
+
+def test_a_message_to_a_DEAD_pane_is_REFUSED_not_executed():
+    panes = NullPanes(foreground_cmd="bash")
+    with pytest.raises(PaneNotAgent):
+        panes.send("shanty-x", "gt escalate -s HIGH 'disk full'")
+    assert panes.sent == [], "text reached a shell pane"
+
+
+@pytest.mark.parametrize("shell", sorted(SHELL_COMMANDS))
+def test_every_known_shell_is_refused(shell):
+    with pytest.raises(PaneNotAgent):
+        NullPanes(foreground_cmd=shell).send("shanty-x", "anything")
+
+
+@pytest.mark.parametrize("runtime", ["claude", "node"])
+def test_a_LIVE_agent_still_receives_normally(runtime):
+    """The direction that decides whether this is shippable at all. Measured on
+    the live fleet: healthy panes read `claude` and `node` — and, critically, an
+    agent RUNNING A SHELL COMMAND still reads as its runtime, because the tool's
+    subprocess never takes the terminal. Without that, this guard would refuse
+    every agent the moment it ran a bash tool call."""
+    panes = NullPanes(foreground_cmd=runtime)
+    panes.send("shanty-x", "ack - proceed")
+    assert panes.sent == [("shanty-x", "ack - proceed")]
+
+
+def test_an_UNKNOWN_foreground_is_DELIVERED_not_refused():
+    """A positive list, never "anything not a known runtime". st does not own
+    every program a pane may legitimately run, and refusing the unrecognised
+    would break messaging for a harness nobody has told this file about.
+    Cannot-tell must not manufacture a refusal."""
+    panes = NullPanes(foreground_cmd="some-new-agent-program")
+    panes.send("shanty-x", "hello")
+    assert panes.sent == [("shanty-x", "hello")]
+
+
+def test_the_LAUNCHER_may_still_type_into_a_bash_pane():
+    """The one caller for which a shell is the CORRECT target: starting an agent
+    is typing `cd … && claude …` into a fresh bash pane. A blanket refusal here
+    would leave st unable to launch anything — which is why the exemption is an
+    explicit, greppable parameter rather than a special case inside the guard."""
+    panes = NullPanes(foreground_cmd="bash")
+    panes.send("shanty-x", "cd /w && claude --settings s.json", allow_shell=True)
+    assert panes.sent == [("shanty-x", "cd /w && claude --settings s.json")]

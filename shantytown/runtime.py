@@ -1045,7 +1045,11 @@ class ClaudeRuntime:
         Panes.send for everyone: the transport must keep seeing a finished
         string. Pinned in tests/test_attribution_inventory.py.
         """
-        self._panes.send(pane, self.compose(card))
+        # allow_shell: the launch line is typed INTO A FRESH BASH PANE on
+        # purpose — that is what starting an agent IS. The send guard
+        # (tmux.PaneNotAgent) refuses shells for message traffic, and this
+        # is the one caller for which a shell is the correct target.
+        self._panes.send(pane, self.compose(card), allow_shell=True)
 
     def is_live(self, screen: str) -> bool:
         """Is the runtime OBSERVED live in this captured pane? Runtime-specific:
@@ -1278,4 +1282,8 @@ class StoplessRuntime:
     def start(self, card: Agent, pane: str) -> None:
         # BARE BY DESIGN — a launch command line, not prose. Same as
         # ClaudeRuntime.start above (aegis-5vxmz).
-        self._panes.send(pane, self.compose(card))
+        # allow_shell: the launch line is typed INTO A FRESH BASH PANE on
+        # purpose — that is what starting an agent IS. The send guard
+        # (tmux.PaneNotAgent) refuses shells for message traffic, and this
+        # is the one caller for which a shell is the correct target.
+        self._panes.send(pane, self.compose(card), allow_shell=True)
