@@ -187,6 +187,18 @@ class Config:
     # usage gauge, and it was the second that went unbounded for six hours. Same
     # default-off-by-omission rule as the governor.
     session_budget: SessionLimits = field(default_factory=SessionLimits)
+    # [harness] — WHICH AGENT PROGRAM, for cards that do not say (harness.py).
+    # Two levels, and a card still beats both:
+    #
+    #     harness.default          the fleet's program
+    #     harness.by_role.<role>   that role's program
+    #
+    # MOST SPECIFIC WINS — card, then role, then fleet, then "claude" — the same
+    # rule the trait model uses, because it is the same question ("who decided
+    # this, and how narrowly?"). Empty means every card answers for itself, which
+    # is every deployment that predates this table.
+    harness_default: str | None = None
+    harness_by_role: dict[str, str] = field(default_factory=dict)
     path: Path | None = None
 
     def catalog(self):
@@ -251,7 +263,8 @@ def load_or_default(root) -> tuple[Config, str | None]:
 # --- parsing ----------------------------------------------------------------
 
 _TOP_KEYS = {"startup", "modes", "hibernate", "fleet", "crew", "env", "tmux",
-             "roles", "precedence", "governor", "session_budget"}
+             "roles", "precedence", "governor", "session_budget", "harness"}
+_HARNESS_KEYS = {"default", "by_role"}
 _STARTUP_KEYS = {"mode"}
 _HIB_KEYS = {"enabled", "max_quiet_minutes"}
 _TMUX_KEYS = {"socket"}
@@ -301,7 +314,11 @@ def _resolve(data: dict, path: Path) -> Config:
     # against what `[roles.*]` declares (GitHub #37). No ordering hazard: both
     # tables come out of the same already-parsed `data`.
     declared_roles = _roles(path, _table(path, data, "roles"))
+    harness_default, harness_by_role = _harness(
+        path, _table(path, data, "harness"), declared=set(declared_roles))
     return Config(mode=mode, modes=modes,
+                  harness_default=harness_default,
+                  harness_by_role=harness_by_role,
                   hibernate=_hibernate(path, _table(path, data, "hibernate")),
                   fleet=_fleet(path, _table(path, data, "fleet")),
                   crew=_crew(path, _table(path, data, "crew"),
@@ -314,6 +331,74 @@ def _resolve(data: dict, path: Path) -> Config:
                   session_budget=_session_budget(
                       path, _table(path, data, "session_budget")),
                   path=path)
+
+
+def _harness(path: Path, tbl: dict,
+             declared: set[str] | None = None) -> tuple[str | None, dict[str, str]]:
+    """[harness] — which agent PROGRAM, for cards that do not say.
+
+        [harness]
+        default = "codex"
+
+        [harness.by_role]
+        lead = "claude"
+        administrator = "claude"
+
+    WHY NOT `[roles.<name>] harness = …`, which is where a reader looks first:
+    that table is the deployment's TRAIT VOCABULARY, its axis names are validated
+    against the ontology, and a seventh key there is a typo rather than an
+    extension (_roles). Launch config is not a trait — it does not compose, does
+    not stack, and has nothing to rank — so mixing it in would mean either
+    loosening that validation for everything or special-casing one key. A
+    separate table costs one heading and keeps both meanings intact.
+
+    BOTH HALVES ARE VALIDATED, and each catches a different silent failure:
+
+      the harness NAME, against what this build implements. A typo in
+      `default` moves EVERY card in the fleet onto a program that does not
+      exist, and without this the first symptom is `st new` refusing agent by
+      agent with UnknownHarness — a fleet-wide config error reported as a
+      per-agent launch failure.
+
+      the ROLE NAME, against the built-in three plus whatever [roles.*]
+      declares. `[harness.by_role] leed = "codex"` would otherwise be accepted,
+      apply to nobody, and read as done — the silently-dropped key this whole
+      file refuses to have.
+    """
+    from . import harness as harness_mod
+    from .tier import VALID_ROLES
+    _refuse_unknown(path, "harness", tbl, _HARNESS_KEYS)
+    known = sorted(h.name for h in harness_mod.all_harnesses())
+
+    def _named(where: str, value) -> str:
+        if not isinstance(value, str):
+            raise ConfigError(f"{path}: [{where}] must be a harness name (a string), "
+                              f"got {type(value).__name__}")
+        if value not in known:
+            raise ConfigError(
+                f"{path}: [{where}] = {value!r} is not a harness this build "
+                f"implements; known: {', '.join(known)}. Refusing to default the "
+                f"fleet onto a program that cannot be launched.")
+        return value
+
+    default = tbl.get("default")
+    default = _named("harness] default", default) if default is not None else None
+
+    raw = tbl.get("by_role", {})
+    if not isinstance(raw, dict):
+        raise ConfigError(f"{path}: [harness.by_role] must be a table, got "
+                          f"{type(raw).__name__}")
+    allowed = set(VALID_ROLES) | set(declared or ())
+    by_role: dict[str, str] = {}
+    for role, value in raw.items():
+        if role not in allowed:
+            raise ConfigError(
+                f"{path}: [harness.by_role] {role!r} is not a role this deployment "
+                f"has; roles: {', '.join(sorted(allowed))}. Declare it as "
+                f"[roles.{role}] to use it here — a rule for a role nobody has "
+                f"applies to nobody and reads as applied.")
+        by_role[role] = _named(f"harness.by_role] {role}", value)
+    return default, by_role
 
 
 def _session_budget(path: Path, tbl: dict) -> SessionLimits:

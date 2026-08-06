@@ -969,7 +969,7 @@ def _default_settings(root: Path):
         # would have been handed a `.json` path for a program that reads
         # config.toml — a file that does not exist, so every codex launch would
         # refuse for a reason that had nothing to do with the card.
-        program = harness_mod.for_card(card)
+        program = harness_mod.for_card(card, root=root)
         for name in (program.agent_settings_name(card.name),
                      program.settings_name(card.role)):
             p = Path(root) / "settings" / name
@@ -2101,7 +2101,7 @@ def _cmd_role(a) -> int:
     try:
         plan = tier.role_set(_registry(a), a.agent, a.role,
                              reports=reports, dry_run=a.dry_run,
-                             catalog=_catalog(a))
+                             catalog=_catalog(a), root=a.root)
     except (LookupError, ValueError, CapabilityError) as e:
         # CapabilityError (aegis-w5l9): the new role needs a stop capability the
         # card's harness lacks. role_set raised it BEFORE writing, so this refusal
@@ -2124,7 +2124,8 @@ def _cmd_role(a) -> int:
     # never emit an artifact for a program nobody in this write asked for.
     by_harness: dict[str, set[str]] = {}
     for ag in plan.writes:
-        by_harness.setdefault(harness_mod.name_for(ag), set()).add(ag.role)
+        by_harness.setdefault(harness_mod.name_for(ag, root=a.root),
+                              set()).add(ag.role)
     for harness_name in sorted(by_harness):
         paths = _emit_role_settings(a.root, by_harness[harness_name],
                                     harness_name=harness_name)
@@ -2705,7 +2706,7 @@ def _anchor_harness(a, me: str) -> int:
     except LookupError as e:
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED
-    print(harness_mod.name_for(card))
+    print(harness_mod.name_for(card, root=a.root))
     return OK
 
 
@@ -3751,7 +3752,8 @@ def _cmd_roles(a) -> int:
     panes = _panes(a)
     rep = roles_mod.check(_registry(a),
                           emitted=lambda card: emitted_stop_directions(
-                              a.root, card.role, harness_mod.name_for(card)),
+                              a.root, card.role,
+                              harness_mod.name_for(card, root=a.root)),
                           live=lambda pane: live_wiring(pane, panes.cmdline),
                           catalog=_catalog(a))
     print()

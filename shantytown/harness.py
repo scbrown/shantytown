@@ -643,13 +643,48 @@ def get(name: str | None) -> Harness:
     return _HARNESSES[key]
 
 
-def for_card(card: Agent) -> Harness:
-    return get(card.harness)
+def for_card(card: Agent, root=None) -> Harness:
+    return get(name_for(card, root=root))
 
 
-def name_for(card: Agent) -> str:
+def name_for(card: Agent, root=None) -> str:
     """What harness IS this card's, as a string — including for a card that never
     said. This is what `st anchor --harness` prints, and it answers with the
     DEFAULT rather than blank: "claude" is the true answer for an unset field, and
-    an empty status-bar segment would read as "no harness"."""
-    return card.harness or DEFAULT
+    an empty status-bar segment would read as "no harness".
+
+    MOST SPECIFIC WINS: the card, then the deployment's rule for its ROLE, then
+    the deployment's fleet-wide default, then "claude"
+    (config._harness). Same shape as the trait model's precedence, because it is
+    the same question — who decided this, and how narrowly?
+
+    `root` is where the deployment's answer lives, so a caller that has no root
+    gets the card's own answer and the built-in default. That is a degradation to
+    the previous behaviour, never to a wider one — but it does mean the root has
+    to be THREADED to every surface that asks, not just the launcher: a gate that
+    resolves `claude` while the launcher resolves `codex` is the aegis-85ox
+    mismatch with a config file in the middle. The call sites are cli's resolver
+    and emitter, ClaudeRuntime (which holds its own root), and tier.role_set's
+    capability gate.
+    """
+    if card.harness:
+        return card.harness
+    return _deployment_harness(card.role, root) or DEFAULT
+
+
+def _deployment_harness(role: str | None, root) -> str | None:
+    """The deployment's [harness] answer for a role, or None if it never said.
+
+    load_or_default, never load: this resolves on the LAUNCH path and inside
+    hooks, and a config typo must surface as the config error at the top of a
+    command — not as a fleet that mysteriously reverted to Claude Code. An
+    unreadable file therefore means "the deployment did not say", which is what a
+    deployment with no file gets.
+    """
+    if root is None:
+        return None
+    from .config import load_or_default
+    cfg, _err = load_or_default(root)
+    if role and cfg.harness_by_role.get(role):
+        return cfg.harness_by_role[role]
+    return cfg.harness_default
