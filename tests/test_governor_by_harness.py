@@ -126,6 +126,19 @@ min_priority = 1
     assert gov.unconfigured(cfg.governor, "claude") is False
 
 
+def test_base_claude_and_codex_sibling_govern_both_harnesses(tmp_path):
+    """The first configuration an operator writes: base Claude remains a real
+    governor after adding a Codex sibling, not a false signal-lost alarm."""
+    cfg = _cfg(tmp_path, BASE + """
+[governor.by_harness.codex]
+source = "stub"
+stub_pct = 10.0
+metric = "codex:usage_utilization_pct:max"
+""")
+    assert gov.unconfigured(cfg.governor, "claude") is False
+    assert gov.unconfigured(cfg.governor, "codex") is False
+
+
 def test_a_single_harness_deployment_is_never_unconfigured(tmp_path):
     """No by_harness at all = the pre-existing world: one governor, one provider.
     Alarming there would fire on every deployment that predates this feature."""
@@ -219,12 +232,9 @@ def test_dispatch_gate_resolves_the_governor_for_the_target_card(monkeypatch):
         by_harness={})
     codex = gov.Policy(source="stub", stub_pct=10, tiers=(
         gov.Tier(at=50, min_priority=1),))
-    claude = gov.Policy(source="stub", stub_pct=90, tiers=(
-        gov.Tier(at=50, min_priority=1),))
-    base.by_harness.update({"claude": claude, "codex": codex})
+    base.by_harness["codex"] = codex
     governors = {
         "base": gov.Governor(base, gov.StubReader(90)),
-        "claude": gov.Governor(claude, gov.StubReader(90)),
         "codex": gov.Governor(codex, gov.StubReader(10)),
     }
     cards = [Agent(name="claire", role="worker", pane="p1", harness="claude"),
