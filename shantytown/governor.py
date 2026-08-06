@@ -2736,13 +2736,15 @@ def policy_for(policy: Policy, harness_name: str | None) -> Policy:
     return policy
 
 
-def unconfigured(policy: Policy, harness_name: str | None) -> bool:
+def unconfigured(policy: Policy, harness_name: str | None,
+                 default_harness: str = "claude") -> bool:
     """Is `harness_name` spending a budget NO governor in this config reads?
 
-    True only when the deployment is actually governing (tiers declared) AND
-    runs more than one harness AND this one has no entry. A single-harness
-    deployment is not unconfigured — its one governor reads its one provider,
-    which is every deployment before aegis-5ve1h.
+    The base policy is the governor for the deployment's DEFAULT harness, not a
+    sibling that applies to nobody once any by_harness entry exists.  A sibling
+    is needed only for every *other* harness.  Without this exception, the
+    first natural configuration — base Claude plus by_harness.codex — makes
+    every Claude card falsely report signal-lost.
 
     This is the predicate the call sites owe an alarm to. It exists as its own
     function, rather than inline at each site, because "which agents are
@@ -2751,7 +2753,8 @@ def unconfigured(policy: Policy, harness_name: str | None) -> bool:
     """
     if not policy.tiers or not policy.by_harness:
         return False
-    return bool(harness_name) and harness_name not in policy.by_harness
+    return (bool(harness_name) and harness_name != default_harness
+            and harness_name not in policy.by_harness)
 
 
 def _cap(spec, where: str) -> int | None:
