@@ -515,6 +515,11 @@ def build_parser() -> argparse.ArgumentParser:
                          "calls per agent per repo — this is the whole staleness "
                          "sweep in one command, instead of a hand-rolled loop "
                          "across directories")
+    cr.add_argument("--check-alert-keepers", metavar="RULE", type=Path,
+                    nargs="+",
+                    help="fail when a Prometheus alert rule has no keeper, names "
+                         "no roster card, or names a card that cannot work "
+                         "unattended. A stopped but launchable keeper is silent.")
 
     # aegis-fagvi: the roles/role footgun (plural-vs-singular) is consolidated
     # into ONE noun with verbs: `st roles {show|set|sync}`. The old `role` and
@@ -3015,6 +3020,8 @@ def _cmd_crew(a) -> int:
     # test_command_count — a new verb is a deliberate widening, this is not.)
     if getattr(a, "governor", False):
         return _crew_governor(a)
+    if rules := getattr(a, "check_alert_keepers", None):
+        return _check_alert_keepers(a, rules)
     panes = _panes(a)
     try:
         agents = _registry(a).all()
@@ -3372,6 +3379,88 @@ def _cmd_crew(a) -> int:
     if stale or unknown or bad_cards or role_drift:
         print()
     return OK
+
+
+def _check_alert_keepers(a, rules: list[Path]) -> int:
+    """Fail-loud ownership check for alert rules, without treating scale-down as a fault.
+
+    A keeper is a roster *ownership* declaration, not a promise that its pane is
+    running at this instant: intentional stops are expected to self-heal through
+    ``st tend``.  The durable bad states are instead (1) no label, (2) a label
+    that names no card, and (3) a card which cannot make unattended progress when
+    re-armed.  Reading ``panes`` here would turn normal right-sizing into a
+    permanent false red and invite a silence.
+
+    Templates contain Jinja and are therefore not necessarily YAML until
+    Ansible renders them.  This intentionally reads only the Prometheus rule
+    shape that survives rendering: an ``alert:`` stanza and its ``keeper:``
+    label.  It rejects missing labels rather than pretending a YAML parse of a
+    template proved ownership.
+    """
+    try:
+        agents = {agent.name: agent for agent in _registry(a).all()}
+    except Exception as e:
+        print(f"could not tell: roster unreadable: {e}", file=sys.stderr)
+        return CANNOT_TELL
+
+    findings = []
+    seen = 0
+    for rule_path in rules:
+        try:
+            lines = rule_path.read_text().splitlines()
+        except OSError as e:
+            print(f"could not tell: cannot read {rule_path}: {e}", file=sys.stderr)
+            return CANNOT_TELL
+
+        active = None
+        for lineno, line in enumerate(lines, start=1):
+            stripped = line.lstrip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            indent = len(line) - len(stripped)
+            if stripped.startswith("- alert:") or stripped.startswith("alert:"):
+                if active is not None:
+                    findings.extend(_keeper_findings(agents, rule_path, active))
+                name = (stripped.removeprefix("- ").removeprefix("alert:")
+                        .strip().strip("\"'"))
+                active = {"name": name, "line": lineno, "indent": indent,
+                          "keeper": None}
+                seen += 1
+                continue
+            if active is not None and indent <= active["indent"]:
+                findings.extend(_keeper_findings(agents, rule_path, active))
+                active = None
+            if active is not None and stripped.startswith("keeper:"):
+                active["keeper"] = stripped.removeprefix("keeper:").strip().strip("\"'")
+        if active is not None:
+            findings.extend(_keeper_findings(agents, rule_path, active))
+
+    if not seen:
+        print("could not tell: no alert stanzas found in supplied rule files", file=sys.stderr)
+        return CANNOT_TELL
+    if findings:
+        for finding in findings:
+            print(f"FAIL: {finding}")
+        print("Alert-keeper check FAILED — every alert needs a roster keeper that "
+              "can work unattended. Stopped but launchable keepers are permitted.")
+        return REFUSED
+    print(f"OK: {seen} alert rule(s) have roster keepers that can work unattended")
+    return OK
+
+
+def _keeper_findings(agents, rule_path: Path, alert) -> list[str]:
+    """Return the durable ownership defects for one parsed alert stanza."""
+    where = f"{rule_path}:{alert['line']} ({alert['name'] or 'unnamed alert'})"
+    keeper = alert["keeper"]
+    if not keeper:
+        return [f"{where}: missing keeper label"]
+    agent = agents.get(keeper)
+    if agent is None:
+        return [f"{where}: keeper {keeper!r} is not on the roster"]
+    if gaps := launchable.launch_gaps(agent):
+        return [f"{where}: keeper {keeper!r} cannot work unattended "
+                f"({', '.join(g.short for g in gaps)})"]
+    return []
 
 
 def _crew_states(agents, panes, runtime):
