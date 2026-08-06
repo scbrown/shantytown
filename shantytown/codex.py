@@ -91,6 +91,44 @@ CONFIG_FILE = "config.toml"
 # at emit time instead.
 MATCHERS_NOT_EMITTED = ("PreToolUse",)
 
+# HOW MUCH OF THE PROJECT DOC THE AGENT ACTUALLY GETS, and why this is not a
+# tuning knob but a correctness fix (aegis-ovffp).
+#
+# codex reads AGENTS.md from its cwd and TRUNCATES IT AT `project_doc_max_bytes`,
+# whose default is 32 KiB. MEASURED on codex-cli 0.146.1 with `codex debug
+# prompt-input`, which renders the model-visible prompt at zero model cost:
+#
+#     crew rulebook on disk                          65367 B
+#     delivered to the model at the default          32690 B   (50% LOST)
+#     a canary on the last line                      ABSENT
+#     any truncation notice, in the prompt or stderr NONE
+#
+# It cuts MID-WORD ("`~/gt/aegis` IS NOT TH") and says nothing to anybody. That
+# is the failure mode this repo keeps paying for — a thing that reads as wired
+# and is half-inert — and it is worse than the stale AGENTS.md that prompted the
+# bead, because a stale file is at least a file somebody can diff. Nothing on
+# either side of this reports a byte count.
+#
+# The number is deliberately far above the rulebook rather than snug to it: the
+# rulebook GROWS (it grew the day this was measured), and a snug limit means the
+# newest rule — the one added because something just went wrong — is the first
+# one silently dropped. selfcheck asserts headroom rather than trusting it.
+PROJECT_DOC_MAX_BYTES = 262144
+
+# ⚠️ NOT EMITTED, and this one is a MEASUREMENT rather than a caution:
+# `project_doc_fallback_filenames = ["CLAUDE.md"]` is real and it works — with
+# AGENTS.md absent, codex reads CLAUDE.md in full. But it is consulted ONLY when
+# AGENTS.md is ABSENT: measured with a stale AGENTS.md beside a configured
+# fallback, the STALE FILE WINS and CLAUDE.md is never read. So it cannot be the
+# mechanism that keeps codex and claude on one rulebook — `bd init` regenerates
+# AGENTS.md (`--skip-agents` exists precisely because it writes one), and the day
+# it does, the fallback goes quiet and the agent is back on the generic file with
+# nothing announcing the change. The rulebook is delivered by AGENTS.md being a
+# SYMLINK to CLAUDE.md instead: one inode, so there is no second file to drift.
+# Emitting a fallback here as "belt and braces" would be decoration — it can
+# never fire while the symlink is intact, and it cannot save us when it is not.
+FALLBACK_NOT_EMITTED = ("project_doc_fallback_filenames",)
+
 
 def settings_for_role(role: str, root=None) -> dict:
     """The codex config.toml a role needs, as a dict (render() turns it to TOML).
@@ -105,13 +143,24 @@ def settings_for_role(role: str, root=None) -> dict:
 
     Call-time import, same one-directional reason as harness.py's: runtime
     imports harness imports codex, never back.
+
+    `project_doc_max_bytes` is a ROOT scalar, not a hook, and it is here rather
+    than left to the operator because the thing it fixes is invisible: without it
+    the agent is handed half its rulebook and neither the agent nor the operator
+    is told (PROJECT_DOC_MAX_BYTES). It merges the same way everything else does —
+    merge_one_level takes emitted-wins per key — so an operator who has set their
+    own is overridden on `roles set`, which is the same contract the hook events
+    already carry and the reason `roles set` exists.
     """
     from .runtime import role_stop_hooks, session_start_hooks
     return {
+        # Root scalars first: TOML puts bare keys before any [table] header, and
+        # dumps() emits scalars ahead of children for exactly that reason.
+        "project_doc_max_bytes": PROJECT_DOC_MAX_BYTES,
         "hooks": {
             "SessionStart": session_start_hooks(),
             "Stop": [{"hooks": role_stop_hooks(role, root=root)}],
-        }
+        },
     }
 
 
