@@ -1,0 +1,225 @@
+# Harnesses — running more than one agent program
+
+> Claude Code is **a** harness, not the shape of the world. Two ship: `claude` (the default) and
+> `codex`. This is the setup and reference doc for both — what to put on a card, what to put in
+> config, what lands on disk, and what does **not** work yet.
+>
+> For *why* the interface looks like this, see [`adapters.md`](adapters.md). This doc is the
+> operator's half.
+
+## The one-minute version
+
+```toml
+# <root>/shantytown.toml
+[harness]
+default = "codex"            # every card that does not say otherwise
+
+[harness.by_role]
+lead = "claude"              # …except these roles
+administrator = "claude"
+```
+
+```json
+// or per card — <root>/crew/<agent>.json
+{ "role": "worker", "harness": "codex", "pane": "st-dearing" }
+```
+
+**Most specific wins: card → role → fleet → `claude`.** A card that names its program is never
+moved by a config written afterwards; the table answers for the silent. A resolved default is
+never written back onto the card — that would be a claim nobody made, and it would outlive the
+config being changed back.
+
+`st anchor <agent> --harness` prints the **resolved** answer, which is what the agent will
+actually run.
+
+---
+
+## Setting up codex on a host
+
+### 1. Log in **before** you emit
+
+```bash
+codex login          # or: printenv OPENAI_API_KEY | codex login --with-api-key
+```
+
+Order matters, and this is the step that bites. `CODEX_HOME` is not just where `config.toml`
+lives — it is also where codex keeps `auth.json`. shantytown points each role at a home *inside
+the store*, so `st roles set` **symlinks** your real `auth.json` into it. Emit before you log in
+and there is nothing to link; you get an agent that starts, looks live, and cannot call a model.
+
+`st roles set` says so at the time rather than leaving you to find out:
+
+```
+⚠ no codex auth.json found — agents using <root>/settings/codex/worker will launch
+  UNAUTHENTICATED. Run `codex login` (or set CODEX_HOME to a logged-in home before
+  emitting) and re-run `st roles set`.
+```
+
+A **symlink, never a copy**: the token stays in the one place you already manage, one
+`codex login` refreshes every agent at once, and the store — a git repo in every deployment we
+know of — never holds a credential.
+
+### 2. Declare it
+
+Either the config table above, or `harness = "codex"` on the cards you want.
+
+### 3. Emit
+
+```bash
+st roles set <agent> worker
+```
+
+On a mixed crew this writes one artifact per **(harness, role)** pair — `worker` on Claude Code
+and `worker` on codex are two different files, because which one a card reads is decided by the
+program it runs:
+
+```
+<root>/settings/worker.settings.json            claude, all claude workers
+<root>/settings/administrator.settings.json     claude
+<root>/settings/codex/worker/config.toml        codex, all codex workers
+<root>/settings/codex/worker/auth.json          → symlink to your ~/.codex/auth.json
+```
+
+The per-agent override still works and is harness-aware: `codex/agent-<name>/config.toml` beats
+the role's file when it exists.
+
+### 4. Launch
+
+```bash
+st new <agent> --dry-run     # look at the composed line first
+st new <agent>
+```
+
+```
+cd /w && SHANTY_ROOT=<root> CODEX_HOME=<root>/settings/codex/worker \
+SHANTY_AGENT=dearing BOBBIN_ROLE=worker BEADS_ACTOR=dearing ST_ROLES=worker \
+codex --dangerously-bypass-hook-trust
+```
+
+`--dangerously-bypass-hook-trust` is a **default** here, and it is the only `dangerously-` flag in
+this repo that is not opt-in per card. It does not widen what the model may do — that is
+`--dangerously-bypass-approvals-and-sandbox`, which stays per card via `dangerous: true`. It says
+*"run the hooks in the home I wrote myself"*. Without it codex declines to run any hook it has no
+persisted trust record for, and the role's whole stop routing would be present, wired, and inert.
+
+### 5. Check it landed
+
+```bash
+st roles --check          # reads the routing back OFF DISK, in whichever format
+st anchor <agent> --events
+```
+
+`hooks: ok` here means the artifact that card will actually read carries the stop directions its
+position in the tier requires. It is a readback, not a claim by the emitter.
+
+---
+
+## What works across a mixed fleet
+
+**The tier is program-blind.** A codex worker sends its stop event with
+`python -m shantytown.stop_event send` and a Claude Code lead drains it — those hook commands are
+shantytown's own CLI, not either program's. So a codex worker under a claude lead under a claude
+administrator routes exactly like an all-Claude-Code crew, and the reverse works too.
+
+**A codex card can hold any role, including lead and administrator.** codex's Stop hook parses
+`{"decision":"block","reason":"…"}` (or exit 2 with the reason on stderr) and feeds the reason back
+to the model as a continuation prompt — the capability the tier gates on. This reverses what this
+repo said before; the evidence, and the cost of the reversal, are in
+[`adapters.md`](adapters.md#what-the-second-implementation-actually-cost--the-seam-codex-moved).
+
+**Card fields honoured on codex:** `role`, `reports_to`, `workspace`, `model` (→ `--model`),
+`dangerous` (→ `--dangerously-bypass-approvals-and-sandbox`), `roles`/`domain` (carried as
+`ST_ROLES` / `ST_ROLE_DOMAIN`, opaquely).
+
+**`chrome: true` is REFUSED on codex**, not ignored — there is no browser integration to enable,
+and a card claiming a capability its process does not have is the same class of failure as
+launching the wrong program:
+
+```
+$ st new ellie
+  refused: card 'ellie' sets chrome=True, and harness 'codex' has no browser
+           integration to enable. …
+$ echo $?
+1
+```
+
+---
+
+## What does NOT work yet
+
+Four gaps, named because a gap you can see is cheaper than one you discover. None of them is a
+TODO with no shape — each says what would close it.
+
+| gap | what you see | why it is not guessed |
+|---|---|---|
+| **`st new` liveness verify** | exit **2, could-not-tell**, for a codex agent that is fine. The agent *is* launched. | The ready-UI markers are Claude Code's literal screen text. A marker nobody has watched pass is not a marker — this repo has paid for guessed ones twice. Closing it needs a `tmux capture-pane` off a live codex agent. |
+| **The matcher-scoped guards** | no hank edit guard, no `SHANTY_BASH_GUARD`, no `SHANTY_MCP_GUARD` on a codex agent | A matcher is a claim about the host program's **tool names** (`"Bash"`, `"mcp__.*"` are Claude Code's). A guard with the wrong vocabulary does not fire *and reads as wired* — measured once already (aegis-ac5x/18e0). |
+| **The workspace-delivered hooks** | no metrics capture, no untracked-work nudge, no stale guard | Those ride `provision.py`'s `<ws>/.claude/settings.local.json`, which is Claude Code's file by construction. Needs a delivery channel measured against codex, not this one aimed at it. |
+| **The codex version floor** | nothing — and that is the problem | codex's hooks system is recent. On an older codex the Stop hook never runs, so a lead accepts the role and absorbs nothing, *silently*. `st` cannot check this from inside the gate (`codex --version` at role-set time measures a binary the agent may not even launch with); it belongs in `st doctor` as a tool row, and is not built. |
+
+**The version floor is the one to check by hand before you trust a codex lead.** `codex --help`
+should list `--dangerously-bypass-hook-trust`; if it does not, your codex predates the hooks system
+and codex cards should stay workers on that host.
+
+---
+
+## Reference
+
+### Precedence
+
+| what says it | where | beats |
+|---|---|---|
+| the card | `harness` on `<root>/crew/<agent>.json`, or `[crew.<name>] harness` | everything |
+| the role | `[harness.by_role] <role> = "…"` | the fleet default |
+| the fleet | `[harness] default = "…"` | the built-in default |
+| the built-in | — | `claude` |
+
+Both config halves are validated **at load**, and each catches a different silent failure. An
+unimplemented harness name is refused, because a typo in `default` moves every card in the fleet
+and would otherwise surface as `st new` failing agent by agent — a fleet-wide config error reported
+as a per-agent launch failure. A role nobody has is refused for the reason every table in that file
+refuses unknown keys: a rule that applies to nobody reads as applied.
+
+A card naming a harness this build does not implement is **refused**, never quietly replaced with
+the default — a card that asks for `opencode` and silently gets `claude` is a launch that succeeded
+at being the wrong thing.
+
+### The two harnesses, side by side
+
+| | `claude` | `codex` |
+|---|---|---|
+| artifact | `<role>.settings.json` | `codex/<role>/config.toml` |
+| format | JSON, Claude Code's hooks schema | TOML, `[hooks]` (same matcher-group shape) |
+| how the launch points at it | `--settings <path>` | `CODEX_HOME=<dir>` (absolute, always) |
+| blocking stop hooks | yes | yes |
+| per-card permission bypass | `--dangerously-skip-permissions` | `--dangerously-bypass-approvals-and-sandbox` |
+| model flag | `--model` | `--model` |
+| browser | `--chrome` / `--no-chrome` | none — `chrome: true` is refused |
+| pane-reading (is it live?) | measured | **not measured** — see the gaps above |
+
+Everything in the codex column was read out of `openai/codex` `main` on 2026-08-06, with the source
+file named beside each fact in [`shantytown/codex.py`](../shantytown/codex.py). There was no codex
+binary on the machine that wrote it, and a guess about another CLI's flags is exactly the kind of
+code that looks shipped and has never run.
+
+### Editing an emitted artifact by hand
+
+You may. `st` owns the hook **events** it emits and replaces those wholesale on the next
+`roles set` — a stale stop direction must never survive a rewrite — and everything else in the file
+is yours and is preserved. That includes codex's `[hooks.state]` trust ledger, and anything you add
+alongside (`model`, `shell_environment_policy`, an MCP server).
+
+One cost specific to TOML: the merge is a parse-and-re-emit, so **comments and key order do not
+survive** a re-emission. The alternative — surgically editing your TOML as text — is a parser we
+would have to be right about every time, and being wrong there corrupts the file that decides how
+the agent runs.
+
+### Writing a third harness
+
+`shantytown/harness.py` and one card. The interface is in
+[`adapters.md`](adapters.md#what-the-second-implementation-actually-cost--the-seam-codex-moved);
+`ClaudeHarness` and `CodexHarness` are the two worked examples, and `tests/test_codex_harness.py`
+separates *claims about the program* from *claims about the seam*, which is the split to copy.
+
+Nothing in the tier, the emitter, the resolver or the capability gate should need to change. If it
+does, that is the leak, and it is the signal the two-implementations rule exists to produce.
