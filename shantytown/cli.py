@@ -104,6 +104,7 @@ from . import scaffold
 from . import traits as traits_mod
 from . import triage as triage_mod
 from .deployment import deployment_default, resolve_root, root_note
+from .tmux import PaneNotAgent
 from .dispatch import (Dispatcher, TriageRefused, SendUnverified,
                        DispatchedButUntracked, AlreadyAssigned, Blocked, Closed,
                        HasOpenBlocker,
@@ -2521,7 +2522,18 @@ def _cmd_inbox(a) -> int:
         print(f"  could not tell: pane {agent.pane} is not there (agent down?)",
               file=sys.stderr)
         return CANNOT_TELL
-    panes.send(agent.pane, msg)
+    try:
+        panes.send(agent.pane, msg)
+    except PaneNotAgent as e:
+        # THE HAZARD THIS EXISTS FOR (aegis-ikj4t): its runtime has exited, so
+        # the pane is a login shell and typing here would EXECUTE the message as
+        # a shell command. Observed live — another agent's escalation text and an
+        # ack recipe ran in bash. Nothing destructive ran by luck of the wording,
+        # not by design. Refuse, and say the message was NOT delivered.
+        print(f"  refused: {e}", file=sys.stderr)
+        print(f"  remedy: st new {agent.name}, or use `st inbox -d` so the "
+              f"message survives until it is back.", file=sys.stderr)
+        return REFUSED
     # READ IT BACK. Sending the keystrokes is not delivering the message, and
     # this line reported the first as if it were the second (aegis-wcjuz): a
     # long body absorbed as a paste sits in the input box unsubmitted while the
@@ -2962,6 +2974,15 @@ def _cmd_go(a) -> int:
         # The item is untouched and stays dispatchable — this is a NOT NOW, not a
         # rejection, and the message says on what reading and at what threshold.
         print(f"  refused: {e}", file=sys.stderr)
+        return REFUSED
+    except PaneNotAgent as e:
+        # The pane is a SHELL, not a runtime — its agent has exited (aegis-ikj4t).
+        # Nothing was typed and nothing was written, so the item stays
+        # dispatchable. Refusing is the whole point: typing a dispatch into bash
+        # would EXECUTE it, and the sender would be told the work was assigned.
+        print(f"  refused: {e}", file=sys.stderr)
+        print(f"  remedy: st new {a.agent}   (then re-run this dispatch)",
+              file=sys.stderr)
         return REFUSED
     except TriageRefused as e:
         # #1: pane not ready (in-flight/wedged/high-context). No write, no send.

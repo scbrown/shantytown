@@ -44,6 +44,7 @@ from typing import NamedTuple
 
 from . import triage as triage_mod
 from .attribution import ST_TEND, attribute
+from .tmux import PaneNotAgent
 from .protocols import Agent
 from .runtime import asks_a_question, auth_expired
 from .tier import route_stop
@@ -105,7 +106,13 @@ def wake_recipient(reg, panes, worker: str, message: str) -> str | None:
     # ATTRIBUTED (aegis-5vxmz). This lands in a coordinator's pane in the
     # imperative — "⚠ <worker> is BLOCKED and needs you" — at the same prompt
     # the operator types at. Unsigned, it reads as Stiwi telling them to go look.
-    panes.send(recipient.pane, attribute(message, ST_TEND))
+    try:
+        panes.send(recipient.pane, attribute(message, ST_TEND))
+    except PaneNotAgent:
+        # Its runtime has exited: the pane is a shell and typing here would
+        # EXECUTE this notification (aegis-ikj4t). Not notified — which is
+        # exactly what None already means to every caller.
+        return None
     return recipient.name
 
 
@@ -246,7 +253,10 @@ def push_to_own_pane(reg, panes, agent: str, message: str) -> str | None:
     # messages that also ride this helper hand out work. Both are exactly the
     # kind of instruction an agent would obey without question BECAUSE it looked
     # like it came from the operator.
-    panes.send(card.pane, attribute(message, ST_TEND))
+    try:
+        panes.send(card.pane, attribute(message, ST_TEND))
+    except PaneNotAgent:
+        return None
     return agent
 
 
@@ -495,7 +505,10 @@ def push_to_admin(reg, panes, message: str) -> str | None:
         return None
     if not card.pane or not panes.exists(card.pane):
         return None
-    panes.send(card.pane, attribute(message, ST_TEND))   # aegis-5vxmz
+    try:
+        panes.send(card.pane, attribute(message, ST_TEND))   # aegis-5vxmz
+    except PaneNotAgent:
+        return None
     return admin
 
 

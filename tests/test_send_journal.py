@@ -87,13 +87,22 @@ def test_tmux_send_journals_before_delivering(tmp_path, monkeypatch):
     calls = []
 
     def fake_run(cmd, **kw):
-        # The attempt must already be on disk by the FIRST subprocess call.
-        assert os.path.exists(os.path.join(str(tmp_path), "logs", "sends.log")), \
-            "journal must be written before send-keys"
-        calls.append(cmd)
+        # SEND-KEYS ONLY. send() now also asks tmux what the pane is running
+        # before it types, so that the dead-pane guard can refuse a shell
+        # (aegis-ikj4t) — a read-only query that puts no keystroke in the pane.
+        # The contract this test pins is about KEYSTROKES: by the time any text
+        # is typed, the attempt is already on disk. Counting every subprocess
+        # call instead would make the assertion about how many times st talks to
+        # tmux, which is not the claim.
+        if "send-keys" in cmd:
+            assert os.path.exists(
+                os.path.join(str(tmp_path), "logs", "sends.log")), \
+                "journal must be written before send-keys"
+            calls.append(cmd)
 
         class R:
             returncode = 0
+            stdout = ""
         return R()
 
     monkeypatch.setenv("SHANTY_ROOT", str(tmp_path))

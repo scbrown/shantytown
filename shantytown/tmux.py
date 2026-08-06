@@ -35,20 +35,6 @@ import time
 # agent never wrote into its turn — the aegis-apz9 injection, self-inflicted by
 # the tool built to prevent it. Adding either to this set is not a tweak, it is
 # the reintroduction of that hole; test_input_box.py asserts they are missing.
-# How much literal text goes into ONE `send-keys -l`, and the gap between
-# chunks. A single large write is read by a TUI as a PASTE — measured on codex
-# 0.146.1: 1000 chars in one write types normally, 1004 becomes a
-# `[Pasted Content N chars]` placeholder that the trailing Enter does NOT commit,
-# and 2000 chars sent as two writes of 1000 types normally. So the trigger is the
-# SIZE OF ONE WRITE and the total message length is irrelevant.
-#
-# 512 is deliberately half the measured boundary. That boundary belongs to
-# somebody else's terminal handling and can move; the price of being conservative
-# is a few more subprocess calls on a long message, and the price of being wrong
-# is a message that is never delivered while the sender is told it was.
-_SEND_CHUNK = 512
-_SEND_CHUNK_GAP_S = 0.05
-
 CONTROL_KEYS = frozenset({
     "C-u",     # kill to line start — the clear
     "C-k",     # kill to line end
@@ -63,6 +49,20 @@ CONTROL_KEYS = frozenset({
 # — see Tmux.option. Enter and Tab are absent here for the same reason and with
 # the same force, and they are not needed: a bare digit selects AND confirms.
 OPTION_KEYS = frozenset("123456789")
+
+# How much literal text goes into ONE `send-keys -l`, and the gap between
+# chunks. A single large write is read by a TUI as a PASTE — measured on codex
+# 0.146.1: 1000 chars in one write types normally, 1004 becomes a
+# `[Pasted Content N chars]` placeholder that the trailing Enter does NOT commit,
+# and 2000 chars sent as two writes of 1000 types normally. So the trigger is the
+# SIZE OF ONE WRITE and the total message length is irrelevant.
+#
+# 512 is deliberately half the measured boundary. That boundary belongs to
+# somebody else's terminal handling and can move; the price of being conservative
+# is a few more subprocess calls on a long message, and the price of being wrong
+# is a message that is never delivered while the sender is told it was.
+_SEND_CHUNK = 512
+_SEND_CHUNK_GAP_S = 0.05
 
 
 def _journal_send(pane: str, text: str) -> None:
@@ -221,6 +221,45 @@ class OwnershipError(RuntimeError):
     """st refused to reap a session it did not launch (no _OWNED_ENV marker)."""
 
 
+class PaneNotAgent(RuntimeError):
+    """st refused to type a message into a pane that is a SHELL, not an agent.
+
+    THE HAZARD (aegis-ikj4t). When a runtime exits, its tmux pane falls back to
+    the login shell. st keeps routing to the pane, so every inbound message is
+    EXECUTED BY BASH. Observed live: another agent's escalation text and an ack
+    recipe ran as shell commands. Nothing destructive ran by luck of the wording,
+    not by design.
+
+    This is the aegis-0214 hazard (message bodies execute) through a different
+    door. 0214 is an AUTHOR quoting badly; here the sender is correct, the body
+    is correct, and the RECIPIENT silently stopped being an agent — so no amount
+    of care at the writing end prevents it.
+
+    A REFUSAL, not a warning, and raised rather than returned: a caller that
+    ignores a return value delivers into bash and reports success, which is the
+    behaviour being fixed. Callers that message agents catch this and say the
+    message was not delivered.
+    """
+
+
+# Foreground commands that mean "this pane is a shell, not a runtime".
+#
+# A POSITIVE LIST, never "anything that is not a known runtime": st does not own
+# every program a pane may legitimately run, and refusing everything unrecognised
+# would break messaging for a harness nobody has told this file about. Unknown
+# stays DELIVERABLE — the check can only ever refuse what it positively
+# identifies as a shell.
+#
+# MEASURED, and this is the false positive that would have made the guard
+# unshippable: an agent RUNNING A SHELL COMMAND does not look like this. While
+# executing a bash tool call, `shanty-franklin` reported `claude` — the runtime
+# stays the pane's foreground process because the tool's subprocess never takes
+# the terminal. Live crew panes read `claude` and `node`; a pane whose runtime
+# had exited read `bash`.
+SHELL_COMMANDS = frozenset({"bash", "sh", "zsh", "fish", "dash", "ksh", "csh",
+                            "tcsh", "-bash", "-sh", "-zsh"})
+
+
 class Tmux:
     def __init__(self, socket: str | None = None) -> None:
         # Explicit arg wins; else the env; else bare tmux (default server).
@@ -377,7 +416,44 @@ class Tmux:
         r = subprocess.run(self._cmd(*args), capture_output=True, text=True)
         return r.stdout if r.returncode == 0 else ""
 
-    def send(self, pane: str, text: str) -> None:
+    def foreground(self, pane: str) -> str | None:
+        """The pane's foreground command, or None if it cannot be read.
+
+        None is CANNOT TELL and never "it is a shell" — the guard below may only
+        refuse on a POSITIVE identification, so a tmux we could not ask leaves
+        messaging exactly as it was.
+        """
+        r = subprocess.run(
+            self._cmd("list-panes", "-a", "-F",
+                      "#{session_name} #{pane_current_command}"),
+            capture_output=True, text=True)
+        if r.returncode != 0:
+            return None
+        for ln in r.stdout.splitlines():
+            parts = ln.split(None, 1)
+            if len(parts) == 2 and parts[0] == pane:
+                return parts[1].strip()
+        return None
+
+    def send(self, pane: str, text: str, *, allow_shell: bool = False) -> None:
+        # REFUSE A SHELL (aegis-ikj4t). A dead agent's pane is a login shell, and
+        # st keeps routing to it — so every inbound message is executed by bash.
+        # The check is here, at the one place st types into a pane, because the
+        # hazard belongs to typing and not to any one caller.
+        #
+        # `allow_shell` is for the LAUNCHER, which types `cd … && claude …` into
+        # a fresh bash pane on purpose. That is the whole reason this is a
+        # parameter rather than an unconditional guard: a blanket refusal here
+        # would make st unable to start an agent at all. Opting in is explicit
+        # and greppable, so the exception stays visible instead of becoming the
+        # rule.
+        if not allow_shell:
+            fg = self.foreground(pane)
+            if fg is not None and fg in SHELL_COMMANDS:
+                raise PaneNotAgent(
+                    f"pane {pane} is running {fg!r}, not an agent runtime — its "
+                    f"agent has exited. NOT DELIVERED: typing here would execute "
+                    f"the message as a shell command.")
         # -l sends the text literally; the separate Enter is the submit.
         # This is the entire dispatch mechanism. gt nudge's own help says so:
         # "Send directly via tmux send-keys."
@@ -636,7 +712,14 @@ class NullPanes:
 
     def __init__(self, screen: str = "", drops: bool = False,
                  live: set | None = None, owned: set | None = None,
-                 cmdlines: dict | None = None) -> None:
+                 cmdlines: dict | None = None,
+                 foreground_cmd: str = "claude") -> None:
+        # What the pane's foreground process is, so a test can model the DEAD
+        # pane the send guard exists for (aegis-ikj4t). Defaults to a runtime
+        # rather than a shell: the overwhelming majority of tests model a live
+        # agent, and a double that refused every send by default would make the
+        # guard look correct by breaking everything that uses it.
+        self.foreground_cmd = foreground_cmd
         self.sent = []
         # Control keys are recorded SEPARATELY from sent text: a test asserting
         # "no Enter, no Tab" must be able to see every key that reached the pane,
@@ -680,7 +763,16 @@ class NullPanes:
         # answer UNKNOWN for, not idle).
         return self.screen
 
-    def send(self, pane: str, text: str) -> None:
+    def send(self, pane: str, text: str, *, allow_shell: bool = False) -> None:
+        # SAME REFUSAL AS THE REAL ADAPTER, and duplicated for the same reason
+        # control()'s allowlist is: a double that delivered where the shipped
+        # path refuses would let a test prove messages reach a dead pane safely
+        # while production refuses them — the double has to be as strict as the
+        # thing it stands in for, or the assertion is theatre.
+        if not allow_shell and self.foreground_cmd in SHELL_COMMANDS:
+            raise PaneNotAgent(
+                f"pane {pane} is running {self.foreground_cmd!r}, not an agent "
+                f"runtime — NOT DELIVERED.")
         self.sent.append((pane, text))
         # A real pane shows what was just typed into it, so capture() must
         # reflect the send — otherwise this double models a pane that silently
