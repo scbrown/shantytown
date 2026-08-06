@@ -470,6 +470,81 @@ def test_the_markers_are_DERIVED_from_the_registry_not_listed_in_the_predicate()
     assert CLAUDE.picker_markers == ()      # claude's live on ClaudeRuntime
 
 
+def test_the_workspace_is_recorded_TRUSTED_so_no_dialog_ever_blocks_launch(tmp_path):
+    """THE DEATH THIS PREVENTS. codex gates an unseen directory behind a blocking
+    two-option dialog whose option 2 is `No, quit`. An agent launched into it is
+    NOT running, while every check reading the pane's PROCESS says it is; a
+    dispatch then types into the picker, Enter resolves it, codex exits, and the
+    pane falls back to a login shell that executes all subsequent fleet traffic.
+    Measured end to end: two agents died exactly that way."""
+    cfg = tmp_path / "codex" / "lead" / codex.CONFIG_FILE
+    cfg.parent.mkdir(parents=True)
+    cfg.write_text(codex.render(codex.settings_for_role("lead", root=str(tmp_path))))
+    CODEX.provision(str(cfg), root=str(tmp_path), workspaces=["/home/x/crew/dee"])
+    data = tomllib.loads(cfg.read_text())
+    assert data["projects"]["/home/x/crew/dee"]["trust_level"] == "trusted"
+    # and the hooks it was written with are still there — trust is added BESIDE
+    # the artifact, never instead of it.
+    assert codex.stop_directions(cfg.read_text()) == {"send", "drain"}
+
+
+def test_recording_trust_is_IDEMPOTENT_and_does_not_rewrite_the_file(tmp_path):
+    """render() is a parse-and-re-emit, so it drops an operator's comments and
+    key order. Spending that on every `roles set` when there was nothing to add
+    would make a fix that prevents one silent loss cause a different one."""
+    cfg = tmp_path / codex.CONFIG_FILE
+    cfg.write_text('# operator comment\nproject_doc_max_bytes = 262144\n\n'
+                   '[projects."/home/x/ws"]\ntrust_level = "trusted"\n')
+    before = cfg.read_text()
+    CODEX.provision(str(cfg), root=str(tmp_path), workspaces=["/home/x/ws"])
+    assert cfg.read_text() == before, "already-trusted config was rewritten"
+    assert "# operator comment" in cfg.read_text()
+
+
+def test_an_unparseable_config_is_NOT_clobbered(tmp_path):
+    """A config we cannot read is one we must not rewrite — we would be guessing
+    at the operator's file, and unlike the emission there is nothing here that
+    has to happen regardless."""
+    cfg = tmp_path / codex.CONFIG_FILE
+    cfg.write_text("this is not = = valid toml [[[\n")
+    before = cfg.read_text()
+    CODEX.provision(str(cfg), root=str(tmp_path), workspaces=["/home/x/ws"])
+    assert cfg.read_text() == before
+
+
+def test_trust_records_do_NOT_disturb_an_operators_other_project_settings():
+    """An operator may carry other per-project keys. This records trust and
+    states nothing else about their directory."""
+    existing = ('[projects."/home/x/ws"]\nmine = "kept"\n')
+    out = tomllib.loads(codex.trust_projects(existing, ["/home/x/ws"]))
+    assert out["projects"]["/home/x/ws"]["mine"] == "kept"
+    assert out["projects"]["/home/x/ws"]["trust_level"] == "trusted"
+
+
+def test_claude_ignores_workspaces_because_it_answers_its_dialog_at_LAUNCH(tmp_path):
+    """Claude Code's folder-trust dialog is answered by the launcher against
+    TRUST_MARKERS, not recorded in its settings file — so there is nothing to
+    write, and writing something would be inventing a mechanism it does not have."""
+    p = tmp_path / "settings.json"
+    p.write_text("{}")
+    assert CLAUDE.provision(str(p), root=str(tmp_path),
+                            workspaces=["/home/x/ws"]) == []
+    assert p.read_text() == "{}"
+
+
+def test_a_roles_config_carries_only_ITS_OWN_agents_workspaces(tmp_path):
+    """The artifact is per (harness, role); the trust record is per WORKSPACE,
+    which is per AGENT. Emitting every workspace into every role's home would
+    record trust for directories those agents never open."""
+    cfg = tmp_path / codex.CONFIG_FILE
+    cfg.write_text("")
+    CODEX.provision(str(cfg), root=str(tmp_path),
+                    workspaces=["/home/x/a", "/home/x/b"])
+    data = tomllib.loads(cfg.read_text())
+    assert set(data["projects"]) == {"/home/x/a", "/home/x/b"}
+    assert "/home/x/c" not in data["projects"]
+
+
 def test_the_operator_keeps_everything_st_did_not_emit():
     """Same merge rule as Claude Code's (harness.merge_one_level), one format
     over — including `[hooks.state]`, which is codex's own trust ledger and
@@ -594,6 +669,51 @@ def test_role_set_emits_the_artifact_the_CARD_will_actually_read(tmp_path, capsy
         "emitted Claude Code's artifact for a codex card"
     # and the card kept its program (the #9 bug, one field over)
     assert FilesRegistry(root / "crew").get("ada").harness == "codex"
+
+
+def test_role_set_records_the_cards_workspace_as_TRUSTED(tmp_path):
+    """THE SAME TRAP AS THE TEST ABOVE, ONE FIELD OVER, and it caught me exactly
+    as it caught whoever wrote that one.
+
+    plan.writes carries FRESH Agents built from what role_set is changing, so a
+    card's `workspace` is None on the plan while being correct on disk. My first
+    version of this fix read the workspace off the plan: it recorded trust for
+    nothing, emitted no error, and the trust dialog still appeared. A fix that
+    changes no behaviour and reports success is the shape of the defect it was
+    written to close, so the workspace is read back off the REGISTRY after the
+    cards are written — what the launch will actually use.
+
+    Without the trust record, codex blocks on 'Do you trust the contents of this
+    directory?' — a picker whose option 2 is `No, quit` — and a dispatch answers
+    it, killing the agent and leaving a shell that executes fleet traffic."""
+    root = tmp_path / ".shanty"
+    (root / "crew").mkdir(parents=True)
+    ws = tmp_path / "crew" / "ada"
+    (root / "crew" / "ada.json").write_text(json.dumps(
+        {"role": "worker", "harness": "codex", "pane": "crew-ada",
+         "workspace": str(ws)}))
+    assert cli.main(["--root", str(root), "roles", "set", "ada", "worker"]) == cli.OK
+    cfg = root / "settings" / "codex" / "worker" / "config.toml"
+    data = tomllib.loads(cfg.read_text())
+    assert data.get("projects", {}).get(str(ws), {}).get("trust_level") == "trusted", (
+        "the card's workspace was not recorded as trusted — an agent launched "
+        "there stops on codex's directory-trust dialog and a dispatch can answer "
+        "it as 'No, quit'")
+    # the artifact it rides on is still intact
+    assert codex.stop_directions(cfg.read_text()) == {"send"}
+
+
+def test_a_claude_card_gets_NO_projects_block(tmp_path):
+    """The trust record is codex's mechanism. Writing one into Claude Code's
+    settings would be inventing a mechanism it does not have — its folder-trust
+    dialog is answered at launch against TRUST_MARKERS."""
+    root = tmp_path / ".shanty"
+    (root / "crew").mkdir(parents=True)
+    (root / "crew" / "bob.json").write_text(json.dumps(
+        {"role": "worker", "pane": "crew-bob", "workspace": str(tmp_path / "w")}))
+    assert cli.main(["--root", str(root), "roles", "set", "bob", "worker"]) == cli.OK
+    text = (root / "settings" / "worker.settings.json").read_text()
+    assert "trust_level" not in text and "projects" not in text
 
 
 def test_a_store_can_run_both_programs_at_once(tmp_path):

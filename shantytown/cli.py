@@ -2127,23 +2127,47 @@ def _cmd_role(a) -> int:
     # by the program it runs, so a store with a codex lead and a claude lead
     # needs both files written. Grouping by the harness the CARDS name means we
     # never emit an artifact for a program nobody in this write asked for.
-    by_harness: dict[str, set[str]] = {}
+    # PER (HARNESS, ROLE) WITH THE CARDS' WORKSPACES, because provision needs
+    # both halves: the artifact is per (harness, role), while codex's trust
+    # record is per WORKSPACE, which is per AGENT (aegis-wc43h). Grouping to the
+    # pair keeps a role's config carrying exactly its own agents' workspaces —
+    # emitting every workspace into every role's home would record trust for
+    # directories those agents never open.
+    #
+    # THE WORKSPACE COMES FROM THE REGISTRY, NOT FROM plan.writes. A write in the
+    # plan is a PARTIAL — it carries the fields role_set is changing, so its
+    # `workspace` is None even for a card that has one on disk. Reading it off
+    # the plan silently recorded trust for nothing and the dialog still appeared:
+    # a fix that emits no error and changes no behaviour, which is the exact
+    # shape of the defect it was written to close. Read back AFTER the cards are
+    # written, so this sees what the launch will actually use.
+    reg_after = _registry(a)
+    by_pair: dict[tuple[str, str], set[str]] = {}
     for ag in plan.writes:
-        by_harness.setdefault(harness_mod.name_for(ag, root=a.root),
-                              set()).add(ag.role)
-    for harness_name in sorted(by_harness):
-        paths = _emit_role_settings(a.root, by_harness[harness_name],
-                                    harness_name=harness_name)
-        for path in paths:
-            print(f"  hooks   {path}")
-        # A harness may need more than the file (codex links the operator's
-        # credentials into the home it just wrote). Notes are the operator's to
-        # act on and NEVER fail the write — the cards and the hooks are already
-        # on disk, and a `role set` that succeeded must not report a failure.
+        key = (harness_mod.name_for(ag, root=a.root), ag.role)
+        by_pair.setdefault(key, set())
+        try:
+            ws = getattr(reg_after.get(ag.name), "workspace", None)
+        except (LookupError, OSError):
+            ws = getattr(ag, "workspace", None)
+        if ws:
+            by_pair[key].add(str(ws))
+    for harness_name in sorted({h for h, _ in by_pair}):
         program = harness_mod.get(harness_name)
-        for path in paths:
-            for note in program.provision(str(path), root=a.root):
-                print(f"  ⚠ {note}", file=sys.stderr)
+        for role in sorted(r for h, r in by_pair if h == harness_name):
+            paths = _emit_role_settings(a.root, {role}, harness_name=harness_name)
+            for path in paths:
+                print(f"  hooks   {path}")
+            # A harness may need more than the file (codex links the operator's
+            # credentials into the home it just wrote, and records the workspaces
+            # as trusted). Notes are the operator's to act on and NEVER fail the
+            # write — the cards and the hooks are already on disk, and a
+            # `role set` that succeeded must not report a failure.
+            for path in paths:
+                for note in program.provision(
+                        str(path), root=a.root,
+                        workspaces=sorted(by_pair[(harness_name, role)])):
+                    print(f"  ⚠ {note}", file=sys.stderr)
     _report_who_the_rewrite_did_not_reach(a, {ag.role for ag in plan.writes})
     return OK
 
