@@ -738,7 +738,9 @@ def parse_prom(body: str) -> list[tuple[str, dict, float]]:
     return out
 
 
-def _from_samples(samples, window: str, source: str) -> Reading:
+def _from_samples(samples, window: str, source: str, *,
+                  metric: str = USAGE_METRIC,
+                  account_metric: str = ACCOUNT_USAGE_METRIC) -> Reading:
     """The ONE place samples become a Reading, shared by every reader.
 
     Shared deliberately: the textfile and the Prometheus paths must not be able
@@ -757,18 +759,21 @@ def _from_samples(samples, window: str, source: str) -> Reading:
         age    MAX     the OLDEST reading wins. Freshness is only as good as the
                        stalest input to the number being governed by.
     """
-    by_window = _readings_by_window(samples, source)
+    by_window = _readings_by_window(samples, source, metric=metric,
+                                    account_metric=account_metric)
     if window in by_window:
         return by_window[window]
     # Asked for a window the exposition does not carry. Not a Reading with a
     # None pct dressed up as fine — say which window, because with two budgets
     # "no value" without a window name sends the reader to the wrong metric.
     return Reading(source=source,
-                   error=f"no {USAGE_METRIC} series for window {window!r} — the "
+                   error=f"no {metric} series for window {window!r} — the "
                          f"exposition carries {sorted(by_window) or 'no windows'}")
 
 
-def _readings_by_window(samples, source: str) -> dict[str, Reading]:
+def _readings_by_window(samples, source: str, *,
+                        metric: str = USAGE_METRIC,
+                        account_metric: str = ACCOUNT_USAGE_METRIC) -> dict[str, Reading]:
     """Fold samples into ONE Reading PER WINDOW (aegis-59hao).
 
     THE TRANSPORT ALREADY CARRIED EVERY WINDOW AND WE THREW THEM AWAY. Both
@@ -803,11 +808,11 @@ def _readings_by_window(samples, source: str) -> dict[str, Reading]:
         w = labels.get("window")
         if name == RESET_TS_METRIC and w:
             reset[w] = value if w not in reset else max(reset[w], value)
-        elif name == USAGE_METRIC and w:
+        elif name == metric and w:
             # The recording rule is ALREADY the max across accounts. If Prometheus
             # somehow returned several, max again — it cannot be wrong.
             rule_pct[w] = value if w not in rule_pct else max(rule_pct[w], value)
-        elif name == ACCOUNT_USAGE_METRIC and w:
+        elif name == account_metric and w:
             pct[w] = value if w not in pct else max(pct[w], value)
         elif name == PROBE_OK_METRIC:
             ok, saw_ok = (ok and bool(value)), True
@@ -888,9 +893,12 @@ class TextfileReader:
     Prometheus is the thing that is broken.
     """
 
-    def __init__(self, path, window: str = FIVE_HOUR):
+    def __init__(self, path, window: str = FIVE_HOUR,
+                 metric: str = USAGE_METRIC,
+                 account_metric: str = ACCOUNT_USAGE_METRIC):
         self.path = Path(path)
         self.window = window
+        self.metric, self.account_metric = metric, account_metric
 
     def read(self) -> Reading:
         try:
@@ -898,7 +906,8 @@ class TextfileReader:
         except OSError as e:
             return Reading(source="textfile",
                            error=f"cannot read {self.path}: {e}")
-        return _from_samples(parse_prom(body), self.window, "textfile")
+        return _from_samples(parse_prom(body), self.window, "textfile",
+                             metric=self.metric, account_metric=self.account_metric)
 
     def read_all(self) -> dict[str, Reading]:
         """Every window the file carries. The read was always whole-file; only
@@ -907,7 +916,9 @@ class TextfileReader:
             body = self.path.read_text()
         except OSError as e:
             return {}
-        return _readings_by_window(parse_prom(body), "textfile")
+        return _readings_by_window(parse_prom(body), "textfile",
+                                   metric=self.metric,
+                                   account_metric=self.account_metric)
 
 
 class PrometheusReader:
@@ -919,15 +930,20 @@ class PrometheusReader:
     # BOTH families: the recording rule (`claude:usage_utilization_pct:max`)
     # carries a COLON, so a `claude_usage_.*` pattern silently misses the one
     # series the governor is supposed to read and falls back to per-account.
+    # Compatibility/documentation pin for the default Claude policy.  Instances
+    # build their query from the configured Policy below.
     QUERY = '{__name__=~"claude_usage_.*|claude:usage_.*"}'
 
     def __init__(self, url: str, window: str = FIVE_HOUR, timeout: float = 5.0,
                  fetch=None, username: str | None = None,
-                 password: str | None = None):
+                 password: str | None = None,
+                 metric: str = USAGE_METRIC,
+                 account_metric: str = ACCOUNT_USAGE_METRIC):
         self.url = (url or "").rstrip("/")
         self.window = window
         self.timeout = timeout
         self.username, self.password = username, password
+        self.metric, self.account_metric = metric, account_metric
         # One tiny transport seam so tests inject a fake without patching
         # urllib — the same shape forgejo.py uses.
         self._fetch = fetch or self._http
@@ -953,7 +969,8 @@ class PrometheusReader:
         samples, err = self._samples()
         if err is not None:
             return err
-        return _from_samples(samples, self.window, "prometheus")
+        return _from_samples(samples, self.window, "prometheus",
+                             metric=self.metric, account_metric=self.account_metric)
 
     def read_all(self) -> dict[str, Reading]:
         """Every window the query returned. QUERY is a regex over the whole
@@ -965,12 +982,17 @@ class PrometheusReader:
             # SAME error rather than an empty map, so the caller reports "cannot
             # see" for each budget instead of silently governing on none of them.
             return {}
-        return _readings_by_window(samples, "prometheus")
+        return _readings_by_window(samples, "prometheus", metric=self.metric,
+                                   account_metric=self.account_metric)
 
     def _samples(self):
         """(samples, error_reading) — exactly one is not None."""
         from urllib.parse import quote
-        url = f"{self.url}/api/v1/query?query={quote(self.QUERY)}"
+        import re as _re
+        names = (self.metric, self.account_metric, PROBE_OK_METRIC,
+                 PROBE_TS_METRIC, CACHE_AGE_METRIC, RESET_TS_METRIC)
+        query = '{__name__=~"' + "|".join(_re.escape(n) for n in names) + '"}'
+        url = f"{self.url}/api/v1/query?query={quote(query)}"
         try:
             body = self._fetch(url)
         except urllib.error.HTTPError as e:
@@ -1026,7 +1048,8 @@ def reader_for(policy: Policy, *, now=time.time):
         if not policy.path:
             raise GovernorError("source = \"textfile\" needs `path` — the "
                                 "node_exporter textfile to read")
-        return TextfileReader(policy.path, policy.window)
+        return TextfileReader(policy.path, policy.window, policy.metric,
+                              policy.account_metric)
     if policy.source == "prometheus":
         if not policy.url:
             raise GovernorError("source = \"prometheus\" needs `url` — e.g. "
@@ -1045,7 +1068,9 @@ def reader_for(policy: Policy, *, now=time.time):
                     f"({e}) — refusing to query unauthenticated, which would "
                     f"look like an outage rather than a config error") from e
         return PrometheusReader(policy.url, policy.window,
-                                username=policy.username, password=password)
+                                username=policy.username, password=password,
+                                metric=policy.metric,
+                                account_metric=policy.account_metric)
     raise GovernorError(f"unknown source {policy.source!r}; "
                         f"expected one of: {', '.join(SOURCES)}")
 
@@ -1116,8 +1141,11 @@ class FilesGovernorState:
     whole point of relax_margin is to remember what we decided last time.
     """
 
-    def __init__(self, root):
-        self.path = Path(root) / "governor" / "state.json"
+    def __init__(self, root, harness: str | None = None):
+        # The legacy/base governor keeps its exact old pathname.  Siblings need
+        # independent hysteresis: a Codex tier must never hold a Claude tier.
+        name = "state.json" if not harness else f"state-{harness}.json"
+        self.path = Path(root) / "governor" / name
 
     def get(self) -> Engaged:
         try:
@@ -2239,6 +2267,7 @@ class Drained:
     state: str                    # drained | pending | failed
     pushed: str = ""              # what the agent said went up
     why: str = ""
+    governor: str = ""
 
 
 DRAINED, PENDING, FAILED = "drained", "pending", "failed"
@@ -2427,7 +2456,8 @@ def render_drain(rows: list[Drained]) -> str:
     lines = ["", "  DRAIN REPORT"]
     for r in sorted(rows, key=lambda x: (x.state, x.agent)):
         detail = r.pushed or r.why
-        lines.append(f"    {r.state:<8} {r.agent:<12} {detail}")
+        owner = f" [{r.governor}]" if r.governor else ""
+        lines.append(f"    {r.state:<8} {r.agent:<12}{owner} {detail}")
     lines.append(f"    {len(by[DRAINED])} drained · {len(by[PENDING])} pending · "
                  f"{len(by[FAILED])} FAILED "
                  f"({'all reported' if not by[PENDING] and not by[FAILED] else 'UNREPORTED IS NOT DRAINED'})")

@@ -330,6 +330,34 @@ def _wire(a) -> Dispatcher:
                       governor=_dispatch_gate(a), sender=_me(a))
 
 
+def _governors(a):
+    """Build one reader/governor per declared policy, keyed by harness.
+
+    ``base`` deliberately retains the legacy state file and is the only entry
+    in an old one-governor deployment.  Siblings are independent readers and
+    hysteresis records: sharing either would reintroduce cross-provider policy.
+    """
+    cfg, err = config.load_or_default(Path(a.root))
+    if err:
+        print(f"  ⚠ {err} — running on config DEFAULTS", file=sys.stderr)
+    if not cfg.governor.active:
+        return cfg, {}
+    policies = {"base": cfg.governor, **cfg.governor.by_harness}
+    out = {}
+    for name, policy in policies.items():
+        try:
+            reader = gov_mod.reader_for(policy)
+        except gov_mod.GovernorError as e:
+            print(f"  ⚠ usage governor {name} DISABLED — {e}. The fleet is "
+                  "running UNGOVERNED for this provider.", file=sys.stderr)
+            continue
+        out[name] = gov_mod.Governor(
+            policy, reader,
+            gov_mod.FilesGovernorState(Path(a.root),
+                                       None if name == "base" else name))
+    return cfg, out
+
+
 def _governor(a):
     """The usage governor for this invocation, or None if none is configured.
 
@@ -344,20 +372,30 @@ def _governor(a):
     failure is printed, every time, on stderr — the same rule the module's
     fail-safe section applies to a lost signal.
     """
-    cfg, err = config.load_or_default(Path(a.root))
-    if err:
-        print(f"  ⚠ {err} — running on config DEFAULTS", file=sys.stderr)
-    if not cfg.governor.active:
-        return None
-    try:
-        reader = gov_mod.reader_for(cfg.governor)
-    except gov_mod.GovernorError as e:
-        print(f"  ⚠ usage governor DISABLED — {e}. The fleet is running "
-              f"UNGOVERNED: no tier will engage at any usage level.",
-              file=sys.stderr)
-        return None
-    return gov_mod.Governor(cfg.governor, reader,
-                            gov_mod.FilesGovernorState(Path(a.root)))
+    _cfg, governors = _governors(a)
+    return governors.get("base")
+
+
+def _governor_for(cfg, governors, card, root):
+    """(harness, governor, synthetic signal-lost verdict-or-None) for card."""
+    harness = harness_mod.name_for(card, root=root)
+    if gov_mod.unconfigured(cfg.governor, harness):
+        policy = cfg.governor
+        frozen = policy.on_signal_lost == gov_mod.FREEZE
+        verdict = gov_mod.Verdict(
+            reading=gov_mod.Reading(source="unconfigured"), signal_lost=True,
+            frozen=frozen,
+            why=f"no governor is configured for harness {harness!r}",
+            alarm=(f"USAGE SIGNAL LOST: harness {harness!r} has no configured "
+                   "usage governor. " +
+                   ("on_signal_lost = \"freeze\": no new work is being "
+                    "dispatched for this provider. " if frozen else
+                    "on_signal_lost = \"warn\": THE FLEET IS RUNNING "
+                    "UNGOVERNED for this provider. ") +
+                   "Configure [governor.by_harness." + harness + "] or "
+                   "deliberately stop running it."))
+        return harness, None, verdict
+    return harness, governors.get(harness, governors.get("base")), None
 
 
 def _dispatch_gate(a):
@@ -372,12 +410,11 @@ def _dispatch_gate(a):
     Evaluated once per invocation and closed over, so a dispatch pays at most one
     metric read — not one per plan()/triage()/go() call on the same Dispatcher.
     """
-    gov = _governor(a)
-    if gov is None:
+    cfg, governors = _governors(a)
+    if not governors:
         return None
-    verdict = gov.evaluate(persist=False)
-    if verdict.alarm:
-        print(f"  ⚠ {verdict.alarm}", file=sys.stderr)
+    cards = {card.name: card for card in _registry(a).all()}
+    verdicts = {}
 
     def gate(item, agent=None):
         """SAY IT WHEN A WAIVER IS WHAT LET THIS THROUGH (aegis-yegfx).
@@ -388,6 +425,16 @@ def _dispatch_gate(a):
         simply off. Printed on stderr like `alarm`, for the same reason and at
         the same layer — the policy object decides, the CLI announces.
         """
+        card = cards.get(agent)
+        if card is None:
+            return ""
+        harness, governor, unconfigured = _governor_for(cfg, governors, card, a.root)
+        if harness not in verdicts:
+            verdicts[harness] = (unconfigured if unconfigured is not None
+                                 else governor.evaluate(persist=False))
+            if verdicts[harness].alarm:
+                print(f"  ⚠ {verdicts[harness].alarm}", file=sys.stderr)
+        verdict = verdicts[harness]
         refusal = verdict.admits(item, agent)
         if not refusal and verdict.waives(item, agent):
             print(f"  ⚠ {verdict.waiver_says(item, agent)}", file=sys.stderr)
@@ -3703,6 +3750,26 @@ def _crew_governor(a) -> int:
     extended a hysteresis hold, merely LOOKING at the bar would ratchet fleet
     policy. `st tend` remains the one writer of the engaged tier.
     """
+    # Mixed fleets cannot be represented by the legacy one-line value without
+    # lying by omission.  Keep that exact line for old configs; emit one named
+    # line per provider once [governor.by_harness] exists.
+    cfg, _err = config.load_or_default(Path(a.root))
+    if cfg.governor.by_harness:
+        _cfg, governors = _governors(a)
+        try:
+            cards = _registry(a).all()
+        except Exception:
+            cards = []
+        for name, multi in sorted(governors.items()):
+            verdict = multi.evaluate(persist=False)
+            status = "lost" if verdict.signal_lost else verdict.render(time.time())
+            print(f"{name} {status}")
+        for harness in sorted({harness_mod.name_for(card, root=a.root) for card in cards}
+                              - {"base"} - set(cfg.governor.by_harness)):
+            if gov_mod.unconfigured(cfg.governor, harness):
+                print(f"{harness} lost unconfigured — no usage governor")
+        return OK
+
     gov = _governor(a)
     if gov is None:
         print("off")
@@ -5527,13 +5594,29 @@ def _tend_once(a, quiet: bool = False) -> int:
     # that PERSISTS the engaged tier (hysteresis has to survive a process that
     # exists for five seconds every five minutes). A dry run evaluates and prints
     # but writes nothing, like everything else on a dry run.
-    gov = _governor(a)
-    verdict = gov.evaluate(persist=not a.dry_run) if gov is not None else None
-    if verdict is not None and verdict.alarm:
-        # EVERY PASS, LOUDLY. A governor that goes quiet when it cannot see the
-        # number is indistinguishable from one with nothing to report, and the
-        # fleet is spending the whole time.
-        print(f"  ⚠ {verdict.alarm}", file=sys.stderr)
+    cfg, governors = _governors(a)
+    verdicts = {name: gov.evaluate(persist=not a.dry_run)
+                for name, gov in governors.items()}
+    # Preserve the byte-for-byte single-governor path.  A mixed fleet has no
+    # meaningful global verdict: every decision below resolves from the card.
+    verdict = verdicts.get("base") if not cfg.governor.by_harness else None
+    card_verdicts = {}
+
+    def _card_verdict(card):
+        harness, governor, unconfigured = _governor_for(cfg, governors, card, a.root)
+        if harness not in card_verdicts:
+            card_verdicts[harness] = (unconfigured if unconfigured is not None
+                                      else verdicts.get(harness, verdicts.get("base")))
+        return card_verdicts[harness]
+
+    for _v in list(verdicts.values()) + [
+            _card_verdict(card) for card in agents
+            if gov_mod.unconfigured(cfg.governor,
+                                    harness_mod.name_for(card, root=a.root))]:
+        if _v is not None and _v.alarm:
+            # EVERY PASS, LOUDLY. A governor that goes quiet when it cannot see
+            # the number is indistinguishable from one with nothing to report.
+            print(f"  ⚠ {_v.alarm}", file=sys.stderr)
     # THE ON RAMP FIRED (aegis-9mehy). A window left a tier, so agents held down
     # by it become eligible in the very same pass — `_withheld` is re-evaluated
     # from this verdict, and retirement is checked before it, so no retiree is
@@ -5594,8 +5677,9 @@ def _tend_once(a, quiet: bool = False) -> int:
         # is not sent hunting for a `--target` flag they never passed.
         target_src=_target_source(getattr(a, "target", None),
                                   None if verdict is None else verdict.max_agents),
-        governed=(None if verdict is None
-                  else lambda card: verdict.excludes(card, _catalog(a))),
+        governed=(None if not governors
+                  else lambda card: (_card_verdict(card).excludes(card, _catalog(a))
+                                     if _card_verdict(card) is not None else "")),
         # The same record `st crew` reads to print "stopped ON PURPOSE", so the
         # two commands cannot disagree about whose decision put an agent down
         # (aegis-k9068). Without it tend explained every deliberate stop with the
@@ -5712,7 +5796,20 @@ def _tend_once(a, quiet: bool = False) -> int:
         # EPISODE, so a five-minute heartbeat does not re-broadcast every pass —
         # and re-broadcast in full if the tier relaxes and re-engages, because the
         # agents told the first time are gone by then.
-        drained = _sweep("drain", lambda: _drain_sweep(a, verdict, agents, panes))
+        # Drains are per provider.  A Claude drain must not tell a Codex agent
+        # to stop, and vice versa; the single-governor path remains one call.
+        if cfg.governor.by_harness:
+            drained = []
+            for _h, _v in card_verdicts.items():
+                _cards = [card for card in agents
+                          if harness_mod.name_for(card, root=a.root) == _h]
+                _gov = governors.get(_h, governors.get("base"))
+                drained.extend(_sweep(f"drain:{_h}",
+                                      lambda v=_v, cs=_cards, h=_h, g=_gov: _drain_sweep(
+                                          a, v, cs, panes, governor_name=h,
+                                          episode=0.0 if g is None else g.episode())))
+        else:
+            drained = _sweep("drain", lambda: _drain_sweep(a, verdict, agents, panes))
         if drained:
             print(gov_mod.render_drain(drained), file=sys.stderr)
         # ARM THE WAKE (aegis-9mehy). Re-armed on EVERY pass, because the
@@ -5743,7 +5840,7 @@ def _tend_once(a, quiet: bool = False) -> int:
     return OK if rep.healthy() else CANNOT_TELL
 
 
-def _drain_sweep(a, verdict, agents, panes):
+def _drain_sweep(a, verdict, agents, panes, *, governor_name="base", episode=None):
     """Broadcast the drain and report it. Returns the report rows (possibly []).
 
     DURABLE DELIVERY, non-negotiable: the message must survive the recipient's
@@ -5765,14 +5862,21 @@ def _drain_sweep(a, verdict, agents, panes):
         return []
     inbox = _inbox(a, default="beads")
     me = _me(a) or "st tend"
+    # Each provider has its own drain episode and ledger.  Reusing the legacy
+    # ledger would let a relaxing sibling clear another provider's outstanding
+    # drain, precisely when its workers still need to report their pushed WIP.
+    drain_root = Path(a.root) if governor_name == "base" else (
+        Path(a.root) / "governor-harness" / governor_name)
     drainer = gov_mod.Drainer(
-        Path(a.root),
+        drain_root,
         deliver=lambda who, body: inbox.deliver(who, body, frm=me),
         stops=_stops(a),
         log=lambda msg: print(f"  {msg}", file=sys.stderr))
-    return drainer.sweep(agents, verdict, _governor_episode(a),
+    rows = drainer.sweep(agents, verdict,
+                         _governor_episode(a) if episode is None else episode,
                          live=lambda ag: bool(ag.pane) and panes.exists(ag.pane),
                          catalog=_catalog(a))
+    return [replace(row, governor=governor_name) for row in rows]
 
 
 def _governor_wake_sweep(a, verdict) -> list[str]:
