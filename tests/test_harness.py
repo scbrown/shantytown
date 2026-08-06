@@ -11,8 +11,13 @@ tests have to prove is that the refactor changed NOTHING:
 
 The other half is the field: a card can now SAY which harness, files.py must
 round-trip it like workspace/model, and a name we do not implement must REFUSE
-rather than fall back to claude. A card that asks for codex and silently gets
+rather than fall back to claude. A card that asks for opencode and silently gets
 claude is a launch that succeeded at being the wrong thing.
+
+THE SECOND HARNESS (codex) has its own file — tests/test_codex_harness.py. What
+stays here is the CLAUDE side and the SEAM, and the refactor test above is what
+those are for: widening the interface for codex must not move one byte of what
+nine live agents launch with.
 """
 from __future__ import annotations
 import json
@@ -30,17 +35,22 @@ from shantytown.tmux import NullPanes
 
 class _NonBlockingHarness:
     """A REGISTERED harness that cannot deliver blocking stop hooks — the harness-
-    level twin of CodexRuntime, so the capability gate can be shown to CLOSE (and,
+    level twin of StoplessRuntime, so the capability gate can be shown to CLOSE (and,
     for a worker, OPEN) through the object the CARD actually selects. Kept test-only
-    and injected: harness.py deliberately ships no guessed second program (its own
-    docstring forbids it), and what is under test here is the GATE, not codex flags."""
-    name = "codex-test"
+    and injected: what is under test here is the GATE, and it must be shown to
+    close on the CAPABILITY rather than on any program's name — both programs
+    this build ships declare blocking_stop, so without a double there would be
+    nothing left to refuse and the closing half would stop being exercised."""
+    name = "stopless-test"
 
     def launch(self, card, settings_path, root=None):
-        return f"SHANTY_AGENT={card.name} codex-test --settings {settings_path}"
+        return f"SHANTY_AGENT={card.name} stopless-test --settings {settings_path}"
 
     def settings(self, role, root=None):
         return {}
+
+    def carries_settings(self, launch, settings_path):
+        return "--settings" in launch
 
     def hooks(self, card):
         return HookSpec(blocking_stop=False)
@@ -161,8 +171,11 @@ def test_query_first_directive_is_actionable_and_host_agnostic():
 def test_an_unimplemented_harness_is_refused_not_defaulted(tmp_path):
     """A card naming a harness we do not ship must NOT launch claude. Silently
     substituting a different program is the failure this whole file exists to
-    prevent — and it would report success."""
-    card = Agent(name="ellie", role="worker", harness="codex")
+    prevent — and it would report success.
+
+    The name moved from `codex` to `opencode` when codex became real: a refusal
+    test whose subject we have since implemented stops testing the refusal."""
+    card = Agent(name="ellie", role="worker", harness="opencode")
     with pytest.raises(harness_mod.UnknownHarness):
         _runtime().compose(card)
 
@@ -188,8 +201,8 @@ def test_claude_runtime_hooks_FORWARD_to_the_cards_harness():
     # forwards to whatever the card names:
     import pytest as _pytest
     with _pytest.MonkeyPatch.context() as m:
-        m.setitem(harness_mod._HARNESSES, "codex-test", _NonBlockingHarness())
-        card = Agent(name="x", role="lead", harness="codex-test")
+        m.setitem(harness_mod._HARNESSES, "stopless-test", _NonBlockingHarness())
+        card = Agent(name="x", role="lead", harness="stopless-test")
         assert rt.hooks(card).blocking_stop is False
 
 
@@ -202,11 +215,11 @@ def test_the_gate_asks_the_CARDS_harness_not_the_runtime(monkeypatch, role, host
     NAMES and refuses. The worker is the positive control: the gate must still OPEN
     for a role that needs no stop delivery, and the launch must carry the CARD's
     program, proving compose went through card.harness rather than claude's argv."""
-    monkeypatch.setitem(harness_mod._HARNESSES, "codex-test", _NonBlockingHarness())
-    card = Agent(name="malcolm", role=role, harness="codex-test")
+    monkeypatch.setitem(harness_mod._HARNESSES, "stopless-test", _NonBlockingHarness())
+    card = Agent(name="malcolm", role=role, harness="stopless-test")
     rt = _runtime()
     if hostable:
-        assert "codex-test --settings" in rt.compose(card)         # gate OPENS
+        assert "stopless-test --settings" in rt.compose(card)         # gate OPENS
     else:
         with pytest.raises(CapabilityError, match="blocking stop hooks"):
             rt.compose(card)                                       # gate CLOSES

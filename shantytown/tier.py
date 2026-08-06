@@ -142,6 +142,17 @@ def plan_role_set(registry: Registry, agent_name: str, role: str,
     made those roles inexpressible.
 
     None = the built-in three, behaving exactly as the enum did.
+
+    EVERY PLANNED CARD CARRIES ITS HARNESS. The writes are freshly built Agents,
+    and files.set() re-merges launch config (harness/model/workspace) from disk,
+    so leaving it off persisted fine — but the plan is READ before it is written,
+    by two things that then read the wrong program: the capability gate
+    (_require_writes_hostable asks harness.for_card of a card whose field it just
+    dropped, so a card on a stopless harness is gated as Claude Code — aegis-85ox
+    exactly, one layer up) and the settings emitter (`role set` on a codex card
+    wrote Claude Code's artifact and nothing the agent reads — measured on a
+    live store while wiring codex up). An in-memory card that silently claims a
+    different program than the one on disk is the same failure as launching one.
     """
     from . import traits as traits_mod
     catalog = catalog if catalog is not None else traits_mod.default_catalog()
@@ -169,7 +180,8 @@ def plan_role_set(registry: Registry, agent_name: str, role: str,
                 f"cannot take reports {reports}. Point them at a lead or the "
                 f"administrator.")
         plan.writes.append(Agent(name=agent_name, role=role, reports_to=None,
-                                 pane=pane_for(agent_name, agent.pane)))
+                                 pane=pane_for(agent_name, agent.pane),
+                                 harness=agent.harness))
         return plan
 
     if role == "worker":
@@ -182,17 +194,21 @@ def plan_role_set(registry: Registry, agent_name: str, role: str,
                 f"Re-point them first (they need a lead or the administrator)."
             )
         plan.writes.append(Agent(name=agent_name, role="worker",
-                                 reports_to=agent.reports_to, pane=pane_for(agent_name, agent.pane)))
+                                 reports_to=agent.reports_to,
+                                 pane=pane_for(agent_name, agent.pane),
+                                 harness=agent.harness))
         return plan
 
     if role == "administrator":
         # Q4: an administrator reports to nobody (it is the root).
         plan.writes.append(Agent(name=agent_name, role="administrator",
-                                 reports_to=None, pane=pane_for(agent_name, agent.pane)))
+                                 reports_to=None, pane=pane_for(agent_name, agent.pane),
+                                 harness=agent.harness))
         # reports handed to an administrator are direct (Q4: worker with no lead)
         for r in reports:
             ra = registry.get(r)
-            plan.writes.append(Agent(name=r, role=ra.role, reports_to=agent_name, pane=pane_for(r, ra.pane)))
+            plan.writes.append(Agent(name=r, role=ra.role, reports_to=agent_name,
+                                     pane=pane_for(r, ra.pane), harness=ra.harness))
         return plan
 
     # role == "lead"
@@ -227,10 +243,13 @@ def plan_role_set(registry: Registry, agent_name: str, role: str,
         if admin and admin != agent_name:
             lead_reports_to = admin
     plan.writes.append(Agent(name=agent_name, role="lead",
-                             reports_to=lead_reports_to, pane=pane_for(agent_name, agent.pane)))
+                             reports_to=lead_reports_to,
+                             pane=pane_for(agent_name, agent.pane),
+                             harness=agent.harness))
     for r in reports:
         ra = registry.get(r)
-        plan.writes.append(Agent(name=r, role=ra.role, reports_to=agent_name, pane=pane_for(r, ra.pane)))
+        plan.writes.append(Agent(name=r, role=ra.role, reports_to=agent_name,
+                                 pane=pane_for(r, ra.pane), harness=ra.harness))
         plan.routes.append((r, agent_name))   # emit the stop-hook routing
     return plan
 

@@ -14,11 +14,16 @@ runtime (codex/opencode) is a drop-in that composes its own string and declares
 its own capabilities.
 
 THE INVARIANT (the whole ruling):
-    The composed command ALWAYS carries --settings, or it is NOT COMPOSED AT
-    ALL. There is no code path that yields a settings-less launch. --settings is
-    what wires the hooks; dropping it is the hookless-zombie handoff bug one
-    layer up. So compose() either returns a string containing --settings, or it
-    RAISES. It never returns a launch without it.
+    The composed command ALWAYS carries its settings, or it is NOT COMPOSED AT
+    ALL. There is no code path that yields a settings-less launch. The settings
+    are what wire the hooks; dropping them is the hookless-zombie handoff bug one
+    layer up. So compose() either returns a string that points at its settings
+    file, or it RAISES. It never returns a launch without one.
+
+    HOW the string points at them is the harness's, not this module's:
+    `--settings <path>` for Claude Code, `CODEX_HOME=<dir>` for codex, and the
+    check is Harness.carries_settings rather than a grep for one program's flag.
+    Below, "--settings" in a comment means "the settings the launch carries".
 
 HONEST BOUNDARY (say it so nobody over-claims):
     compose() guarantees --settings was REQUESTED (the string provably carried
@@ -47,8 +52,12 @@ class HookSpec:
     """What stop/start hooks a runtime can declare. A CAPABILITY declaration, not
     metadata (adapters.md). The one that hurts: a runtime whose stop hook cannot
     reach the MODEL cannot host a lead — the whole lead role is "receive your
-    reports' stop events". Claude Code declares blocking stop hooks; a runtime
-    that does not (measured: codex) can host workers only.
+    reports' stop events". A program that cannot can host workers only.
+
+    BOTH SHIPPED HARNESSES DECLARE IT (Claude Code, and codex since its hooks
+    system — harness.CodexHarness.hooks). The gate is keyed on the CAPABILITY
+    and never on a program name, so that stayed a one-line change and the
+    refusal path is still exercised, by StoplessRuntime below.
 
     blocking_stop: can this runtime deliver a message to its agent AT STOP, to the
                    MODEL (not just the user's terminal)? Claude Code's non-blocking
@@ -83,7 +92,7 @@ def asks_a_question(rt, screen: str) -> bool:
     """Does `rt` say a BLOCKING picker is up on this screen? (aegis-qxc2)
 
     Tolerates a runtime that cannot answer. Pane-reading is an OPTIONAL capability
-    here — CodexRuntime implements neither this nor shows_ready_ui — and the two
+    here — StoplessRuntime implements neither this nor shows_ready_ui — and the two
     consumers are `st crew` and the tend supervisor, so a hard AttributeError would
     crash a watchdog over a runtime that simply reads no panes.
 
@@ -103,7 +112,7 @@ def reads_a_question(rt, screen: str):
     """Ask `rt` to READ the picker on this screen, or None if it cannot (w30p2).
 
     The tolerant twin of asks_a_question, and tolerant for the same reason: pane
-    reading is an OPTIONAL runtime capability (CodexRuntime implements none of
+    reading is an OPTIONAL runtime capability (StoplessRuntime implements none of
     it), so a hard AttributeError here would crash `st ask` over a runtime that
     simply draws no pickers we know how to read.
 
@@ -122,7 +131,7 @@ def auth_expired(rt, screen: str) -> bool:
     """Does `rt` say its LOGIN EXPIRED banner is on this screen? (aegis-arma)
 
     The auth twin of asks_a_question, with the identical tolerance and the
-    identical safety argument: a runtime that reads no panes (codex) cannot
+    identical safety argument: a runtime that reads no panes cannot
     answer, and False-because-could-not-ask is safe ONLY because of where it
     lands — the flag can only ever convert some other verdict INTO `auth-dead`,
     so failing to ask leaves the verdict as it was. It can never manufacture
@@ -164,7 +173,7 @@ def require_capability(program, card: Agent,
     Keyed on the DECLARED hooks(), never a name (adapters.md:86-87), so a third
     capable program passes without editing here — the declaration is the source of
     truth. Duck-typed on `.hooks()`/`.name`: a Harness satisfies it, and so does a
-    self-contained runtime that is its own program (CodexRuntime, the test double).
+    self-contained runtime that is its own program (StoplessRuntime, the test double).
     """
     if card.role in _ROLES_NEEDING_STOP and not program.hooks(card).blocking_stop:
         raise CapabilityError(
@@ -511,9 +520,17 @@ def settings_for_role(role: str, root=None, harness_name: str | None = None) -> 
     return harness_mod.get(harness_name).settings(role, root=root)
 
 
-def claude_settings_for_role(role: str, root=None) -> dict:
-    """The Claude Code settings.json a role needs. CLAUDE-CODE-SPECIFIC (its hooks
-    schema) — owned by ClaudeHarness, which is the only thing that should call it.
+def role_stop_hooks(role: str, root=None) -> list[dict]:
+    """The Stop-hook COMMANDS a role runs — SHANTYTOWN'S decision, not any one
+    program's, which is why it is out here rather than inside a harness.
+
+    The split this factoring makes literal: WHICH events a role needs and WHAT
+    they run is ours (it is our own `python -m shantytown.stop_event …`); the
+    FILE those events are written into, and its schema, is the harness's. Claude
+    Code and codex happen to take the same matcher-group shape
+    (docs/adapters.md; codex.py fact 2), so both harnesses call this and neither
+    restates it — a second copy of the routing table is how a lead comes to send
+    on one harness and drain on the other.
 
     Every non-root role SENDs its own stop up (route_stop -> persist). Every
     DESTINATION (lead, admin) also DRAINs received events into its model. A Stop
@@ -549,6 +566,30 @@ def claude_settings_for_role(role: str, root=None) -> dict:
     capture_cmd = stop_capture_command(root)
     if capture_cmd:
         stop.append({"type": "command", "command": capture_cmd})
+    return stop
+
+
+def session_start_hooks() -> list[dict]:
+    """QUERY-FIRST at session start (aegis-rcyd): inject the "ask the knowledge
+    graph before you act" directive into live context, the same way the
+    bobbin-first hint works. Every role gets it — query-first is not role-scoped.
+    Best-effort, fail-open, blocks nothing.
+
+    MATCHER-FREE, which is what makes it emittable for a harness whose tool
+    vocabulary we have not measured (codex.MATCHERS_NOT_EMITTED)."""
+    return [{"hooks": [_query_first_cmd()]}]
+
+
+def pre_tool_use_hooks(root=None) -> list[dict]:
+    """The matcher-scoped guards: hank on every edit, and whatever the deployment
+    configures for Bash and MCP.
+
+    MATCHER-SCOPED, and a matcher is a claim about the HOST PROGRAM'S TOOL NAMES
+    ("Bash", "mcp__.*" are Claude Code's). That is why this is a separate builder
+    from the two above rather than one more key in the settings dict: a harness
+    whose vocabulary we have not measured must be able to emit the stop routing
+    WITHOUT emitting guards that would read as wired and fire zero times
+    (aegis-ac5x/18e0 is that exact bill, already paid once)."""
     pre_tool = [_guard_hook()]
     # NOTE: the untracked-work nudge (PreToolUse, aegis-fv2zc) is NOT here — it
     # is delivered via the PROVISION consent settings (provision.
@@ -575,16 +616,22 @@ def claude_settings_for_role(role: str, root=None) -> dict:
     if mcp_cmd:
         pre_tool.append({"matcher": "mcp__.*",
                          "hooks": [{"type": "command", "command": mcp_cmd}]})
+    return pre_tool
+
+
+def claude_settings_for_role(role: str, root=None) -> dict:
+    """The Claude Code settings.json a role needs. CLAUDE-CODE-SPECIFIC (this
+    container and its keys) — owned by ClaudeHarness, which is the only thing
+    that should call it. The hook EVENTS inside it are shantytown's and come
+    from the three shared builders above.
+    """
     return {
         "hooks": {
-            # QUERY-FIRST at session start (aegis-rcyd): inject the "ask the
-            # knowledge graph before you act" directive into live context, the
-            # same way the bobbin-first hint works. Every role gets it — query-
-            # first is not role-scoped. Best-effort, fail-open, blocks nothing.
-            "SessionStart": [{"hooks": [_query_first_cmd()]}],
-            "Stop": [{"hooks": stop}],
+            # QUERY-FIRST at session start (aegis-rcyd). See session_start_hooks.
+            "SessionStart": session_start_hooks(),
+            "Stop": [{"hooks": role_stop_hooks(role, root=root)}],
             # hank policy guard on every edit-shaped tool call. See _HANK_GUARD.
-            "PreToolUse": pre_tool,
+            "PreToolUse": pre_tool_use_hooks(root),
             # NOTE: metrics capture (PostToolUse, matcher '.*') is delivered via
             # the PROVISION consent settings (provision._with_capture_hook), NOT
             # here — that file is re-applied on EVERY launch so it self-heals,
@@ -664,7 +711,7 @@ def _settings_env(role: str, root=None) -> dict:
     return env
 
 
-def emitted_stop_directions(root, role: str) -> set[str] | None:
+def emitted_stop_directions(root, role: str, harness_name: str | None = None) -> set[str] | None:
     """READ BACK which stop directions a role's EMITTED settings file actually
     carries: a subset of {"send", "drain"}, or None if it could not be read.
 
@@ -676,8 +723,17 @@ def emitted_stop_directions(root, role: str) -> set[str] | None:
     None is NOT an empty set. Missing file / unparseable JSON means CANNOT TELL,
     and the caller must not render that as a pass — a role whose hooks we failed
     to read is not a role with no hooks.
+
+    harness_name defaults to Claude Code, which is what every caller that does
+    not know a card's harness means — and every card in a single-harness store.
+    A caller holding a card should pass harness.name_for(card): a codex role's
+    artifact is a different file with a different name, and reading the claude
+    one would answer about a file that is not there.
     """
-    return stop_directions_in(Path(root) / "settings" / f"{role}.settings.json")
+    from . import harness as harness_mod
+    program = harness_mod.get(harness_name)
+    return stop_directions_in(
+        Path(root) / "settings" / program.settings_name(role))
 
 
 def stop_directions_in(path) -> set[str] | None:
@@ -687,48 +743,37 @@ def stop_directions_in(path) -> set[str] | None:
     reader (live_stop_directions) apply the identical parse. If they diverged,
     a mismatch between them would be unattributable: you could not tell a real
     runtime drift from two parsers disagreeing.
+
+    THE FORMAT IS THE HARNESS'S, so this reads the bytes once and asks each
+    harness in turn (harness.all_harnesses, default first). Every reader is
+    format-anchored and answers None rather than guessing, so first-match is a
+    decision and not a coin toss — and a file NO harness recognises is a
+    cannot-tell, which is the same answer this function has always given for a
+    settings file that is not shaped like ours.
     """
+    from . import harness as harness_mod
     try:
-        data = json.loads(Path(path).read_text())
-    except (OSError, ValueError):
+        text = Path(path).read_text()
+    except OSError:
         return None
-    found: set[str] = set()
-    try:
-        for block in data["hooks"]["Stop"]:
-            for hook in block["hooks"]:
-                cmd = hook.get("command", "")
-                # The unified entry PROVIDES the drain direction (rank 4 delivers
-                # through the same stop_event drain). Without this line every
-                # administrator on the new chain reads as DEAF to `roles --check`
-                # and `st tend` — a checker that cannot see the thing it is
-                # checking for is the exact defect those surfaces exist to catch.
-                if "shantytown.stop_policy" in cmd:
-                    found.add("drain")
-                    continue
-                if "shantytown.stop_event" not in cmd:
-                    continue
-                for mode in ("send", "drain"):
-                    # Match the token, not a substring: "send" must be the
-                    # stop_event subcommand, not a stray word in a path.
-                    if mode in cmd.split():
-                        found.add(mode)
-    except (KeyError, TypeError, AttributeError):
-        # The file exists but is not shaped like settings we emitted. That is a
-        # cannot-tell, not "no hooks" — see above.
-        return None
-    return found
+    for program in harness_mod.all_harnesses():
+        found = program.read_stop_directions(text)
+        if found is not None:
+            return found
+    return None
 
 
 def settings_path_in_cmdline(cmdline: str) -> str | None:
-    """Pull the `--settings <path>` argument out of a launch command line."""
+    """The settings artifact a launch command line points at, whichever program
+    it launches — `--settings <path>` for Claude Code, `CODEX_HOME=<dir>` for
+    codex. Asked of each harness in turn; see stop_directions_in on the order."""
     if not cmdline:
         return None
-    toks = cmdline.split()
-    for i, t in enumerate(toks):
-        if t == "--settings" and i + 1 < len(toks):
-            return toks[i + 1]
-        if t.startswith("--settings="):
-            return t.split("=", 1)[1]
+    from . import harness as harness_mod
+    for program in harness_mod.all_harnesses():
+        found = program.settings_in_cmdline(cmdline)
+        if found is not None:
+            return found
     return None
 
 
@@ -942,7 +987,12 @@ class ClaudeRuntime:
         launch = program.launch(card, settings_path, root=self._root)
         # The invariant, asserted where it is made. If this ever fails, the bug is
         # here, not downstream — a settings-less string must be UNREACHABLE.
-        assert "--settings" in launch, "compose produced a settings-less launch"
+        # ASKED OF THE HARNESS, not grepped for `--settings`: that flag is Claude
+        # Code's spelling, and a launcher that checks one program's syntax on
+        # every program's argv either rejects a correct launch or passes a broken
+        # one the moment a second harness exists.
+        assert program.carries_settings(launch, settings_path), \
+            "compose produced a settings-less launch"
         return launch
 
 
@@ -1140,18 +1190,23 @@ class ClaudeRuntime:
                    for m in self.AUTH_MARKERS)
 
 
-class CodexRuntime:
-    """Second implementation. NOT charity — the capability leak detector.
+class StoplessRuntime:
+    """A runtime that CANNOT deliver blocking stop hooks — the capability leak
+    detector, and nothing else.
 
-    codex is a real runtime we can host WORKERS on, but it does NOT declare
-    blocking stop hooks (measured, adapters.md). So `role set X lead` on codex
-    MUST refuse — and this second impl is what makes that refusal testable with a
-    positive control: lead-on-claude passes, lead-on-codex refuses. A capability
-    gate that only ever sees one runtime is a gate that has never been shown to
-    open OR close.
+    IT USED TO BE CALLED CodexRuntime, on the belief that codex was such a
+    program. codex is not (harness.CodexHarness.hooks, read out of codex's own
+    Stop-hook source), and leaving the name would have made this repo's negative
+    control a false claim about a real product — the exact "declared and never
+    checked" shape it exists to catch. The name now says what the class IS
+    rather than who we thought had the flaw.
+
+    Its whole job: make the capability refusal testable with a positive control.
+    lead-on-claude passes, lead-on-stopless refuses. A gate that only ever sees
+    capable programs is a gate that has never been shown to close.
     """
 
-    name = "codex"
+    name = "stopless"
 
     def __init__(self, panes, resolve_settings: SettingsResolver) -> None:
         self._panes = panes
@@ -1168,7 +1223,7 @@ class CodexRuntime:
                 f"could not materialize settings for {card.name} "
                 f"(role {card.role!r}); refusing to launch a settings-less agent."
             )
-        launch = f"SHANTY_AGENT={card.name} codex --settings {settings_path}"
+        launch = f"SHANTY_AGENT={card.name} stopless --settings {settings_path}"
         assert "--settings" in launch, "compose produced a settings-less launch"
         return launch
 
