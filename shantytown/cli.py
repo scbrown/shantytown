@@ -963,7 +963,15 @@ def _default_settings(root: Path):
         # nowhere to land. An agent file is used when it EXISTS; otherwise the
         # role file, which is what every card uses today. No file for either is
         # None, and compose REFUSES: no settings, no launch, never a fallback.
-        for name in (f"agent-{card.name}.settings.json", f"{card.role}.settings.json"):
+        #
+        # THE NAMES ARE THE HARNESS'S (harness.settings_name). They were literals
+        # here, which made this resolver quietly Claude-Code-only: a codex card
+        # would have been handed a `.json` path for a program that reads
+        # config.toml — a file that does not exist, so every codex launch would
+        # refuse for a reason that had nothing to do with the card.
+        program = harness_mod.for_card(card)
+        for name in (program.agent_settings_name(card.name),
+                     program.settings_name(card.role)):
             p = Path(root) / "settings" / name
             if p.is_file():
                 return str(p)
@@ -1105,9 +1113,16 @@ def _settings_reach(a, panes, agents) -> tuple[list[str], list[str]]:
 
 
 def _runtime(a, panes):
-    """The runtime for this invocation. Claude Code is first-class; a second
-    runtime (codex/opencode) would be selected here and its capability gate
-    (runtime.require_capability) would refuse a lead it cannot host."""
+    """The runtime for this invocation.
+
+    ONE RUNTIME, MANY HARNESSES, and the distinction is the aegis-85ox fix rather
+    than an accident: WHICH PROGRAM an agent runs is the card's (harness.py, and
+    ClaudeRuntime.compose asks the card's harness for the argv, the settings and
+    the capability). What is left in the Runtime is the launcher seam itself —
+    compose-or-refuse, deliver through Panes — plus the pane-reading predicates,
+    which are still Claude Code's and are the one seam the codex work did not
+    move (harness.py's header says why, and what it costs).
+    """
     return ClaudeRuntime(panes, _default_settings(a.root), root=a.root)
 
 
@@ -1221,7 +1236,8 @@ def _launch(a, card, panes, runtime, *, dry_run: bool = False) -> int:
     # (aegis-85ox). It belongs here with the others: same seam, same outcome.
     try:
         launch = runtime.compose(card)
-    except (CapabilityError, SettingsError, harness_mod.UnknownHarness) as e:
+    except (CapabilityError, SettingsError, harness_mod.UnknownHarness,
+            harness_mod.Unsupported) as e:
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED
     if dry_run:
@@ -2098,12 +2114,30 @@ def _cmd_role(a) -> int:
     if a.dry_run:
         print("\n  --dry-run: nothing written.")
         return OK
-    # GENERATIVE (#6): emit each written role's settings.json in the SAME operation
-    # as the card, so "declaring a role emits its stop hooks" is literal — the card
-    # and its hooks cannot drift. This is the CONTENT st new's --settings reads.
-    emitted = _emit_role_settings(a.root, {ag.role for ag in plan.writes})
-    for path in emitted:
-        print(f"  hooks   {path}")
+    # GENERATIVE (#6): emit each written role's settings in the SAME operation as
+    # the card, so "declaring a role emits its stop hooks" is literal — the card
+    # and its hooks cannot drift. This is the CONTENT st new's launch reads.
+    #
+    # PER (HARNESS, ROLE), not per role: which artifact a card reads is decided
+    # by the program it runs, so a store with a codex lead and a claude lead
+    # needs both files written. Grouping by the harness the CARDS name means we
+    # never emit an artifact for a program nobody in this write asked for.
+    by_harness: dict[str, set[str]] = {}
+    for ag in plan.writes:
+        by_harness.setdefault(harness_mod.name_for(ag), set()).add(ag.role)
+    for harness_name in sorted(by_harness):
+        paths = _emit_role_settings(a.root, by_harness[harness_name],
+                                    harness_name=harness_name)
+        for path in paths:
+            print(f"  hooks   {path}")
+        # A harness may need more than the file (codex links the operator's
+        # credentials into the home it just wrote). Notes are the operator's to
+        # act on and NEVER fail the write — the cards and the hooks are already
+        # on disk, and a `role set` that succeeded must not report a failure.
+        program = harness_mod.get(harness_name)
+        for path in paths:
+            for note in program.provision(str(path), root=a.root):
+                print(f"  ⚠ {note}", file=sys.stderr)
     _report_who_the_rewrite_did_not_reach(a, {ag.role for ag in plan.writes})
     return OK
 
@@ -2172,18 +2206,29 @@ def _report_who_the_rewrite_did_not_reach(a, roles: set[str]) -> None:
         print(f"    Treat as not-reached until relaunched — unknown is not fine.")
 
 
-def _emit_role_settings(root: Path, roles: set[str]) -> list[Path]:
-    """Write <root>/settings/<role>.settings.json for each role. Idempotent —
-    settings are per-role (all workers share one), so re-emitting is a no-op
-    rewrite. Returns the paths written."""
+def _emit_role_settings(root: Path, roles: set[str],
+                        harness_name: str | None = None) -> list[Path]:
+    """Write each role's settings artifact FOR ONE HARNESS. Idempotent —
+    settings are per-role (all workers on one harness share one file), so
+    re-emitting is a no-op rewrite. Returns the paths written.
+
+    harness_name defaults to Claude Code, so a caller that says nothing gets
+    exactly what this always wrote. A store running two programs gets two
+    artifacts per role, in two names the harnesses choose — which is why the
+    caller loops over the (harness, role) pairs its cards actually name rather
+    than over roles alone (_cmd_role).
+    """
+    program = harness_mod.get(harness_name)
     sdir = Path(root) / "settings"
-    sdir.mkdir(parents=True, exist_ok=True)
     written = []
     for role in sorted(roles):
-        p = sdir / f"{role}.settings.json"
+        p = sdir / program.settings_name(role)
+        # mkdir per artifact, not once for sdir: a harness's name may carry
+        # directories (codex needs a DIRECTORY per role — CODEX_HOME names one).
+        p.parent.mkdir(parents=True, exist_ok=True)
         # Pass the root: the hook must reach THIS store, not cwd/.shanty (the
         # agent's own workspace, which has none) — see _stop_cmd.
-        emitted = settings_for_role(role, root=root)
+        emitted = settings_for_role(role, root=root, harness_name=harness_name)
         # MERGE, NEVER CLOBBER (GitHub #15, #16). This was an unconditional full
         # overwrite, so anything an operator added — a permission, an env var, a
         # SessionStart self-prime — was silently dropped on the next `roles set`.
@@ -2192,46 +2237,26 @@ def _emit_role_settings(root: Path, roles: set[str]) -> list[Path]:
         #
         # st OWNS the hook EVENTS it emits and replaces those wholesale (a stale
         # stop direction must never survive a rewrite); every other key, and every
-        # hook event st does not emit, is the operator's and is preserved.
-        merged = _merge_settings(_read_json(p), emitted)
-        p.write_text(json.dumps(merged, indent=2, sort_keys=True))
+        # hook event st does not emit, is the operator's and is preserved. The
+        # merge AND the serialization are the harness's render() — one call,
+        # because they are one decision and this emitter must not learn a second
+        # file format to keep the rule.
+        p.write_text(program.render(emitted, _read_text(p)))
         written.append(p)
     return written
 
 
-def _read_json(path: Path) -> dict:
+def _read_text(path: Path) -> str:
     try:
-        data = json.loads(Path(path).read_text())
-        return data if isinstance(data, dict) else {}
-    except (OSError, ValueError):
-        return {}
+        return Path(path).read_text()
+    except OSError:
+        return ""
 
 
-def _merge_settings(existing: dict, emitted: dict) -> dict:
-    """Emitted keys win; everything else the operator wrote survives.
-
-    ONE LEVEL DEEP for dict values, and that depth is the whole rule. Both keys st
-    emits are dicts the operator also has a legitimate claim on:
-
-      hooks   st replaces the EVENTS it emits — a stale stop direction surviving a
-              rewrite is exactly the drift `roles set` exists to remove — but an
-              event st does not emit (a Notification hook, a SessionStart prime) is
-              left as found.
-      env     st sets BOBBIN_ROLE; an operator's own variables beside it are theirs.
-
-    Deeper than one level would start merging st's hook LISTS with an operator's,
-    which is how a removed hook comes back. Shallower is the wholesale clobber this
-    fixes. So: one level, emitted wins per sub-key.
-    """
-    out = dict(existing)
-    for key, value in emitted.items():
-        if isinstance(value, dict) and isinstance(out.get(key), dict):
-            merged = dict(out[key])
-            merged.update(value)
-            out[key] = merged
-        else:
-            out[key] = value
-    return out
+# _merge_settings MOVED to harness.merge_one_level (the merge rule is st's, but
+# it has to run inside the harness's render() — the operator's keys can only be
+# preserved by something that can parse the format they are written in, and this
+# emitter deliberately knows only one of the two).
 
 
 def _cmd_context(a) -> int:
@@ -3725,7 +3750,8 @@ def _cmd_roles(a) -> int:
     # artifact was green for a lead whose live process had no stop hooks at all.
     panes = _panes(a)
     rep = roles_mod.check(_registry(a),
-                          emitted=lambda role: emitted_stop_directions(a.root, role),
+                          emitted=lambda card: emitted_stop_directions(
+                              a.root, card.role, harness_mod.name_for(card)),
                           live=lambda pane: live_wiring(pane, panes.cmdline),
                           catalog=_catalog(a))
     print()

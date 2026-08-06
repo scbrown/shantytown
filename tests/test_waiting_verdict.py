@@ -133,7 +133,7 @@ def test_default_is_off_so_the_verdict_cannot_appear_by_accident():
 
 
 def test_a_runtime_that_cannot_answer_degrades_to_unsure_not_to_a_guess():
-    """Pane-reading is optional (CodexRuntime implements neither this nor
+    """Pane-reading is optional (StoplessRuntime implements neither this nor
     shows_ready_ui), so a runtime without the method must not crash a supervisor.
     It must also not answer 'not waiting' into a real verdict — the degraded path
     leaves `?`, the honest could-not-tell."""
