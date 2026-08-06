@@ -188,6 +188,21 @@ def _warn_socket_file_once(root) -> None:
           f"{root / 'shantytown.toml'} instead.", file=sys.stderr)
 
 
+def _carries_settings_pointer(line: str) -> bool:
+    """Does this reconstructed launch line point at ANY harness's settings?
+
+    Asked of the harnesses rather than pattern-matched here, because "carries
+    settings" is a claim about a program's own syntax — a flag for one, an export
+    for another. The previous version tested for the literal string `--settings`,
+    which is Claude Code's spelling, so every correctly-wired codex agent failed
+    it (aegis-506x9). A reader that hardcodes one program's mechanism does not
+    check the fleet, it checks the half of the fleet that runs that program.
+    """
+    from . import harness as harness_mod
+    return any(h.settings_in_cmdline(line) is not None
+               for h in harness_mod.all_harnesses())
+
+
 class OwnershipError(RuntimeError):
     """st refused to reap a session it did not launch (no _OWNED_ENV marker)."""
 
@@ -226,11 +241,33 @@ class Tmux:
             st-launched   pane_pid is `-bash`, the runtime is a CHILD
         So look at the pane process AND its descendants.
 
-        Among candidates carrying --settings, take the EARLIEST-STARTED. A
-        transient `bash -c` from a tool call can mention --settings in an eval
+        Among candidates carrying a SETTINGS POINTER, take the EARLIEST-STARTED.
+        A transient `bash -c` from a tool call can mention --settings in an eval
         string; the real runtime has been there since the session began, so
         oldest-wins keeps a passing shell command from impersonating the
         agent's wiring.
+
+        ⚠️ ARGV IS NOT THE LAUNCH LINE, and reading it as though it were is what
+        made this check harness-blind (aegis-506x9). Claude Code's pointer is a
+        FLAG, so it lands in argv. codex has no such flag — its pointer is an
+        EXPORT, `CODEX_HOME=<dir> codex …`, which the shell consumes into the
+        child's environment. Measured on the live store, 2026-08-06:
+
+            argv        node …/codex --dangerously-bypass-hook-trust --model …
+            environ     CODEX_HOME=…/settings/codex/lead
+            that file   carries BOTH the send and the drain Stop hooks
+
+        So `ps` alone showed no pointer and a fully-wired codex lead was reported
+        as the hookless zombie — the alarm whose text is "the stops of its 7
+        reports land in a store nothing reads". The launch line is therefore
+        RECONSTRUCTED here: argv, with the harnesses' settings_env_var
+        assignments read back out of /proc and prepended, which is exactly the
+        string the launcher typed. Callers keep taking a plain string and the
+        interpretation stays in the harnesses, where the syntax lives.
+
+        The env is read from the CANDIDATE PROCESS, not from this one. st runs
+        with its own environment and inheriting it here would let the checker's
+        own CODEX_HOME answer a question about somebody else's agent.
         """
         r = subprocess.run(
             self._cmd("list-panes", "-a", "-F", "#{pane_pid} #{session_name}"),
@@ -244,9 +281,10 @@ class Tmux:
             return None
         root = pids[0]
         # etimes (seconds elapsed) is monotone in age and trivially sortable —
-        # unlike lstart, which is a fixed-width 24-char date field.
+        # unlike lstart, which is a fixed-width 24-char date field. pid is here
+        # so the environment can be read back for the process it belongs to.
         ps = subprocess.run(
-            ["ps", "-o", "etimes=,args=", "-p", root, "--ppid", root],
+            ["ps", "-o", "etimes=,pid=,args=", "-p", root, "--ppid", root],
             capture_output=True, text=True,
         )
         if ps.returncode != 0:
@@ -256,22 +294,59 @@ class Tmux:
             ln = ln.strip()
             if not ln:
                 continue
-            age_s, _, args = ln.partition(" ")
+            parts = ln.split(None, 2)
+            if len(parts) < 3:
+                continue
+            age_s, pid, args = parts
             try:
                 age = int(age_s)
             except ValueError:
                 continue
             args = args.strip()
-            toks = args.split()
-            if fallback is None and args != "-bash":
-                fallback = args
-            if "--settings" in toks or any(t.startswith("--settings=") for t in toks):
+            if args == "-bash":
+                continue
+            line = self._launch_line(pid, args)
+            if fallback is None:
+                fallback = line
+            if _carries_settings_pointer(line):
                 if age > best_age:
-                    best, best_age = args, age
-        # No --settings anywhere is a REAL answer (the hookless zombie), so
-        # return the process we found rather than None, which means "could not
-        # look". That distinction is the whole contract of the callers.
+                    best, best_age = line, age
+        # No pointer anywhere is a REAL answer (the hookless zombie), so return
+        # the process we found rather than None, which means "could not look".
+        # That distinction is the whole contract of the callers.
         return best or fallback
+
+    @staticmethod
+    def _launch_line(pid: str, args: str) -> str:
+        """argv with the settings-pointer exports folded back in.
+
+        Only the harnesses' declared vars are recovered — not the whole
+        environment. A process environment holds credentials (codex's home sits
+        beside its auth.json), and this string is printed in operator-facing
+        findings, so pulling everything would leak secrets into `st crew` output
+        to fix a display bug.
+        """
+        from . import harness as harness_mod
+        wanted = harness_mod.settings_env_vars()
+        if not wanted:
+            return args
+        try:
+            with open(f"/proc/{pid}/environ", "rb") as fh:
+                raw = fh.read()
+        except OSError:
+            # Unreadable environ (process gone, or not ours) is not a finding —
+            # fall back to argv and let the caller's own None/empty contract say
+            # what it can and cannot tell.
+            return args
+        env = {}
+        for item in raw.split(b"\0"):
+            if not item:
+                continue
+            key, sep, value = item.decode("utf-8", "replace").partition("=")
+            if sep and key in wanted:
+                env[key] = value
+        prefix = " ".join(f"{k}={env[k]}" for k in wanted if k in env)
+        return f"{prefix} {args}" if prefix else args
 
     def capture(self, pane: str, history: int = 0, attrs: bool = False) -> str:
         # -S -N extends the capture back N lines into scrollback. Default 0 keeps

@@ -275,6 +275,109 @@ def test_an_operators_snug_doc_limit_does_NOT_survive_a_re_emission():
     assert data["project_doc_max_bytes"] == codex.PROJECT_DOC_MAX_BYTES
 
 
+def test_the_settings_env_vars_are_DERIVED_from_the_registry():
+    """A process reader must not know which program it is looking at. The
+    previous one tested for the literal `--settings`, which is Claude Code's
+    spelling, so it did not check the fleet — it checked the half of the fleet
+    running that program. Derived, so a third harness with an env-borne pointer
+    is covered by declaring it on itself rather than by a third special case."""
+    assert harness_mod.settings_env_vars() == (codex.HOME_VAR,)
+    assert CLAUDE.settings_env_var is None      # a flag, nothing to recover
+    assert CODEX.settings_env_var == codex.HOME_VAR
+
+
+def _spawn_with_env(**extra):
+    """A live process whose EXEC has completed, so /proc/<pid>/environ is its own.
+
+    Popen returns as soon as the fork is under way; until exec lands, the child's
+    /proc still shows the PARENT's environment. Waiting is therefore part of
+    setting the fixture up, not part of the assertion — and it waits on argv
+    (exec completed), never on the environ this is about to measure, so the wait
+    cannot make the test pass by itself.
+    """
+    import os
+    import subprocess as sp
+    import time
+    proc = sp.Popen(["sleep", "30"], env={**os.environ, **extra})
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        try:
+            with open(f"/proc/{proc.pid}/cmdline", "rb") as fh:
+                if b"sleep" in fh.read():
+                    return proc
+        except OSError:
+            pass
+        time.sleep(0.01)
+    proc.kill(); proc.wait()
+    raise AssertionError("child never exec'd — fixture failed, not the code")
+
+
+def test_a_codex_agents_ENVIRON_is_folded_back_into_the_launch_line(tmp_path):
+    """THE FALSE POSITIVE, at its source. `CODEX_HOME=<dir> codex …` is a shell
+    assignment: the shell eats it and the child's argv never contains it. So
+    `ps` shows a wired codex agent as `node …/codex --model …` with no pointer.
+
+    Measured against a REAL process rather than a mocked string, because the
+    whole defect was believing a launch line we had reconstructed wrongly."""
+    from shantytown.tmux import Tmux
+    home = tmp_path / "codexhome"
+    home.mkdir()
+    proc = _spawn_with_env(**{codex.HOME_VAR: str(home)})
+    try:
+        argv = "node /somewhere/codex --model gpt-5.6-terra"
+        line = Tmux._launch_line(str(proc.pid), argv)
+        assert line.startswith(f"{codex.HOME_VAR}={home} "), line
+        # and the reconstructed line now answers the question argv could not.
+        assert CODEX.settings_in_cmdline(line) == str(home / codex.CONFIG_FILE)
+    finally:
+        proc.kill()
+        proc.wait()
+
+
+def test_only_the_settings_vars_are_recovered_never_the_whole_environ(tmp_path):
+    """A codex home sits beside its auth.json, and this string is printed in
+    operator-facing findings. Recovering the whole environment to fix a display
+    bug would put secrets in `st crew` output."""
+    from shantytown.tmux import Tmux
+    proc = _spawn_with_env(**{codex.HOME_VAR: str(tmp_path),
+                              "AWS_SECRET_ACCESS_KEY": "hunter2"})
+    try:
+        line = Tmux._launch_line(str(proc.pid), "node /somewhere/codex")
+        assert "hunter2" not in line
+        assert "AWS_SECRET_ACCESS_KEY" not in line
+    finally:
+        proc.kill()
+        proc.wait()
+
+
+def test_a_healthy_codex_lead_is_NOT_reported_as_a_hookless_zombie(tmp_path):
+    """DIRECTION ONE of the acceptance. A codex lead whose config carries send
+    AND drain must read as wired — this is the alarm that fired verbatim on
+    dearing while its config carried both and its process pointed at that exact
+    file."""
+    home = tmp_path / "codex" / "lead"
+    home.mkdir(parents=True)
+    (home / codex.CONFIG_FILE).write_text(
+        codex.render(codex.settings_for_role("lead", root=str(tmp_path))))
+    launch = f"{codex.HOME_VAR}={home} node /somewhere/codex --model gpt-5.6-terra"
+    wiring = live_wiring("pane", lambda _p: launch)
+    assert wiring is not None
+    assert wiring.directions == {"send", "drain"}, (
+        "a codex lead carrying both stop directions was read as carrying none")
+    assert wiring.settings_path == str(home / codex.CONFIG_FILE)
+
+
+def test_a_codex_pane_that_dropped_to_bash_STILL_reports_the_zombie():
+    """DIRECTION TWO, and the reason one direction alone made this defect
+    survivable: the same warning was a TRUE positive within ten minutes of being
+    a false one, and was dismissed. A launch line with no pointer anywhere is an
+    EMPTY SET (a measurement), never None (a failure to measure)."""
+    wiring = live_wiring("pane", lambda _p: "node /somewhere/codex --model x")
+    assert wiring is not None, "no pointer is a finding, not a failure to look"
+    assert wiring.directions == set()
+    assert wiring.settings_path is None
+
+
 def test_the_operator_keeps_everything_st_did_not_emit():
     """Same merge rule as Claude Code's (harness.merge_one_level), one format
     over — including `[hooks.state]`, which is codex's own trust ledger and
