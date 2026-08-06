@@ -144,11 +144,31 @@ class Harness(Protocol):
         harness's because the format is."""
         ...
 
+    # The ENVIRONMENT VARIABLE this program's settings ride on, or None for a
+    # program that takes a flag instead.
+    #
+    # It is declared because ARGV IS NOT THE LAUNCH LINE (internal-ref).
+    # `CODEX_HOME=<dir> codex …` is a SHELL ASSIGNMENT: the shell consumes it into
+    # the child's environment and it never appears in argv. So a reader that
+    # scrapes a live process's command line sees `node …/codex --model …` with no
+    # pointer in it at all, and concludes the agent carries no hooks — the
+    # hookless-zombie verdict, delivered against a perfectly wired agent.
+    #
+    # Naming the var HERE rather than in the process reader is the point: the
+    # reader must not have to know which harness it is looking at, or it becomes
+    # the thing it is checking — one program's mechanism, applied to everybody.
+    settings_env_var: "str | None"
+
     def settings_in_cmdline(self, cmdline: str) -> "str | None":
         """The settings artifact a RUNNING process was launched with, read off
         its command line — or None if this launch is not one of ours. This is
         what makes the foreign-launcher check (runtime.live_wiring) work for a
-        program whose settings ride an env export instead of a flag."""
+        program whose settings ride an env export instead of a flag.
+
+        `cmdline` here means the RECONSTRUCTED launch line — argv with the
+        harnesses' settings_env_var assignments folded back in (tmux.cmdline) —
+        precisely because argv alone cannot answer this for an env-pointer
+        program."""
         ...
 
     def carries_settings(self, launch: str, settings_path: str) -> bool:
@@ -188,6 +208,9 @@ class ClaudeHarness:
     """
 
     name = "claude"
+    # A FLAG, not an export — so there is nothing to recover from the environment
+    # and the reconstructed launch line is just argv.
+    settings_env_var = None
 
     def launch(self, card: Agent, settings_path: str, root=None) -> str:
         # --no-chrome: crew agents do not use the Chrome integration, and WITHOUT
@@ -390,6 +413,16 @@ class CodexHarness:
     """
 
     name = "codex"
+
+    @property
+    def settings_env_var(self) -> str:
+        # codex offers no --settings flag (codex.py fact 1), so the pointer is an
+        # export, and this is the ONLY place a process reader can recover it from.
+        # A property, not a class attribute, so the NAME has one definition:
+        # codex.HOME_VAR. A second copy here would be a constant that can drift
+        # from the launcher that writes it, and the drift would present as an
+        # agent silently reported hookless — the defect this exists to fix.
+        return codex_mod().HOME_VAR
 
     def launch(self, card: Agent, settings_path: str, root=None) -> str:
         # A card asking for a browser gets a REFUSAL, not a dropped flag. codex
@@ -631,6 +664,26 @@ def all_harnesses() -> tuple[Harness, ...]:
     """
     return (_HARNESSES[DEFAULT],) + tuple(
         h for n, h in _HARNESSES.items() if n != DEFAULT)
+
+
+def settings_env_vars() -> tuple[str, ...]:
+    """Every environment variable some harness carries its settings pointer in.
+
+    Exists so a PROCESS READER can reconstruct a launch line without knowing
+    which program it is looking at. tmux.cmdline reads argv out of `ps`, and argv
+    is not the launch line for a program whose pointer is a shell assignment —
+    `CODEX_HOME=<dir> codex …` reaches the process as ENVIRONMENT, never as an
+    argument. Without this the reader sees a codex agent's argv, finds no
+    pointer, and reports a fully-wired agent as a hookless zombie (aegis-506x9).
+
+    Derived from the registry rather than listed, so a third harness with an
+    env-borne pointer is covered by declaring `settings_env_var` on itself — the
+    reader does not get a third special case, which is how the second one got
+    missed.
+    """
+    return tuple(dict.fromkeys(
+        v for h in all_harnesses()
+        if (v := getattr(h, "settings_env_var", None))))
 
 
 def get(name: str | None) -> Harness:
