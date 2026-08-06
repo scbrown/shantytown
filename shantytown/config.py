@@ -199,6 +199,21 @@ class Config:
     # is every deployment that predates this table.
     harness_default: str | None = None
     harness_by_role: dict[str, str] = field(default_factory=dict)
+    # [model] — WHICH MODEL, for cards that do not say. Same two levels and the
+    # same precedence as [harness], because it is the same question one axis
+    # over: harness picks the PROGRAM, model picks what that program runs.
+    #
+    #     model.default            the fleet's model
+    #     model.by_role.<role>     that role's model
+    #
+    # NOT validated against a known-names list, unlike harness: model slugs are
+    # the PROVIDER's vocabulary and they rotate without a shantytown release, so
+    # a build-time allowlist here would refuse tomorrow's model and be wrong in
+    # the direction that blocks work. The ROLE half is still validated — that is
+    # the silently-dropped key, and it fails the other way (applies to nobody,
+    # reads as applied).
+    model_default: str | None = None
+    model_by_role: dict[str, str] = field(default_factory=dict)
     path: Path | None = None
 
     def catalog(self):
@@ -263,8 +278,10 @@ def load_or_default(root) -> tuple[Config, str | None]:
 # --- parsing ----------------------------------------------------------------
 
 _TOP_KEYS = {"startup", "modes", "hibernate", "fleet", "crew", "env", "tmux",
-             "roles", "precedence", "governor", "session_budget", "harness"}
+             "roles", "precedence", "governor", "session_budget", "harness",
+             "model"}
 _HARNESS_KEYS = {"default", "by_role"}
+_MODEL_KEYS = {"default", "by_role"}
 _STARTUP_KEYS = {"mode"}
 _HIB_KEYS = {"enabled", "max_quiet_minutes"}
 _TMUX_KEYS = {"socket"}
@@ -316,9 +333,13 @@ def _resolve(data: dict, path: Path) -> Config:
     declared_roles = _roles(path, _table(path, data, "roles"))
     harness_default, harness_by_role = _harness(
         path, _table(path, data, "harness"), declared=set(declared_roles))
+    model_default, model_by_role = _model(
+        path, _table(path, data, "model"), declared=set(declared_roles))
     return Config(mode=mode, modes=modes,
                   harness_default=harness_default,
                   harness_by_role=harness_by_role,
+                  model_default=model_default,
+                  model_by_role=model_by_role,
                   hibernate=_hibernate(path, _table(path, data, "hibernate")),
                   fleet=_fleet(path, _table(path, data, "fleet")),
                   crew=_crew(path, _table(path, data, "crew"),
@@ -398,6 +419,67 @@ def _harness(path: Path, tbl: dict,
                 f"[roles.{role}] to use it here — a rule for a role nobody has "
                 f"applies to nobody and reads as applied.")
         by_role[role] = _named(f"harness.by_role] {role}", value)
+    return default, by_role
+
+
+def _model(path: Path, tbl: dict,
+           declared: set[str] | None = None) -> tuple[str | None, dict[str, str]]:
+    """[model] — which MODEL, for cards that do not say.
+
+        [model]
+        default = "gpt-5.6-terra"
+
+        [model.by_role]
+        administrator = "gpt-5.6-terra"
+        worker = "gpt-5.6-luna"
+
+    Deliberately the same shape, the same precedence and the same table position
+    as [harness], because it is the same question one axis over — harness picks
+    the PROGRAM, model picks what that program runs. A reader who has learned one
+    has learned the other, and `[roles.<name>] model = …` is refused here for the
+    reason spelled out in _harness: that table is the trait vocabulary.
+
+    ONE HALF IS VALIDATED, AND THE ASYMMETRY IS THE POINT:
+
+      the ROLE name, exactly as _harness does. `[model.by_role] wrker = "…"` must
+      not be accepted, apply to nobody and read as applied.
+
+      the MODEL name is NOT checked against a list, and must not be. Slugs are
+      the PROVIDER's vocabulary — `gpt-5.6-terra` and `claude-opus-5` are minted
+      and retired on their schedule, not on shantytown's. A build-time allowlist
+      would refuse a model released after the installed version and be wrong in
+      the direction that BLOCKS WORK, which is the worse direction for a knob
+      whose failure is otherwise loud: a bad slug is rejected by the harness
+      itself, at launch, naming the model. Compare harness, where the name space
+      IS this build's (all_harnesses()) and an unknown one is unlaunchable — so
+      validating there is checkable and refusing here would be guessing.
+    """
+    from .tier import VALID_ROLES
+    _refuse_unknown(path, "model", tbl, _MODEL_KEYS)
+
+    def _slug(where: str, value) -> str:
+        if not isinstance(value, str) or not value.strip():
+            raise ConfigError(f"{path}: [{where}] must be a model name (a "
+                              f"non-empty string), got {value!r}")
+        return value
+
+    default = tbl.get("default")
+    default = _slug("model] default", default) if default is not None else None
+
+    raw = tbl.get("by_role", {})
+    if not isinstance(raw, dict):
+        raise ConfigError(f"{path}: [model.by_role] must be a table, got "
+                          f"{type(raw).__name__}")
+    allowed = set(VALID_ROLES) | set(declared or ())
+    by_role: dict[str, str] = {}
+    for role, value in raw.items():
+        if role not in allowed:
+            raise ConfigError(
+                f"{path}: [model.by_role] {role!r} is not a role this deployment "
+                f"has; roles: {', '.join(sorted(allowed))}. Declare it as "
+                f"[roles.{role}] to use it here — a rule for a role nobody has "
+                f"applies to nobody and reads as applied.")
+        by_role[role] = _slug(f"model.by_role] {role}", value)
     return default, by_role
 
 

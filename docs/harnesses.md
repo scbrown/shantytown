@@ -29,6 +29,35 @@ moved by a config written afterwards; the table answers for the silent. A resolv
 never written back onto the card — that would be a claim nobody made, and it would outlive the
 config being changed back.
 
+### …and which MODEL that program runs
+
+`[model]` is the same table one axis over — harness picks the **program**, model picks what that
+program runs — with the same two levels, the same precedence, and a card still beating both:
+
+```toml
+[model]
+default = "gpt-5.6-luna"       # the fleet's model
+
+[model.by_role]
+administrator = "gpt-5.6-terra"   # …except these roles
+```
+
+Before this table, `model` was a **card field only**: a deployment that wanted its administrator on
+the top model and its workers on a cheap one had to stamp the slug onto every card by hand, and
+every card added afterwards silently reverted to whatever the harness defaults to. That is the same
+"reads as configured, isn't" failure the card field itself was added to fix.
+
+**Two differences from `[harness]`, both deliberate:**
+
+- **The fallback is `None`, not a name.** `claude` is a sane fallback program; there is no sane
+  fallback *model*. Saying nothing omits `--model` and lets the harness apply its own default —
+  which is exactly what every deployment that never writes this table already gets.
+- **The slug is not validated against a list.** Model names are the *provider's* vocabulary and
+  rotate without a shantytown release, so a build-time allowlist would refuse a model newer than
+  your installed version — wrong in the direction that blocks work. A bad slug still fails loudly,
+  at launch, from the harness itself. The **role** half *is* validated, because an unknown role
+  there fails the other way: it applies to nobody and reads as applied.
+
 `st anchor <agent> --harness` prints the **resolved** answer, which is what the agent will
 actually run.
 
@@ -173,6 +202,15 @@ and codex cards should stay workers on that host.
 | the role | `[harness.by_role] <role> = "…"` | the fleet default |
 | the fleet | `[harness] default = "…"` | the built-in default |
 | the built-in | — | `claude` |
+
+Same ladder for the model, one axis over:
+
+| what says it | where | beats |
+|---|---|---|
+| the card | `model` on `<root>/crew/<agent>.json`, or `[crew.<name>] model` | everything |
+| the role | `[model.by_role] <role> = "…"` | the fleet default |
+| the fleet | `[model] default = "…"` | saying nothing |
+| nothing | — | no `--model` flag; the harness picks |
 
 Both config halves are validated **at load**, and each catches a different silent failure. An
 unimplemented harness name is refused, because a typo in `default` moves every card in the fleet
