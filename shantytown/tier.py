@@ -256,7 +256,15 @@ def plan_role_set(registry: Registry, agent_name: str, role: str,
 
 def role_set(registry: MutableRegistry, agent_name: str, role: str,
              reports: list[str] | None = None, dry_run: bool = False,
-             catalog=None) -> RolePlan:
+             catalog=None, root=None) -> RolePlan:
+    """`root` is threaded for ONE reason: the deployment can name a card's
+    program without the card saying so (`[harness]` / `[harness.by_role]`), and
+    that answer lives under the root. The gate below must ask the program the
+    LAUNCHER will resolve, not the one a card-only reading implies — otherwise a
+    fleet whose config puts leads on a stopless program passes role set and
+    refuses at `st new`, which is aegis-85ox with a config file in the middle.
+    None keeps the card-only answer, which is what every caller without a root
+    already got."""
     plan = plan_role_set(registry, agent_name, role, reports, catalog=catalog)
     # Capability gate (aegis-w5l9). A lead/administrator RECEIVES stop events, so
     # its harness must declare blocking stop hooks; refuse BEFORE any write, so
@@ -267,21 +275,21 @@ def role_set(registry: MutableRegistry, agent_name: str, role: str,
     # rather than only in `_cmd_role` protects every caller of role_set, not one
     # command; adapters.md documented the gate firing at role-set time and it
     # never did — the check lived only on the `st new` launch path.
-    _require_writes_hostable(plan)
+    _require_writes_hostable(plan, root)
     if not dry_run:
         for a in plan.writes:
             registry.set(a)
     return plan
 
 
-def _require_writes_hostable(plan: RolePlan) -> None:
+def _require_writes_hostable(plan: RolePlan, root=None) -> None:
     """Refuse the plan if any WRITTEN card's role needs a stop capability its
     harness lacks. Local imports keep tier free of a load-time runtime/harness
     dependency (neither imports tier, so no cycle — but the layer stays clean)."""
     from . import harness, runtime
     for card in plan.writes:
         if card.role in runtime._ROLES_NEEDING_STOP:
-            runtime.require_capability(harness.for_card(card), card,
+            runtime.require_capability(harness.for_card(card, root=root), card,
                                        consequence="Nothing written.")
 
 
