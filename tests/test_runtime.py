@@ -12,7 +12,7 @@ import pytest
 
 from shantytown.protocols import Agent
 from shantytown.runtime import (
-    ClaudeRuntime, CodexRuntime, CapabilityError, SettingsError, require_capability,
+    ClaudeRuntime, StoplessRuntime, CapabilityError, SettingsError, require_capability,
     HookSpec,
 )
 from shantytown.tmux import NullPanes
@@ -127,27 +127,28 @@ def test_lead_on_claude_PASSES():
     assert "--settings" in launch          # composed, not refused
 
 
-def test_lead_on_codex_REFUSES():
+def test_lead_on_a_stopless_runtime_REFUSES():
     """codex declares no blocking stop hooks -> a lead cannot be hosted -> refuse,
     write nothing, launch nothing (adapters.md)."""
-    rt = CodexRuntime(NullPanes(), _ok_settings)
+    rt = StoplessRuntime(NullPanes(), _ok_settings)
     with pytest.raises(CapabilityError, match="blocking stop hooks"):
         rt.compose(Agent(name="maldoon", role="lead"))
 
 
-def test_administrator_on_codex_REFUSES():
+def test_administrator_on_a_stopless_runtime_REFUSES():
     """An administrator also receives risen stop events (tier.route_stop), so it
     needs the same delivery capability."""
-    rt = CodexRuntime(NullPanes(), _ok_settings)
+    rt = StoplessRuntime(NullPanes(), _ok_settings)
     with pytest.raises(CapabilityError):
         rt.compose(Agent(name="hammond", role="administrator"))
 
 
-def test_worker_on_codex_is_FINE():
-    """codex can host workers — the gate is role-specific, not a blanket ban."""
-    rt = CodexRuntime(NullPanes(), _ok_settings)
+def test_worker_on_a_stopless_runtime_is_FINE():
+    """A program that cannot deliver stop events can still host workers — the
+    gate is role-specific, not a blanket ban."""
+    rt = StoplessRuntime(NullPanes(), _ok_settings)
     launch = rt.compose(Agent(name="ellie", role="worker"))
-    assert "codex" in launch and "--settings" in launch
+    assert "stopless" in launch and "--settings" in launch
 
 
 def test_capability_gate_keys_on_declaration_not_name():

@@ -36,7 +36,9 @@ def test_role_set_dry_run_writes_nothing(tmp_path):
 
 
 class _NonBlockingHarness:
-    name = "codex"
+    # Not named codex: codex declares blocking stop hooks now (harness.py). What
+    # this double stands for is the CAPABILITY GAP, not any one program.
+    name = "stopless-test"
 
     def hooks(self, card):
         from shantytown.runtime import HookSpec
