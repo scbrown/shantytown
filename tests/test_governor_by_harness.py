@@ -23,9 +23,12 @@ declared, resolution returns the base policy unchanged.
 from __future__ import annotations
 
 import pytest
+import types
 
 from shantytown import governor as gov
+from shantytown import cli
 from shantytown.config import ConfigError, load
+from shantytown.protocols import Agent
 
 
 def _cfg(tmp_path, toml: str):
@@ -123,6 +126,19 @@ min_priority = 1
     assert gov.unconfigured(cfg.governor, "claude") is False
 
 
+def test_base_claude_and_codex_sibling_govern_both_harnesses(tmp_path):
+    """The first configuration an operator writes: base Claude remains a real
+    governor after adding a Codex sibling, not a false signal-lost alarm."""
+    cfg = _cfg(tmp_path, BASE + """
+[governor.by_harness.codex]
+source = "stub"
+stub_pct = 10.0
+metric = "codex:usage_utilization_pct:max"
+""")
+    assert gov.unconfigured(cfg.governor, "claude") is False
+    assert gov.unconfigured(cfg.governor, "codex") is False
+
+
 def test_a_single_harness_deployment_is_never_unconfigured(tmp_path):
     """No by_harness at all = the pre-existing world: one governor, one provider.
     Alarming there would fire on every deployment that predates this feature."""
@@ -193,3 +209,39 @@ def test_metric_defaults_to_the_claude_series(tmp_path):
     cfg = _cfg(tmp_path, BASE)
     assert cfg.governor.metric == gov.USAGE_METRIC
     assert cfg.governor.account_metric == gov.ACCOUNT_USAGE_METRIC
+
+
+def test_a_policy_metric_is_what_the_prometheus_reader_requests():
+    """A sibling metric that is parsed but not requested would look configured
+    while permanently signal-lost.  Assert the request, not just the field."""
+    seen = []
+    reader = gov.PrometheusReader("http://prom", metric="codex:usage:max",
+                                  account_metric="codex_usage",
+                                  fetch=lambda url: seen.append(url) or
+                                  '{"status":"success","data":{"result":[]}}')
+    reader.read_all()
+    assert "codex%3Ausage%3Amax" in seen[0]
+    assert "claude%3Ausage" not in seen[0]
+
+
+def test_dispatch_gate_resolves_the_governor_for_the_target_card(monkeypatch):
+    """Acceptance is through the go gate, not policy_for in isolation: Claude
+    at 90% refuses a P2 while the same P2 reaches a Codex card at 10%."""
+    base = gov.Policy(source="stub", stub_pct=90, tiers=(
+        gov.Tier(at=50, min_priority=1),),
+        by_harness={})
+    codex = gov.Policy(source="stub", stub_pct=10, tiers=(
+        gov.Tier(at=50, min_priority=1),))
+    base.by_harness["codex"] = codex
+    governors = {
+        "base": gov.Governor(base, gov.StubReader(90)),
+        "codex": gov.Governor(codex, gov.StubReader(10)),
+    }
+    cards = [Agent(name="claire", role="worker", pane="p1", harness="claude"),
+             Agent(name="sattler", role="administrator", pane="p2", harness="codex")]
+    monkeypatch.setattr(cli, "_governors", lambda a: (types.SimpleNamespace(governor=base), governors))
+    monkeypatch.setattr(cli, "_registry", lambda a: types.SimpleNamespace(all=lambda: cards))
+    gate = cli._dispatch_gate(types.SimpleNamespace(root="/tmp"))
+    item = types.SimpleNamespace(priority=2)
+    assert gate(item, "claire")
+    assert gate(item, "sattler") == ""
