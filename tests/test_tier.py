@@ -51,9 +51,14 @@ def test_role_set_dry_run_writes_nothing(tmp_path):
 
 
 class _NonBlockingHarness:
-    """A harness that cannot deliver stop events — the codex-class program the
-    capability gate exists to refuse for a lead/administrator (aegis-w5l9)."""
-    name = "codex"
+    """A harness that cannot deliver stop events — the program class the
+    capability gate exists to refuse for a lead/administrator (aegis-w5l9).
+
+    NOT NAMED codex ANY MORE: codex declares blocking stop hooks (harness.
+    CodexHarness.hooks, read out of its Stop-hook source), so a double claiming
+    otherwise under that name would make this suite assert a false thing about a
+    real program — while still passing, because the double is what it measures."""
+    name = "stopless-test"
 
     def hooks(self, card):
         from shantytown.runtime import HookSpec

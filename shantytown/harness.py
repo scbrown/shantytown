@@ -19,18 +19,46 @@ a Harness owns BOTH:
     launch()   the argv (env + binary + flags + how the settings file is passed)
     settings() the CONTENT of the file that argv points at
 
-CLAUDE IS THE ONLY IMPLEMENTATION, and this is a PURE REFACTOR of it — the string
-it composes for an existing card is byte-identical to what shipped before
-(test_harness.py pins it against a literal, and test_new.py's --dry-run output is
-unchanged). No second harness is invented here: one would be a guess, and a guess
-about somebody else's CLI flags is exactly the kind of thing that looks shipped
-and has never run (this repo's `python` vs `python3`, the unmeasured ready
-markers, "Welcome to Claude Code"). What this file buys is that adding one later
-touches THIS file and the card, and nothing in the tier.
+THE SECOND HARNESS LANDED (codex), and it moved the seam. `launch()` +
+`settings()` was enough while Claude Code was the only program, because the rest
+of st quietly agreed with it: the emitter wrote `<role>.settings.json` and JSON
+bytes, the compose invariant asserted the literal string `--settings`, the live
+reader grepped a cmdline for `--settings`, and the artifact reader parsed Claude
+Code's hook schema. Four more places that were Claude Code wearing a generic
+name. codex has NO settings flag at all — it reads config.toml out of
+$CODEX_HOME — so every one of those four would have quietly answered for the
+wrong program. They are now the harness's too:
 
-A card with no `harness` field means "claude" — every card in existence today.
+    settings_name()/agent_settings_name()   WHAT the artifact is called
+    render()                                WHAT BYTES it holds (json / toml)
+    carries_settings()                      the compose invariant, in ITS argv
+    settings_in_cmdline()                   finding it on a RUNNING process
+    read_stop_directions()                  reading the routing back off disk
+    provision()                             anything the file alone cannot do
+
+The rule the codex work should be judged against, and the reason for the reading
+list in codex.py: a guess about somebody else's CLI flags is exactly the kind of
+thing that looks shipped and has never run (this repo's `python` vs `python3`,
+the unmeasured ready markers, "Welcome to Claude Code"). Every codex fact here
+was read out of codex's own source, with the file named beside it.
+
+WHAT IS STILL CLAUDE-SHAPED, named rather than pretended away: the PANE-READING
+predicates (READY_MARKERS, TRUST_MARKERS, CONSENT_MARKERS, the auth-dead banner)
+live on ClaudeRuntime and are matched against a captured pane. They are the same
+KIND of per-program fact as the argv — but a marker is a claim about a UI's
+literal text, and this repo's own rule (runtime.READY_MARKERS' comment) is that a
+marker never observed passing is not a marker. There is no codex on this host to
+watch, so none are written. The honest consequence: `st new` on a codex card
+verifies liveness with Claude Code's markers, matches nothing, and reports
+could-not-tell (2) for an agent that may be fine. That is a WRONG-BUT-LOUD
+answer, which is the one this repo prefers to a confident wrong one.
+
+A card with no `harness` field means "claude" — every card that never said
+otherwise, and the default is the answer for an UNSET field, never a fallback for
+an unrecognised one.
 """
 from __future__ import annotations
+import json
 from pathlib import Path
 from typing import Protocol, runtime_checkable, TYPE_CHECKING
 
@@ -53,21 +81,87 @@ class UnknownHarness(Exception):
     start the wrong program with the wrong settings and report success."""
 
 
+class Unsupported(Exception):
+    """A card asks for something ITS harness's program cannot express.
+
+    The sibling of UnknownHarness, one level in: the program is one we host, but
+    the card sets a field it has no way to honour (`chrome` on codex — there is
+    no browser integration to turn on or off). Dropping the field silently would
+    launch an agent that reads as configured and is not, which is the same class
+    of failure as substituting a different program: it succeeds at being the
+    wrong thing. Raised at COMPOSE time, so nothing is launched."""
+
+
 @runtime_checkable
 class Harness(Protocol):
-    """One agent program, and the two things that are specific to it."""
+    """One agent program, and everything that is specific to it."""
     name: str
 
     def launch(self, card: Agent, settings_path: str, root=None) -> str:
         """The full command line for this card. MUST reference settings_path —
         the launcher's invariant (runtime.py) is that a composed launch always
-        carries its settings or is not composed at all."""
+        carries its settings or is not composed at all. HOW it references it is
+        the harness's: a flag for Claude Code, an env export for codex, which is
+        why the invariant is checked by carries_settings() below rather than by
+        the launcher grepping for a flag name it invented."""
         ...
 
     def settings(self, role: str, root=None) -> dict:
         """The CONTENT of the settings file `launch` points at, for a ROLE. This
         is the file format half — Claude Code's hooks schema is Claude Code's,
         and a second harness emits its own."""
+        ...
+
+    def settings_name(self, role: str) -> str:
+        """The artifact's path RELATIVE TO <root>/settings — name and extension
+        both, because a harness that writes TOML must not be handed a `.json`
+        filename by a caller that assumed. May contain directories."""
+        ...
+
+    def agent_settings_name(self, agent: str) -> str:
+        """Same, for the PER-AGENT override that wins over the role's file
+        (GitHub #17). Two names rather than one parameterised one because they
+        are two different questions and a harness may answer them differently."""
+        ...
+
+    def render(self, settings: dict, existing: str = "") -> str:
+        """The BYTES to write, given what is already on disk.
+
+        Serialization AND merge together, because they are one decision: st owns
+        the hook events it emits and replaces those wholesale (a stale stop
+        direction surviving a rewrite is exactly the drift `role set` exists to
+        remove); everything else in the file is the operator's and survives. A
+        harness that could serialize but not merge would force the caller to
+        parse a format it does not know."""
+        ...
+
+    def read_stop_directions(self, text: str) -> "set[str] | None":
+        """The stop directions an emitted artifact carries — a subset of
+        {"send", "drain"} — or None for CANNOT TELL.
+
+        None is NOT an empty set, and every implementation owes that contract: a
+        file we could not parse is not a file with no hooks. The reader is the
+        harness's because the format is."""
+        ...
+
+    def settings_in_cmdline(self, cmdline: str) -> "str | None":
+        """The settings artifact a RUNNING process was launched with, read off
+        its command line — or None if this launch is not one of ours. This is
+        what makes the foreign-launcher check (runtime.live_wiring) work for a
+        program whose settings ride an env export instead of a flag."""
+        ...
+
+    def carries_settings(self, launch: str, settings_path: str) -> bool:
+        """Does this composed launch actually point at that artifact? The
+        compose invariant, asked of the program that owns the syntax."""
+        ...
+
+    def provision(self, settings_path: str, root=None) -> "list[str]":
+        """Anything the artifact alone cannot do, run after it is written.
+        Returns human-readable notes for the operator (empty is the normal
+        answer). It exists because codex needs one — its home directory holds
+        credentials as well as config — and inventing that seam at the call site
+        would have made the emitter know which harness it was serving."""
         ...
 
     def hooks(self, card: Agent) -> "HookSpec":
@@ -197,6 +291,73 @@ class ClaudeHarness:
         from .runtime import claude_settings_for_role
         return claude_settings_for_role(role, root=root)
 
+    def settings_name(self, role: str) -> str:
+        return f"{role}.settings.json"
+
+    def agent_settings_name(self, agent: str) -> str:
+        # PER-AGENT FIRST (GitHub #17). All workers sharing one file meant nothing
+        # could differ per agent — so a card's own model, permissions or hooks had
+        # nowhere to land.
+        return f"agent-{agent}.settings.json"
+
+    def render(self, settings: dict, existing: str = "") -> str:
+        # indent=2, sort_keys=True and NO trailing newline: the bytes nine live
+        # agents' hook files are already written in. This moved here from
+        # cli._emit_role_settings unchanged, and changing it would rewrite every
+        # settings file in every store on the next `role set` for no reason.
+        return json.dumps(merge_one_level(_load_json(existing), settings),
+                          indent=2, sort_keys=True)
+
+    def read_stop_directions(self, text: str) -> "set[str] | None":
+        try:
+            data = json.loads(text)
+        except (ValueError, TypeError):
+            return None
+        found: set[str] = set()
+        try:
+            for block in data["hooks"]["Stop"]:
+                for hook in block["hooks"]:
+                    cmd = hook.get("command", "")
+                    # The unified entry PROVIDES the drain direction (rank 4
+                    # delivers through the same stop_event drain). Without this
+                    # line every administrator on the new chain reads as DEAF to
+                    # `roles --check` and `st tend` — a checker that cannot see
+                    # the thing it is checking for is the exact defect those
+                    # surfaces exist to catch.
+                    if "shantytown.stop_policy" in cmd:
+                        found.add("drain")
+                        continue
+                    if "shantytown.stop_event" not in cmd:
+                        continue
+                    for mode in ("send", "drain"):
+                        # Match the token, not a substring: "send" must be the
+                        # stop_event subcommand, not a stray word in a path.
+                        if mode in cmd.split():
+                            found.add(mode)
+        except (KeyError, TypeError, AttributeError):
+            # The file exists but is not shaped like settings we emitted. That is
+            # a cannot-tell, not "no hooks" — see the protocol's contract.
+            return None
+        return found
+
+    def settings_in_cmdline(self, cmdline: str) -> "str | None":
+        toks = cmdline.split()
+        for i, t in enumerate(toks):
+            if t == "--settings" and i + 1 < len(toks):
+                return toks[i + 1]
+            if t.startswith("--settings="):
+                return t.split("=", 1)[1]
+        return None
+
+    def carries_settings(self, launch: str, settings_path: str) -> bool:
+        return "--settings" in launch
+
+    def provision(self, settings_path: str, root=None) -> list[str]:
+        # Nothing. Claude Code reads the file the flag names and needs no second
+        # artifact beside it — the workspace-level wiring (.mcp.json, the consent
+        # settings) is provision.py's job and predates the harness split.
+        return []
+
     def hooks(self, card: Agent) -> "HookSpec":
         # Claude Code delivers blocking stop hooks — measured, load-bearing: a
         # lead/administrator's reports' stop events reach the MODEL via a blocking
@@ -209,14 +370,267 @@ class ClaudeHarness:
         return HookSpec(blocking_stop=True)
 
 
-_HARNESSES = {h.name: h for h in (ClaudeHarness(),)}
+class CodexHarness:
+    """OpenAI's Codex CLI. The second implementation — and, per docs/adapters.md,
+    the thing that proves the first did not leak.
+
+    EVERY FACT ABOUT CODEX IS IN codex.py, WITH ITS SOURCE FILE NAMED. Read that
+    docstring before changing anything here; the four numbered facts are what
+    this class is made of, and each one was read out of openai/codex `main` on
+    2026-08-06 because there is no codex on the host that wrote it.
+
+    The shape of the difference, which is the whole reason the seam widened:
+    codex has no `--settings`. It reads config.toml from its home directory, so
+    the launch points at the artifact by exporting CODEX_HOME to the directory
+    holding it. Everything else — the stop routing, the roles, the capability
+    gate — is unchanged, because none of it was ever Claude Code's.
+    """
+
+    name = "codex"
+
+    def launch(self, card: Agent, settings_path: str, root=None) -> str:
+        # A card asking for a browser gets a REFUSAL, not a dropped flag. codex
+        # has no chrome integration; `--no-chrome`/`--chrome` are Claude Code's
+        # answer to a Claude Code consent screen. Honouring the field by ignoring
+        # it would launch an agent whose card says browser and whose process has
+        # none — configured on paper, absent in fact.
+        if card.chrome:
+            raise Unsupported(
+                f"card {card.name!r} sets chrome=True, and harness 'codex' has no "
+                f"browser integration to enable. Refusing to launch an agent whose "
+                f"card claims a capability its program does not have."
+            )
+        # ABSOLUTE, always. The launch `cd`s into the workspace before the env
+        # takes effect, so a relative CODEX_HOME (what `st --root .shanty …`
+        # resolves to) would name a directory relative to the AGENT's cwd — and
+        # codex does not fail on a home that is not there, it quietly uses an
+        # empty one: no hooks, no auth, an agent that starts and is governed by
+        # nothing. Claude Code's `--settings` has the same exposure and errors
+        # loudly instead; this one had to be closed here.
+        home = Path(settings_path).resolve().parent
+        # --dangerously-bypass-hook-trust IS A DEFAULT HERE, and it is the one
+        # `dangerously-` flag in this repo that is not opt-in per card. The
+        # reason it is different in kind: it does not widen what the MODEL may
+        # do (that is --dangerously-bypass-approvals-and-sandbox, below, still
+        # per-card). It says "run the hooks in the home directory I wrote
+        # myself" — and without it codex declines to run any hook it has no
+        # persisted trust record for (codex.py fact 4). The trust record is a
+        # hash we cannot compute from outside, so the alternative is emitting a
+        # role's whole stop routing into a program that will not run it: hooks
+        # present, wired, and inert, which is the failure this repo keeps
+        # naming. An agent whose stop events vanish is the aegis-nipg incident.
+        flags = "--dangerously-bypass-hook-trust"
+        # The codex spelling of the per-card permission opt-in. Same rule as
+        # Claude Code's --dangerously-skip-permissions: one agent's decision on
+        # one card, never a default anybody inherits (the pilot, aegis-qdal.5).
+        if card.dangerous:
+            flags += " --dangerously-bypass-approvals-and-sandbox"
+        # HONOUR THE CARD'S MODEL AT LAUNCH (GitHub #17/#9), same as claude.
+        # `--model` is codex's long form of -m (shared_options.rs).
+        if card.model:
+            flags += f" --model {card.model}"
+        # Identical env contract to ClaudeHarness — SHANTY_ROOT the belt for a
+        # stale settings snapshot (aegis-nipg), BOBBIN_ROLE for hank's scope,
+        # BEADS_ACTOR so the tracker records WHO (GitHub #24), ST_ROLES carrying
+        # the role set OPAQUELY (GitHub #37). None of that is Claude Code's; it
+        # is how a shantytown agent knows who it is, whatever program it runs.
+        root_env = f"SHANTY_ROOT={Path(root).resolve()} " if root else ""
+        st_roles = f"ST_ROLES={','.join(card.effective_roles())} "
+        st_domain = f"ST_ROLE_DOMAIN={card.domain} " if card.domain else ""
+        st_reports = f"ST_REPORTS_TO={card.reports_to} " if card.reports_to else ""
+        launch = (
+            f"{root_env}{codex_mod().HOME_VAR}={home} SHANTY_AGENT={card.name} "
+            f"BOBBIN_ROLE={card.role} BEADS_ACTOR={card.name} "
+            f"{st_roles}{st_domain}{st_reports}codex {flags}"
+        )
+        # Launch IN the agent's workspace, same as claude and for the same
+        # reason: codex reads AGENTS.md and project config relative to its cwd.
+        # A cd prefix, so the single send-keys still delivers one line. (codex
+        # also has --cd; the prefix is used so both harnesses put the agent in
+        # the same place by the same mechanism, and one shell quoting story
+        # covers both.)
+        if card.workspace:
+            launch = f"cd {card.workspace} && {launch}"
+        return launch
+
+    def settings(self, role: str, root=None) -> dict:
+        return codex_mod().settings_for_role(role, root=root)
+
+    def settings_name(self, role: str) -> str:
+        # A DIRECTORY PER ROLE, because CODEX_HOME names a directory and codex
+        # reads a fixed filename inside it. Nested under codex/ so a store that
+        # runs both programs has two artifacts that cannot collide, and so
+        # `ls <root>/settings` still says which harness each one is for.
+        return f"codex/{role}/{codex_mod().CONFIG_FILE}"
+
+    def agent_settings_name(self, agent: str) -> str:
+        return f"codex/agent-{agent}/{codex_mod().CONFIG_FILE}"
+
+    def render(self, settings: dict, existing: str = "") -> str:
+        return codex_mod().render(settings, existing)
+
+    def read_stop_directions(self, text: str) -> "set[str] | None":
+        return codex_mod().stop_directions(text)
+
+    def settings_in_cmdline(self, cmdline: str) -> "str | None":
+        # The env export IS the pointer, so this reads an assignment rather than
+        # a flag — and returns the config file, not the directory, so a caller
+        # comparing it against an emitted path is comparing like with like.
+        var = codex_mod().HOME_VAR
+        for tok in cmdline.split():
+            if tok.startswith(f"{var}="):
+                home = tok.split("=", 1)[1]
+                if home:
+                    return str(Path(home) / codex_mod().CONFIG_FILE)
+        return None
+
+    def carries_settings(self, launch: str, settings_path: str) -> bool:
+        # Resolved on both sides: launch() absolutises the home (see there), so a
+        # caller that passed a relative path is still pointing at the same file
+        # and the invariant must not read that as a settings-less launch.
+        return self.settings_in_cmdline(launch) == str(Path(settings_path).resolve())
+
+    def provision(self, settings_path: str, root=None) -> list[str]:
+        """Link the operator's codex credentials into the home we just wrote.
+
+        THE TRAP THIS ANSWERS, and it would be silent: CODEX_HOME is not only
+        where config.toml lives, it is where codex keeps auth.json. Pointing an
+        agent at a home the store owns therefore points it at a home with no
+        login, and the failure surfaces as an agent that starts, looks live, and
+        cannot call a model.
+
+        A SYMLINK, NEVER A COPY. The token stays in the one place the operator
+        already manages, a `codex login` refreshes every agent at once, and the
+        store never holds a credential — which matters because this store is a
+        git repo in every deployment we know of.
+
+        Best-effort and never fatal: it reports rather than raises, because the
+        artifact it is finishing has already been written, and an emitter that
+        turned a successful `role set` into a traceback over a symlink would be
+        a worse bug than the one it warns about.
+        """
+        home = Path(settings_path).parent
+        source = _codex_credentials()
+        if source is None:
+            return [f"no codex auth.json found — agents using {home} will launch "
+                    f"UNAUTHENTICATED. Run `codex login` (or set CODEX_HOME to a "
+                    f"logged-in home before emitting) and re-run `st role set`."]
+        link = home / "auth.json"
+        try:
+            if link.is_symlink() and link.readlink() == source:
+                return []
+            if link.is_symlink() or link.exists():
+                link.unlink()
+            link.symlink_to(source)
+        except OSError as e:
+            return [f"could not link {link} -> {source} ({e}); agents using {home} "
+                    f"will launch UNAUTHENTICATED."]
+        return []
+
+    def hooks(self, card: Agent) -> "HookSpec":
+        """codex DELIVERS BLOCKING STOP HOOKS, and this reverses a claim this
+        repo shipped.
+
+        docs/adapters.md and the old CodexRuntime both said codex could not —
+        that a codex card was worker-only and the capability gate's negative
+        control. That was true of the codex those were written against, and it
+        is not true now: codex's Stop hook parses `{"decision":"block",
+        "reason":"…"}` (or exit 2 with the reason on stderr) and turns the reason
+        into a continuation prompt for the MODEL, which is the whole of the
+        capability (codex.py fact 3, codex-rs/hooks/src/events/stop.rs).
+
+        SO THE COST OF BEING WRONG MOVED, and it is worth being plain about it.
+        While this said False, the failure mode was a refusal — a lead you could
+        not create. Saying True means a lead on a codex OLDER than the hooks
+        system would be accepted and would absorb nothing: stop events routed
+        into a program that never runs the hook, silently. That is the failure
+        the gate exists to prevent, so it is not hidden here — it is a version
+        floor we cannot check from inside st (`codex --version` at role-set time
+        would be measuring a binary the agent may not even launch with), and it
+        belongs in `st doctor` as a tool row, not in a guess made here.
+        """
+        from .runtime import HookSpec
+        return HookSpec(blocking_stop=True)
+
+
+def _codex_credentials() -> Path | None:
+    """The auth.json of the operator's own codex home: $CODEX_HOME if set, else
+    ~/.codex (codex.py fact 1). None when there is no login to link."""
+    import os
+    base = os.environ.get(codex_mod().HOME_VAR) or (Path.home() / ".codex")
+    p = Path(base) / "auth.json"
+    return p if p.is_file() else None
+
+
+def codex_mod():
+    """The codex module, imported at CALL TIME — the same one-directional import
+    rule the settings()/hooks() halves follow. harness must stay importable
+    without dragging in every program it can host."""
+    from . import codex
+    return codex
+
+
+def merge_one_level(existing: dict, emitted: dict) -> dict:
+    """Emitted keys win; everything else the operator wrote survives.
+
+    ONE LEVEL DEEP for dict values, and that depth is the whole rule. The keys st
+    emits are dicts the operator also has a legitimate claim on:
+
+      hooks   st replaces the EVENTS it emits — a stale stop direction surviving a
+              rewrite is exactly the drift `roles set` exists to remove — but an
+              event st does not emit (a Notification hook, a SessionStart prime,
+              codex's own `[hooks.state]` trust ledger) is left as found.
+      env     st sets BOBBIN_ROLE; an operator's own variables beside it are theirs.
+
+    Deeper than one level would start merging st's hook LISTS with an operator's,
+    which is how a removed hook comes back. Shallower is the wholesale clobber this
+    fixes. So: one level, emitted wins per sub-key.
+
+    Lives here, shared by both harnesses, because it is not a fact about either
+    format — it is st's rule about whose file this is. (It was cli's until codex
+    needed the identical rule for TOML; two copies of a merge rule is how two
+    formats come to disagree about what an operator is allowed to keep.)
+    """
+    out = dict(existing)
+    for key, value in emitted.items():
+        if isinstance(value, dict) and isinstance(out.get(key), dict):
+            merged = dict(out[key])
+            merged.update(value)
+            out[key] = merged
+        else:
+            out[key] = value
+    return out
+
+
+def _load_json(text: str) -> dict:
+    try:
+        data = json.loads(text) if text.strip() else {}
+    except (ValueError, TypeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+_HARNESSES = {h.name: h for h in (ClaudeHarness(), CodexHarness())}
+
+
+def all_harnesses() -> tuple[Harness, ...]:
+    """Every harness this build implements, DEFAULT FIRST.
+
+    Order is load-bearing for the sniffing readers (runtime.settings_path_in_
+    cmdline, stop_directions_in): they ask each harness in turn and take the
+    first that recognises what it is looking at. Claude Code first keeps the
+    common case first, and every implementation is format-anchored — it answers
+    None rather than guessing — so first-match is a decision, not a coin toss.
+    """
+    return (_HARNESSES[DEFAULT],) + tuple(
+        h for n, h in _HARNESSES.items() if n != DEFAULT)
 
 
 def get(name: str | None) -> Harness:
     """The harness by name. None -> the default, which is every card today.
 
     RAISES UnknownHarness for a name we do not implement. It does NOT fall back to
-    the default: a card that asks for `codex` and silently gets `claude` is a
+    the default: a card that asks for `opencode` and silently gets `claude` is a
     launch that succeeded at being the wrong thing.
     """
     key = name or DEFAULT

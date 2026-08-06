@@ -864,16 +864,34 @@ A card can name the agent program it runs:
 { "role": "worker", "harness": "claude", "workspace": "/home/w" }
 ```
 
-No field means `claude`, which is every card today, and `st anchor --harness` prints it either way.
-The point of the field is what it forced: the launcher hardcoded Claude Code in **two** places that
-had to agree and had no way to — the argv in `ClaudeRuntime.compose`, and the `settings.json` *format*
-in `settings_for_role`. Those are one decision (if you launch a different program, `--settings` is not
-its flag and its hook schema is not this one), so a `Harness` now owns both halves.
+No field means `claude`, which is every card that never said otherwise, and `st anchor --harness`
+prints it either way. Two are implemented — `claude` and `codex` — and a name we do not implement is
+**refused**, never quietly replaced with the default: a card that asks for `opencode` and silently
+gets `claude` is a launch that succeeded at being the wrong thing.
 
-Claude is the only implementation, and adding a second one is not something to do speculatively: a
-guess about another CLI's flags is exactly the kind of code that looks shipped and has never run.
-What this buys today is that the second one would touch `harness.py` and a card, and nothing in the
-tier. The refactor is pinned byte-for-byte against the pre-split launch strings (`tests/test_harness.py`).
+The point of the field is what it forced. The launcher hardcoded Claude Code in places that had to
+agree and had no way to — the argv, the `settings.json` *format*, the artifact's **name**, the
+compose invariant's literal `--settings`, the cmdline reader that looked for that same flag, and the
+readback that parsed Claude Code's hook schema. Those are one decision, and codex is what proved it:
+codex has **no settings flag at all**, it reads `config.toml` out of `$CODEX_HOME`. So a `Harness`
+owns all of it — `launch()`, `settings()`, `settings_name()`, `render()`, `carries_settings()`,
+`settings_in_cmdline()`, `read_stop_directions()`, `provision()`, `hooks()`.
+
+Two consequences worth knowing before you put `"harness": "codex"` on a card:
+
+- **A codex card can be a lead or an administrator.** codex's Stop hook delivers `decision: block`
+  with a reason to the model, so it declares the capability the tier gates on. That reverses what
+  this repo used to say, and `docs/adapters.md` carries the evidence and the version caveat.
+- **`st new`'s liveness verify does not understand codex panes yet.** The ready-UI markers are
+  Claude Code's, and a marker nobody has watched pass is not a marker — so a codex launch reports
+  *could-not-tell* (2) rather than a confident wrong answer. The agent is launched; the verify is
+  the part that cannot see it.
+
+Every codex fact in the implementation was read out of codex's own source, with the file named
+beside it (`shantytown/codex.py`), because a guess about another CLI's flags is exactly the kind of
+code that looks shipped and has never run. The Claude Code path is pinned byte-for-byte against the
+pre-split launch strings (`tests/test_harness.py`) and its emitted settings file is pinned against
+the pre-codex bytes (`tests/test_codex_harness.py`).
 
 ## Machine-readable output — five flags, not five commands
 
