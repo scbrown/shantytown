@@ -35,6 +35,20 @@ import time
 # agent never wrote into its turn — the aegis-apz9 injection, self-inflicted by
 # the tool built to prevent it. Adding either to this set is not a tweak, it is
 # the reintroduction of that hole; test_input_box.py asserts they are missing.
+# How much literal text goes into ONE `send-keys -l`, and the gap between
+# chunks. A single large write is read by a TUI as a PASTE — measured on codex
+# 0.146.1: 1000 chars in one write types normally, 1004 becomes a
+# `[Pasted Content N chars]` placeholder that the trailing Enter does NOT commit,
+# and 2000 chars sent as two writes of 1000 types normally. So the trigger is the
+# SIZE OF ONE WRITE and the total message length is irrelevant.
+#
+# 512 is deliberately half the measured boundary. That boundary belongs to
+# somebody else's terminal handling and can move; the price of being conservative
+# is a few more subprocess calls on a long message, and the price of being wrong
+# is a message that is never delivered while the sender is told it was.
+_SEND_CHUNK = 512
+_SEND_CHUNK_GAP_S = 0.05
+
 CONTROL_KEYS = frozenset({
     "C-u",     # kill to line start — the clear
     "C-k",     # kill to line end
@@ -379,8 +393,37 @@ class Tmux:
         # it) but says so on stderr rather than going quietly dark. Launch
         # strings are safe to journal by existing invariant: provisioning
         # forbids secrets in them (they live in 0600 files instead).
+        # CHUNKED, and that is a correctness fix rather than a politeness
+        # (aegis-wcjuz). A single large literal write is seen by a TUI as a
+        # PASTE: codex absorbs it into a `[Pasted Content N chars]` placeholder
+        # and the trailing Enter does NOT commit it, so the body sits in the
+        # input box, unread, while st prints success. Measured on this host:
+        #
+        #     one write of 1000 chars   -> literal text, submits normally
+        #     one write of 1004 chars   -> PASTE placeholder, stranded
+        #     2000 chars as 2x1000      -> literal text. TOTAL SIZE IS IRRELEVANT
+        #
+        # The trigger is the size of a SINGLE WRITE, not the length of the
+        # message, which is why chunking fixes it outright rather than merely
+        # raising the ceiling. The chunk below is well under the measured
+        # boundary because that boundary is somebody else's implementation
+        # detail and may move; the cost of being conservative is a few extra
+        # send-keys calls, and the cost of being wrong is a silently undelivered
+        # message. The small gap between chunks keeps them separate writes.
+        #
+        # This lives in send() rather than in `st inbox` so EVERY caller gets it
+        # — dispatch, escalations, tend prompts. The defect was found on inbox
+        # and was never inbox's: it belongs to the one place st types into a pane.
         _journal_send(pane, text)
-        subprocess.run(self._cmd("send-keys", "-t", pane, "-l", text), check=True)
+        # `or [""]` keeps the empty-body case sending exactly one `-l ""`, which
+        # is what this always did — the split of an empty string is no chunks.
+        chunks = [text[i:i + _SEND_CHUNK]
+                  for i in range(0, len(text), _SEND_CHUNK)] or [""]
+        for n, chunk in enumerate(chunks):
+            subprocess.run(self._cmd("send-keys", "-t", pane, "-l", chunk),
+                           check=True)
+            if n + 1 < len(chunks):
+                time.sleep(_SEND_CHUNK_GAP_S)
         subprocess.run(self._cmd("send-keys", "-t", pane, "Enter"), check=True)
 
     def control(self, pane: str, key: str) -> None:

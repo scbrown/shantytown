@@ -2522,8 +2522,41 @@ def _cmd_inbox(a) -> int:
               file=sys.stderr)
         return CANNOT_TELL
     panes.send(agent.pane, msg)
+    # READ IT BACK. Sending the keystrokes is not delivering the message, and
+    # this line reported the first as if it were the second (aegis-wcjuz): a
+    # long body absorbed as a paste sits in the input box unsubmitted while the
+    # sender is told it landed. That is the same false-success family as the
+    # other checks this fleet has already paid for — the tool reported exactly
+    # what it did, and what it did was not what the caller asked for.
+    #
+    # Best-effort and one-directional: it can only DOWNGRADE this to an honest
+    # could-not-tell. A pane we cannot capture, or a program whose stranded
+    # signature nobody has measured, leaves the old behaviour untouched.
+    if _looks_stranded(panes, agent.pane):
+        print(f"  could not tell: typed {len(msg)} chars into {agent.pane} but "
+              f"they are STILL IN ITS INPUT BOX, unsubmitted — the agent has "
+              f"not seen this. Do NOT assume it was read.", file=sys.stderr)
+        return CANNOT_TELL
     print(f"  -> {agent.name}    sent to pane {agent.pane}")
     return OK
+
+
+def _looks_stranded(panes, pane: str) -> bool:
+    """Did what we just typed stay in the box? Never raises, never blocks a send.
+
+    The settle is what makes this answerable at all: a TUI repaints after input,
+    so capturing immediately reads the frame BEFORE the box was drawn and every
+    message would look delivered. Short, because this runs on the interactive
+    send path and a message that submits normally must not feel slow.
+    """
+    from .runtime import input_stranded
+    try:
+        time.sleep(0.35)
+        return input_stranded(panes.capture(pane))
+    except Exception:
+        # A capture failure is not a finding. Reporting "stranded" because we
+        # could not look would manufacture the opposite false answer.
+        return False
 
 
 def _inbox_durable(a, agent, msg: str, panes, typed: str | None = None) -> int:
