@@ -360,3 +360,32 @@ def test_knowledge_layer_is_absent_until_built():
             "Build the whole protocol (Knowledge/Fact/Episode/TxId) or none of it, "
             "and update the docs off PLANNED — aegis-ks9b."
         )
+
+
+# --- the harness doc is pinned to the harnesses that exist --------------------
+#
+# docs/harnesses.md is the OPERATOR's doc: it is where somebody setting up a host
+# looks to find out what they may put on a card. A harness this build implements
+# and that doc does not name is one nobody can discover — which is the same
+# failure as an adapter row written before the code, in the other direction.
+# Cheap to assert, and it makes adding a third harness update its own docs.
+
+HARNESSES_MD = ROOT / "docs" / "harnesses.md"
+
+
+def test_the_harness_doc_names_every_harness_this_build_implements():
+    from shantytown import harness as harness_mod
+    text = HARNESSES_MD.read_text()
+    for program in harness_mod.all_harnesses():
+        assert f"`{program.name}`" in text, (
+            f"harness {program.name!r} is implemented and docs/harnesses.md never "
+            f"names it. An operator cannot put on a card what no doc mentions.")
+
+
+def test_the_config_example_shows_the_harness_table():
+    """[harness] is the fleet-wide switch, and shantytown.toml.example is the one
+    file an operator copies. A table that exists only in the parser is a feature
+    nobody finds."""
+    example = (ROOT / "docs" / "shantytown.toml.example").read_text()
+    assert "[harness]" in example and "[harness.by_role]" in example, \
+        "shantytown.toml.example does not document the [harness] table"
