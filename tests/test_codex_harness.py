@@ -218,6 +218,63 @@ def test_the_matcher_scoped_guards_are_NOT_emitted_and_that_is_deliberate():
     assert set(settings["hooks"]) == {"SessionStart", "Stop"}
 
 
+def test_the_whole_rulebook_reaches_the_agent_not_the_first_32KiB():
+    """codex truncates AGENTS.md at `project_doc_max_bytes` (default 32 KiB) and
+    SAYS NOTHING — no notice in the prompt, none on stderr. MEASURED on
+    codex-cli 0.146.1 via `codex debug prompt-input`, which renders the
+    model-visible prompt at zero model cost (aegis-ovffp):
+
+        crew rulebook on disk       65367 B
+        delivered at the default    32690 B   — cut MID-WORD, 50% lost
+        canary on the last line     ABSENT
+
+    This is a CLAIM ABOUT CODEX in the sense of this file's header, but an
+    unusually strong one: it was measured against the binary on this host rather
+    than read out of source. If codex changes the default, this test does not go
+    red — the emitted value is what protects us, which is the point of emitting
+    it instead of relying on a default.
+    """
+    settings = codex.settings_for_role("worker", root="/tmp/r")
+    assert settings["project_doc_max_bytes"] == codex.PROJECT_DOC_MAX_BYTES
+    # Headroom, not a snug fit: the rulebook grows, and a snug limit drops the
+    # NEWEST rule first — the one added because something just went wrong.
+    assert codex.PROJECT_DOC_MAX_BYTES >= 4 * 32768, (
+        "a limit close to codex's 32 KiB default leaves the rulebook one edit "
+        "away from being silently truncated again")
+    # and it has to survive the writer -> parser round trip as a root scalar.
+    data = tomllib.loads(codex.render(settings))
+    assert data["project_doc_max_bytes"] == codex.PROJECT_DOC_MAX_BYTES
+
+
+def test_the_CLAUDE_md_fallback_is_NOT_emitted_because_it_cannot_fire():
+    """`project_doc_fallback_filenames = ["CLAUDE.md"]` works — with AGENTS.md
+    absent, codex reads CLAUDE.md in full — but it is consulted ONLY when
+    AGENTS.md is ABSENT. MEASURED: a stale AGENTS.md beside a configured
+    fallback wins outright and CLAUDE.md is never read.
+
+    So it cannot be what keeps codex and claude on one rulebook, and emitting it
+    anyway would be decoration: inert while the AGENTS.md -> CLAUDE.md symlink is
+    intact, useless the moment `bd init` regenerates a real AGENTS.md over it.
+    Pinned so nobody adds it later as belt-and-braces and reads the fleet as
+    covered twice when it is covered once."""
+    settings = codex.settings_for_role("worker", root="/tmp/r")
+    for key in codex.FALLBACK_NOT_EMITTED:
+        assert key not in settings, (
+            f"{key} is consulted only when AGENTS.md is absent — see "
+            f"codex.FALLBACK_NOT_EMITTED before adding it")
+
+
+def test_an_operators_snug_doc_limit_does_NOT_survive_a_re_emission():
+    """Same contract as a stale stop direction: st owns what it emits. An
+    operator who pinned the old 32 KiB default — or who never set one and picked
+    up codex's — gets the fleet's value back on `roles set`, because a truncated
+    rulebook is not a preference we honour."""
+    existing = "project_doc_max_bytes = 32768\n"
+    data = tomllib.loads(codex.render(
+        codex.settings_for_role("worker", root="/tmp/r"), existing))
+    assert data["project_doc_max_bytes"] == codex.PROJECT_DOC_MAX_BYTES
+
+
 def test_the_operator_keeps_everything_st_did_not_emit():
     """Same merge rule as Claude Code's (harness.merge_one_level), one format
     over — including `[hooks.state]`, which is codex's own trust ledger and
