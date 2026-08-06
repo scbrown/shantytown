@@ -25,7 +25,7 @@
 
 [![dispatch 3.4s](https://img.shields.io/badge/dispatch-3.4s-brightgreen)](#-measured-against-gas-town)
 [![24 commands](https://img.shields.io/badge/commands-24-blue)](#-the-whole-surface)
-[![tests](https://img.shields.io/badge/tests-1955%20passing-blue)](#-principles)
+[![tests](https://img.shields.io/badge/tests-2132%20passing-blue)](#-principles)
 [![python](https://img.shields.io/badge/python-3.11%2B-blue)](#-install)
 [![dependencies none](https://img.shields.io/badge/dependencies-none-blue)](#-install)
 [![license MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
@@ -233,6 +233,10 @@ plus every script on one fleet. Full write-up in [`docs/vision.md`](docs/vision.
   administrator with a reason, and is on disk before anyone reads it.
 - 🔌 **Pluggable trackers.** A tracker is two functions. Files today, beads tomorrow, yours next —
   *same dispatch code*, proven by a swap test rather than by an interface.
+- 🤖 **Bring your own agent program.** Claude Code is *a* harness, not the shape of the world —
+  `codex` ships too, and a crew can mix them: pick per card, per role, or fleet-wide. The tier is
+  program-blind, so a codex worker's stop event reaches a Claude Code lead unchanged. What codex
+  does *not* do yet is written down rather than discovered ([`docs/harnesses.md`](docs/harnesses.md)).
 - 🖥️ **tmux-native, socket-aware.** Bring your own panes. Named sockets are first-class, because bare
   tmux cannot see them and will confidently report every live agent as down.
 - 🧪 **`--dry-run` on every writing command**, from commit one.
@@ -463,6 +467,7 @@ error, it just stops new facts from joining the old ones.
 | [`docs/agent-card.md`](docs/agent-card.md) | identity — the graph is the truth, the card is a projection |
 | [`docs/roles.md`](docs/roles.md) | worker / lead / administrator, and why a lead absorbs |
 | [`docs/adapters.md`](docs/adapters.md) | first-class defaults, pluggable everything |
+| [`docs/harnesses.md`](docs/harnesses.md) | running more than one agent program — claude, codex, and setting one up |
 | [`docs/integrations.md`](docs/integrations.md) | the rest of the toolbox — and why we ship no dashboard |
 
 ## 🧭 Principles

@@ -514,7 +514,7 @@ class CodexHarness:
         if source is None:
             return [f"no codex auth.json found — agents using {home} will launch "
                     f"UNAUTHENTICATED. Run `codex login` (or set CODEX_HOME to a "
-                    f"logged-in home before emitting) and re-run `st role set`."]
+                    f"logged-in home before emitting) and re-run `st roles set`."]
         link = home / "auth.json"
         try:
             if link.is_symlink() and link.readlink() == source:
