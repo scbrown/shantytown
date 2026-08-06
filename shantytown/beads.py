@@ -181,11 +181,26 @@ class BeadsTracker:
                 and (dep.get("status") or "") != "closed"
                 and dep.get("id")
             ),
-            # bd COUNTS every dependency row and RETURNS only the ones it could
-            # resolve, so the difference is exactly the rows we are blind to
+            # bd COUNTS every dependency row and LISTS only issue-targeted ones,
+            # so the difference is exactly the rows this view does not render
             # (aegis-kt7jr). Measured on aegis-8y80: `dependency_count: 3`,
-            # `len(dependencies): 1` — the two dropped rows include a `blocks`
-            # edge to gt-9h8wbq8, an id that resolves in NO store on this host.
+            # `len(dependencies): 1` — the two omitted rows include a `blocks`
+            # edge to gt-9h8wbq8.
+            #
+            # gt-9h8wbq8 IS NOT UNRESOLVABLE, and this comment said it was.
+            # Migration 0041 split `depends_on_id` into three typed columns and
+            # classified it `depends_on_external` — recorded, typed, preserved.
+            # A join for unresolvable ISSUE targets returns ZERO: there are no
+            # dangling issue refs at all. So this is a serialisation difference
+            # over a deliberate classification, NOT a dropped edge.
+            #
+            # ⚠ DO NOT "FIX" bd BY ADDING EXTERNAL DEPS TO THE `dependencies`
+            # ARRAY. `open_blockers` above takes every blocks-type entry with an
+            # id, so those rows would make `st go` REFUSE those beads — the
+            # blocking that was explicitly ruled against — and `unreadable_deps`
+            # below would go to 0, reporting ALL-CLEAR while detecting nothing.
+            # Safe direction: make the COUNT agree with the LIST, or carry
+            # external deps in a SEPARATE field. Never list-to-count.
             #
             # This costs NOTHING: both numbers are in the `bd show --json` this
             # method already parses, so the one-tracker-read budget is unchanged.
