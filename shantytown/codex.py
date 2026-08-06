@@ -45,6 +45,27 @@ The four facts this file rests on:
     hostable. See harness.CodexHarness.hooks for what that costs if the codex on
     the host is older than the hooks system.
 
+3b. THE WHOLE STOP GROUP RUNS, AND THE REASON LANDS.  Fact 3 is a claim about
+    what codex's source PARSES; this is a claim about what the binary on this
+    host DOES, and it is the one the lead half rests on. `send` was proven end to
+    end long before `drain` was, and drain is where the cost is: a lead with
+    seven reports that cannot drain silently swallows every one of their stop
+    events while its config looks perfect. st emits send and drain as two hooks
+    in ONE Stop group, so the risk was that codex ran the first and stopped, or
+    stopped as soon as a hook returned a block decision.
+
+    MEASURED live against codex-cli 0.146.1 (scripts/probe-codex-stop-hooks.sh):
+    all three hooks in the group ran; the hook AFTER the one returning
+    `{"decision":"block"}` still ran; the reason reached the MODEL (it replied
+    with the word the reason asked for); and the block drove a second turn on
+    which the whole group ran again — block-once is what terminates that.
+
+    ⚠ ORDER IS NOT GUARANTEED and is NONDETERMINISTIC between runs (2,1,3 then
+    1,2,3). Nothing here may depend on send preceding drain. It does not: send
+    writes THIS agent's stop event for its lead to collect, drain collects events
+    addressed to THIS agent, so the two commute even for an agent that is both a
+    lead and a report — which dearing is.
+
 4.  HOOK TRUST.  codex will not run hooks it has no persisted trust record for;
     `--dangerously-bypass-hook-trust` is documented in shared_options.rs as "Run
     enabled hooks without requiring persisted hook trust for this invocation."
