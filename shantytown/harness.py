@@ -220,9 +220,12 @@ class ClaudeHarness:
         # The field was persisted so a restart would not silently revert to the
         # default — and then the launcher never read it, so it reverted anyway.
         # A card that names a model and an agent that ignores it is worse than no
-        # field: it reads as configured.
-        if card.model:
-            flags += f" --model {card.model}"
+        # field: it reads as configured. Now resolved card -> role -> fleet
+        # (resolve_model), so a deployment can set one model for a whole tier
+        # without stamping it onto every card — and a card still beats both.
+        model = resolve_model(card, root)
+        if model:
+            flags += f" --model {model}"
         # BOBBIN_ROLE is how hank's policy guard resolves WHICH scope applies
         # (hank#20: tenant is resolved --tenant, then BOBBIN_ROLE; scopes live in
         # .bobbin/config.toml under [hank.policy.scopes.<role>]). Exporting it per
@@ -426,9 +429,13 @@ class CodexHarness:
         if card.dangerous:
             flags += " --dangerously-bypass-approvals-and-sandbox"
         # HONOUR THE CARD'S MODEL AT LAUNCH (GitHub #17/#9), same as claude.
-        # `--model` is codex's long form of -m (shared_options.rs).
-        if card.model:
-            flags += f" --model {card.model}"
+        # `--model` is codex's long form of -m (shared_options.rs). Same
+        # card -> role -> fleet ladder as ClaudeHarness: resolving in ONE helper
+        # is what keeps the two programs from drifting into different answers for
+        # the same card, which is the aegis-85ox mismatch class.
+        model = resolve_model(card, root)
+        if model:
+            flags += f" --model {model}"
         # Identical env contract to ClaudeHarness — SHANTY_ROOT the belt for a
         # stale settings snapshot (aegis-nipg), BOBBIN_ROLE for hank's scope,
         # BEADS_ACTOR so the tracker records WHO (GitHub #24), ST_ROLES carrying
@@ -670,6 +677,44 @@ def name_for(card: Agent, root=None) -> str:
     if card.harness:
         return card.harness
     return _deployment_harness(card.role, root) or DEFAULT
+
+
+def resolve_model(card, root=None) -> str | None:
+    """Which MODEL this card runs, or None to let the harness choose its own.
+
+    MOST SPECIFIC WINS: the card, then the deployment's rule for its ROLE, then
+    the deployment's fleet-wide default, then None — the same ladder as
+    resolve_harness, because it is the same question one axis over.
+
+    None is a REAL answer here and not a failure, which is where this differs
+    from harness: `claude` is a sane fallback program, but there is no sane
+    fallback MODEL — shantytown does not know which slugs a given harness can
+    reach, and inventing one would pin every card in the fleet to a guess that
+    goes stale on the provider's schedule. None means "say nothing", the flag is
+    omitted, and the harness applies its own default. That is the behaviour every
+    deployment predating this table already has, so adding the table changes
+    nothing for anyone who does not write it.
+    """
+    if getattr(card, "model", None):
+        return card.model
+    return _deployment_model(getattr(card, "role", None), root)
+
+
+def _deployment_model(role: str | None, root) -> str | None:
+    """The deployment's [model] answer for a role, or None if it never said.
+
+    load_or_default for the same reason _deployment_harness uses it: this runs on
+    the LAUNCH path, and a typo elsewhere in the config must not silently move a
+    card onto a different model — it surfaces as the config error at the top of
+    the command, while an unreadable file means "the deployment did not say".
+    """
+    if root is None:
+        return None
+    from .config import load_or_default
+    cfg, _err = load_or_default(root)
+    if role and cfg.model_by_role.get(role):
+        return cfg.model_by_role[role]
+    return cfg.model_default
 
 
 def _deployment_harness(role: str | None, root) -> str | None:
