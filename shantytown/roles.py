@@ -235,8 +235,15 @@ def _hooks_verdict(a: Agent, agents: list[Agent], emitted) -> tuple[str, str]:
                                       land in a store nothing ever reads)
 
     A role whose settings file is missing or unreadable is CANNOT TELL, never ok.
+
+    THE READER IS ASKED ABOUT THE CARD, not the role name (it took `a.role`
+    until codex landed). Which artifact answers for an agent depends on the
+    PROGRAM it runs — a codex card's stop routing is in a different file, under
+    a different name, in a different format — so a reader handed only "lead"
+    would open Claude Code's file and report cannot-tell for a codex lead whose
+    hooks are fine, or worse, report ok from an artifact that card never reads.
     """
-    directions = emitted(a.role)
+    directions = emitted(a)
     if directions is None:
         return CANNOT_TELL, f"no readable stop hooks emitted for role {a.role!r}"
     need = _needs(a, agents)

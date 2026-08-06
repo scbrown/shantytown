@@ -171,7 +171,7 @@ interface, with a second implementation as the proof.
 | knowledge *(planned — not built, aegis-ks9b)* | `search` / `record` | quipu | `none` |
 | events | `subscribe` | **quipu** (cursored transaction log) | `none` |
 | telemetry | `record_miss` | dp | `none` |
-| runtime | `start` / `send` / `hooks` | Claude Code | opencode / codex |
+| runtime | `start` / `send` / `hooks` | Claude Code | **codex** (shipped); opencode later |
 | panes | `open` / `send` | bare tmux | shanty / herdr |
 | **dashboard** | **— none —** | **tapestry (reads the tracker)** | **any store reader** |
 

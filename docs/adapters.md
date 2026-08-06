@@ -23,7 +23,7 @@ first didn't leak.
 | layer | first-class (default) | the second implementation, which is the *proof* |
 |---|---|---|
 | **registry** *(identity)* | **quipu** | `files` — a flat registry. **Required layer; still needs two impls.** |
-| **runtime** | **Claude Code** | one other (`opencode` / `codex`) |
+| **runtime** | **Claude Code** | **codex** — shipped. `shantytown/codex.py` |
 | **tracker** | **beads** | `files` — a directory of markdown. Zero dependencies. |
 | **panes** | bare `tmux` | `shanty` / `herdr` adapters, later |
 | **context** | **bobbin** | none-adapter (returns nothing, harness still works) |
@@ -70,10 +70,30 @@ must refuse a card whose role needs a capability its runtime doesn't have:
 
 ```
 $ st role set malcolm lead
-  refused: harness 'codex' does not declare blocking stop hooks;
+  refused: harness 'opencode' does not declare blocking stop hooks;
            role 'lead' requires stop-event delivery to the model.
            malcolm stays worker. Nothing written.
 ```
+
+> **This example used to say `codex`, and that claim has been withdrawn.** It was true of the codex
+> it was written against — a `notify` program, non-blocking, stdout discarded. Current codex ships a
+> full hooks system whose `Stop` hook parses `{"decision":"block","reason":"…"}` (or exit 2 with the
+> reason on stderr) and feeds the reason back to the model as a continuation prompt — which is
+> exactly the capability this section defines. So **`CodexHarness` declares `blocking_stop = True`
+> and a codex lead/administrator is hostable.** Read out of `openai/codex` `main` on 2026-08-06
+> (`codex-rs/hooks/src/events/stop.rs`); every codex fact and its source file is listed in
+> `shantytown/codex.py`'s header.
+>
+> **The cost of that reversal, stated plainly:** while this said False the failure mode was a
+> refusal — a lead you could not create. Saying True means a lead on a codex *older* than the hooks
+> system is accepted and absorbs nothing, silently. That is a version floor `st` cannot check from
+> inside the gate (`codex --version` at role-set time measures a binary the agent may not even
+> launch with); it belongs in `st doctor` as a tool row, and it is not built yet.
+>
+> The gate itself did not change, and that is the point of keying it on the capability: the reversal
+> was one method on one class. The refusal path is still exercised — by `StoplessRuntime` and the
+> `_NonBlockingHarness` doubles, which now say what they *are* rather than naming a program we were
+> wrong about.
 
 The gate fires at **role-set time**, before the card or its settings are written
 (`tier.role_set`, aegis-w5l9) — so "Nothing written." is literally true, and a
@@ -95,6 +115,61 @@ capable runtime passes without editing it.
 Refusing loudly is the point. A stop-receiver on a runtime that can't deliver stop events is a tier
 that exists on paper and absorbs nothing — and that failure is *silent*, which is the one kind we've
 agreed not to ship.
+
+### What the second implementation actually cost — the seam codex moved
+
+The `Runtime` block above is the *launcher* seam: compose-or-refuse, then deliver through Panes.
+**Which program** an agent runs is a different seam, and it is the card's — a `Harness`
+(`shantytown/harness.py`). Writing the second one is the only way to find out where the first leaked,
+and it leaked in five places that all *looked* generic:
+
+```python
+class Harness(Protocol):
+    name: str
+    def launch(self, card: Agent, settings_path: str, root=None) -> str: ...
+    def settings(self, role: str, root=None) -> dict: ...
+    def settings_name(self, role: str) -> str: ...            # WHAT the artifact is called
+    def agent_settings_name(self, agent: str) -> str: ...
+    def render(self, settings: dict, existing: str = "") -> str: ...   # its BYTES, merged
+    def read_stop_directions(self, text: str) -> set[str] | None: ...  # reading it back
+    def settings_in_cmdline(self, cmdline: str) -> str | None: ...     # on a RUNNING process
+    def carries_settings(self, launch: str, settings_path: str) -> bool: ...  # the invariant
+    def provision(self, settings_path: str, root=None) -> list[str]: ...
+    def hooks(self, card: Agent) -> HookSpec: ...             # the capability declaration
+```
+
+Each of the middle six was a literal somewhere in `cli.py` or `runtime.py`, and every one of them was
+Claude Code's: the emitter wrote `<role>.settings.json` and JSON bytes; the compose invariant asserted
+the string `--settings`; the live reader grepped a command line for that same flag; the readback
+parsed Claude Code's hook schema. **codex has no settings flag at all** — it reads `config.toml` out
+of `$CODEX_HOME` — so all four would have quietly answered for the wrong program, and the tests would
+have stayed green, because nothing else in the suite ran a second program. That is the leak-detection
+argument in this document, paid off exactly as advertised.
+
+What is *shared* is as load-bearing as what differs. **Which** stop hooks a role gets and **what
+command** they run is shantytown's (`runtime.role_stop_hooks`) and both harnesses call it — a second
+copy of the routing table is how a lead comes to send on one program and drain on the other. Both
+programs happen to take the same matcher-group hook shape, so only the container differs.
+
+Two honest gaps, named rather than papered over:
+
+- **The matcher-scoped guards are not emitted for codex.** A matcher is a claim about the host
+  program's *tool names* (`"Bash"`, `"mcp__.*"` are Claude Code's), and codex's vocabulary is
+  unmeasured. A guard emitted with the wrong vocabulary is not a weaker guard, it is one that never
+  fires while reading as wired — this repo has already paid that bill (aegis-ac5x/18e0). So codex
+  gets the matcher-free events (`SessionStart`, `Stop`), and the omission is pinned by a test.
+- **The pane-reading predicates are still Claude Code's.** `is_live`, the trust and consent screens,
+  the auth-dead banner — all matched against a captured pane, all `ClaudeRuntime`'s. They are the same
+  *kind* of per-program fact as the argv, but a marker never observed passing is not a marker, and
+  there is no codex on the build host to watch. The consequence is stated where it lands: `st new` on
+  a codex card reports **could-not-tell (2)**, not a confident wrong answer.
+- **The workspace-delivered hooks do not reach a codex agent at all.** The metrics capture, the
+  untracked-work nudge and the stale guard are deliberately *not* in the emitted settings — they ride
+  `provision.py`'s `<ws>/.claude/settings.local.json`, which is re-applied on every launch so it
+  self-heals (aegis-rcyd). That file is Claude Code's by construction, and `provision` writes it for
+  every card regardless of harness. So a codex agent gets its stop routing and its session-start
+  directive and **none of those three**. Same rule as the matchers: the fix is a delivery channel
+  measured against codex, not this one aimed at it and hoped for.
 
 ## Context and knowledge — bobbin and quipu, first-class
 

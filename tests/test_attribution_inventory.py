@@ -78,7 +78,7 @@ INVENTORY: dict[tuple[str, str], tuple[str, str]] = {
     ("runtime.py", "start"): (
         BARE,
         "the LAUNCH COMMAND LINE. A prefix here is a shell syntax error and every "
-        "launch on the host fails. Both ClaudeRuntime and CodexRuntime."),
+        "launch on the host fails. Both ClaudeRuntime and StoplessRuntime."),
 }
 
 

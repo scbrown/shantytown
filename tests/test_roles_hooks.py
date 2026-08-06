@@ -42,7 +42,11 @@ def _emit(root: Path, *rolenames: str) -> None:
 
 
 def _reader(root: Path):
-    return lambda role: emitted_stop_directions(root, role)
+    # The reader is asked about the CARD, not the role name: which artifact
+    # answers depends on the program the card runs (roles._hooks_verdict).
+    from shantytown import harness
+    return lambda card: emitted_stop_directions(root, card.role,
+                                                harness.name_for(card))
 
 
 def _crew(root: Path) -> Path:
@@ -172,7 +176,7 @@ def test_positive_control_a_constant_ok_reader_hides_the_missing_lead_hooks(tmp_
     """
     c = _crew(tmp_path)
     _emit(tmp_path, "administrator", "worker")        # lead hooks still absent
-    always_ok = lambda role: {"send", "drain"}
+    always_ok = lambda card: {"send", "drain"}
     rep = roles.check(FilesRegistry(c), emitted=always_ok)
     assert rep.verdict == roles.OK
     assert "hooks: ok" in rep.render()
@@ -189,7 +193,7 @@ def test_positive_control_ignoring_the_graph_hides_the_missing_drain(tmp_path: P
     dearing = next(a for a in agents if a.name == "dearing")
 
     # honest reader, send-only lead
-    reader = lambda role: {"send"} if role == "lead" else {"send", "drain"}
+    reader = lambda card: {"send"} if card.role == "lead" else {"send", "drain"}
     hv, note = roles._hooks_verdict(dearing, agents, reader)
     assert hv == roles.BROKEN                      # graph-derived: lead must drain
 
