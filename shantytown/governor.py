@@ -1911,11 +1911,16 @@ class Governor:
     the whole decision with no Prometheus, no clock and no filesystem.
     """
 
-    def __init__(self, policy: Policy, reader, state=None, *, now=time.time):
+    def __init__(self, policy: Policy, reader, state=None, *, now=time.time,
+                 name: str = "base"):
         self.policy = policy
         self.reader = reader
         self.state = state
         self._now = now
+        # The policy is deliberately provider-neutral; its owning harness is
+        # assigned by the CLI when it builds the per-harness governor map.
+        # Keep "base" as the compatibility label for direct callers/tests.
+        self.name = name
 
     def evaluate(self, *, persist: bool = True) -> Verdict:
         """One decision, with hysteresis.
@@ -2045,7 +2050,7 @@ class Governor:
                 # A dead probe must not be able to uncap the fleet.
                 cap=pol.max_agents,
                 why=lost,
-                alarm=(f"USAGE SIGNAL LOST: {lost}. "
+                alarm=(f"USAGE SIGNAL LOST [{self.name}]: {lost}. "
                        + ("on_signal_lost = \"freeze\": no new work is being "
                           "dispatched. " if frozen else
                           "on_signal_lost = \"warn\": THE FLEET IS RUNNING "

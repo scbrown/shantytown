@@ -352,6 +352,18 @@ def test_warn_runs_the_fleet_and_alarms_every_pass(tmp_path):
             "cannot see is indistinguishable from one with nothing to report")
 
 
+def test_signal_lost_alarm_names_the_governor_harness(tmp_path):
+    """A real Codex sentinel must never look like a Claude/base outage."""
+    codex = gov.Governor(_policy(tmp_path),
+                         gov.StubReader(pct=12, at=STALE_AT,
+                                        now=lambda: 1_000_000),
+                         gov.FilesGovernorState(tmp_path), now=lambda: 1_000_000,
+                         name="codex")
+    base = _gov(tmp_path, 12, at=STALE_AT)
+    assert "USAGE SIGNAL LOST [codex]" in codex.evaluate().alarm
+    assert "USAGE SIGNAL LOST [base]" in base.evaluate().alarm
+
+
 def test_freeze_dispatches_nothing_new_and_still_never_drains(tmp_path):
     text = SPOKEN.replace('source = "stub"',
                           'source = "stub"\non_signal_lost = "freeze"')
