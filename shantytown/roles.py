@@ -50,6 +50,7 @@ class Row:
     note: str = ""
     hooks: str = UNVERIFIED   # the second leg; see check(emitted=...)
     live: str = UNVERIFIED    # the third leg; see check(live=...)
+    guard: str = UNVERIFIED   # the fourth leg; see check(guard=...)
     # WHICH SURVIVAL BAND THE USAGE GOVERNOR WILL RESOLVE for this card
     # (aegis-upo93). "" = not measured (no catalog was passed), never a value.
     band: str = ""
@@ -82,6 +83,16 @@ class Report:
             # as a finding.
             if r.live == OK:
                 hooks += " live: ok"
+            # Shown ONLY when measured green, exactly like `live` above and for
+            # the same reason: a deployment that configures no Bash guard is not
+            # a finding, and printing `guard: —` on every row of every default
+            # store would train readers to skim past the one row where it matters.
+            # A guard that is configured and MISSING does not appear here at all —
+            # it is a BROKEN verdict and prints in the *** note ***, which is the
+            # point (aegis-610jv: the whole defect was an unguarded card reading
+            # as green).
+            if r.guard == OK:
+                hooks += " guard: ok"
             # THE BAND THAT DECIDES WHETHER THIS CARD SURVIVES A THROTTLE
             # (aegis-upo93). Shown on every measured row, including the ordinary
             # ones, because the question a reader brings to this table under a
@@ -109,11 +120,21 @@ class Report:
             # working mechanism was nearly rebuilt on the strength of it
             # (aegis-j1dzp). Say the structural fact, which is what check()
             # actually established; each row already carries its measured reason.
-            L.append(f"  BLOCKED: {broken} agent is not correctly attached to "
-                     f"the tier — see the reason on its row above."
+            #
+            # AND NOT EVEN THE STRUCTURAL FACT ANY MORE (aegis-610jv). "not
+            # correctly attached to the tier" was true of all four BROKEN causes
+            # when it was written, and the guard leg added a fifth that is not
+            # about attachment at all: an unguarded card is attached perfectly
+            # and reports fine. So the sentence is now a narrower claim than the
+            # verdict it summarises — the same over-reach one generation on,
+            # which is how this comment came to be written twice. Say only what
+            # is true of EVERY cause: something on the row failed, the row says
+            # what.
+            L.append(f"  BLOCKED: {broken} agent failed a check — see the reason "
+                     f"on its row above."
                      if broken == 1 else
-                     f"  BLOCKED: {broken} agents are not correctly attached to "
-                     f"the tier — see the reason on each row above.")
+                     f"  BLOCKED: {broken} agents failed a check — see the reason "
+                     f"on each row above.")
         if unknown:
             # Never let this render as a pass. It is the reason exit 2 exists.
             #
@@ -267,7 +288,57 @@ def _no_empty_note() -> str:
             "clean result")
 
 
-def check(registry: Registry, emitted=None, live=None, catalog=None) -> Report:
+def _guard_verdict(a: Agent, guard, configured) -> tuple[str, str]:
+    """The FOURTH leg (aegis-610jv): does this card's emitted artifact carry the
+    deployment's Bash guard?
+
+    WHY IT IS A LEG AND NOT A FOOTNOTE. On this deployment that guard is the only
+    thing between an agent and two unrecoverable actions: a `bd` subcommand that
+    opens one of the 14 exposed stores read-write and wedges it (aegis-lmi —
+    gastown is the crater, and it is the one store somebody opened that way), and
+    a `gt up` that puts a live witness on a crew-only host (aegis-bah2). Both are
+    ENFORCEMENT on a claude card and were ABSENT on a codex one, and NOTHING said
+    so: `roles --check` measured the stop routing and printed `hooks: ok`, so a
+    wholly unguarded agent checked out green. A checker that cannot see the guard
+    is how the gap survived long enough to block the codex expansion.
+
+    THE DEPLOYMENT DECIDES WHETHER THERE IS A GUARD AT ALL, so an absent one is
+    only a finding when the deployment configures one. A store with no
+    SHANTY_BASH_GUARD is not broken — shantytown ships no guard and hardcodes no
+    path — and reporting it broken would make every default deployment fail its
+    own health check for declining an optional extension point. That is the
+    exists-not-acts shape this file already refuses elsewhere. So: guard
+    configured but MISSING from the artifact is BROKEN; no guard configured
+    anywhere is simply not measured.
+    """
+    got = guard(a)
+    if got is None:
+        return CANNOT_TELL, "could not read the emitted settings for the Bash guard"
+    if got == "":
+        # Distinguish "the deployment has no guard" (fine) from "it has one and
+        # this card did not get it" (the aegis-610jv defect). `configured` is
+        # passed IN rather than looked up here, and that is a bug fix rather than
+        # a style choice: this function looked it up itself with no root, so it
+        # read only the ambient environment and never the STORE'S env.json —
+        # where a deployment actually records its guard. Measured on the live
+        # store: the codex lead and both codex workers came back UNVERIFIED (a
+        # shrug) when the true answer was BROKEN (guard configured, card has
+        # none). A leg that downgrades its own finding to silence is the defect
+        # it was written to catch.
+        if configured is None:
+            return CANNOT_TELL, "could not tell whether a Bash guard is configured"
+        if not configured:
+            return UNVERIFIED, ""
+        return BROKEN, ("emits NO Bash guard, but this deployment configures one "
+                        f"({configured}) — host policy is UNENFORCED on this card")
+    return OK, ""
+
+
+_ASK_AMBIENT = object()
+
+
+def check(registry: Registry, emitted=None, live=None, catalog=None,
+          guard=None, guard_configured=_ASK_AMBIENT) -> Report:
     """Verify the hierarchy. Never raises for a bad card — that is a verdict.
 
     `catalog` (traits.Catalog) is how a role gets to NOT BE IN THE TREE (GitHub
@@ -290,6 +361,21 @@ def check(registry: Registry, emitted=None, live=None, catalog=None) -> Report:
     `emitted` verifies the role's INTENT, `live` verifies the running REALITY.
     They can disagree, and when they do the tier is broken while the artifact
     looks perfect — see _live_verdict for the measured case that motivated it.
+
+    `guard` is an optional reader `card -> str | "" | None` giving the deployment
+    Bash guard the role's EMITTED artifact carries (see
+    runtime.emitted_bash_guard). Same three-state contract as the others and the
+    same refusal to print an unmeasured word — see _guard_verdict for why an
+    unguarded card was invisible to every leg above it.
+
+    `guard_configured` is the guard the DEPLOYMENT configures — what a card OUGHT
+    to carry — and it decides whether an artifact with no guard is a finding or
+    a non-event. Pass it whenever you pass `guard`: a caller that knows the store
+    root is the only thing that can read the store's env.json, and omitting it
+    falls back to the ambient environment, which on the live store answered "no
+    guard configured" for a host that configures one. That fallback is kept only
+    so a test can drive this leg through the environment; it is not good enough
+    for a real check, and the CLI passes the real value.
     """
     try:
         agents: list[Agent] = registry.all()
@@ -321,6 +407,23 @@ def check(registry: Registry, emitted=None, live=None, catalog=None) -> Report:
         note = getattr(registry, "empty_note", _no_empty_note)()
         if note is not None:
             return Report([Row("(registry)", "—", None, CANNOT_TELL, note)])
+
+    # Resolved ONCE, not per row: it is a property of the deployment, and asking
+    # per card would let one unreadable answer make some rows findings and others
+    # shrugs for the same underlying fact.
+    configured = guard_configured
+    if configured is _ASK_AMBIENT:
+        from .runtime import bash_guard_command
+        try:
+            # `or ""` is load-bearing. bash_guard_command returns None for a
+            # setting that is simply ABSENT, which means NOT CONFIGURED — a
+            # perfectly ordinary state. None here is reserved for COULD NOT TELL,
+            # and letting the two share a value would report every default
+            # deployment as unmeasurable instead of as having no guard. Same
+            # three-state discipline as the readers, one level up.
+            configured = bash_guard_command(None) or ""
+        except Exception:      # noqa: BLE001 — an unreadable deployment config
+            configured = None
 
     known = {a.name for a in agents}
     rows: list[Row] = []
@@ -359,6 +462,13 @@ def check(registry: Registry, emitted=None, live=None, catalog=None) -> Report:
             lv, note = _live_verdict(a, agents, live)
             rows[-1].live = lv
             _fold(rows[-1], lv, note)
+
+        if guard is None:
+            rows[-1].guard = UNVERIFIED
+        else:
+            gv, note = _guard_verdict(a, guard, configured)
+            rows[-1].guard = gv
+            _fold(rows[-1], gv, note)
 
         # NOT A VERDICT, and deliberately not folded into one. A band is a
         # deployment's choice, never a fault — this leg reports, it does not judge.
