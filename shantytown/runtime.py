@@ -34,6 +34,7 @@ HONEST BOUNDARY (say it so nobody over-claims):
     never be read as "hooks registered" — it cannot show that.
 """
 from __future__ import annotations
+import re
 import os
 import json
 import shutil
@@ -1160,7 +1161,15 @@ class ClaudeRuntime:
         "can I dispatch to this agent" would answer no for a free agent that had
         just run a failing test. Runtime-specific by construction: a second
         runtime knows its own ready markers, and triage knows none of them."""
-        return any(mark in screen for mark in self.READY_MARKERS)
+        if any(mark in screen for mark in self.READY_MARKERS):
+            return True
+        # Codex's positive signal is a structured status line rather than a
+        # stable literal. Tail-only: an agent discussing that line in scrollback
+        # is not evidence that the runtime is currently ready.
+        from . import harness as harness_mod
+        tail = "\n".join((screen or "").splitlines()[-10:])
+        return any(re.search(pattern, tail)
+                   for pattern in harness_mod.ready_patterns())
 
     def trust_prompt(self, screen: str) -> bool:
         """Is the folder-trust dialog up? Distinguished from waiting_for_human
