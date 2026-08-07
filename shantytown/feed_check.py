@@ -566,6 +566,24 @@ def haul_feed_message(nid: str, title: str, rest: int, headroom: str = "",
         f"bead is grabbed by the next idle agent — so defer or close to truly park.")
 
 
+def haul_resume_message(nid: str, title: str) -> str:
+    """Keep a Codex worker's active anchor moving across turn boundaries.
+
+    Codex allows the stop after every completed model turn.  Without a new block
+    reason there is no later event that asks it to continue, while an active
+    anchor also keeps tend's Rule Zero feed from treating the worker as idle.
+    Claude's autonomous turn loop does not need this prompt, so the caller gates
+    it by the resolved harness.
+    """
+    t = (title or "")[:80]
+    return (
+        f"HAUL RESUME: {nid} ({t}) is still your active anchor. Continue it now "
+        f"(`bd show {nid}`), execute the remaining work, verify it, and close it "
+        f"when done so the haul can advance. If it is genuinely gated, record "
+        f"the evidence and defer it; if it is not yours, clear the assignee. "
+        f"Do not stop merely because the previous model turn ended.")
+
+
 def haul_handoff_message(context_k: float, line_k: float) -> str:
     """Past the handoff line: shed context first; the haul resumes itself."""
     return (

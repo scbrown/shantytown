@@ -77,12 +77,36 @@ def test_anchor_closed_and_queue_ready_feeds_the_next_bead(monkeypatch, capsys):
 
 
 def test_an_active_anchor_is_a_turn_boundary_allow_silently(monkeypatch, capsys):
-    """The w9z1 correction: mid-work stops are normal. Halting or feeding here
-    would fire at every turn end."""
+    """Claude owns its turn loop, so its mid-work stops remain silent."""
     rc, block = _run(monkeypatch, capsys,
                      ready=[{"id": "aegis-2", "assignee": "billy"}],
                      in_progress=[{"id": "aegis-1", "assignee": "billy"}])
     assert rc == 0 and block is None
+
+
+def test_a_codex_active_anchor_blocks_with_resume_not_new_work(monkeypatch, capsys):
+    """Codex otherwise exits after the turn and its active bead hides it from tend."""
+    codex = Agent(name="billy", role="worker", pane="p-b", harness="codex")
+    rc, block = _run(
+        monkeypatch, capsys, reg=_Reg([codex]),
+        in_progress=[{"id": "aegis-1", "title": "finish me", "assignee": "billy"}],
+    )
+    assert rc == 0
+    assert block["decision"] == "block"
+    assert "HAUL RESUME" in block["reason"] and "aegis-1" in block["reason"]
+
+
+def test_codex_is_resolved_from_deployment_default_for_resume(tmp_path, monkeypatch,
+                                                              capsys):
+    """Live cards leave harness unset; the deployment default is authoritative."""
+    (tmp_path / "shantytown.toml").write_text(
+        '[harness]\ndefault = "codex"\n', encoding="utf-8")
+    rc, block = _haul_at(
+        monkeypatch, capsys, tmp_path,
+        in_progress=[{"id": "aegis-1", "title": "finish me", "assignee": "billy"}],
+    )
+    assert rc == 0
+    assert "HAUL RESUME" in block["reason"] and "aegis-1" in block["reason"]
 
 
 def test_an_empty_queue_is_normal_idle_flow(monkeypatch, capsys):
