@@ -175,6 +175,18 @@ def test_clear_empties_a_typed_box_and_confirms_by_repaint():
     assert ("p", "C-u") in panes.controls
 
 
+def test_clear_accepts_a_suggestion_repainted_over_the_empty_buffer():
+    """Codex immediately restores ghost text after C-u; that is empty, not a
+    failed clear.  The verdict remains GHOST so inspection stays truthful."""
+    panes = _Panes(_pane(CODEX_TYPED_LINE))
+    panes.next_screen = _pane(CODEX_GHOST_LINE)
+    rep = input_box.clear(panes, "p")
+    assert rep.verdict == input_box.GHOST
+    assert rep.changed is True
+    assert "box is empty" in rep.detail
+    assert ("p", "C-u") in panes.controls
+
+
 def test_a_pane_that_never_repaints_is_NOT_reported_as_failure():
     """THE REPAINT TRAP, pinned. `capture-pane` returns the last painted FRAME,
     not the buffer: after a real C-u every capture still showed the original

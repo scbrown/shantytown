@@ -5351,7 +5351,11 @@ def _cmd_input(a) -> int:
         return CANNOT_TELL
     if rep.verdict == input_box.UNKNOWN:
         return CANNOT_TELL
-    if a.clear and rep.verdict != input_box.EMPTY:
+    # GHOST is also an empty input buffer: it is only the runtime's dimmed
+    # suggestion painted over that buffer.  Codex does this immediately after
+    # C-u, so requiring a visually EMPTY frame turns a successful clear into a
+    # refusal (aegis-7v54g).
+    if a.clear and rep.verdict not in (input_box.EMPTY, input_box.GHOST):
         return REFUSED
     return OK
 
