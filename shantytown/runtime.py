@@ -1104,7 +1104,7 @@ class ClaudeRuntime:
         # Launch site: the card may already be on disk (a prior `role set`), so
         # only "Nothing launched." is true here — not "Nothing written" (w5l9).
         require_capability(program, card, consequence="Nothing launched.")
-        settings_path = self._resolve(card)
+        settings_path = self.settings_path(card)
         if not settings_path:
             raise SettingsError(
                 f"could not materialize settings for {card.name} "
@@ -1120,6 +1120,10 @@ class ClaudeRuntime:
         assert program.carries_settings(launch, settings_path), \
             "compose produced a settings-less launch"
         return launch
+
+    def settings_path(self, card: Agent) -> str | None:
+        """The graph-aware settings artifact resolved for this launch."""
+        return self._resolve(card)
 
 
     def start(self, card: Agent, pane: str) -> None:
