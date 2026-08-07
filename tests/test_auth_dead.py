@@ -271,6 +271,11 @@ class _CliRuntime(_TendRuntime):
     def is_live(self, screen):
         return self.shows_ready_ui(screen) and not self.auth_dead(screen)
 
+    def settings_path(self, _card):
+        # Tend stamps the settings used for every relaunch.  This lightweight
+        # runtime has no settings files, so model the honest "unknown" stamp.
+        return None
+
 
 def test_reauth_relaunches_every_auth_dead_agent_and_only_them(tmp_path, monkeypatch, capsys):
     root, panes = _reauth_fixture(
