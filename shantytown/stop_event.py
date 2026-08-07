@@ -324,16 +324,20 @@ def _haul(reg: FilesRegistry, panes, me: str, root: Path) -> int:
     advance must never trap a worker at its own stop."""
     try:
         card = reg.get(me)
-        if card.role != "worker":
+        from . import harness as harness_mod
+        harness_name = harness_mod.name_for(card, root=root)
+        # Leads hold assigned work too. Codex leads need the same explicit
+        # continuation as workers; Claude leads keep their autonomous turn loop.
+        if card.role != "worker" and not (card.role == "lead" and
+                                           harness_name == "codex"):
             return 0
         from .feed_check import bd_cwd
         cwd = bd_cwd(reg)
         # An active anchor = mid-work turn boundary. bd list is filtered
         # client-side (same reason as feed_check: assignee formats vary).
         active = _assigned_to(me, _bd_json(["list", "--status", "in_progress", "--limit", "0"], cwd))
-        from . import harness as harness_mod
         resume = active[0] if (active and
-                               harness_mod.name_for(card, root=root) == "codex") else None
+                               harness_name == "codex") else None
         if active and resume is None:
             return 0
         # Keep the active Codex path dependency-free and inside the hook's

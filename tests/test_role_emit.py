@@ -42,10 +42,11 @@ def test_worker_settings_send_then_haul():
                     f"{_PY} -m shantytown.stop_event haul"]
 
 
-def test_lead_settings_send_and_drain():
-    """A lead sends its OWN stop up AND drains its reports' — send + drain."""
+def test_lead_settings_send_haul_then_drain():
+    """A lead persists, continues own work, then drains reports when unblocked."""
     cmds = _stop_commands(settings_for_role("lead"))
     assert cmds == [f"{_PY} -m shantytown.stop_event send",
+                    f"{_PY} -m shantytown.stop_event haul",
                     f"{_PY} -m shantytown.stop_event drain"]
 
 
