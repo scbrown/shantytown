@@ -153,10 +153,10 @@ programs happen to take the same matcher-group hook shape, so only the container
 
 Two honest gaps, named rather than papered over:
 
-- **The *edit* and *MCP* guards are not emitted for codex** — the Bash guard now is (aegis-610jv).
+- **The *edit* and *MCP* guards are not emitted for codex** — the Bash guard now is.
   A matcher is a claim about the host program's *tool names*, and a guard emitted with the wrong
-  vocabulary is not a weaker guard, it is one that never fires while reading as wired (aegis-ac5x/
-  18e0). What changed is that the SHELL vocabulary stopped being a guess: measured live against
+  vocabulary is not a weaker guard, it is one that never fires while reading as wired — a bill
+  this repo has already paid. What changed is that the SHELL vocabulary stopped being a guess: measured live against
   codex-cli 0.146.1, `tool_name` is `Bash` and `tool_input` is `{"command": …}` — Claude Code's
   exact shape — and matcher `"Bash"` fires while six other candidates do not. So `SHANTY_BASH_GUARD`
   is emitted from the same builder the Claude side uses, and `"Edit|Write|MultiEdit"` / `"mcp__.*"`
