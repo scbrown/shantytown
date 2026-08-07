@@ -144,6 +144,24 @@ class Harness(Protocol):
         harness's because the format is."""
         ...
 
+    def read_bash_guard(self, text: str) -> "str | None":
+        """The deployment Bash guard COMMAND an emitted artifact carries, "" for
+        none, or None for CANNOT TELL.
+
+        THREE STATES, NOT TWO, and the middle one is the whole reason this
+        exists (aegis-610jv). Before it, `roles --check` reported `hooks: ok` on
+        the stop routing alone, so a codex agent with NO bd-store-guard and NO
+        crew-only-guard checked out green — the surface whose job is catching
+        unwired governance could not see this guard at all. "" says READ IT,
+        THERE IS NONE; None says COULD NOT READ. Rendering None as "" would be
+        a false clear, which is the failure this repo keeps paying for.
+
+        It must read the MATCHER and not merely the presence of a PreToolUse
+        block: a group scoped to another tool name leaves Bash unguarded, and a
+        presence-only reader would call that wired — aegis-ac5x's own defect,
+        committed by the checker built to catch it."""
+        ...
+
     # The ENVIRONMENT VARIABLE this program's settings ride on, or None for a
     # program that takes a flag instead.
     #
@@ -412,6 +430,32 @@ class ClaudeHarness:
             return None
         return found
 
+    def read_bash_guard(self, text: str) -> "str | None":
+        from .runtime import BASH_MATCHER
+        try:
+            data = json.loads(text)
+        except (ValueError, TypeError):
+            return None
+        hooks = data.get("hooks")
+        if not isinstance(hooks, dict):
+            return None
+        groups = hooks.get("PreToolUse")
+        if not isinstance(groups, list):
+            # Readable settings of ours, carrying no PreToolUse at all: an
+            # observation ("" = no guard), not a failure to look (None).
+            return "" if ("Stop" in hooks or "SessionStart" in hooks) else None
+        try:
+            for group in groups:
+                if group.get("matcher") != BASH_MATCHER:
+                    continue
+                for hook in group["hooks"]:
+                    cmd = hook.get("command", "")
+                    if cmd:
+                        return cmd
+        except (KeyError, TypeError, AttributeError):
+            return None
+        return ""
+
     def settings_in_cmdline(self, cmdline: str) -> "str | None":
         toks = cmdline.split()
         for i, t in enumerate(toks):
@@ -606,6 +650,9 @@ class CodexHarness:
 
     def read_stop_directions(self, text: str) -> "set[str] | None":
         return codex_mod().stop_directions(text)
+
+    def read_bash_guard(self, text: str) -> "str | None":
+        return codex_mod().bash_guard(text)
 
     def settings_in_cmdline(self, cmdline: str) -> "str | None":
         # The env export IS the pointer, so this reads an assignment rather than

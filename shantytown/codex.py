@@ -100,17 +100,37 @@ HOME_VAR = "CODEX_HOME"
 CONFIG_FILE = "config.toml"
 
 # WHAT WE DELIBERATELY DO NOT EMIT, and why it is a constant rather than a
-# comment: the hank edit guard, the deployment Bash guard and the MCP guard are
-# all MATCHER-SCOPED PreToolUse hooks, and a matcher is a claim about the host
-# program's TOOL NAMES. Claude Code's are "Bash" and "mcp__.*". codex's tool
-# vocabulary is its own and we have not measured it, and this repo has already
-# paid for one matcher that looked specific and fired zero times (aegis-ac5x/
-# 18e0, the `Bash(pattern)` matcher that was permissions syntax). A guard
-# emitted with the wrong program's vocabulary is not a weaker guard, it is a
-# guard that never runs while reading as wired — so codex settings carry the
-# events that need NO matcher (SessionStart, Stop) and name this gap out loud
-# at emit time instead.
-MATCHERS_NOT_EMITTED = ("PreToolUse",)
+# comment: a matcher is a claim about the host program's TOOL NAMES, and this
+# repo has already paid for one matcher that looked specific and fired zero
+# times (aegis-ac5x/18e0, the `Bash(pattern)` matcher that was permissions
+# syntax). A guard emitted with the wrong program's vocabulary is not a weaker
+# guard, it is a guard that never runs WHILE READING AS WIRED.
+#
+# ⚠️ THIS CONSTANT USED TO BE `("PreToolUse",)` — the whole event — and that
+# was correct on the evidence available then and EXPENSIVE once it stopped
+# being (aegis-610jv). It meant a codex agent ran with NO bd-store-guard and NO
+# crew-only-guard: nothing between it and a `bd doctor` that wedges one of the
+# 14 exposed stores (aegis-lmi — gastown is the crater), and nothing between it
+# and a `gt up` that puts a live witness on a crew-only host (aegis-bah2). Both
+# are ENFORCEMENT on claude, and every card converted to codex silently lost
+# them. It blocked the codex expansion outright, which is the cost of a
+# not-yet-measured being read as a settled no.
+#
+# What retired it was a MEASUREMENT, not an argument. scripts/probe-codex-
+# pretooluse.sh, live against codex-cli 0.146.1: tool_name is `Bash`, tool_input
+# is `{"command": …}` — byte-identical to Claude Code — and matcher "Bash" fired
+# while "shell", "exec_command", "unified_exec", "local_shell", "bash" and
+# "apply_patch" all stayed silent, so the matcher discriminates and the one
+# firing candidate is a result rather than a match-all.
+#
+# WHAT REMAINS UNMEASURED, and stays unemitted for exactly the original reason:
+# the hank edit guard's `Edit|Write|MultiEdit` and the MCP guard's `mcp__.*`.
+# That probe only ever made codex call a SHELL tool, so it observed nothing
+# about edit or MCP vocabulary. The six silent candidates are silent about
+# shell, not about editing. Measuring those is the same script with a different
+# prompt; until somebody runs it, absence of an observation is not an
+# observation of absence.
+MATCHERS_NOT_EMITTED = ("PreToolUse:Edit|Write|MultiEdit", "PreToolUse:mcp__.*")
 
 # HOW MUCH OF THE PROJECT DOC THE AGENT ACTUALLY GETS, and why this is not a
 # tuning knob but a correctness fix (aegis-ovffp).
@@ -172,16 +192,27 @@ def settings_for_role(role: str, root=None) -> dict:
     merge_one_level takes emitted-wins per key — so an operator who has set their
     own is overridden on `roles set`, which is the same contract the hook events
     already carry and the reason `roles set` exists.
+
+    THE BASH GUARD IS EMITTED HERE (aegis-610jv), from the SAME builder the
+    Claude emitter uses, so the two cannot drift into two different matchers for
+    one measured fact. It appears only when the deployment configures one
+    (SHANTY_BASH_GUARD) — shantytown ships no guard and hardcodes no path — and
+    the key is absent entirely rather than empty when it does not, because an
+    empty PreToolUse array is a claim of coverage this file cannot back.
     """
-    from .runtime import role_stop_hooks, session_start_hooks
+    from .runtime import bash_guard_group, role_stop_hooks, session_start_hooks
+    hooks: dict[str, Any] = {
+        "SessionStart": session_start_hooks(),
+        "Stop": [{"hooks": role_stop_hooks(role, root=root)}],
+    }
+    bash_group = bash_guard_group(root)
+    if bash_group:
+        hooks["PreToolUse"] = [bash_group]
     return {
         # Root scalars first: TOML puts bare keys before any [table] header, and
         # dumps() emits scalars ahead of children for exactly that reason.
         "project_doc_max_bytes": PROJECT_DOC_MAX_BYTES,
-        "hooks": {
-            "SessionStart": session_start_hooks(),
-            "Stop": [{"hooks": role_stop_hooks(role, root=root)}],
-        },
+        "hooks": hooks,
     }
 
 
@@ -303,6 +334,46 @@ def stop_directions(text: str) -> set[str] | None:
     except (KeyError, TypeError, AttributeError):
         return None
     return found
+
+
+def bash_guard(text: str) -> str | None:
+    """The Bash guard COMMAND this config.toml carries, or None for none/unreadable.
+
+    Same contract shape as stop_directions above and the same reason for it: a
+    file we could not parse is not a file with no guard. The caller renders None
+    as CANNOT TELL, never as a pass — reporting "no guard" for a config we failed
+    to read would be the false-clear this whole module keeps refusing to emit.
+
+    It reads the MATCHER, not just the presence of a PreToolUse block: a group
+    scoped to some other tool name would leave Bash unguarded while a
+    presence-only reader called it wired, which is aegis-ac5x's defect wearing
+    the checker's uniform.
+    """
+    from .runtime import BASH_MATCHER
+    try:
+        data = tomllib.loads(text)
+    except (ValueError, TypeError):
+        return None
+    hooks = data.get("hooks")
+    if not isinstance(hooks, dict):
+        return None
+    groups = hooks.get("PreToolUse")
+    if not isinstance(groups, list):
+        # A config with hooks but no PreToolUse is READABLE and carries no
+        # guard — that is an observation, so "" rather than None. The caller
+        # distinguishes them: "" is a finding, None is a failure to look.
+        return "" if "Stop" in hooks or "SessionStart" in hooks else None
+    try:
+        for group in groups:
+            if group.get("matcher") != BASH_MATCHER:
+                continue
+            for hook in group["hooks"]:
+                cmd = hook.get("command", "")
+                if cmd:
+                    return cmd
+    except (KeyError, TypeError, AttributeError):
+        return None
+    return ""
 
 
 # --- the TOML writer -----------------------------------------------------------

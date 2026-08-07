@@ -616,6 +616,58 @@ def session_start_hooks() -> list[dict]:
     return [{"hooks": [_query_first_cmd()]}]
 
 
+# THE MATCHER, once. Both harnesses emit it and both readers look for it, so a
+# typo or a well-meant "improvement" in one of the four places cannot leave a
+# guard that is emitted under one name and checked under another — which would
+# report a green readback for an unguarded agent. Measured for BOTH programs:
+# Claude Code (aegis-ac5x, 2026-07-23) and codex-cli 0.146.1 (aegis-610jv,
+# scripts/probe-codex-pretooluse.sh). It is the TOOL NAME, exactly; `Bash(...)`
+# is permissions syntax and is invalid here.
+BASH_MATCHER = "Bash"
+
+
+def bash_guard_group(root=None) -> dict | None:
+    """The deployment's Bash guard as ONE PreToolUse matcher group, or None.
+
+    SHARED BY BOTH HARNESSES, and that sharing is the whole point (aegis-610jv).
+    The matcher `Bash` and the payload field `tool_input.command` were Claude
+    Code's vocabulary, so this used to be inlined in the Claude-only builder and
+    codex agents ran with no host guard at all — no bd-store-guard between an
+    agent and a `bd doctor` that wedges one of the 14 exposed stores, and no
+    crew-only-guard between an agent and `gt up`. Every claude card converted to
+    codex silently lost both, which is why the codex expansion was blocked on it.
+
+    IT IS EMITTABLE FOR CODEX BECAUSE THE VOCABULARY WAS MEASURED, not assumed —
+    scripts/probe-codex-pretooluse.sh, live against codex-cli 0.146.1:
+
+        tool_name     'Bash'                    (x2, the only value seen)
+        tool_input    {'command': '...'}        exactly Claude Code's shape
+        matcher       "Bash" FIRED; "shell", "exec_command", "unified_exec",
+                      "local_shell", "bash", "apply_patch" were ALL silent
+
+    That last line is the part that matters and the reason the probe carries
+    candidates it expected to fail: it shows the matcher is genuinely
+    DISCRIMINATING rather than matching everything, so a single firing candidate
+    is a measurement and not a coincidence. The guards themselves needed no
+    translation at all — both were run against a real codex payload and refused
+    the two commands they exist to refuse, while benign commands passed.
+
+    DELIBERATELY NOT GENERALISED TO THE OTHER TWO GUARDS. The hank edit guard
+    (`Edit|Write|MultiEdit`) and the MCP guard (`mcp__.*`) stay Claude-only,
+    because that probe run only ever made codex call a SHELL tool — no edit and
+    no MCP call happened, so those six silent candidates are silent about
+    everything except shell. Absence of an observation is not an observation of
+    absence, and emitting on the strength of it would rebuild the exact defect
+    this function's evidence retires. See codex.MATCHERS_NOT_EMITTED, which now
+    names those two and no longer names PreToolUse itself.
+    """
+    guard_cmd = bash_guard_command(root)
+    if not guard_cmd:
+        return None
+    return {"matcher": BASH_MATCHER,
+            "hooks": [{"type": "command", "command": guard_cmd}]}
+
+
 def pre_tool_use_hooks(root=None) -> list[dict]:
     """The matcher-scoped guards: hank on every edit, and whatever the deployment
     configures for Bash and MCP.
@@ -625,7 +677,12 @@ def pre_tool_use_hooks(root=None) -> list[dict]:
     from the two above rather than one more key in the settings dict: a harness
     whose vocabulary we have not measured must be able to emit the stop routing
     WITHOUT emitting guards that would read as wired and fire zero times
-    (aegis-ac5x/18e0 is that exact bill, already paid once)."""
+    (aegis-ac5x/18e0 is that exact bill, already paid once).
+
+    Codex now shares the BASH leg of this via bash_guard_group — its vocabulary
+    for that one tool has been measured. The other two legs remain Claude-only;
+    see bash_guard_group for why that is a scope limit and not an oversight.
+    """
     pre_tool = [_guard_hook()]
     # NOTE: the untracked-work nudge (PreToolUse, aegis-fv2zc) is NOT here — it
     # is delivered via the PROVISION consent settings (provision.
@@ -637,11 +694,12 @@ def pre_tool_use_hooks(root=None) -> list[dict]:
     # double every strike and escalate at half the threshold.
     # Deployment Bash guard (aegis-if4d): emitted ONLY when the deployment
     # configures one — see bash_guard_command. Matcher Bash, so every shell
-    # command an agent runs passes the host's policy first.
-    guard_cmd = bash_guard_command(root)
-    if guard_cmd:
-        pre_tool.append({"matcher": "Bash",
-                         "hooks": [{"type": "command", "command": guard_cmd}]})
+    # command an agent runs passes the host's policy first. Built by
+    # bash_guard_group so the codex emitter and this one cannot drift into two
+    # different matchers for one measured fact.
+    bash_group = bash_guard_group(root)
+    if bash_group:
+        pre_tool.append(bash_group)
     # Deployment MCP guard (aegis-uy8e8). The matcher is a NAME REGEX covering
     # the whole MCP surface, because matchers cannot see ARGUMENTS — the handler
     # filters itself. That is not a style choice: `Bash(pattern)` matchers are
@@ -770,6 +828,32 @@ def emitted_stop_directions(root, role: str, harness_name: str | None = None) ->
     program = harness_mod.get(harness_name)
     return stop_directions_in(
         Path(root) / "settings" / program.settings_name(role))
+
+
+def emitted_bash_guard(root, role: str, harness_name: str | None = None) -> str | None:
+    """READ BACK the deployment Bash guard a role's EMITTED settings carry: the
+    command, "" for none, or None for could-not-read.
+
+    The artifact reader for aegis-610jv's third acceptance clause — `roles
+    --check` must read the guard back OFF DISK for a codex role, the same way it
+    does the stop directions. Same separation and the same reason: a check that
+    asks the WRITER what it would write proves nothing about what is on disk,
+    which was GitHub #6's whole complaint. It matters more here than it did
+    there, because the emitter is exactly what was wrong — a codex config that
+    had never carried a guard would be pronounced fine by any check that
+    consulted settings_for_role.
+
+    Reads through the harness whose format it is, so a codex role's config.toml
+    is parsed as TOML at the codex path and never as the claude JSON one.
+    """
+    from . import harness as harness_mod
+    program = harness_mod.get(harness_name)
+    path = Path(root) / "settings" / program.settings_name(role)
+    try:
+        text = path.read_text()
+    except OSError:
+        return None
+    return program.read_bash_guard(text)
 
 
 def stop_directions_in(path) -> set[str] | None:
