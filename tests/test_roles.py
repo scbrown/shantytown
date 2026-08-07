@@ -49,7 +49,12 @@ def test_broken_orphan(tmp_path: Path):
     assert rep.verdict == roles.BROKEN
     out = rep.render()
     assert "ORPHAN" in out
-    assert "BLOCKED: 1 agent is not correctly attached to the tier" in out
+    # The summary says only what is true of EVERY broken cause. It used to say
+    # "not correctly attached to the tier", which held for all four causes then
+    # and stopped holding when the guard leg added a fifth (aegis-610jv): an
+    # unguarded card is attached perfectly. The row still carries ORPHAN, which
+    # is where the structural claim belongs and where it is measured.
+    assert "BLOCKED: 1 agent failed a check" in out
     # ORPHAN is a real structural fault and stays BROKEN — but the summary must
     # not assert a delivery outcome it never measured. dearing's stop actually
     # goes STRAIGHT to arnold (route_stop Q4); "go nowhere" was false, and the
