@@ -110,6 +110,18 @@ def test_crew_says_zero_free_when_everyone_is_mid_flight(tmp_path, monkeypatch, 
     assert "free: " not in out.replace("0 free", "")
 
 
+def test_unknown_work_is_counted_loudly_and_prevents_false_saturation_summary(
+        tmp_path, monkeypatch, capsys):
+    root = _roster(tmp_path, {"ellie": "p-ellie", "ian": "p-ian"})
+    monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: _Panes(
+        {"p-ellie": BUSY_SCREEN, "p-ian": SHELL_SCREEN}))
+    assert cli._cmd_crew(_Args(root)) == cli.OK
+    out = capsys.readouterr().out
+    assert "1 busy: ellie" in out
+    assert "1 UNKNOWN work state: ian" in out
+    assert "every live agent is mid-flight" not in out
+
+
 def test_a_down_agent_is_never_free(tmp_path, monkeypatch, capsys):
     """`down` is not `idle`. A down agent on the free list sends work into a
     session that does not exist."""
