@@ -115,13 +115,14 @@ from . import guard as guard_mod
 from . import attribution as attribution_mod
 from .attribution import attribute
 from .events import FilesEvents
-from .inbox import FilesInbox, MessageTooLong, TrackerInbox
+from .inbox import FilesInbox, MessageTooLong, TrackerInbox, is_message
 from .triage import Action
 from . import supervisor as sup_mod
 from . import tend as tend_mod
 from . import provision as prov_mod
 from . import notify as notify_mod
-from .files import FilesRegistry, FilesTracker, plate as files_plate
+from .files import (FilesRegistry, FilesTracker, plate as files_plate,
+                    items as files_items)
 from .launched import FilesLaunches, CURRENT, STALE, UNKNOWN
 from .stopped import FilesStops
 from .quipu import QuipuRegistry
@@ -6230,6 +6231,54 @@ def _tend_retire(a) -> int:
               "durable and it cannot be written here.", file=sys.stderr)
         return REFUSED
     want = bool(a.retire)
+
+    # RETIREMENT REFERENCES ARE FOREIGN KEYS, EVEN THOUGH THE CARD FORMAT DOES
+    # NOT SAY SO (aegis-z58d3). A card can disappear from supervision while its
+    # name remains on work and in the reporting tree. Say those references at
+    # the transition where a person can still act on them. The two surfaces
+    # have deliberately different consequences: assigned work is reported (the
+    # operator may be retiring first and routing second), while a reports_to
+    # edge is refused because it makes the tier structurally false immediately.
+    if want:
+        try:
+            tracker = _tracker(a)
+            rows = ([vars(item) for item in files_items(tracker)]
+                    if isinstance(tracker, FilesTracker)
+                    else beads_mod.rows(tracker))
+            assigned = [
+                row for row in rows
+                if (row.get("assignee") or "").split("/")[-1] == name
+                and row.get("status") in {"open", "in_progress", "hooked", "blocked"}
+            ]
+        except Exception as e:
+            print(f"  could not tell: retirement reference scan failed: {e}\n"
+                  f"  {name} was NOT retired; an unreadable work store must not "
+                  f"look like zero references.", file=sys.stderr)
+            return CANNOT_TELL
+
+        work = [row for row in assigned if not is_message(row.get("title", ""))]
+        messages = len(assigned) - len(work)
+        if work:
+            print(f"  outstanding work assigned to {name} ({len(work)}):")
+            for row in sorted(work, key=lambda x: x.get("id", "")):
+                print(f"    {row.get('id', '?')} [{row.get('status', '?')}] "
+                      f"{row.get('title', '')}")
+        if messages:
+            print(f"  excluded {messages} delivered inbox message(s) from the "
+                  f"work count (still assigned to {name}).")
+
+        dependents = sorted(
+            ag.name for ag in reg.all()
+            if ag.name != name and ag.reports_to == name and not ag.retired)
+        if dependents:
+            print(f"  refused: {name} is still reports_to for: "
+                  f"{', '.join(dependents)}. Rewire the tier before retiring "
+                  f"its parent.", file=sys.stderr)
+            return REFUSED
+
+        print("  st cannot see verbally routed threads or external alert "
+              "owner chains; check conversation handoffs and automation alert "
+              "routing before considering retirement complete.")
 
     # THE PRE-FLIGHT, BEFORE THE DRY-RUN BRANCH. A dry run that reported "would
     # mark retired=False" while the real command refuses would be lying about
