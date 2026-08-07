@@ -1184,3 +1184,93 @@ class BlockedStaleAlerter:
 
         self._save(ledger)
         return surfaced
+
+
+class BlockedMisstatusAlerter:
+    """Report BLOCKED beads whose issue blockers are all CLOSED.
+
+    This is intentionally separate from BlockedStaleAlerter. Age means "chase
+    the still-real blocker"; this condition means "clear the stale status" and
+    is actionable immediately. Combining their messages would erase that
+    distinction and make a freshly mis-statused P1 wait three days for an age
+    threshold even though no dependency holds it.
+
+    A blocked bead with NO issue dependencies is not classified. Its reason may
+    live in prose or in an external dependency the issue view cannot enumerate;
+    treating absence as all-closed is the false-clear direction.
+    """
+
+    def __init__(self, root, reg, panes, *, push=push_to_admin,
+                 bd_blocked=None, bd_show=None, now=None, log=None):
+        self.path = Path(root) / "notify" / "blocked_misstatus.json"
+        self._reg = reg
+        self._panes = panes
+        self._push = push
+        self._bd_blocked = bd_blocked
+        self._bd_show = bd_show
+        self._now = now
+        self._log = log or (lambda msg: None)
+
+    def sweep(self) -> list[str]:
+        from .feed_check import bd_blocked, bd_cwd, bd_show
+        from .files import write_json_atomic
+        from .inbox import is_blocked
+        # A fully injected reader is hermetic and has no registry/cwd at all in
+        # tests. Resolve the production cwd only when a production reader needs
+        # it; otherwise a diagnostic dependency outside the data path can make
+        # a complete fixture look unreadable.
+        cwd = (bd_cwd(self._reg)
+               if self._bd_blocked is None or self._bd_show is None else None)
+        try:
+            rows = self._bd_blocked() if self._bd_blocked else bd_blocked(cwd)
+        except Exception as e:
+            self._log(f"blocked-misstatus: could not read blocked beads ({e!r})")
+            return []
+
+        try:
+            ledger = json.loads(self.path.read_text())
+        except (OSError, ValueError):
+            ledger = {}
+        now = self._now() if callable(self._now) else self._now
+        if now is None:
+            import time
+            now = time.time()
+
+        live, due = set(), []
+        for row in rows or []:
+            bid = row.get("id")
+            if not bid or not is_blocked(row.get("status")):
+                continue
+            try:
+                detail = self._bd_show(bid) if self._bd_show else bd_show(cwd, bid)
+            except Exception as e:
+                self._log(f"blocked-misstatus: could not inspect {bid} ({e!r})")
+                continue
+            deps = [d for d in (detail.get("dependencies") or [])
+                    if d.get("dependency_type") == "blocks"]
+            # Non-empty is load-bearing: all([]) is True in Python and exactly
+            # wrong operationally for prose/external blocks.
+            if not deps or not all((d.get("status") or "") == "closed" for d in deps):
+                continue
+            live.add(bid)
+            last = ledger.get(bid)
+            if not isinstance(last, (int, float)) or now - last >= 86400:
+                due.append((bid, row, [d.get("id", "?") for d in deps]))
+
+        for bid in [b for b in ledger if b not in live]:
+            del ledger[bid]
+        surfaced = []
+        for bid, row, deps in due:
+            msg = (f"⚠ MIS-STATUSED BLOCKED bead: {bid} has dependencies and "
+                   f"EVERY one is closed ({', '.join(deps)}). It is unblocked "
+                   f"in fact but blocked on paper, so bd ready and every feed "
+                   f"path hide it. Clear/correct the status; do not chase a "
+                   f"blocker that no longer exists. {(row.get('title') or '')[:90]}")
+            if self._push(self._reg, self._panes, msg):
+                ledger[bid] = now
+                surfaced.append(bid)
+            else:
+                self._log(f"blocked-misstatus: {bid} push did not land — not ledgered")
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        write_json_atomic(self.path, ledger)
+        return surfaced

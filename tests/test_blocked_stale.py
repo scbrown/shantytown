@@ -14,7 +14,7 @@ from pathlib import Path
 
 from shantytown.inbox import is_blocked
 from shantytown.notify import (BLOCKED_MIN_AGE_DAYS, BlockedStaleAlerter,
-                               _bead_age_days)
+                               BlockedMisstatusAlerter, _bead_age_days)
 
 NOW = datetime(2026, 8, 2, tzinfo=timezone.utc).timestamp()
 
@@ -39,6 +39,44 @@ class _Push:
 def _alerter(tmp_path, rows, push, now=NOW):
     return BlockedStaleAlerter(tmp_path, reg=None, panes=None, push=push,
                                  bd_blocked=lambda: rows, now=now)
+
+
+def _detail(*deps):
+    return {"dependencies": [
+        {"id": bid, "dependency_type": "blocks", "status": status}
+        for bid, status in deps
+    ]}
+
+
+def _misstatus(tmp_path, rows, details, push):
+    return BlockedMisstatusAlerter(
+        tmp_path, reg=None, panes=None, push=push,
+        bd_blocked=lambda: rows, bd_show=lambda bid: details[bid], now=NOW)
+
+
+def test_all_closed_dependencies_are_reported_as_MIS_STATUS_not_age(tmp_path):
+    push = _Push()
+    rows = [_row("hac0", 18)]
+    got = _misstatus(tmp_path, rows, {
+        "hac0": _detail(("9p7a1", "closed"), ("b7ve", "closed"))}, push).sweep()
+    assert got == ["hac0"]
+    assert "MIS-STATUSED" in push.msgs[0] and "EVERY one is closed" in push.msgs[0]
+    assert "Clear/correct the status" in push.msgs[0]
+
+
+def test_a_genuinely_open_blocker_is_NOT_misstatused(tmp_path):
+    push = _Push()
+    rows = [_row("real", 40)]
+    got = _misstatus(tmp_path, rows, {
+        "real": _detail(("done", "closed"), ("still-open", "open"))}, push).sweep()
+    assert got == [] and push.msgs == []
+
+
+def test_a_blocked_bead_with_NO_dependencies_is_NOT_misstatused(tmp_path):
+    push = _Push()
+    rows = [_row("prose-block", 40)]
+    got = _misstatus(tmp_path, rows, {"prose-block": _detail()}, push).sweep()
+    assert got == [] and push.msgs == []
 
 
 # --- the clock. This is the part that would silently defeat the whole feature --
