@@ -380,8 +380,11 @@ def _governor(a):
 def _governor_for(cfg, governors, card, root):
     """(harness, governor, synthetic signal-lost verdict-or-None) for card."""
     harness = harness_mod.name_for(card, root=root)
-    default_harness = getattr(cfg, "harness_default", None) or harness_mod.DEFAULT
-    if gov_mod.unconfigured(cfg.governor, harness, default_harness):
+    # The base governor's provider is its compatibility default (Claude), not
+    # [harness].default.  The latter chooses which program new cards launch;
+    # using it here made a codex launch default falsely mark the still-metered
+    # Claude base governor as unconfigured (aegis-5ve1h).
+    if gov_mod.unconfigured(cfg.governor, harness):
         policy = cfg.governor
         frozen = policy.on_signal_lost == gov_mod.FREEZE
         verdict = gov_mod.Verdict(
@@ -3845,8 +3848,7 @@ def _crew_governor(a) -> int:
             print(f"{name} {status}")
         for harness in sorted({harness_mod.name_for(card, root=a.root) for card in cards}
                               - {"base"} - set(cfg.governor.by_harness)):
-            if gov_mod.unconfigured(cfg.governor, harness,
-                                    cfg.harness_default or harness_mod.DEFAULT):
+            if gov_mod.unconfigured(cfg.governor, harness):
                 print(f"{harness} lost unconfigured — no usage governor")
         return OK
 
@@ -5692,8 +5694,7 @@ def _tend_once(a, quiet: bool = False) -> int:
     for _v in list(verdicts.values()) + [
             _card_verdict(card) for card in agents
             if gov_mod.unconfigured(cfg.governor,
-                                    harness_mod.name_for(card, root=a.root),
-                                    cfg.harness_default or harness_mod.DEFAULT)]:
+                                    harness_mod.name_for(card, root=a.root))]:
         if _v is not None and _v.alarm:
             # EVERY PASS, LOUDLY. A governor that goes quiet when it cannot see
             # the number is indistinguishable from one with nothing to report.
