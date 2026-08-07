@@ -422,7 +422,11 @@ def worktree_for(repo: Path | str, agent: str) -> Path:
 
 
 # Running git is INJECTED here for the same reason cloning and origin-reading are
-# above: the refusal has to be testable without a network. Returns (rc, stdout).
+# above: the refusal has to be testable without a network. Returns (rc, output).
+# Most callers need stdout as structured input. Push is the exception: Git's
+# porcelain ref report is stdout, while pre-push hooks and Git's own actionable
+# refusal diagnostics are stderr. The default runner preserves both for push so
+# the operator sees the mechanism that refused publication (aegis-l3o0x).
 GitRunner = Callable[..., "tuple[int, str]"]
 
 MAIN_CANDIDATES = ("main", "master")
@@ -431,7 +435,10 @@ MAIN_CANDIDATES = ("main", "master")
 def _git(dest: Path | str, *args: str) -> "tuple[int, str]":
     r = subprocess.run(["git", "-C", str(dest), *args],
                        capture_output=True, text=True, timeout=60)
-    return r.returncode, (r.stdout or "").strip()
+    output = r.stdout or ""
+    if args and args[0] == "push":
+        output += r.stderr or ""
+    return r.returncode, output.strip()
 
 
 def upstream_ref(dest: Path | str, run: GitRunner = _git
@@ -857,9 +864,9 @@ def push_every_remote(dest: Path | str, src: str, dst: str = "main",
     outcomes: list[PushOutcome] = []
     for remote in remotes:
         rc, out = run(dest, "push", "--porcelain", remote, f"{src}:refs/heads/{dst}")
-        # --porcelain puts the per-ref result on STDOUT (plain push writes it to
-        # stderr, which this runner drops) — that is why it is used here rather
-        # than for readability.
+        # --porcelain puts the per-ref result on stdout. The runner also retains
+        # stderr for push because hooks explain their refusals there; neither
+        # stream may be replaced by a generic failure (aegis-l3o0x).
         text = out or ""
         if rc == 0:
             outcomes.append(PushOutcome(
@@ -869,14 +876,15 @@ def push_every_remote(dest: Path | str, src: str, dst: str = "main",
         low = text.lower()
         non_ff = ("non-fast-forward" in low or "fetch first" in low
                   or "[rejected]" in low)
+        detail = f"\n{text}" if text else ""
         if non_ff:
             reason = (f"{remote} REFUSED: non-fast-forward. {remote} has commits "
                       f"this branch does not. Fetch it and merge — never force: "
                       f"`git fetch {remote} && git merge {remote}/{dst}` then push "
-                      f"again. A merge commit fast-forwards on BOTH remotes.")
+                      f"again. A merge commit fast-forwards on BOTH remotes."
+                      f"{detail}")
         else:
-            first = next((ln for ln in text.splitlines() if ln.strip()), "")
-            reason = f"{remote} FAILED: {first or 'no output from git push'}"
+            reason = f"{remote} FAILED:{detail or ' no output from git push'}"
         outcomes.append(PushOutcome(remote=remote, ok=False, non_ff=non_ff,
                                     reason=reason))
     return outcomes
