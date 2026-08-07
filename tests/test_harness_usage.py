@@ -50,13 +50,24 @@ def test_stats_reads_each_harness_store_and_keeps_missing_usage_unknown(tmp_path
     crew = root / "crew"; crew.mkdir(parents=True)
     claude_ws = "/work/a-team"
     codex_ws = "/work/codex-team"
+    role_codex_ws = "/work/role-codex-team"
     (crew / "claude-agent.json").write_text(json.dumps({"role": "worker", "workspace": claude_ws}))
     (crew / "codex-agent.json").write_text(json.dumps({"role": "worker", "workspace": codex_ws,
                                                         "harness": "codex"}))
+    (crew / "role-codex-agent.json").write_text(json.dumps(
+        {"role": "worker", "workspace": role_codex_ws, "harness": "codex"}))
+    # The resolver's per-agent override wins over the role home.  Usage must
+    # follow this path, not the default ~/.codex home.
+    codex_home = root / "settings" / "codex" / "agent-codex-agent"
+    codex_home.mkdir(parents=True)
+    (codex_home / "config.toml").write_text("model = \"test\"\n")
+    role_codex_home = root / "settings" / "codex" / "worker"
+    role_codex_home.mkdir(parents=True)
+    (role_codex_home / "config.toml").write_text("model = \"test\"\n")
     cp = home / ".claude" / "projects" / "-work-a-team" / "one.jsonl"
     cp.parent.mkdir(parents=True)
     cp.write_text(json.dumps({"message": {"usage": {"input_tokens": 2, "output_tokens": 3}}}) + "\n")
-    xp = home / ".codex" / "sessions" / "2026" / "08" / "07" / "rollout.jsonl"
+    xp = codex_home / "sessions" / "2026" / "08" / "07" / "rollout.jsonl"
     xp.parent.mkdir(parents=True)
     xp.write_text("\n".join(json.dumps(x) for x in [
         {"payload": {"cwd": codex_ws}},
@@ -65,11 +76,19 @@ def test_stats_reads_each_harness_store_and_keeps_missing_usage_unknown(tmp_path
     ]) + "\n")
     # A second Codex session belonging to the same card has no token snapshot.
     (xp.parent / "unknown.jsonl").write_text(json.dumps({"payload": {"cwd": codex_ws}}) + "\n")
+    rp = role_codex_home / "sessions" / "2026" / "08" / "07" / "role.jsonl"
+    rp.parent.mkdir(parents=True)
+    rp.write_text("\n".join(json.dumps(x) for x in [
+        {"payload": {"cwd": role_codex_ws}},
+        {"type": "event_msg", "payload": {"info": {"total_token_usage": {
+            "total_tokens": 9, "input_tokens": 5, "output_tokens": 4}}}},
+    ]) + "\n")
 
     got = stats.session_usage(root, home=home)
     assert got["claude-agent"]["claude"][0].total_tokens == 5
     assert got["codex-agent"]["codex"][0].total_tokens == 12
     assert got["codex-agent"]["codex"][1] == 1
+    assert got["role-codex-agent"]["codex"][0].total_tokens == 9
     # A transcript-only agent is included even before a capture hook event exists.
     monkeypatch.setattr(stats.Path, "home", lambda: home)
     buf = io.StringIO()
