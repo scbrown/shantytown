@@ -75,3 +75,24 @@ def test_a_bare_name_that_exists_NOWHERE_still_resolves_under_gt_root(
     reintroduce the same class of cwd-sensitivity one call up."""
     monkeypatch.chdir(tmp_path)
     assert _resolve_repo("not-cloned-yet") == gt_root / "not-cloned-yet"
+
+
+def test_a_rig_inside_the_parent_repo_resolves_to_its_source_checkout(
+        gt_root, monkeypatch, tmp_path):
+    """~/gt/hank inherits ~/gt's Git context, but that does not make the rig a
+    Hank checkout. Only an own .git marker may win repo-name resolution."""
+    (gt_root / ".git").mkdir()
+    (gt_root / "hank").mkdir()
+    (gt_root / "hank" / ".beads").mkdir()
+    (gt_root / "hank-src" / ".git").mkdir(parents=True)
+    monkeypatch.chdir(tmp_path)
+    assert _resolve_repo("hank") == gt_root / "hank-src"
+
+
+def test_a_real_direct_checkout_wins_over_a_source_suffix(
+        gt_root, monkeypatch, tmp_path):
+    """The suffix is a compatibility alias, not a blanket rename rule."""
+    (gt_root / "hank" / ".git").mkdir(parents=True)
+    (gt_root / "hank-src" / ".git").mkdir(parents=True)
+    monkeypatch.chdir(tmp_path)
+    assert _resolve_repo("hank") == gt_root / "hank"
