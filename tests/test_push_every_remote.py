@@ -61,6 +61,10 @@ def two_remotes(tmp_path: Path):
     _git(repo, "commit", "-q", "-m", "one")
     _git(repo, "remote", "add", "origin", str(origin))
     _git(repo, "remote", "add", "forge", str(forge))
+    # Local bare paths do not prove common ownership.  This fixture models the
+    # explicitly trusted two-peer topology that shantytown uses in production.
+    _git(repo, "config", "remote.origin.st-push-allowed", "true")
+    _git(repo, "config", "remote.forge.st-push-allowed", "true")
     _git(repo, "push", "-q", "origin", "main")
     _git(repo, "push", "-q", "forge", "main")
     _git(repo, "branch", "--set-upstream-to=origin/main", "main")
@@ -120,6 +124,26 @@ def test_a_repo_with_ONE_remote_still_works(tmp_path, capsys):
     _commit(wt, "solo-work")
     assert main(["push", str(repo), "ellie"]) == OK
     assert _sha(origin, "main") == _sha(wt, "HEAD")
+
+
+def test_mixed_authority_remotes_REFUSE_before_contacting_either(two_remotes, capsys):
+    """Thinker's measured shape: our fork plus somebody else's upstream.
+
+    Both remote refs remain unchanged, proving the refusal is a PRE-FLIGHT and
+    cannot manufacture a partial push before discovering the unsafe peer.
+    """
+    repo, wt, origin, forge = two_remotes
+    _git(repo, "config", "--unset", "remote.origin.st-push-allowed")
+    _git(repo, "config", "--unset", "remote.forge.st-push-allowed")
+    before_origin, before_forge = _sha(origin, "main"), _sha(forge, "main")
+    _commit(wt, "must-not-land")
+
+    assert main(["push", str(repo), "ellie"]) == REFUSED
+    err = capsys.readouterr().err
+    assert "REFUSED BEFORE PUSH" in err
+    assert "third-party" in err and "no remote was contacted" in err
+    assert _sha(origin, "main") == before_origin
+    assert _sha(forge, "main") == before_forge
 
 
 # --- requirement 1: refuse on non-ff, NEVER force ----------------------------
