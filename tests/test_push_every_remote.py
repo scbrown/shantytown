@@ -181,6 +181,36 @@ def test_a_fast_forward_is_still_accepted(two_remotes):
     assert _sha(forge, "main") == _sha(wt, "HEAD")
 
 
+def test_pre_push_hook_refusal_surfaces_complete_stderr(two_remotes, capsys):
+    """A scrub guard speaks on stderr; its complete refusal is the remedy.
+
+    Git's porcelain ref report is stdout, so a test that stubs only the runner
+    cannot prove the real subprocess boundary retains both streams. Use an
+    actual pre-push hook in the fixture's shared hooks directory.
+    """
+    repo, wt, origin, forge = two_remotes
+    hook = repo / ".git" / "hooks" / "pre-push"
+    hook.write_text(
+        "#!/bin/sh\n"
+        "echo 'SCRUB REFUSED: internal identifier detected' >&2\n"
+        "echo 'remove the .svc hostname before public push' >&2\n"
+        "exit 1\n"
+    )
+    hook.chmod(0o755)
+    _commit(wt, "must-be-scrubbed")
+
+    assert main(["push", str(repo), "ellie"]) == REFUSED
+    err = capsys.readouterr().err
+    refusal = (
+        "SCRUB REFUSED: internal identifier detected\n"
+        "remove the .svc hostname before public push"
+    )
+    assert refusal in err, f"hook refusal was altered or truncated: {err!r}"
+    assert "no output from git push" not in err
+    assert _sha(origin, "main") != _sha(wt, "HEAD")
+    assert _sha(forge, "main") != _sha(wt, "HEAD")
+
+
 # --- requirement 2: NAME the remote that refused -----------------------------
 
 def test_the_refusal_NAMES_the_remote_that_refused(two_remotes, capsys):
