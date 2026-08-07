@@ -58,6 +58,7 @@ otherwise, and the default is the answer for an UNSET field, never a fallback fo
 an unrecognised one.
 """
 from __future__ import annotations
+from dataclasses import dataclass
 import json
 from pathlib import Path
 from typing import Protocol, runtime_checkable, TYPE_CHECKING
@@ -90,6 +91,21 @@ class Unsupported(Exception):
     launch an agent that reads as configured and is not, which is the same class
     of failure as substituting a different program: it succeeds at being the
     wrong thing. Raised at COMPOSE time, so nothing is launched."""
+
+
+@dataclass(frozen=True)
+class Usage:
+    """Absolute token totals from one transcript; absence is ``None``, not zero."""
+    input_tokens: int = 0
+    cached_input_tokens: int = 0
+    cache_write_input_tokens: int = 0
+    output_tokens: int = 0
+    reasoning_output_tokens: int = 0
+    total_tokens: int = 0
+
+
+def _count(value: object) -> int:
+    return value if isinstance(value, int) and value >= 0 else 0
 
 
 @runtime_checkable
@@ -144,6 +160,13 @@ class Harness(Protocol):
         harness's because the format is."""
         ...
 
+    def read_usage(self, session_path: str | Path) -> Usage | None:
+        """Read absolute session token totals, or UNKNOWN when no record exists.
+
+        This belongs to the harness: Claude records deltas per assistant
+        message, while Codex records cumulative snapshots.  A generic parser
+        would either miss one or multiply the other (aegis-8c1cv).
+        """
     def read_bash_guard(self, text: str) -> "str | None":
         """The deployment Bash guard COMMAND an emitted artifact carries, "" for
         none, or None for CANNOT TELL.
@@ -430,6 +453,31 @@ class ClaudeHarness:
             return None
         return found
 
+    def read_usage(self, session_path: str | Path) -> Usage | None:
+        """Claude stores a usage delta on each assistant message; sum deltas."""
+        inp = cached = written = out = reasoning = 0
+        seen = False
+        try:
+            with Path(session_path).open(encoding="utf-8", errors="replace") as fh:
+                for line in fh:
+                    try:
+                        usage = (json.loads(line).get("message") or {}).get("usage") or {}
+                    except (ValueError, AttributeError):
+                        continue
+                    if not isinstance(usage, dict) or not usage:
+                        continue
+                    seen = True
+                    inp += _count(usage.get("input_tokens"))
+                    cached += _count(usage.get("cache_read_input_tokens"))
+                    written += _count(usage.get("cache_creation_input_tokens"))
+                    out += _count(usage.get("output_tokens"))
+                    reasoning += _count(usage.get("reasoning_output_tokens"))
+        except OSError:
+            return None
+        if not seen:
+            return None
+        return Usage(inp, cached, written, out, reasoning,
+                     inp + cached + written + out + reasoning)
     def read_bash_guard(self, text: str) -> "str | None":
         from .runtime import BASH_MATCHER
         try:
@@ -651,6 +699,32 @@ class CodexHarness:
     def read_stop_directions(self, text: str) -> "set[str] | None":
         return codex_mod().stop_directions(text)
 
+    def read_usage(self, session_path: str | Path) -> Usage | None:
+        """Codex stores cumulative snapshots; take the greatest total once."""
+        best: Usage | None = None
+        try:
+            with Path(session_path).open(encoding="utf-8", errors="replace") as fh:
+                for line in fh:
+                    try:
+                        usage = (((json.loads(line).get("payload") or {}).get("info") or {})
+                                 .get("total_token_usage") or {})
+                    except (ValueError, AttributeError):
+                        continue
+                    if not isinstance(usage, dict) or "total_tokens" not in usage:
+                        continue
+                    candidate = Usage(
+                        _count(usage.get("input_tokens")),
+                        _count(usage.get("cached_input_tokens")),
+                        _count(usage.get("cache_write_input_tokens")),
+                        _count(usage.get("output_tokens")),
+                        _count(usage.get("reasoning_output_tokens")),
+                        _count(usage.get("total_tokens")),
+                    )
+                    if best is None or candidate.total_tokens > best.total_tokens:
+                        best = candidate
+        except OSError:
+            return None
+        return best
     def read_bash_guard(self, text: str) -> "str | None":
         return codex_mod().bash_guard(text)
 
