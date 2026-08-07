@@ -65,6 +65,19 @@ def test_gh17_no_settings_at_all_is_still_None(tmp_path):
     assert cli._default_settings(tmp_path)(Agent(name="kelly")) is None
 
 
+def test_worker_with_reports_resolves_the_lead_drain_profile(tmp_path):
+    """The graph destination needs drain without changing its card role."""
+    sdir = tmp_path / "settings"
+    sdir.mkdir()
+    (sdir / "worker.settings.json").write_text("{}")
+    (sdir / "lead.settings.json").write_text("{}")
+    arnold = Agent(name="arnold", role="worker", reports_to="dearing")
+    billy = Agent(name="billy", role="worker", reports_to="arnold")
+    resolve = cli._default_settings(tmp_path, [arnold, billy])
+    assert resolve(arnold).endswith("lead.settings.json")
+    assert resolve(billy).endswith("worker.settings.json")
+
+
 # --- #15 / #16: emitting settings must not erase the operator's keys ---------
 
 def test_gh15_operator_keys_survive_a_re_emit(tmp_path):

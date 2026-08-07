@@ -1009,14 +1009,19 @@ def main(argv: list[str] | None = None) -> int:
     return _not_yet(a.cmd)
 
 
-def _default_settings(root: Path):
-    """Resolve a card -> the settings file that wires its ROLE's hooks.
+def _default_settings(root: Path, agents=()):
+    """Resolve a card -> the settings file that wires its graph role's hooks.
 
     The file is EMITTED by `role set` / #6; #5 owns the launch seam,
     not the hook-file content. So this resolver READS: it returns the path if the
     role's settings file exists, else None -> compose refuses. That refusal IS the
     invariant working — no settings, no launch, never a settings-less fallback.
     """
+    # A worker with direct reports is a stop-event destination even when its
+    # card role deliberately remains worker.  It needs the lead hook profile
+    # (drain) without a role/trait change that could affect governor tiers.
+    receivers = {a.reports_to for a in agents if a.reports_to}
+
     def resolve(card):
         # PER-AGENT FIRST (GitHub #17). All workers sharing one file meant nothing
         # could differ per agent — so a card's own model, permissions or hooks had
@@ -1030,8 +1035,9 @@ def _default_settings(root: Path):
         # config.toml — a file that does not exist, so every codex launch would
         # refuse for a reason that had nothing to do with the card.
         program = harness_mod.for_card(card, root=root)
+        profile = "lead" if card.role == "worker" and card.name in receivers else card.role
         for name in (program.agent_settings_name(card.name),
-                     program.settings_name(card.role)):
+                     program.settings_name(profile)):
             p = Path(root) / "settings" / name
             if p.is_file():
                 return str(p)
@@ -1183,7 +1189,11 @@ def _runtime(a, panes):
     which are still Claude Code's and are the one seam the codex work did not
     move (harness.py's header says why, and what it costs).
     """
-    return ClaudeRuntime(panes, _default_settings(a.root), root=a.root)
+    try:
+        agents = _registry(a).all()
+    except Exception:
+        agents = []
+    return ClaudeRuntime(panes, _default_settings(a.root, agents), root=a.root)
 
 
 def _observe_live(runtime, panes, session, card=None) -> bool:
@@ -1365,7 +1375,7 @@ def _launch(a, card, panes, runtime, *, dry_run: bool = False) -> int:
     # rather than silently unapplied. Best-effort on purpose: a stamp that cannot
     # be written leaves the agent reporting `unknown`, which is the truth. It must
     # never turn a successful launch into a failure.
-    _launched_now(a, card.name, _default_settings(a.root)(card))
+    _launched_now(a, card.name, runtime.settings_path(card))
     if _observe_live(runtime, panes, session, card):
         return _verify_live_hooks(a, card, runtime, panes, session)
     # Not observed live. Distinguish "waiting for a human" (a first-run consent
@@ -6151,7 +6161,7 @@ def _tend_reauth(a) -> int:
         runtime.start(card, session)
         # Best-effort, same contract as `st new`: an unstamped agent reports
         # `unknown`, which is the state it is in — never fail the launch.
-        _launched_now(a, card.name, _default_settings(a.root)(card))
+        _launched_now(a, card.name, runtime.settings_path(card))
     tender = tend_mod.Tender(
         panes, runtime, _launches(a),
         spawn=_spawn,
