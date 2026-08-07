@@ -5886,6 +5886,15 @@ def _tend_once(a, quiet: bool = False) -> int:
             print(f"  ⚠ re-surfaced {len(stale_blocked)} bead(s) blocked "
                   f"long enough to be forgotten: {', '.join(stale_blocked)}",
                   file=sys.stderr)
+        # A DIFFERENT condition and a DIFFERENT action from age: these beads do
+        # not need their blocker chased; every issue blocker is already closed
+        # and the stale status itself is what hides them (aegis-mwc5j).
+        misstatused = _sweep("blocked-misstatus", lambda: notify_mod.BlockedMisstatusAlerter(
+            Path(a.root), _registry(a), panes, log=_log).sweep())
+        if misstatused:
+            print(f"  ⚠ found {len(misstatused)} MIS-STATUSED blocked bead(s) "
+                  f"whose dependencies are ALL CLOSED: {', '.join(misstatused)}",
+                  file=sys.stderr)
         # STALLED (aegis-e01l): the PROGRESS-over-time twin of the point-in-time
         # push above — an agent parked idle HOLDING an in_progress item with no
         # pane/item/shell change across the whole threshold window. The weaver
