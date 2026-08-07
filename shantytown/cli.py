@@ -3170,6 +3170,7 @@ def _cmd_crew(a) -> int:
     stops = _stops(a)
     runtime = _runtime(a, panes)
     free, busy, queued, shelled = [], [], [], []
+    work_unknown = []
     deliberate = []
     tree_stale = []
     verdicts = []
@@ -3203,6 +3204,8 @@ def _cmd_crew(a) -> int:
             saturated.append(ag.name)
         elif work.startswith(triage_mod.AUTH_DEAD):
             authdead.append(ag.name)
+        elif work.startswith(triage_mod.UNSURE):
+            work_unknown.append(ag.name)
         # Only a LIVE agent can be running stale settings. A down agent has no
         # loaded settings to be stale, and will read the current file when it
         # next starts, so reporting on it would be noise that hides the real hits.
@@ -3281,11 +3284,16 @@ def _cmd_crew(a) -> int:
     # scan 14 rows; the question is "who can take this", so print the list.
     if free:
         print(f"  {len(free)} free: {', '.join(free)}")
-    elif busy:
+    elif busy and not work_unknown:
         print("  0 free — every live agent is mid-flight. Dispatching now "
               "interrupts work.")
     if busy:
         print(f"  {len(busy)} busy: {', '.join(busy)}")
+    if work_unknown:
+        print(f"  ⚠ {len(work_unknown)} UNKNOWN work state: "
+              f"{', '.join(work_unknown)}")
+        print("    Not counted as free or busy — pane content did not prove either. "
+              "Inspect with `st log <agent>` before dispatching.")
     # WHO CAN TAKE THIS is only half the dispatcher's question; the other half is
     # WHAT IS NOT QUEUED ANYWHERE. See _unassigned_open (aegis-jqcs3).
     n_un, n_p1, why = _unassigned_open(a)

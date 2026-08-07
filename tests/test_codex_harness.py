@@ -29,7 +29,7 @@ from pathlib import Path
 
 import pytest
 
-from shantytown import cli, codex, harness as harness_mod
+from shantytown import cli, codex, harness as harness_mod, triage
 from shantytown.files import FilesRegistry
 from shantytown.protocols import Agent
 from shantytown import runtime as runtime_mod
@@ -505,6 +505,14 @@ CODEX_IDLE = """\
   gpt-5.6-terra default · /home/x/ws
 """
 
+CODEX_BUSY = """\
+• Working (5s · esc to interrupt)
+
+› Explain this codebase
+
+  gpt-5.6-terra default · /home/x/ws
+"""
+
 
 @pytest.mark.parametrize("screen,what", [
     (CODEX_MODEL_PICKER, "the /model picker"),
@@ -531,6 +539,29 @@ def test_an_IDLE_codex_agent_is_NOT_called_blocked():
     zombie warning went from alarming to ignorable."""
     rt = ClaudeRuntime(NullPanes(), lambda _c: None)
     assert rt.awaiting_answer(CODEX_IDLE) is False
+
+
+def test_live_codex_idle_and_busy_captures_are_ready():
+    """Measured positive captures: the status line persists across both states."""
+    rt = ClaudeRuntime(NullPanes(), lambda _c: None)
+    assert rt.shows_ready_ui(CODEX_IDLE) is True
+    assert rt.is_live(CODEX_IDLE) is True
+    assert rt.shows_ready_ui(CODEX_BUSY) is True
+    assert triage.work_state(CODEX_BUSY, ui_up=True) == "busy"
+
+
+def test_codex_directory_trust_dialog_is_NOT_live():
+    """The wc43h negative control: a process on its picker is not an agent."""
+    rt = ClaudeRuntime(NullPanes(), lambda _c: None)
+    assert rt.awaiting_answer(CODEX_TRUST_DIALOG) is True
+    assert rt.shows_ready_ui(CODEX_TRUST_DIALOG) is False
+    assert rt.is_live(CODEX_TRUST_DIALOG) is False
+
+
+def test_codex_ready_pattern_is_tail_only():
+    rt = ClaudeRuntime(NullPanes(), lambda _c: None)
+    buried = CODEX_IDLE + "\n".join(f"later output {i}" for i in range(20))
+    assert rt.shows_ready_ui(buried) is False
 
 
 def test_codex_picker_markers_are_matched_TAIL_ONLY():

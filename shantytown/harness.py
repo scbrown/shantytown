@@ -213,6 +213,11 @@ class Harness(Protocol):
     # further up a pane are an agent TALKING about pickers, not sitting on one.
     picker_markers: "tuple[str, ...]"
 
+    # Measured persistent chrome that proves this program's ready UI is present.
+    # Patterns are matched against the pane TAIL by runtime.shows_ready_ui; an
+    # empty tuple means unmeasured, never "this program has no ready UI".
+    ready_patterns: "tuple[str, ...]"
+
     # CHROME THAT MEANS "WHAT I JUST SENT IS STILL IN THE INPUT BOX, UNSUBMITTED".
     #
     # A send is two facts, and st has always reported the first as if it were the
@@ -293,6 +298,7 @@ class ClaudeHarness:
     # the failure mode of a rotted marker is silence — CONSENT_MARKERS rotted once
     # already and the test that caught it exists for that reason.
     picker_markers = ()
+    ready_patterns = ()
     # Claude Code submits what st types; no stranded-paste signature has been
     # observed. Empty means UNMEASURED, not "cannot happen" — if a long send is
     # ever seen sitting in its box, the marker goes here and the check below
@@ -594,6 +600,13 @@ class CodexHarness:
     picker_markers = ("Press enter to confirm or esc to go back",
                       "Do you trust the contents of this directory",
                       "1. Yes, continue")
+
+    # MEASURED on live idle AND busy Codex 0.146.1 panes. The model/status/cwd
+    # line persists in both states and is absent from the directory-trust picker.
+    # The prompt glyph alone is deliberately not used: the picker draws it too.
+    ready_patterns = (
+        r"(?m)^\s*gpt-\S+\s+\S+\s+[·.]\s+(?:~|/).+\s*$",
+    )
 
     # MEASURED on this host: a single `send-keys -l` of >1000 chars is absorbed
     # as a paste and rendered in the input box as `[Pasted Content N chars]`,
@@ -955,6 +968,16 @@ def picker_markers() -> tuple[str, ...]:
     """
     return tuple(dict.fromkeys(
         m for h in all_harnesses() for m in getattr(h, "picker_markers", ())))
+
+
+def ready_patterns() -> tuple[str, ...]:
+    """Measured ready-UI patterns across registered harnesses.
+
+    The runtime currently receives a pane but not its card, so this is a union
+    for the same reason as picker_markers. Matching is tail-only at the caller.
+    """
+    return tuple(dict.fromkeys(
+        p for h in all_harnesses() for p in getattr(h, "ready_patterns", ())))
 
 
 def stranded_markers() -> tuple[str, ...]:
