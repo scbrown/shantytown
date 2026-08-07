@@ -456,6 +456,24 @@ def provision(card: Agent, root, *, secrets=None) -> list[str]:
     # and the skill links depend on nothing but the clone itself.
     link_skills(ws)
 
+    # Codex does not read Claude Code's workspace consent file.  Its equivalent
+    # self-healing channel is the config.toml selected by the card, so refresh
+    # the workspace hooks here on every launch (aegis-jlmqn).  Prefer a per-agent
+    # override exactly as the launcher does, then fall back to the role artifact.
+    if card.harness == "codex":
+        from . import codex as codex_mod
+        settings = Path(root) / "settings"
+        candidates = (
+            settings / "codex" / f"agent-{card.name}" / codex_mod.CONFIG_FILE,
+            settings / "codex" / card.role / codex_mod.CONFIG_FILE,
+        )
+        config = next((p for p in candidates if p.is_file()), None)
+        if config is not None:
+            before = config.read_text()
+            after = codex_mod.with_workspace_hooks(before, card.role, root)
+            if after != before:
+                config.write_text(after)
+
     d = provision_dir(root)
     tmpl = d / MCP_TEMPLATE
     if not tmpl.is_file():
