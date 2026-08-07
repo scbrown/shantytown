@@ -36,11 +36,13 @@ concurrent operations on a shared checkout swallowed one agent's commit and
 BOTH SIDES reported success. Present means present. That is the whole check.
 """
 from __future__ import annotations
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
+from urllib.parse import urlsplit
 
 from .protocols import Agent
 
@@ -759,6 +761,36 @@ class PushOutcome:
     reason: str | None = None
 
 
+def _remote_authority(url: str) -> tuple[str, str]:
+    """Return the conservative (host, owner) identity a push URL exposes.
+
+    This is a SAFETY comparison, not URL canonicalisation.  Network remotes are
+    considered peers only when both host and first path component agree.  Local
+    paths are each their own authority: two bare repos may be intentional peers,
+    but that fact is not derivable from their filenames and must be declared.
+    """
+    raw = (url or "").strip()
+    scp = re.match(r"^(?:[^@/]+@)?([^:/]+):(.+)$", raw)
+    if scp and "://" not in raw:
+        host, path = scp.group(1), scp.group(2)
+    else:
+        parsed = urlsplit(raw)
+        if parsed.hostname:
+            host, path = parsed.hostname, parsed.path
+        else:
+            return "local", normalize_source(raw)
+    owner = path.strip("/").split("/", 1)[0] if path.strip("/") else ""
+    return host.lower(), owner.lower()
+
+
+def _explicit_push_peer(dest: Path | str, remote: str,
+                        run: GitRunner) -> bool:
+    """Was this remote explicitly approved for an every-remote push?"""
+    rc, value = run(dest, "config", "--bool", "--get",
+                    f"remote.{remote}.st-push-allowed")
+    return rc == 0 and value.strip().lower() == "true"
+
+
 def push_every_remote(dest: Path | str, src: str, dst: str = "main",
                       run: GitRunner = _git) -> "list[PushOutcome]":
     """Push `src` to `dst` on EVERY configured remote. NEVER forces.
@@ -789,6 +821,38 @@ def push_every_remote(dest: Path | str, src: str, dst: str = "main",
     remotes = sorted(r.strip() for r in out.splitlines() if r.strip()) if rc == 0 else []
     if not remotes:
         return []
+
+    # PRE-FLIGHT EVERY REMOTE BEFORE CONTACTING ANY OF THEM (aegis-ke5ri).
+    # `upstream` is a normal name for somebody else's repository.  Thinker's
+    # origin is scbrown/thinker while upstream is induktio/thinker; blindly
+    # preserving the every-remote invariant would attempt to publish to a third
+    # party.  A credential refusal is luck, not a guard.
+    #
+    # Same host+owner is the only relationship the URLs themselves establish.
+    # Heterogeneous peers remain supported (shantytown needs them), but EACH must
+    # be explicitly marked in the repo's common config.  Refusing the whole set
+    # before the loop prevents the safety check itself from creating a partial
+    # push.
+    urls: dict[str, str] = {}
+    for remote in remotes:
+        url_rc, url = run(dest, "remote", "get-url", "--push", remote)
+        urls[remote] = url.strip() if url_rc == 0 else ""
+    authorities = {_remote_authority(urls[r]) for r in remotes}
+    if len(authorities) > 1:
+        unapproved = [r for r in remotes
+                      if not _explicit_push_peer(dest, r, run)]
+        if unapproved:
+            listed = ", ".join(f"{r}={urls[r] or '<unreadable>'}" for r in remotes)
+            reason = (
+                "REFUSED BEFORE PUSH: configured remotes have different host/owner "
+                f"authorities ({listed}). Unapproved: {', '.join(unapproved)}. "
+                "One may be a third-party upstream; no remote was contacted. Only "
+                "after verifying ownership and authorization, mark every intended "
+                "peer with `git config remote.<name>.st-push-allowed true`."
+            )
+            # One PRE-FLIGHT outcome, not one copy per remote: the refusal is
+            # about the set and no member was contacted.
+            return [PushOutcome(remote="preflight", ok=False, reason=reason)]
 
     outcomes: list[PushOutcome] = []
     for remote in remotes:
