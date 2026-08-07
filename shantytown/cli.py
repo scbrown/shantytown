@@ -127,9 +127,10 @@ from .stopped import FilesStops
 from .quipu import QuipuRegistry
 from . import selfcheck
 from .anchor import Unreachable, anchor as do_anchor
-from .runtime import (asks_a_question, auth_expired, ClaudeRuntime, CapabilityError,
-                      SettingsError, emitted_stop_directions, live_stop_directions,
-                      live_wiring, settings_for_role)
+from .runtime import (asks_a_question, auth_expired, bash_guard_command,
+                      ClaudeRuntime, CapabilityError, SettingsError,
+                      emitted_bash_guard, emitted_stop_directions,
+                      live_stop_directions, live_wiring, settings_for_role)
 from .tmux import Tmux, declared_socket
 from .workspace import (WorkspaceError, cleanup_worktree, ensure_workspace,
                         ensure_worktree, push_every_remote, tree_staleness,
@@ -3986,12 +3987,26 @@ def _cmd_roles(a) -> int:
     # running process, not only the artifact its role would have emitted. The
     # artifact was green for a lead whose live process had no stop hooks at all.
     panes = _panes(a)
+    # aegis-610jv: and the GUARD reader, so `roles --check` can see the host
+    # policy guard it was blind to. Read off disk through the card's own harness,
+    # because a codex role's artifact is a config.toml in a different place — the
+    # unguarded cards this leg exists to find are precisely the codex ones.
     rep = roles_mod.check(_registry(a),
                           emitted=lambda card: emitted_stop_directions(
                               a.root, card.role,
                               harness_mod.name_for(card, root=a.root)),
                           live=lambda pane: live_wiring(pane, panes.cmdline),
-                          catalog=_catalog(a))
+                          catalog=_catalog(a),
+                          guard=lambda card: emitted_bash_guard(
+                              a.root, card.role,
+                              harness_mod.name_for(card, root=a.root)),
+                          # WITH THE STORE ROOT. Without it the lookup sees only
+                          # the ambient environment, never the store's env.json,
+                          # and every unguarded card downgrades from BROKEN to a
+                          # silent unverified — measured on the live store.
+                          # `or ""` distinguishes NOT CONFIGURED (ordinary) from
+                          # COULD NOT TELL (None) — see roles.check.
+                          guard_configured=bash_guard_command(a.root) or "")
     print()
     print(rep.render())
     print()
