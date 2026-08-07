@@ -146,6 +146,11 @@ class _RetireArgs:
         self.dry_run = False
 
 
+class _RowsTracker:
+    def __init__(self, rows):
+        self._rows = rows
+
+
 def _card(tmp_path: Path, name: str, **fields) -> Path:
     crew = tmp_path / "crew"; crew.mkdir(exist_ok=True)
     (crew / f"{name}.json").write_text(
@@ -191,14 +196,55 @@ def test_a_fully_healthy_card_is_warned_about_at_all(tmp_path, capsys):
     assert json.loads((root / "crew" / "ellie.json").read_text())["retired"] is False
 
 
-def test_retiring_is_never_gated_and_never_warned(tmp_path, capsys):
-    """Only UN-retiring is a launch decision. Stopping an agent that cannot work
-    is exactly what an operator should be able to do without an argument — a gate
-    on the safe direction would be a mechanism that resists being made safer."""
+def test_retiring_reports_assigned_work_and_excludes_inbox(tmp_path, monkeypatch, capsys):
+    """The retirement transition names real work, while delivered mail does not
+    inflate the count that an operator has to triage."""
     root = _card(tmp_path, "goldblum")
+    rows = [
+        {"id": "a-1", "title": "rotate key", "status": "open", "assignee": "crew/goldblum"},
+        {"id": "a-2", "title": "blocked work", "status": "blocked", "assignee": "goldblum"},
+        {"id": "a-3", "title": "inbox: hello", "status": "open", "assignee": "goldblum"},
+        {"id": "a-4", "title": "finished", "status": "closed", "assignee": "goldblum"},
+    ]
+    monkeypatch.setattr(cli, "_tracker", lambda _a: _RowsTracker(rows))
+    monkeypatch.setattr(cli.beads_mod, "rows", lambda trk: trk._rows)
     assert cli._tend_retire(_RetireArgs(root, retire="goldblum")) == cli.OK
-    assert "MANUAL MODE" not in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "outstanding work assigned to goldblum (2)" in out
+    assert "a-1 [open] rotate key" in out and "a-2 [blocked] blocked work" in out
+    assert "excluded 1 delivered inbox message" in out and "a-3 [" not in out
+    assert "cannot see verbally routed threads" in out
     assert json.loads((root / "crew" / "goldblum.json").read_text())["retired"] is True
+
+
+def test_retiring_empty_agent_prints_no_work_list(tmp_path, monkeypatch, capsys):
+    root = _card(tmp_path, "ellie")
+    monkeypatch.setattr(cli, "_tracker", lambda _a: _RowsTracker([]))
+    monkeypatch.setattr(cli.beads_mod, "rows", lambda trk: trk._rows)
+    assert cli._tend_retire(_RetireArgs(root, retire="ellie")) == cli.OK
+    assert "outstanding work" not in capsys.readouterr().out
+
+
+def test_retire_dry_run_reports_same_work_and_writes_nothing(tmp_path, monkeypatch, capsys):
+    root = _card(tmp_path, "ellie")
+    rows = [{"id": "a-1", "title": "real work", "status": "in_progress", "assignee": "ellie"}]
+    monkeypatch.setattr(cli, "_tracker", lambda _a: _RowsTracker(rows))
+    monkeypatch.setattr(cli.beads_mod, "rows", lambda trk: trk._rows)
+    args = _RetireArgs(root, retire="ellie"); args.dry_run = True
+    assert cli._tend_retire(args) == cli.OK
+    out = capsys.readouterr().out
+    assert "a-1 [in_progress] real work" in out and "would mark ellie retired=True" in out
+    assert json.loads((root / "crew" / "ellie.json").read_text()).get("retired") is not True
+
+
+def test_retire_refuses_a_reports_to_parent(tmp_path, monkeypatch, capsys):
+    root = _card(tmp_path, "lead")
+    _card(tmp_path, "worker", reports_to="lead")
+    monkeypatch.setattr(cli, "_tracker", lambda _a: _RowsTracker([]))
+    monkeypatch.setattr(cli.beads_mod, "rows", lambda trk: trk._rows)
+    assert cli._tend_retire(_RetireArgs(root, retire="lead")) == cli.REFUSED
+    assert "still reports_to for: worker" in capsys.readouterr().err
+    assert json.loads((root / "crew" / "lead.json").read_text()).get("retired") is not True
 
 
 # --- st crew ----------------------------------------------------------------
