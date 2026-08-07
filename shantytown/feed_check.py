@@ -170,6 +170,53 @@ def free_feedable_workers(reg, panes, runtime, root=None) -> list[str]:
     return sorted(out)
 
 
+def idle_resumable_codex(reg, panes, runtime, active_beads, root=None) -> list[str]:
+    """Idle Codex workers/leads that still own an active anchor.
+
+    This is the belt under the Stop-hook fast path.  A blocked Codex Stop can
+    begin a continuation and that continuation can still terminate without a
+    second Stop verdict.  Such an agent is excluded from Rule Zero precisely
+    because its bead is in progress, so tend must recognize this narrow state
+    explicitly.  It is *not* general lead capacity: only an existing anchor is
+    resumed and Claude remains untouched.
+    """
+    from . import harness as harness_mod
+    from . import triage as triage_mod
+    from .runtime import asks_a_question, auth_expired, live_wiring
+    from .tend import is_retired
+
+    stamped = st_launched_agents(root) if root is not None else None
+    names = sorted({(b.get("assignee") or "").split("/")[-1]
+                    for b in active_beads if b.get("assignee")})
+    out = []
+    for name in names:
+        try:
+            card = reg.get(name)
+        except Exception:
+            continue
+        if (card.role not in {"worker", "lead"} or is_retired(card)
+                or not card.pane or not panes.exists(card.pane)):
+            continue
+        if stamped is not None and name not in stamped:
+            continue
+        try:
+            if harness_mod.name_for(card, root=Path(root)) != "codex":
+                continue
+            screen = panes.capture(card.pane, attrs=True)
+            plain = triage_mod.strip_attrs(screen)
+            state = triage_mod.work_state(
+                screen, runtime.shows_ready_ui(plain),
+                awaiting=asks_a_question(runtime, plain),
+                auth_dead=auth_expired(runtime, plain))
+            wiring = live_wiring(card.pane, panes.cmdline)
+        except Exception:
+            continue
+        if (state == triage_mod.IDLE and wiring is not None
+                and "haul" in wiring.directions):
+            out.append(name)
+    return out
+
+
 def bd_cwd(reg) -> str | None:
     """The directory `bd` must resolve its store FROM: the ADMINISTRATOR's
     workspace, off its card. None = could not resolve (no admin, no workspace).
