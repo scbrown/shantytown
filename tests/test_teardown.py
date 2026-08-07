@@ -75,7 +75,9 @@ def test_kill_session_reaps_the_pane_child_process():
         t.new_session("victim")
         # a child that IGNORES SIGHUP, modelling claude: it survives the pty close
         # that kill-session triggers, and is only reaped by the tree-kill.
-        t.send("victim", "trap '' HUP; sleep 300")
+        # This intentionally types a shell payload into the fixture's fresh
+        # shell, so opt in to the production pane-safety guard explicitly.
+        t.send("victim", "trap '' HUP; sleep 300", allow_shell=True)
         # Poll with a deadline, not a fixed sleep: wait until the pane's fg
         # command IS the sleep — which also proves the trap was processed (same
         # command line, sequential), so kill_session cannot fire before the
