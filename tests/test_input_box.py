@@ -44,6 +44,13 @@ TYPED_LINE = "\x1b[38;5;246m❯\xa0\x1b[39mfile the reconcile bead for ian"
 EMPTY_LINE_246 = "\x1b[38;5;246m❯\xa0\x1b[39m"
 EMPTY_LINE_39 = "\x1b[39m❯\xa0"
 
+# shanty-franklin, live Codex capture, 2026-08-07 (aegis-7v54g).  Codex uses
+# U+203A rather than Claude's U+276F.  The semantic distinction is the same:
+# ghost text is SGR 2 (dim), while deliberately typed text is undimmed.
+CODEX_GHOST_LINE = "\x1b[0;1m›\x1b[0m \x1b[2mImprove documentation in @filename\x1b[0m"
+CODEX_TYPED_LINE = "\x1b[0;1m›\x1b[0m CODEX-INPUT-BOX-PROBE-7v54g"
+CODEX_EMPTY_LINE = "\x1b[0;1m›\x1b[0m "
+
 # THE DANGEROUS ONE. Typed text with a dim tail after it. I could not induce the
 # runtime to render this (see the module docstring on triage._split_dim), and
 # that is exactly why it is pinned: the classifier must not DEPEND on a negative
@@ -66,15 +73,19 @@ def test_ghost_text_is_not_queued_input():
         assert triage.input_state(_pane(line)) == triage.INPUT_PLACEHOLDER
         assert triage.work_state(_pane(line), True) == triage.IDLE
 
+    assert triage.input_state(_pane(CODEX_GHOST_LINE)) == triage.INPUT_PLACEHOLDER
+
 
 def test_typed_text_is_queued_and_that_verdict_survives():
     assert triage.input_state(_pane(TYPED_LINE)) == triage.INPUT_QUEUED
     assert triage.work_state(_pane(TYPED_LINE), True) == triage.QUEUED
+    assert triage.input_state(_pane(CODEX_TYPED_LINE)) == triage.INPUT_QUEUED
 
 
 def test_both_empty_renderings_read_empty():
     for line in (EMPTY_LINE_246, EMPTY_LINE_39):
         assert triage.input_state(_pane(line)) == triage.INPUT_EMPTY
+    assert triage.input_state(_pane(CODEX_EMPTY_LINE)) == triage.INPUT_EMPTY
 
 
 def test_UNDIMMED_TEXT_WINS_over_a_dim_tail():
