@@ -576,7 +576,7 @@ def role_stop_hooks(role: str, root=None) -> list[dict]:
     hook can reach the model (the capability gate refuses a lead on one that
     can't). So:
         worker        -> [send]          (send-only; never receives)
-        lead          -> [send, drain]   (sends its own stop up; drains reports')
+        lead          -> [send, haul, drain] (continues own work before reports)
         administrator -> [drain]         (root: receives only; its stop terminates)
     """
     if role == "worker":
@@ -585,7 +585,12 @@ def role_stop_hooks(role: str, root=None) -> list[dict]:
         # (anchor closed -> block-with-next; fail-open, self-terminating).
         stop = [_stop_cmd("send", root), _stop_cmd("haul", root)]
     elif role == "lead":
-        stop = [_stop_cmd("send", root), _stop_cmd("drain", root)]
+        # A Codex lead owns work AND receives reports. Its own active anchor must
+        # resume before drain: Codex stops after the first blocking Stop hook, so
+        # drain-first can consume the boundary and strand the lead's haul. Claude
+        # reaches haul too, but _haul is a no-op for Claude leads.
+        stop = [_stop_cmd("send", root), _stop_cmd("haul", root),
+                _stop_cmd("drain", root)]
     elif role == "administrator":
         # ONE decision (docs/stop-policy-spec.md). This was [drain, feed_check] —
         # two commands that could each BLOCK the same stop and neither of which

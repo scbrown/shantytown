@@ -96,6 +96,26 @@ def test_a_codex_active_anchor_blocks_with_resume_not_new_work(monkeypatch, caps
     assert "HAUL RESUME" in block["reason"] and "aegis-1" in block["reason"]
 
 
+def test_a_codex_lead_active_anchor_resumes_too(monkeypatch, capsys):
+    """Leads own beads; drain must not strand their own active anchor."""
+    lead = Agent(name="billy", role="lead", pane="p-b", harness="codex")
+    rc, block = _run(
+        monkeypatch, capsys, reg=_Reg([lead]),
+        in_progress=[{"id": "aegis-1", "title": "lead work", "assignee": "billy"}],
+    )
+    assert rc == 0
+    assert "HAUL RESUME" in block["reason"] and "aegis-1" in block["reason"]
+
+
+def test_a_claude_lead_remains_silent(monkeypatch, capsys):
+    lead = Agent(name="billy", role="lead", pane="p-b", harness="claude")
+    rc, block = _run(
+        monkeypatch, capsys, reg=_Reg([lead]),
+        in_progress=[{"id": "aegis-1", "assignee": "billy"}],
+    )
+    assert rc == 0 and block is None
+
+
 def test_codex_is_resolved_from_deployment_default_for_resume(tmp_path, monkeypatch,
                                                               capsys):
     """Live cards leave harness unset; the deployment default is authoritative."""
