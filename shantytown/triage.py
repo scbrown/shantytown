@@ -77,7 +77,13 @@ _ANSI = re.compile(
 )
 _DIM = "\x1b[2m"
 # ASCII `>` as well as `❯`: the runtime renders ❯, the tests and older panes `>`.
-_PROMPT_GLYPHS = ("❯", ">")
+# Claude Code uses U+276F; Codex uses U+203A.  The latter was measured on a
+# live Codex pane in both ghost and typed states (aegis-7v54g).  Keep the ASCII
+# fallback for older/plain renderers.  This is only a candidate-glyph gate: the
+# attribute-aware logic below still decides empty/typed/ghost, and the caller's
+# runtime-specific picker predicate prevents a selected option from becoming an
+# input-box false positive.
+_PROMPT_GLYPHS = ("❯", "›", ">")
 
 # Only SGR (`CSI … m`) can turn dim on or off; every other CSI is cursor/erase
 # chrome and must not disturb the state machine below.
