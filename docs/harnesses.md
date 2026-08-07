@@ -176,19 +176,20 @@ $ echo $?
 
 ## What does NOT work yet
 
-Two gaps, named because a gap you can see is cheaper than one you discover. None of them is a
+One gap, named because a gap you can see is cheaper than one you discover. It is not a
 TODO with no shape — each says what would close it.
 
 | gap | what you see | why it is not guessed |
 |---|---|---|
 | **The *remaining* matcher-scoped guards** | no hank edit guard and no `SHANTY_MCP_GUARD` on a codex agent. **`SHANTY_BASH_GUARD` now IS emitted** — see below. | A matcher is a claim about the host program's **tool names**, and only the SHELL one has been measured. `probe-codex-pretooluse.sh` made codex call a shell tool and nothing else, so it says nothing about `Edit|Write|MultiEdit` or `mcp__.*`. Emitting on the strength of the Bash result would be guessing from an adjacent measurement — the same move this repo has already paid for once. Closing it is the same script with a prompt that makes codex edit a file. |
-| **The codex version floor** | nothing — and that is the problem | codex's hooks system is recent. On an older codex the Stop hook never runs, so a lead accepts the role and absorbs nothing, *silently*. `st` cannot check this from inside the gate (`codex --version` at role-set time measures a binary the agent may not even launch with); it belongs in `st doctor` as a tool row, and is not built. |
-
-**The version floor is the one to check by hand before you trust a codex lead.** `codex --help`
-should list `--dangerously-bypass-hook-trust`; if it does not, your codex predates the hooks system
-and codex cards should stay workers on that host.
 
 ### What CLOSED, and how
+
+`st doctor` now reports Codex's installed version and independently probes the
+hooks floor by requiring `--dangerously-bypass-hook-trust` in `codex --help`.
+The capability probe—not a version comparison—decides the verdict: missing
+Codex and a present CLI without hooks both fail loudly, while a failed help
+probe is unknown rather than clean.
 
 Codex liveness now uses the measured persistent status line
 `<model> <effort> · <workspace>`, matched only in the pane tail. It is present in

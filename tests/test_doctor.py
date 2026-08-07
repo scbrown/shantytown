@@ -26,6 +26,7 @@ QUIPU = ToolSpec("quipu", "quipu-server", ("quipu-server", "--version"), r"(\d+\
                  release="github:x/quipu", version_broken=True)
 REACTOR = ToolSpec("reactor", "reactor", ("reactor", "--version"), r"(\d+\.\d+\.\d+)",
                    toolchain="unknown", installs_via="no release yet", leverage="events", release=None)
+CODEX = next(s for s in doc.SPECS if s.name == "codex")
 
 
 def probes(*, on_path=True, version_out=("bobbin 0.3.1", 0), latest=("0.3.1", None),
@@ -56,6 +57,41 @@ def test_absent_tool_is_absent():
 def test_present_and_versioned():
     h = detect(SPEC, **probes(latest=(None, None)))
     assert h.present and h.version == "0.3.1" and h.state == doc.PRESENT
+
+
+def test_codex_floor_is_a_capability_probe_not_a_version_guess():
+    calls = []
+    def run(argv):
+        calls.append(tuple(argv))
+        if tuple(argv) == ("codex", "--version"):
+            return 0, "codex-cli 0.146.1"
+        return 0, "... --dangerously-bypass-hook-trust ..."
+    h = detect(CODEX, which=lambda n: "/bin/codex" if n == "codex" else None,
+               run=run, fetch=lambda _r: (None, None))
+    assert h.version == "0.146.1" and h.capability_ok is True
+    assert h.state == doc.PRESENT
+    assert ("codex", "--help") in calls
+    rendered = doc.report([h])
+    assert "0.146.1 installed" in rendered
+    assert "required:" in rendered and "available" in rendered
+
+
+def test_codex_present_but_below_hooks_floor_fails_loudly():
+    def run(argv):
+        return ((0, "codex-cli 0.100.0") if tuple(argv) == ("codex", "--version")
+                else (0, "old help without the required flag"))
+    h = detect(CODEX, which=lambda n: "/bin/codex" if n == "codex" else None,
+               run=run, fetch=lambda _r: (None, None))
+    assert h.capability_ok is False and h.state == doc.STALE
+    assert exit_code([h]) == 1
+    assert "required hooks capability MISSING" in doc.report([h])
+
+
+def test_codex_absent_is_a_fault_not_a_clean_row():
+    h = detect(CODEX, which=lambda _n: None, run=lambda _a: (127, "not found"),
+               fetch=lambda _r: (None, None))
+    assert h.state == doc.ABSENT and exit_code([h]) == 1
+    assert "codex" in doc.report([h]) and "not installed" in doc.report([h])
 
 
 # --- STALE vs CURRENT (positive control) ------------------------------------
