@@ -176,12 +176,11 @@ $ echo $?
 
 ## What does NOT work yet
 
-Three gaps, named because a gap you can see is cheaper than one you discover. None of them is a
+Two gaps, named because a gap you can see is cheaper than one you discover. None of them is a
 TODO with no shape — each says what would close it.
 
 | gap | what you see | why it is not guessed |
 |---|---|---|
-| **`st new` liveness verify** | exit **2, could-not-tell**, for a codex agent that is fine. The agent *is* launched. | The ready-UI markers are Claude Code's literal screen text. A marker nobody has watched pass is not a marker — this repo has paid for guessed ones twice. Closing it needs a `tmux capture-pane` off a live codex agent. |
 | **The *remaining* matcher-scoped guards** | no hank edit guard and no `SHANTY_MCP_GUARD` on a codex agent. **`SHANTY_BASH_GUARD` now IS emitted** — see below. | A matcher is a claim about the host program's **tool names**, and only the SHELL one has been measured. `probe-codex-pretooluse.sh` made codex call a shell tool and nothing else, so it says nothing about `Edit|Write|MultiEdit` or `mcp__.*`. Emitting on the strength of the Bash result would be guessing from an adjacent measurement — the same move this repo has already paid for once. Closing it is the same script with a prompt that makes codex edit a file. |
 | **The codex version floor** | nothing — and that is the problem | codex's hooks system is recent. On an older codex the Stop hook never runs, so a lead accepts the role and absorbs nothing, *silently*. `st` cannot check this from inside the gate (`codex --version` at role-set time measures a binary the agent may not even launch with); it belongs in `st doctor` as a tool row, and is not built. |
 
@@ -190,6 +189,15 @@ should list `--dangerously-bypass-hook-trust`; if it does not, your codex predat
 and codex cards should stay workers on that host.
 
 ### What CLOSED, and how
+
+Codex liveness now uses the measured persistent status line
+`<model> <effort> · <workspace>`, matched only in the pane tail. It is present in
+both idle and busy captures and absent from the directory-trust picker, so
+`st new` can observe a healthy launch without rubber-stamping a blocked process.
+The same signal drives `st crew`; unclassified live panes are named and counted
+as UNKNOWN instead of disappearing between the free and busy totals. Codex
+approval bypass is read from the live process flag because its status line does
+not render that posture.
 
 The workspace-delivered hooks closed in aegis-jlmqn. Provisioning now merges metrics capture,
 the non-admin untracked-work nudge, and the stale-tree advisory into the Codex role or agent
