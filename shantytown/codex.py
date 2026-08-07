@@ -242,6 +242,60 @@ def render(settings: dict, existing: str = "") -> str:
     return dumps(merge_one_level(current, settings))
 
 
+def with_workspace_hooks(existing: str, role: str, root=None) -> str:
+    """Add the launch-time workspace hooks to an existing Codex config.
+
+    These are deliberately not part of :func:`settings_for_role`: role settings
+    are emitted only by ``st roles set`` while workspace provisioning runs on
+    every launch.  Keeping the transform here also keeps TOML ownership in the
+    Codex adapter; provision.py must not learn Codex's serialization format.
+
+    Existing event groups survive.  Only prior copies of these three commands
+    are replaced, making repeated launches idempotent without disturbing stop
+    routing, the deployment Bash guard, hook trust state, or operator keys.
+    """
+    from .runtime import _capture_cmd, _stale_hook, _untracked_hook
+
+    try:
+        cfg = tomllib.loads(existing) if existing.strip() else {}
+    except (ValueError, TypeError):
+        return existing
+    if not isinstance(cfg, dict):
+        return existing
+
+    hooks = cfg.setdefault("hooks", {})
+    if not isinstance(hooks, dict):
+        return existing
+
+    def without(event: str, needle: str) -> list:
+        groups = hooks.get(event, [])
+        if not isinstance(groups, list):
+            return []
+        return [g for g in groups if not any(
+            needle in h.get("command", "")
+            for h in g.get("hooks", []) if isinstance(h, dict)
+        )]
+
+    capture = _capture_cmd(root)
+    hooks["PostToolUse"] = without("PostToolUse", "shantytown.stats capture") + [
+        {"matcher": ".*", "hooks": [capture]}
+    ]
+    hooks["Stop"] = without("Stop", "shantytown.stats capture") + [
+        {"hooks": [capture]}
+    ]
+
+    pre = without("PreToolUse", "shantytown.untracked")
+    pre = [g for g in pre if not any(
+        "shantytown.stale_guard" in h.get("command", "")
+        for h in g.get("hooks", []) if isinstance(h, dict)
+    )]
+    if role != "administrator":
+        pre.append(_untracked_hook(root))
+    pre.append(_stale_hook(root))
+    hooks["PreToolUse"] = pre
+    return dumps(cfg)
+
+
 def trust_projects(existing: str, workspaces) -> str:
     """`existing` config.toml with each workspace recorded as a TRUSTED project.
 

@@ -146,6 +146,21 @@ def _edited_path(payload: dict) -> Path | None:
     for k in ("file_path", "notebook_path", "path"):
         if ti.get(k):
             return Path(str(ti[k]))
+    # Codex's apply_patch tool carries one patch string instead of Claude's
+    # file_path field.  The hook event supplies cwd, so recover the first file
+    # header and resolve it exactly as the tool does.  One path is sufficient:
+    # every file in one apply_patch call is rooted in the same workspace, and
+    # this guard measures the repository rather than the individual file.
+    command = ti.get("command")
+    if payload.get("tool_name") == "apply_patch" and isinstance(command, str):
+        for line in command.splitlines():
+            for marker in ("*** Update File: ", "*** Add File: ",
+                           "*** Delete File: "):
+                if line.startswith(marker):
+                    path = Path(line[len(marker):].strip())
+                    if not path.is_absolute() and payload.get("cwd"):
+                        path = Path(str(payload["cwd"])) / path
+                    return path
     return None
 
 
