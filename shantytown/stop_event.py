@@ -308,11 +308,11 @@ def _haul(reg: FilesRegistry, panes, me: str, root: Path) -> int:
     protocol drain and the Rule Zero gate already use. The coordinator is not
     involved at any point; that is the feature.
 
-    A STOP IS A TURN BOUNDARY, NOT AN IDLE AGENT (aegis-w9z1), so the advance
-    fires only on evidence the anchor actually finished: nothing of mine
-    in_progress AND something of mine ready. Mid-work turn ends fall through
-    silently — halting there would halt every haul within minutes (the design
-    correction this module's own header taught).
+    A STOP IS A TURN BOUNDARY, NOT AN IDLE AGENT (aegis-w9z1). Claude continues
+    its own turn loop, so its mid-work boundaries remain silent. Codex does not:
+    an allowed stop ends the run, while the active anchor excludes it from tend's
+    Rule Zero idle feed. For Codex only, an active anchor therefore blocks with a
+    resume instruction. A closed anchor advances to assigned ready work as before.
 
     SELF-TERMINATING like feed_check: each feed claims the bead in_progress,
     so the next stop sees an active anchor and allows. The handoff branch
@@ -323,18 +323,34 @@ def _haul(reg: FilesRegistry, panes, me: str, root: Path) -> int:
     to the tend self-feed nudge (the belt) and normal idle flow. A broken
     advance must never trap a worker at its own stop."""
     try:
-        if reg.get(me).role != "worker":
+        card = reg.get(me)
+        if card.role != "worker":
             return 0
         from .feed_check import bd_cwd
         cwd = bd_cwd(reg)
         # An active anchor = mid-work turn boundary. bd list is filtered
         # client-side (same reason as feed_check: assignee formats vary).
         active = _assigned_to(me, _bd_json(["list", "--status", "in_progress", "--limit", "0"], cwd))
-        if active:
+        from . import harness as harness_mod
+        resume = active[0] if (active and
+                               harness_mod.name_for(card, root=root) == "codex") else None
+        if active and resume is None:
             return 0
-        mine = _assigned_to(me, _bd_json(["ready", "--limit", "0"], cwd))
-        if not mine:
+        # Keep the active Codex path dependency-free and inside the hook's
+        # deadline. It is continuation of work already admitted, not a new haul
+        # item, so neither the session admission ceiling nor pane handoff applies.
+        if resume is not None:
+            from .feed_check import haul_resume_message
+            rid = resume.get("id", "?")
+            title = resume.get("title") or ""
+            print(json.dumps({"decision": "block",
+                              "reason": haul_resume_message(rid, title)}))
             return 0
+        mine = []
+        if resume is None:
+            mine = _assigned_to(me, _bd_json(["ready", "--limit", "0"], cwd))
+            if not mine:
+                return 0
 
         # THE SESSION CEILING, ASKED BEFORE THE CONTEXT HANDOFF (aegis-xxae9).
         # Order matters and this is the deliberate one: the handoff is a RECYCLE
