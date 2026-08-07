@@ -12,7 +12,8 @@ Three faces, one file:
             can block a tool call is a control inversion nobody signed up for,
             so the ONLY unguarded line in main() is the exit itself.
   st stats  the query surface (cli.py wires it): files touched, skills used,
-            tokens per agent, activity, closed-item throughput.
+            activity from the capture store; token consumption from each
+            harness's local session records, labelled by provider.
   export    OPTIONAL push to a Prometheus pushgateway, and only when
             ST_STATS_PUSHGATEWAY is set (st's env-var config discipline —
             local-first, the exporter is a bonus, never a dependency). Absent
@@ -31,7 +32,11 @@ import sqlite3
 import sys
 import time
 import urllib.request
+from collections import defaultdict
 from pathlib import Path
+
+from .files import FilesRegistry
+from .harness import Usage, get as harness_get
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS events (
@@ -499,12 +504,131 @@ def _maybe_export(root: Path, agent: str) -> None:
 
 # --- query surface (st stats) ---------------------------------------------
 
+def _codex_cwd(path: Path) -> str | None:
+    """The workspace Codex records in its session metadata, if readable.
+
+    The path is deliberately read from Codex's record rather than inferred from
+    a filename.  Unlike Claude's project directory, Codex's session hierarchy is
+    date-based, so its path cannot identify an agent.
+    """
+    try:
+        with path.open(encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                try:
+                    payload = json.loads(line).get("payload") or {}
+                except (ValueError, AttributeError):
+                    continue
+                cwd = payload.get("cwd")
+                if isinstance(cwd, str) and cwd:
+                    return cwd
+    except OSError:
+        pass
+    return None
+
+
+def _claude_project_dir(workspace: str) -> str:
+    """Claude Code's on-disk project slug for an absolute workspace path."""
+    return workspace.replace("/", "-")
+
+
+def session_usage(root: Path, since_h: float = 24.0, home: Path | None = None
+                  ) -> dict[str, dict[str, tuple[Usage, int]]]:
+    """Observed per-agent, per-provider transcript usage in the requested window.
+
+    A tuple is ``(known totals, sessions whose usage is UNKNOWN)``.  UNKNOWN is
+    kept separate from zero: local records exist for sessions with no usage
+    snapshot, and rendering those as zero would understate consumption exactly
+    when the instrument is incomplete.  This scans harness-owned stores instead
+    of the hook capture database because Codex's Stop payload is not Claude's
+    payload and Codex has no Claude consent-file hook.
+    """
+    try:
+        cards = FilesRegistry(Path(root) / "crew").all()
+    except (OSError, ValueError, LookupError):
+        return {}
+    base = Path.home() if home is None else Path(home)
+    cutoff = time.time() - since_h * 3600
+    out: dict[str, dict[str, tuple[Usage, int]]] = {}
+
+    # First resolve the card workspaces once.  Harness selection is a card fact;
+    # a Claude transcript under a Codex card's workspace must not be credited to
+    # that card merely because the paths happen to agree.
+    cards_by_harness: dict[str, dict[str, str]] = defaultdict(dict)
+    for card in cards:
+        if card.workspace:
+            cards_by_harness[card.harness or "claude"][str(Path(card.workspace))] = card.name
+
+    def add(agent: str, provider: str, usage: Usage | None) -> None:
+        prior, unknown = out.setdefault(agent, {}).get(provider, (Usage(), 0))
+        if usage is None:
+            out[agent][provider] = (prior, unknown + 1)
+            return
+        out[agent][provider] = (Usage(
+            prior.input_tokens + usage.input_tokens,
+            prior.cached_input_tokens + usage.cached_input_tokens,
+            prior.cache_write_input_tokens + usage.cache_write_input_tokens,
+            prior.output_tokens + usage.output_tokens,
+            prior.reasoning_output_tokens + usage.reasoning_output_tokens,
+            prior.total_tokens + usage.total_tokens,
+        ), unknown)
+
+    claude_cards = cards_by_harness.get("claude", {})
+    for path in (base / ".claude" / "projects").glob("*/*.jsonl"):
+        try:
+            if path.stat().st_mtime < cutoff:
+                continue
+        except OSError:
+            continue
+        # The slug conversion is non-reversible for hyphenated directories, so
+        # compare the *encoded* card path instead of attempting to decode it.
+        agent = next((name for ws, name in claude_cards.items()
+                      if _claude_project_dir(ws) == path.parent.name), None)
+        if agent:
+            add(agent, "claude", harness_get("claude").read_usage(path))
+
+    codex_cards = cards_by_harness.get("codex", {})
+    for path in (base / ".codex" / "sessions").glob("*/*/*/*.jsonl"):
+        try:
+            if path.stat().st_mtime < cutoff:
+                continue
+        except OSError:
+            continue
+        agent = codex_cards.get(_codex_cwd(path) or "")
+        if agent:
+            add(agent, "codex", harness_get("codex").read_usage(path))
+    return out
+
+
+def _render_usage(by_provider: dict[str, tuple[Usage, int]]) -> str:
+    """Provider-labelled consumption, never a quota percentage or a zero guess."""
+    bits = []
+    for provider, (usage, unknown) in sorted(by_provider.items()):
+        known = usage.total_tokens
+        bit = f"{provider}_tokens={known}"
+        if unknown:
+            bit += f" ({unknown} session{'s' if unknown != 1 else ''} unknown)"
+        bits.append(bit)
+    return " usage=" + ", ".join(bits) if bits else ""
+
 def stats_report(root: Path, agent: str | None = None, since_h: float = 24.0,
                  out=sys.stdout) -> int:
     """The default `st stats` answer: per-agent activity, files, skills,
-    tokens — from the LOCAL store only."""
+    and provider-labelled transcript consumption from local sources."""
     p = Path(root) / "stats.sqlite"
+    observed = session_usage(root, since_h=since_h)
+    if agent:
+        observed = {agent: observed[agent]} if agent in observed else {}
     if not p.is_file():
+        # Transcript consumption is a separate, harness-owned local source.  It
+        # remains useful before the Claude-only activity hook has ever fired;
+        # refusing to show it would make Codex consumption disappear behind an
+        # unrelated empty SQLite file.
+        if observed:
+            print(f"st stats — last {since_h:g}h", file=out)
+            for ag in sorted(observed):
+                print(f"  {ag:<14} events=? files=? stops=? tokens=? (no capture store)"
+                      f"{_render_usage(observed[ag])}", file=out)
+            return 0
         print("st stats — no capture store yet (.shanty/stats.sqlite absent).\n"
               "The capture hook writes it on the first tool call after the\n"
               "hooks are wired (settings PostToolUse/Stop).", file=out)
@@ -517,11 +641,13 @@ def stats_report(root: Path, agent: str | None = None, since_h: float = 24.0,
             f"SELECT agent, COUNT(*), COUNT(DISTINCT file),"
             f" SUM(kind='stop') FROM events WHERE ts>? {where}"
             f" GROUP BY agent ORDER BY 2 DESC", [cutoff] + args).fetchall()
+        row_by_agent = {row[0]: row for row in rows}
         print(f"st stats — last {since_h:g}h", file=out)
-        if not rows:
+        if not rows and not observed:
             print("  (no activity captured in the window)", file=out)
         measured = 0
-        for ag, ev, files, stops in rows:
+        for ag in sorted(set(row_by_agent) | set(observed)):
+            _, ev, files, stops = row_by_agent.get(ag, (ag, 0, 0, 0))
             # BOUNDED BY THE SAME WINDOW AS THE EVENTS BESIDE IT (aegis-u5u98).
             # This query had NO time filter while the events query had one, so
             # the line read `st stats — last 24h` and printed ALL-TIME token
@@ -546,7 +672,7 @@ def stats_report(root: Path, agent: str | None = None, since_h: float = 24.0,
             toks = (f"tokens_in={inp} tokens_out={outt}" if n
                     else "tokens=? (none captured)")
             print(f"  {ag:<14} events={ev:<6} files={files:<4} stops={stops:<4}"
-                  f" {toks}", file=out)
+                  f" {toks}{_render_usage(observed.get(ag, {}))}", file=out)
         if rows and not measured:
             # THE TELL. Every agent reading `tokens=?` is a fleet-wide fault,
             # not twenty independent gaps, and it has exactly one cause worth

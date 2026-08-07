@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import json
+import io
 
 from shantytown.harness import ClaudeHarness, CodexHarness
+from shantytown import stats
 
 
 def test_claude_sums_message_deltas_and_keeps_cache_dimensions(tmp_path):
@@ -36,3 +38,42 @@ def test_absent_usage_is_unknown_not_zero(tmp_path):
     p = tmp_path / "empty.jsonl"; p.write_text(json.dumps({"type": "event_msg"}) + "\n")
     assert ClaudeHarness().read_usage(p) is None
     assert CodexHarness().read_usage(p) is None
+
+
+def test_stats_reads_each_harness_store_and_keeps_missing_usage_unknown(tmp_path, monkeypatch):
+    """The end-to-end seam: card -> harness-owned store -> provider-labelled stats.
+
+    Codex is mapped by its recorded cwd; Claude's hyphenated workspace proves we
+    compare the encoded project slug rather than trying to decode it.
+    """
+    root, home = tmp_path / "store", tmp_path / "home"
+    crew = root / "crew"; crew.mkdir(parents=True)
+    claude_ws = "/work/a-team"
+    codex_ws = "/work/codex-team"
+    (crew / "claude-agent.json").write_text(json.dumps({"role": "worker", "workspace": claude_ws}))
+    (crew / "codex-agent.json").write_text(json.dumps({"role": "worker", "workspace": codex_ws,
+                                                        "harness": "codex"}))
+    cp = home / ".claude" / "projects" / "-work-a-team" / "one.jsonl"
+    cp.parent.mkdir(parents=True)
+    cp.write_text(json.dumps({"message": {"usage": {"input_tokens": 2, "output_tokens": 3}}}) + "\n")
+    xp = home / ".codex" / "sessions" / "2026" / "08" / "07" / "rollout.jsonl"
+    xp.parent.mkdir(parents=True)
+    xp.write_text("\n".join(json.dumps(x) for x in [
+        {"payload": {"cwd": codex_ws}},
+        {"type": "event_msg", "payload": {"info": {"total_token_usage": {
+            "total_tokens": 12, "input_tokens": 8, "output_tokens": 4}}}},
+    ]) + "\n")
+    # A second Codex session belonging to the same card has no token snapshot.
+    (xp.parent / "unknown.jsonl").write_text(json.dumps({"payload": {"cwd": codex_ws}}) + "\n")
+
+    got = stats.session_usage(root, home=home)
+    assert got["claude-agent"]["claude"][0].total_tokens == 5
+    assert got["codex-agent"]["codex"][0].total_tokens == 12
+    assert got["codex-agent"]["codex"][1] == 1
+    # A transcript-only agent is included even before a capture hook event exists.
+    monkeypatch.setattr(stats.Path, "home", lambda: home)
+    buf = io.StringIO()
+    assert stats.stats_report(root, out=buf) == 0
+    rendered = buf.getvalue()
+    assert "claude_tokens=5" in rendered
+    assert "codex_tokens=12 (1 session unknown)" in rendered
