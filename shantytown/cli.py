@@ -4454,9 +4454,18 @@ def _cmd_project(a) -> int:
 
 
 def _resolve_repo(repo: str) -> Path:
-    """A shared repo, as a path OR a bare name under $GT_ROOT (~/gt) — so both
-    `st worktree /home/x/gt/quipu` and `st worktree quipu` reach the same tree,
-    matching scripts/crew-worktree.sh's `$GT_ROOT/$repo` resolution.
+    """A shared repo, as a path OR a bare name under $GT_ROOT (~/gt).
+
+    A bare name normally means ``$GT_ROOT/<name>``. When that path exists but is
+    a Gas Town rig rather than a checkout, and ``$GT_ROOT/<name>-src`` carries
+    its own ``.git`` marker, the source checkout wins. This is the Hank layout:
+    ``~/gt/hank`` owns ``.beads`` and a bare ``.repo.git`` cache, while
+    ``~/gt/hank-src`` is the editable scbrown/hank checkout (aegis-gbuap).
+
+    The own ``.git`` marker is load-bearing. ``~/gt`` is itself a repository,
+    so asking Git whether ``~/gt/hank`` is in a worktree returns ``~/gt`` and
+    silently blesses the wrong scope. Parent-repository inheritance must never
+    qualify a child as the requested checkout.
 
     A BARE NAME IS ALWAYS $GT_ROOT/<name>, NEVER CWD-RELATIVE (aegis-k3i8t).
     This used to carry an `or p.exists()` clause, evaluated against the CWD, and
@@ -4485,7 +4494,11 @@ def _resolve_repo(repo: str) -> Path:
     if p.is_absolute() or "/" in repo:
         return p
     root = Path(os.environ.get("GT_ROOT", Path.home() / "gt"))
-    return root / repo
+    direct = root / repo
+    source = root / f"{repo}-src"
+    if not (direct / ".git").exists() and (source / ".git").exists():
+        return source
+    return direct
 
 
 def _cmd_cycle(a) -> int:
@@ -4640,7 +4653,7 @@ def _cmd_worktree(a) -> int:
     """worktree <repo> [<agent>] [--gc] — st PROVISIONS the isolated worktree so
     the agent never runs `git worktree add` by hand (aegis-h2rr).
 
-    A shared project checkout (~/gt/shantytown, quipu, hank, goldblum) is
+    A shared project checkout (~/gt/shantytown, quipu, hank-src, goldblum) is
     multi-writer: index and HEAD belong to the working copy, so two agents
     committing there corrupt each other silently (aegis-repg/iaef). Each agent
     gets its own worktree off the shared repo instead — <repo>-wt/<agent> on
