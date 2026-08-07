@@ -604,6 +604,21 @@ def bd_blocked(cwd: str | None) -> list[dict]:
     return json.loads(r.stdout)
 
 
+def bd_show(cwd: str | None, bead_id: str) -> dict:
+    """One full bead, including dependency rows. Raises; callers fail open.
+
+    `bd list` carries only dependency_count, which cannot distinguish an open
+    blocker from a closed one. The detail read is therefore not optional for a
+    status-correction check: count alone was the original false classifier.
+    """
+    r = subprocess.run(["bd", "show", bead_id, "--json"],
+                       capture_output=True, text=True, timeout=20, cwd=cwd)
+    if r.returncode != 0:
+        raise RuntimeError(f"bd show {bead_id} failed: {r.stderr.strip()}")
+    value = json.loads(r.stdout)
+    return value[0] if isinstance(value, list) else value
+
+
 def bd_claim(cwd: str | None, bead_id: str) -> None:
     """Claim a bead in_progress — the dispatcher's write, shared by both
     advance triggers so the tracker shows the truth and the worker's next stop
