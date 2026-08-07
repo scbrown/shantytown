@@ -601,13 +601,25 @@ class IdleFleetAlerter:
                                                     root=self._shanty_root)
         except Exception:
             return []                              # detector broke -> stay quiet
+        # Read anchors before the idle ledger: an idle Codex continuation is
+        # deliberately absent from free_feedable_workers (it already owns
+        # work), but is exactly the state this fallback must recover.
+        try:
+            cwd = feed_check.bd_cwd(self._reg)
+            active = self._bd_in_progress(cwd)
+        except Exception:      # noqa: BLE001
+            active = []
+        resumable = feed_check.idle_resumable_codex(
+            self._reg, self._panes, self._runtime, active,
+            root=self._shanty_root)
+        observed_idle = sorted(set(free) | set(resumable))
         already = set(self._load())
 
         # Re-arm: a worker no longer free is forgotten, so a LATER idle episode
         # alerts again. Done first, so a fleet that emptied and re-filled is fresh.
-        already &= set(free)
+        already &= set(observed_idle)
 
-        newly = [w for w in free if w not in already]
+        newly = [w for w in observed_idle if w not in already]
         if not newly:
             self._save(already)                    # still-idle set -> no re-spam
             return []
@@ -624,10 +636,6 @@ class IdleFleetAlerter:
         # in_progress counts as a haul (aegis-ap4gm) — same reason as the
         # feed_check gate: an item the worker already started is its next work,
         # and `bd ready` structurally cannot report it. Fails open.
-        try:
-            active = feed_check.bd_in_progress(feed_check.bd_cwd(self._reg))
-        except Exception:      # noqa: BLE001
-            active = []
         queues = feed_check.hauls(ready_beads, active)
         hauling_newly = [w for w in newly if w in queues]
         unhauled_free = [w for w in free if w not in queues]
@@ -671,6 +679,19 @@ class IdleFleetAlerter:
             if open_anchors is None:
                 self._log(f"haul: {worker} idle with {len(beads)} queued but "
                           f"anchor state unreadable — not fed this pass")
+                continue
+            own_active = [b for b in active
+                          if (b.get("assignee") or "").split("/")[-1] == worker]
+            if worker in resumable and own_active:
+                bead = own_active[0]
+                target = push_to_own_pane(
+                    self._reg, self._panes, worker,
+                    feed_check.haul_resume_message(
+                        bead.get("id", "?"), bead.get("title") or ""))
+                if target is not None:
+                    nudged.append(worker)
+                    self._log(f"haul: resumed idle Codex {worker} on active "
+                              f"anchor {bead.get('id', '?')}")
                 continue
             feedable = [b for b in beads
                         if b not in open_anchors.get(worker, ())]

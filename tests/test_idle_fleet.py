@@ -140,6 +140,33 @@ def test_no_free_workers_is_silent(tmp_path, monkeypatch):
     assert a.sweep(reg.all()) == [] and panes.sent == []
 
 
+def test_tend_resumes_idle_codex_lead_with_active_anchor(tmp_path, monkeypatch):
+    """The belt covers the live failure: Stop resumed once, then Codex idled
+    mid-anchor.  Leads are resumable but never become general free capacity."""
+    reg = _Reg([
+        Agent(name="sattler", role="administrator", pane="p-admin"),
+        Agent(name="dearing", role="lead", reports_to="sattler", pane="p-dearing"),
+    ])
+    panes = _Panes({"p-admin", "p-dearing"})
+    active = [{"id": "aegis-pimvc", "title": "keeper allocation",
+               "assignee": "beads_aegis/crew/dearing"}]
+    monkeypatch.setattr("shantytown.feed_check.free_feedable_workers",
+                        lambda *a, **k: [])
+    monkeypatch.setattr("shantytown.feed_check.idle_resumable_codex",
+                        lambda *a, **k: ["dearing"])
+    monkeypatch.setattr("shantytown.feed_check.bd_cwd", lambda reg: None)
+    alerter = IdleFleetAlerter(
+        tmp_path, reg, panes, runtime=None, bd_ready=lambda: [],
+        bd_in_progress=lambda cwd: active)
+
+    assert alerter.sweep(reg.all()) == ["dearing"]
+    assert panes.sent == [("p-dearing", panes.sent[0][1])]
+    assert "HAUL RESUME: aegis-pimvc" in panes.sent[0][1]
+    assert "p-admin" not in [pane for pane, _ in panes.sent]
+    # Still-idle is deduplicated; leaving/re-entering idle re-arms elsewhere.
+    assert alerter.sweep(reg.all()) == []
+
+
 # --- FAIL OPEN --------------------------------------------------------------
 
 def test_a_broken_detector_stays_quiet(tmp_path, monkeypatch):
