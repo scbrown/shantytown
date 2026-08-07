@@ -68,6 +68,9 @@ class ToolSpec:
     # #27): reactor had been up for 9 days while doctor said "not installed" and
     # advised --install, which would have put a CLI beside the running service.
     service_unit: str | None = None
+    capability_argv: tuple[str, ...] | None = None
+    capability_marker: str | None = None
+    capability_label: str | None = None
 
 
 # Surveyed, not assumed. beads has NO releases → source build; quipu's
@@ -116,6 +119,16 @@ SPECS: tuple[ToolSpec, ...] = (
         leverage="the failed-tool-call signal — what the crew reached for that did not exist",
         release=None,
     ),
+    ToolSpec(
+        "codex", "codex", ("codex", "--version"), r"(\d+\.\d+\.\d+)",
+        toolchain="unknown",
+        installs_via="install or upgrade the OpenAI Codex CLI",
+        leverage="Codex crew launch plus blocking Stop-hook delivery for leads",
+        release=None,
+        capability_argv=("codex", "--help"),
+        capability_marker="--dangerously-bypass-hook-trust",
+        capability_label="hooks floor: `codex --help` lists --dangerously-bypass-hook-trust",
+    ),
 )
 
 
@@ -129,6 +142,8 @@ class Health:
     latest_error: str | None     # set iff we tried to check latest and could not
     toolchain_ok: bool
     unpathed_at: str | None = None   # absolute path when installed off-PATH (wmy7)
+    capability_ok: bool | None = None
+    capability_error: str | None = None
 
     @property
     def state(self) -> str:
@@ -136,6 +151,10 @@ class Health:
             return UNPATHED if self.unpathed_at else ABSENT
         if self.version_error is not None:
             return UNKNOWN
+        if self.capability_error is not None:
+            return UNKNOWN
+        if self.capability_ok is False:
+            return STALE
         if self.latest and self.version and _older(self.version, self.latest):
             return STALE
         if self.latest and self.version:
@@ -146,7 +165,9 @@ class Health:
     def uncertain(self) -> bool:
         """True when doctor could not fully determine this tool's state — the
         'I could not tell' that must not be laundered into a clean bill."""
-        return self.present and (self.version_error is not None or self.latest_error is not None)
+        return self.present and (self.version_error is not None
+                                 or self.latest_error is not None
+                                 or self.capability_error is not None)
 
 
 # --- injectable probes: real by default, faked in tests ----------------------
@@ -288,8 +309,17 @@ def detect(spec: ToolSpec, *, which=_which, run=_run, fetch=_fetch_latest,
     else:
         toolchain_ok = which(spec.toolchain) is not None
 
+    capability_ok = capability_error = None
+    if present and spec.capability_argv and spec.capability_marker:
+        rc, out = run(spec.capability_argv)
+        if rc != 0:
+            first = (out or "").strip().splitlines()[0] if (out or "").strip() else "(no output)"
+            capability_error = f"capability probe failed: {first[:160]}"
+        else:
+            capability_ok = spec.capability_marker in (out or "")
+
     return Health(spec, present, version, version_error, latest, latest_error,
-                  toolchain_ok, unpathed_at)
+                  toolchain_ok, unpathed_at, capability_ok, capability_error)
 
 
 def detect_all(specs: tuple[ToolSpec, ...] = SPECS, **kw) -> list[Health]:
@@ -393,12 +423,16 @@ def report(healths: list[Health], *, plans: list[InstallPlan] | None = None) -> 
             detail = (f"{v}installed at {h.unpathed_at} — NOT on your PATH "
                       f"(add {os.path.dirname(h.unpathed_at)} to PATH)")
         elif h.state == UNKNOWN:
-            reason = h.version_error or h.latest_error or "could not determine state"
+            reason = (h.version_error or h.capability_error or h.latest_error
+                      or "could not determine state")
             if h.spec.version_broken and h.version_error:
                 reason = f"cannot report version (known upstream bug: --version opens a store) [{reason}]"
             detail = f"present, but {reason}"
         elif h.state == STALE:
-            detail = f"{h.version} installed — {h.latest} available (STALE)"
+            if h.capability_ok is False:
+                detail = f"{h.version} installed — required hooks capability MISSING (STALE)"
+            else:
+                detail = f"{h.version} installed — {h.latest} available (STALE)"
         elif h.state == CURRENT:
             detail = f"{h.version} installed (current)"
         else:  # PRESENT
@@ -407,6 +441,11 @@ def report(healths: list[Health], *, plans: list[InstallPlan] | None = None) -> 
                 detail += f"; latest unknown ({h.latest_error})"
         lines.append(f"  {g} {h.spec.name:8} {detail}")
         lines.append(f"      leverage: {h.spec.leverage}")
+        if h.spec.capability_label:
+            verdict = ("available" if h.capability_ok is True else
+                       "MISSING" if h.capability_ok is False else
+                       "could not verify")
+            lines.append(f"      required: {h.spec.capability_label} — {verdict}")
         # When dp is present, show the signal it has actually captured — proof the
         # tool is not just installed but feeding st. Self-hiding: summary_line()
         # returns None if dp is absent or has no readable data, and we print
