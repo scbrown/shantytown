@@ -256,14 +256,27 @@ if [ "${1:-}" = "--selftest" ]; then
         echo "ok   ticket in a source comment is allowed"
       else echo "FAIL ticket in a source comment refused (aegis-4boql)"; exit 1; fi
 
-      # 2. same id in a USER-FACING artefact -> STILL REFUSED
+      # 2. same id in a USER-FACING artefact -> ALLOWED, but it must WARN.
+      #    This case asserted REFUSED until aegis-krlog, which is what blocked
+      #    every shantytown push. The graph rates pattern_bead-reference `warn`
+      #    while every other pattern is `block`, so refusing here was the guard
+      #    disagreeing with its own source of truth.
+      #    BOTH HALVES ARE ASSERTED, and the second is the one that matters: an
+      #    exit-0 alone cannot tell "warned" from "the rule stopped firing", and
+      #    the surrounding comment already names that as the failure mode a scope
+      #    change degrades into. So the WARNING TEXT is the observable.
       git checkout -q main 2>/dev/null || git checkout -q -B main origin/main
       git checkout -q -b chg
       echo '- Fixed the thing (zz-1a2b)' > CHANGELOG.md
       git add CHANGELOG.md; git commit -qm changelog
-      if echo "refs/heads/chg $(git rev-parse chg) refs/heads/chg $Z" | SCRUB_PATTERNS_FILE="$cf" bash "$SELF" origin "$r/pub.git" >/dev/null 2>&1; then
-        echo "FAIL ticket in a CHANGELOG was allowed — the scope swallowed the rule"; exit 1
-      else echo "ok   ticket in a CHANGELOG is still refused"; fi
+      out=$(echo "refs/heads/chg $(git rev-parse chg) refs/heads/chg $Z" | SCRUB_PATTERNS_FILE="$cf" bash "$SELF" origin "$r/pub.git" 2>&1); rc=$?
+      if [ "$rc" -ne 0 ]; then
+        echo "FAIL ticket in a CHANGELOG was REFUSED — warn tier regressed to block (aegis-krlog)"; exit 1
+      elif printf '%s' "$out" | grep -q 'bead references'; then
+        echo "ok   ticket in a CHANGELOG is allowed AND warned about"
+      else
+        echo "FAIL ticket in a CHANGELOG was allowed SILENTLY — the rule stopped firing"; exit 1
+      fi
 
       # 3. a HOSTNAME in that same source file -> STILL REFUSED. The scope is the
       #    TICKET rule's alone; narrowing it must not narrow the rule that matters.
@@ -394,13 +407,51 @@ while read -r _lref lsha _rref rsha; do
   # in a source comment is the convention, not a leak (aegis-4boql).
   tickets=""
   [ -n "$TICKET_PATTERNS" ] && tickets=$(printf '%s\n' "$ticketlines" | grep -nE "$TICKET_PATTERNS" || true)
-  if [ -n "$added" ] || [ -n "$msgs" ] || [ -n "$tickets" ]; then
+
+  # ── BEAD REFS ARE **WARN** TIER, NOT BLOCK (aegis-krlog) ────────────────────
+  # This used to add `tickets` to the refusal condition, and that CONTRADICTED
+  # the policy graph this guard is projected from. Measured in the graph, which
+  # aegis-mqnl makes the source of truth:
+  #
+  #     pattern_internal-lan-host   block      pattern_internal-home-path  block
+  #     pattern_internal-svc-host   block      pattern_guard-canary        block
+  #     pattern_private-ipv4        block      pattern_internal-node-name  block
+  #     pattern_bead-reference      WARN   <-- the only warn-tier pattern
+  #
+  # So this was not a policy that was merely wider than intended — it was a
+  # MIS-PROJECTION of a tier the graph already states, and the repo's own ratchet
+  # test had it right all along (BLOCK_TIER excludes "internal ticket id", with
+  # the comment "they are warn-tier in the graph rule (a bead reference leaks no
+  # topology)"). Two mechanisms, one graph, and only this one disagreed.
+  #
+  # WHY IT HAD TO CHANGE RATHER THAN BE OVERRIDDEN CASE BY CASE. Citing the bead
+  # in a comment is this codebase's documented convention, so the rule fired on
+  # ordinary correct work: 172 distinct bead ids are ALREADY in public
+  # origin/main file content and 191 in its commit messages (re-measured on
+  # origin/main). It was not preventing publication of bead ids; it was
+  # preventing the 173rd, at the price of a `--no-verify` on essentially every
+  # push. A guard that must be routinely overridden is a guard that will be
+  # overridden on the day it is right — and this same guard also catches real
+  # hostnames, which is the thing we cannot afford to have people reflex past.
+  #
+  # A bead ref is an opaque slug: it maps no host, no address and no path, which
+  # is why the graph rates it warn. Everything that DOES map the estate still
+  # refuses, immediately below, unchanged.
+  if [ -n "$tickets" ]; then
+    echo "⚠ note: this push adds internal bead references to a public remote." >&2
+    echo "  remote: $REMOTE_URL" >&2
+    printf '%s\n' "$tickets" | head -10 | sed 's/^/    /' >&2
+    echo "  Not refused — bead refs are warn-tier in the policy graph (they leak no" >&2
+    echo "  topology) and citing one is this repo's convention. Drop it if a stranger" >&2
+    echo "  could not act on the line without it." >&2
+  fi
+
+  if [ -n "$added" ] || [ -n "$msgs" ]; then
     violations=1
     echo "✗ REFUSED: this push would add internal identifiers to a PUBLIC remote." >&2
     echo "  remote: $REMOTE_URL" >&2
     [ -n "$added" ]   && { echo "  internal names in the diff:" >&2; printf '%s\n' "$added" | head -10 | sed 's/^/    /' >&2; }
     [ -n "$msgs" ]    && { echo "  internal names in commit messages:" >&2; printf '%s\n' "$msgs" | head -10 | sed 's/^/    /' >&2; }
-    [ -n "$tickets" ] && { echo "  internal ticket IDs in file content (CHANGELOG / source comments):" >&2; printf '%s\n' "$tickets" | head -10 | sed 's/^/    /' >&2; }
   fi
 done
 
