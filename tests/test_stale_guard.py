@@ -161,6 +161,30 @@ def test_main_ALWAYS_exits_zero_even_on_garbage(tmp_path, monkeypatch, capsys):
     assert stale_guard.main([]) == 0
 
 
+def test_codex_apply_patch_payload_resolves_the_edited_file(tmp_path):
+    """Codex sends a patch string, not Claude's tool_input.file_path."""
+    payload = {
+        "cwd": str(tmp_path),
+        "tool_name": "apply_patch",
+        "tool_input": {"command": (
+            "*** Begin Patch\n"
+            "*** Update File: src/changed.py\n"
+            "@@\n-old\n+new\n"
+            "*** End Patch")},
+    }
+    assert stale_guard._edited_path(payload) == tmp_path / "src/changed.py"
+
+
+def test_codex_apply_patch_absolute_path_stays_absolute(tmp_path):
+    target = tmp_path / "changed.py"
+    payload = {
+        "cwd": "/wrong",
+        "tool_name": "apply_patch",
+        "tool_input": {"command": f"*** Add File: {target}\n+content"},
+    }
+    assert stale_guard._edited_path(payload) == target
+
+
 def test_a_linked_WORKTREE_resolves_to_itself_not_the_shared_checkout(tmp_path):
     """The tree the agent edits is the worktree. Resolving to the shared checkout
     would measure staleness of a tree nobody is working in."""
