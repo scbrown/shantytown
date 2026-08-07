@@ -36,7 +36,7 @@ from collections import defaultdict
 from pathlib import Path
 
 from .files import FilesRegistry
-from .harness import Usage, get as harness_get
+from .harness import Usage, for_card, get as harness_get
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS events (
@@ -556,7 +556,8 @@ def session_usage(root: Path, since_h: float = 24.0, home: Path | None = None
     cards_by_harness: dict[str, dict[str, str]] = defaultdict(dict)
     for card in cards:
         if card.workspace:
-            cards_by_harness[card.harness or "claude"][str(Path(card.workspace))] = card.name
+            program = for_card(card, root=root)
+            cards_by_harness[program.name][str(Path(card.workspace))] = card.name
 
     def add(agent: str, provider: str, usage: Usage | None) -> None:
         prior, unknown = out.setdefault(agent, {}).get(provider, (Usage(), 0))
@@ -587,15 +588,29 @@ def session_usage(root: Path, since_h: float = 24.0, home: Path | None = None
             add(agent, "claude", harness_get("claude").read_usage(path))
 
     codex_cards = cards_by_harness.get("codex", {})
-    for path in (base / ".codex" / "sessions").glob("*/*/*/*.jsonl"):
-        try:
-            if path.stat().st_mtime < cutoff:
-                continue
-        except OSError:
+    # Codex agents do NOT write to ~/.codex: their launch receives CODEX_HOME
+    # from the settings resolver.  Use that resolver, rather than a second path
+    # formula here, because it also owns the per-agent-before-role precedence.
+    # A human's default-home transcript is not crew usage and must not leak in.
+    from .cli import _default_settings
+    resolve_settings = _default_settings(Path(root))
+    codex_homes = set()
+    for card in cards:
+        if for_card(card, root=root).name != "codex":
             continue
-        agent = codex_cards.get(_codex_cwd(path) or "")
-        if agent:
-            add(agent, "codex", harness_get("codex").read_usage(path))
+        settings = resolve_settings(card)
+        if settings:
+            codex_homes.add(Path(settings).parent)
+    for codex_home in codex_homes:
+        for path in (codex_home / "sessions").glob("*/*/*/*.jsonl"):
+            try:
+                if path.stat().st_mtime < cutoff:
+                    continue
+            except OSError:
+                continue
+            agent = codex_cards.get(_codex_cwd(path) or "")
+            if agent:
+                add(agent, "codex", harness_get("codex").read_usage(path))
     return out
 
 
