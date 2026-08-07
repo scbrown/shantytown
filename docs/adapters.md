@@ -153,11 +153,21 @@ programs happen to take the same matcher-group hook shape, so only the container
 
 Two honest gaps, named rather than papered over:
 
-- **The matcher-scoped guards are not emitted for codex.** A matcher is a claim about the host
-  program's *tool names* (`"Bash"`, `"mcp__.*"` are Claude Code's), and codex's vocabulary is
-  unmeasured. A guard emitted with the wrong vocabulary is not a weaker guard, it is one that never
-  fires while reading as wired — this repo has already paid that bill (aegis-ac5x/18e0). So codex
-  gets the matcher-free events (`SessionStart`, `Stop`), and the omission is pinned by a test.
+- **The *edit* and *MCP* guards are not emitted for codex** — the Bash guard now is (aegis-610jv).
+  A matcher is a claim about the host program's *tool names*, and a guard emitted with the wrong
+  vocabulary is not a weaker guard, it is one that never fires while reading as wired (aegis-ac5x/
+  18e0). What changed is that the SHELL vocabulary stopped being a guess: measured live against
+  codex-cli 0.146.1, `tool_name` is `Bash` and `tool_input` is `{"command": …}` — Claude Code's
+  exact shape — and matcher `"Bash"` fires while six other candidates do not. So `SHANTY_BASH_GUARD`
+  is emitted from the same builder the Claude side uses, and `"Edit|Write|MultiEdit"` / `"mcp__.*"`
+  stay out because that probe only ever made codex call a shell tool. Both omissions are pinned by
+  a test, and `codex.MATCHERS_NOT_EMITTED` now names the two matchers rather than the whole event.
+
+  The lesson is about the *constant*, not the guards. `MATCHERS_NOT_EMITTED = ("PreToolUse",)` was
+  an honest record of something unmeasured, and it aged into a settled no that nobody re-opened
+  while codex cards ran with no host policy at all. A not-yet-measured needs to name the experiment
+  that would settle it — which is why the two probes are checked in and re-runnable rather than
+  described.
 - **The pane-reading predicates are still Claude Code's.** `is_live`, the trust and consent screens,
   the auth-dead banner — all matched against a captured pane, all `ClaudeRuntime`'s. They are the same
   *kind* of per-program fact as the argv, but a marker never observed passing is not a marker, and

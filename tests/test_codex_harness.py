@@ -32,6 +32,7 @@ import pytest
 from shantytown import cli, codex, harness as harness_mod
 from shantytown.files import FilesRegistry
 from shantytown.protocols import Agent
+from shantytown import runtime as runtime_mod
 from shantytown.runtime import (ClaudeRuntime, live_wiring, require_capability,
                                 settings_path_in_cmdline, stop_directions_in)
 from shantytown.tmux import NullPanes
@@ -202,20 +203,110 @@ def test_the_stop_routing_is_the_same_routing_claude_gets(role, expected):
     assert codex.stop_directions(text) == claude
 
 
-def test_the_matcher_scoped_guards_are_NOT_emitted_and_that_is_deliberate():
-    """A matcher is a claim about the host program's TOOL NAMES. Claude Code's
-    are "Bash" and "mcp__.*"; codex's are unmeasured. Emitting the guards with
-    the wrong vocabulary would not be a weaker guard, it would be a guard that
-    never runs while reading as wired — this repo has already paid that bill
-    once (aegis-ac5x/18e0). Pinned so nobody "completes" the emitter by copying
-    Claude Code's matchers across."""
+def test_the_STILL_unmeasured_matchers_are_NOT_emitted(monkeypatch):
+    """A matcher is a claim about the host program's TOOL NAMES, and emitting one
+    with the wrong vocabulary is not a weaker guard — it is a guard that never
+    runs while reading as wired (aegis-ac5x/18e0, a bill already paid once).
+
+    THIS TEST USED TO COVER THE WHOLE PreToolUse EVENT and now covers only the
+    two matchers still unmeasured. That narrowing is the aegis-610jv change and
+    it is a MEASUREMENT, not a relaxation: probe-codex-pretooluse.sh ran live
+    against codex-cli 0.146.1 and found tool_name `Bash` with tool_input
+    `{"command": …}` — Claude Code's exact shape — with matcher "Bash" firing
+    while "shell", "exec_command", "unified_exec", "local_shell", "bash" and
+    "apply_patch" stayed silent.
+
+    The edit and MCP matchers stay out because that probe only ever made codex
+    call a SHELL tool. It observed nothing about editing, so the six silences are
+    silent about shell and not about `Edit|Write|MultiEdit`. Pinned so nobody
+    "completes" the emitter by copying the remaining Claude Code matchers across
+    on the strength of the Bash one having worked.
+    """
+    monkeypatch.setenv("SHANTY_BASH_GUARD", "/guard.sh")
     settings = codex.settings_for_role("worker", root="/tmp/r")
-    for event in codex.MATCHERS_NOT_EMITTED:
-        assert event not in settings["hooks"], (
-            f"{event} is matcher-scoped and codex's tool vocabulary is unmeasured "
-            f"— see codex.MATCHERS_NOT_EMITTED before adding it")
-    # the matcher-free events ARE emitted, so the omission is narrow.
+    rendered = codex.render(settings)
+    for unmeasured in codex.MATCHERS_NOT_EMITTED:
+        matcher = unmeasured.split(":", 1)[1]
+        assert matcher not in rendered, (
+            f"matcher {matcher!r} is unmeasured for codex — see "
+            f"codex.MATCHERS_NOT_EMITTED before emitting it")
+
+
+def test_a_codex_role_DOES_carry_the_deployment_bash_guard(monkeypatch):
+    """THE aegis-610jv DEFECT, pinned. A codex agent used to run with NO
+    bd-store-guard and NO crew-only-guard: nothing between it and a `bd`
+    subcommand that opens one of the 14 exposed stores read-write and wedges it
+    (aegis-lmi), and nothing between it and a `gt up` that puts a live witness on
+    a crew-only host (aegis-bah2). Both are ENFORCEMENT on a claude card, and
+    every card converted to codex silently lost them — which is what blocked the
+    codex expansion.
+
+    The matcher is asserted EXACTLY, because that string is the whole measured
+    fact: a group emitted under any other name leaves Bash unguarded while the
+    config still reads as carrying a guard.
+    """
+    monkeypatch.setenv("SHANTY_BASH_GUARD", "/guard.sh")
+    settings = codex.settings_for_role("worker", root="/tmp/r")
+    groups = settings["hooks"]["PreToolUse"]
+    assert [g["matcher"] for g in groups] == [runtime_mod.BASH_MATCHER]
+    assert groups[0]["hooks"] == [{"type": "command", "command": "/guard.sh"}]
+    # and it survives the TOML round trip — an emitter that produces a config
+    # codex rejects at launch is the same inert guard by another route.
+    back = tomllib.loads(codex.render(settings))
+    assert back["hooks"]["PreToolUse"][0]["matcher"] == runtime_mod.BASH_MATCHER
+
+
+def test_the_bash_guard_matcher_is_the_SAME_ONE_claude_emits(monkeypatch):
+    """ONE measured fact, one definition. The guard is emitted by two harnesses
+    and looked for by two readers, so a matcher that drifted in one of the four
+    places would leave a card guarded under one name and CHECKED under another —
+    a green readback for an unguarded agent, which is precisely the failure this
+    whole bead is about. Compared against the CLAUDE emitter's own output rather
+    than against a literal, so the two cannot drift apart without this failing.
+    """
+    monkeypatch.setenv("SHANTY_BASH_GUARD", "/guard.sh")
+    claude_groups = runtime_mod.pre_tool_use_hooks(root="/tmp/r")
+    claude_bash = [g for g in claude_groups
+                   if g.get("matcher") == runtime_mod.BASH_MATCHER]
+    codex_bash = codex.settings_for_role("worker", root="/tmp/r")["hooks"]["PreToolUse"]
+    assert claude_bash == codex_bash
+
+
+def test_NO_deployment_guard_means_NO_PreToolUse_key_at_all(monkeypatch):
+    """An empty PreToolUse array is a claim of coverage the emitter cannot back.
+    shantytown ships no guard and hardcodes no path, so a store that configures
+    none must get a config with the key ABSENT — not present-and-empty, which
+    reads to every downstream reader as "guards were considered here"."""
+    monkeypatch.delenv("SHANTY_BASH_GUARD", raising=False)
+    settings = codex.settings_for_role("worker", root="/tmp/r")
+    assert "PreToolUse" not in settings["hooks"]
     assert set(settings["hooks"]) == {"SessionStart", "Stop"}
+
+
+@pytest.mark.parametrize("text,expected,why", [
+    ('[[hooks.PreToolUse]]\nmatcher = "Bash"\n\n'
+     '[[hooks.PreToolUse.hooks]]\ntype = "command"\ncommand = "/g.sh"\n',
+     "/g.sh", "the guard is there and named"),
+    ('[[hooks.Stop]]\n[[hooks.Stop.hooks]]\ntype="command"\ncommand="/x"\n',
+     "", "readable settings of ours carrying NO guard — an observation"),
+    ('[[hooks.PreToolUse]]\nmatcher = "shell"\n\n'
+     '[[hooks.PreToolUse.hooks]]\ntype = "command"\ncommand = "/g.sh"\n',
+     "", "scoped to a matcher that never fires: UNGUARDED, not guarded"),
+    ("this is not toml [[[", None, "unparseable — a failure to look"),
+    ("", None, "empty — not a file with no guard"),
+])
+def test_the_guard_READER_has_three_states_not_two(text, expected, why):
+    """"" and None are DIFFERENT ANSWERS and conflating them is the false clear
+    this repo keeps paying for: "" means READ IT, THERE IS NONE; None means COULD
+    NOT READ. `roles --check` renders the first as a finding and the second as
+    cannot-tell, so a reader that collapsed them would report every unreadable
+    config as a healthy one.
+
+    The third case is the one worth having a parametrisation for at all: a
+    PreToolUse block scoped to `shell` — a matcher MEASURED not to fire — must
+    read as NO GUARD. A presence-only reader would call it wired, which is
+    aegis-ac5x's defect committed by the checker built to catch it."""
+    assert codex.bash_guard(text) == expected, why
 
 
 def test_the_whole_rulebook_reaches_the_agent_not_the_first_32KiB():
