@@ -195,8 +195,11 @@ def clear(panes, pane: str, awaiting: bool = False) -> Report:
             f"{_SETTLE_S:g}s, so this frame proves NOTHING about the buffer. Do "
             "not read this as failure — the clear may well have landed. Look "
             "again, or attach."))
-    if after_verdict == EMPTY:
-        return Report(after_verdict, after_raw, after_text, detail="cleared — box is empty.")
+    if after_verdict in (EMPTY, GHOST):
+        detail = "cleared — box is empty."
+        if after_verdict == GHOST:
+            detail += " The runtime repainted its suggestion over the empty buffer."
+        return Report(after_verdict, after_raw, after_text, detail=detail)
     return Report(after_verdict, after_raw, after_text, detail=(
         f"clear did not empty the box: it now reads {after_verdict}. "
         "The pane DID repaint, so this is a real result, not a stale frame."))
