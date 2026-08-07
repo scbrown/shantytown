@@ -286,3 +286,27 @@ def test_dispatch_gate_resolves_the_governor_for_the_target_card(monkeypatch):
     item = types.SimpleNamespace(priority=2)
     assert gate(item, "claire")
     assert gate(item, "sattler") == ""
+
+
+def test_dispatch_signal_lost_is_qualified_by_target_harness(monkeypatch, capsys):
+    """The Codex sentinel must not be misread as the Claude/base governor."""
+    base = gov.Policy(source="stub", stub_pct=10, tiers=(
+        gov.Tier(at=50, min_priority=1),), by_harness={})
+    codex = gov.Policy(source="stub", stub_pct=10, tiers=(
+        gov.Tier(at=50, min_priority=1),))
+    base.by_harness["codex"] = codex
+    governors = {
+        "base": gov.Governor(base, gov.StubReader(10), name="base"),
+        "codex": gov.Governor(codex, gov.StubReader(10, ok=False), name="codex"),
+    }
+    cards = [Agent(name="claire", role="worker", pane="p1", harness="claude"),
+             Agent(name="sattler", role="administrator", pane="p2", harness="codex")]
+    monkeypatch.setattr(cli, "_governors", lambda a: (types.SimpleNamespace(governor=base), governors))
+    monkeypatch.setattr(cli, "_registry", lambda a: types.SimpleNamespace(all=lambda: cards))
+    gate = cli._dispatch_gate(types.SimpleNamespace(root="/tmp"))
+    item = types.SimpleNamespace(priority=2)
+
+    assert gate(item, "claire") == ""
+    assert "[codex]" not in capsys.readouterr().err
+    assert gate(item, "sattler") == ""
+    assert "USAGE SIGNAL LOST [codex]" in capsys.readouterr().err

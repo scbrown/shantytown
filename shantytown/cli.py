@@ -357,7 +357,8 @@ def _governors(a):
         out[name] = gov_mod.Governor(
             policy, reader,
             gov_mod.FilesGovernorState(Path(a.root),
-                                       None if name == "base" else name))
+                                       None if name == "base" else name),
+            name=name)
     return cfg, out
 
 
