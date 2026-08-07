@@ -139,6 +139,47 @@ metric = "codex:usage_utilization_pct:max"
     assert gov.unconfigured(cfg.governor, "codex") is False
 
 
+def test_launch_default_does_not_reassign_the_base_governor(tmp_path):
+    """[harness].default selects a launcher; it must not change which provider
+    the historic base governor reads.  This is the live codex-default shape.
+    """
+    cfg = _cfg(tmp_path, BASE + """
+[governor.by_harness.codex]
+source = "stub"
+stub_pct = 10.0
+metric = "codex:usage_utilization_pct:max"
+
+[harness]
+default = "codex"
+""")
+    assert cfg.harness_default == "codex"
+    assert gov.unconfigured(cfg.governor, "claude") is False
+    assert gov.unconfigured(cfg.governor, "codex") is False
+
+
+def test_governor_lookup_keeps_claude_metered_when_launch_default_is_codex(tmp_path):
+    """Exercise the production call site.  Passing harness_default here caused
+    the live false SIGNAL LOST line even though unconfigured() itself had the
+    right compatibility default."""
+    cfg = _cfg(tmp_path, BASE + """
+[governor.by_harness.codex]
+source = "stub"
+stub_pct = 10.0
+
+[harness]
+default = "codex"
+""")
+    base = object()
+    codex = object()
+    claude_card = Agent(name="claire", role="worker", pane="p1",
+                        harness="claude")
+    harness, selected, alarm = cli._governor_for(
+        cfg, {"base": base, "codex": codex}, claude_card, tmp_path)
+    assert harness == "claude"
+    assert selected is base
+    assert alarm is None
+
+
 def test_a_single_harness_deployment_is_never_unconfigured(tmp_path):
     """No by_harness at all = the pre-existing world: one governor, one provider.
     Alarming there would fire on every deployment that predates this feature."""
