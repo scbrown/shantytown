@@ -3645,7 +3645,14 @@ def _crew_states(agents, panes, runtime):
                 screen, ui_up,
                 awaiting=asks_a_question(runtime, plain),
                 auth_dead=auth_expired(runtime, plain))
-            posture = launchable.observed_posture(plain, ui_up)
+            cmdline = None
+            read_cmdline = getattr(panes, "cmdline", None)
+            if callable(read_cmdline):
+                try:
+                    cmdline = read_cmdline(ag.pane)
+                except Exception:
+                    pass
+            posture = launchable.observed_posture(plain, ui_up, cmdline=cmdline)
             # Background shells outlive the turn. An agent whose turn ended with a
             # build/test/`gh run watch` still live is NOT finished, and every
             # surface the administrator has was silent about it. Shown ON the work

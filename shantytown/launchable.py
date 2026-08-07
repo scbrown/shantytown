@@ -125,7 +125,7 @@ BYPASS_MARKER = "bypass permissions on"
 FOOTER_LINES = 10
 
 
-def observed_posture(plain: str, ui_up: bool) -> str:
+def observed_posture(plain: str, ui_up: bool, cmdline: str | None = None) -> str:
     """BYPASS / MANUAL / UNKNOWN, from the stripped capture of a pane.
 
     DERIVED NEGATIVELY, on purpose. Only the bypass line has been measured here;
@@ -143,4 +143,12 @@ def observed_posture(plain: str, ui_up: bool) -> str:
     if not ui_up:
         return UNKNOWN
     tail = "\n".join((plain or "").splitlines()[-FOOTER_LINES:])
-    return BYPASS if BYPASS_MARKER in tail else MANUAL
+    if BYPASS_MARKER in tail:
+        return BYPASS
+    # Codex 0.146.1's persistent status line does not render approval posture.
+    # Its live process does: this flag is the mechanism that disables prompts,
+    # and tmux.cmdline reconstructs the launch line from argv + declared env.
+    # This is process truth, not the card's requested intent.
+    if cmdline and "--dangerously-bypass-approvals-and-sandbox" in cmdline.split():
+        return BYPASS
+    return MANUAL

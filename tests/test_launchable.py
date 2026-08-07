@@ -46,6 +46,20 @@ def test_a_live_pane_with_no_bypass_line_is_manual():
     assert launchable.observed_posture(MANUAL_FOOTER, ui_up=True) == launchable.MANUAL
 
 
+def test_codex_bypass_is_read_from_the_live_process_not_absent_footer():
+    screen = "› Explain this codebase\n  gpt-5.6-terra default · /home/x/ws"
+    launch = ("CODEX_HOME=/s/codex/worker codex "
+              "--dangerously-bypass-approvals-and-sandbox")
+    assert launchable.observed_posture(screen, ui_up=True, cmdline=launch) == \
+        launchable.BYPASS
+
+
+def test_codex_without_the_live_bypass_flag_is_manual():
+    screen = "› Explain this codebase\n  gpt-5.6-terra default · /home/x/ws"
+    assert launchable.observed_posture(screen, ui_up=True, cmdline="codex") == \
+        launchable.MANUAL
+
+
 def test_a_pane_with_no_ready_ui_is_unknown_not_manual():
     """A trust dialog, a consent screen or a blocking picker has no mode line at
     all. Calling that MANUAL is a fabricated measurement aimed at the wrong
