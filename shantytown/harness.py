@@ -282,7 +282,7 @@ class ClaudeHarness:
 
     Both halves moved here verbatim from runtime.py; every comment explaining WHY
     a flag or a hook is there moved with it, because those comments are measured
-    incidents (the --no-chrome consent screen, the SHANTY_ROOT belt, the hank
+    incidents (the --no-chrome consent screen, the SHANTY_ROOT belt, the yupana
     guard's fail-open) and separating a rule from its reason is how the rule gets
     "cleaned up" by the next reader.
     """
@@ -342,9 +342,12 @@ class ClaudeHarness:
         model = resolve_model(card, root)
         if model:
             flags += f" --model {model}"
-        # BOBBIN_ROLE is how hank's policy guard resolves WHICH scope applies
-        # (hank#20: tenant is resolved --tenant, then BOBBIN_ROLE; scopes live in
-        # .bobbin/config.toml under [hank.policy.scopes.<role>]). Exporting it per
+        # BOBBIN_ROLE is how yupana's policy guard resolves WHICH scope applies
+        # (yupana#20: tenant is resolved --tenant, then BOBBIN_ROLE; scopes live
+        # in .bobbin/config.toml under [yupana.policy.scopes.<role>] — the
+        # section was [hank.policy.*] before the v0.6.0 rename, and a config
+        # under the old section name projects NO scopes rather than erroring).
+        # Exporting it per
         # agent is what lets ONE hook registration serve every role — without it
         # the guard has no scope to enforce and every agent is ungoverned.
         # SHANTY_ROOT is the BELT to --settings' braces, and it exists because of a
@@ -670,7 +673,7 @@ class CodexHarness:
         if model:
             flags += f" --model {model}"
         # Identical env contract to ClaudeHarness — SHANTY_ROOT the belt for a
-        # stale settings snapshot (aegis-nipg), BOBBIN_ROLE for hank's scope,
+        # stale settings snapshot (aegis-nipg), BOBBIN_ROLE for yupana's scope,
         # BEADS_ACTOR so the tracker records WHO (GitHub #24), ST_ROLES carrying
         # the role set OPAQUELY (GitHub #37). None of that is Claude Code's; it
         # is how a shantytown agent knows who it is, whatever program it runs.

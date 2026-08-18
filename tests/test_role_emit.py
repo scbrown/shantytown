@@ -98,32 +98,42 @@ def _guard_commands(settings: dict) -> list[str]:
     return out
 
 
-def test_every_role_gets_the_hank_policy_guard():
+def test_every_role_gets_the_yupana_policy_guard():
     """First-class means you cannot launch an UNGUARDED agent by forgetting a flag
-    (Stiwi 2026-07-19). Every role wires hank's pre-edit guard on edit-shaped tools."""
+    (Stiwi 2026-07-19). Every role wires yupana's pre-edit guard on edit-shaped tools."""
     for role in ("worker", "lead", "administrator"):
         cmds = _guard_commands(settings_for_role(role))
-        assert cmds, f"{role} has no hank guard — an unguarded agent is launchable"
-        assert "hank hook pre-edit" in cmds[0]
+        assert cmds, f"{role} has no yupana guard — an unguarded agent is launchable"
+        assert "yupana hook pre-edit" in cmds[0]
         matcher = settings_for_role(role)["hooks"]["PreToolUse"][0]["matcher"]
         for tool in ("Edit", "Write"):
             assert tool in matcher, f"{role} guard does not cover {tool}"
 
 
-def test_the_guard_invokes_hanks_pre_edit_event():
-    """The guard must still CALL hank — laundering the exit code must not become
-    "stop asking hank". It wraps the call; it does not replace it.
+def test_the_guard_invokes_yupanas_pre_edit_event():
+    """The guard must still CALL yupana — laundering the exit code must not become
+    "stop asking yupana". It wraps the call; it does not replace it.
 
-    The previous version of this test asserted the command was `hank hook pre-edit`
-    VERBATIM, on the reasoning that a `||` wrapper was redundant because "hank never
-    exits 2". That reasoning was falsified in production on 2026-07-19: installed
-    hank 0.1.0 knows only `post-edit`, clap treated `pre-edit` as a usage error, and
-    clap exits 2 — blocking every Write/Edit for every worker. The wrapper is now
-    mandatory, and the stdout hazard it was accused of is handled by only echoing
-    hank's output when hank exited 0 (see _HANK_GUARD).
+    THE BINARY NAME IS PART OF THIS ASSERTION, and that is the point. An earlier
+    version of this test asserted `hank hook pre-edit`, which stayed green for
+    nine days after the crate was renamed hank -> yupana at v0.6.0 — because the
+    test checks what shantytown EMITS, and shantytown emitted the dead name
+    faithfully. A guard invoking a binary that is not on PATH exits 127, the
+    wrapper's `|| exit 0` swallows it, and empty stdout is ALLOW. So the fleet
+    ran unguarded while this test reported the guard as wired. The name is now
+    asserted against the live binary deliberately; if the crate is ever renamed
+    again, this test is the thing that must go red.
+
+    Separately, the previous version asserted the command VERBATIM, reasoning
+    that a `||` wrapper was redundant because "the guard never exits 2". That was
+    falsified in production on 2026-07-19: the installed binary knew only
+    `post-edit`, clap treated `pre-edit` as a usage error, and clap exits 2 —
+    blocking every Write/Edit for every worker. The wrapper is mandatory, and the
+    stdout hazard it was accused of is handled by only echoing output on exit 0
+    (see _YUPANA_GUARD).
     """
     hook = settings_for_role("worker")["hooks"]["PreToolUse"][0]["hooks"][0]
-    assert "hank hook pre-edit" in hook["command"], "guard no longer consults hank"
+    assert "yupana hook pre-edit" in hook["command"], "guard no longer consults yupana"
     assert hook.get("timeout") == 5, "guard has no timeout; a hung guard stalls every edit"
 
 
@@ -131,9 +141,9 @@ def test_guard_can_never_produce_the_blocking_exit_code(tmp_path):
     """THE fail-open invariant, stated correctly and PROVEN by running it.
 
     Exit 2 is the ONLY code that blocks a tool call. So the requirement is not
-    "always exits 0" — a missing hank exits 127, which is fine — it is "can never
+    "always exits 0" — a missing yupana exits 127, which is fine — it is "can never
     exit 2". A guard that could exit 2 would brick every crew agent the moment
-    hank was absent, crashed, or lagging a release.
+    yupana was absent, crashed, or lagging a release.
     """
     import subprocess
     cmd = _guard_commands(settings_for_role("worker"))[0]
@@ -141,25 +151,26 @@ def test_guard_can_never_produce_the_blocking_exit_code(tmp_path):
     empty.mkdir()
     r = subprocess.run(cmd, shell=True, capture_output=True, text=True,
                        env={"PATH": str(empty)})
-    assert r.returncode != 2, f"guard hard-blocked with hank absent (rc={r.returncode})"
+    assert r.returncode != 2, f"guard hard-blocked with yupana absent (rc={r.returncode})"
     # ALLOW IS SILENCE: it must not forge a permission decision either way.
-    assert "permissionDecision" not in r.stdout, "guard forged a decision with no hank"
+    assert "permissionDecision" not in r.stdout, "guard forged a decision with no yupana"
 
 
-def test_guard_cannot_block_when_hank_is_present_but_stale(tmp_path):
-    """THE REGRESSION. hank ABSENT (127) was already covered; hank PRESENT and
-    older than the event name was not — and that is the case that took the fleet
-    down on 2026-07-19. A CLI that does not know the subcommand exits 2 (clap's
-    usage-error code), which is the one code Claude Code treats as a hard block.
+def test_guard_cannot_block_when_yupana_is_present_but_stale(tmp_path):
+    """THE REGRESSION. The binary ABSENT (127) was already covered; the binary
+    PRESENT and older than the event name was not — and that is the case that
+    took the fleet down on 2026-07-19. A CLI that does not know the subcommand
+    exits 2 (clap's usage-error code), which is the one code Claude Code treats
+    as a hard block.
 
-    Specimen: `hank hook pre-edit` against hank 0.1.0 ->
+    Specimen: `hook pre-edit` against hank 0.1.0 (this crate's pre-rename name) ->
         error: invalid value 'pre-edit' for '<EVENT>'   (exit 2)
     """
     import subprocess
     cmd = _guard_commands(settings_for_role("worker"))[0]
     stale = tmp_path / "stalebin"
     stale.mkdir()
-    fake = stale / "hank"
+    fake = stale / "yupana"
     fake.write_text(
         "#!/bin/sh\n"
         "echo \"error: invalid value 'pre-edit' for '<EVENT>'\" >&2\n"
@@ -169,14 +180,14 @@ def test_guard_cannot_block_when_hank_is_present_but_stale(tmp_path):
     r = subprocess.run(cmd, shell=True, capture_output=True, text=True,
                        env={"PATH": str(stale)})
     assert r.returncode != 2, (
-        f"guard passed a stale hank's usage-error exit 2 straight through (rc={r.returncode}) "
+        f"guard passed a stale yupana's usage-error exit 2 straight through (rc={r.returncode}) "
         "— this is the fleet-wide edit outage"
     )
-    assert "permissionDecision" not in r.stdout, "guard forged a decision from a failed hank"
+    assert "permissionDecision" not in r.stdout, "guard forged a decision from a failed yupana"
 
 
 def test_settings_env_carries_BOBBIN_ROLE_for_the_guard_tenant():
-    """hank's shipped spec puts BOBBIN_ROLE in the settings `env` block, and that
+    """yupana's shipped spec puts BOBBIN_ROLE in the settings `env` block, and that
     is where the guard reads its tenant. A launch-string export sets it for the
     agent PROCESS, but a hook is re-exec'd by the harness — so settings.env is the
     binding that actually reaches the guard. Without it the guard resolves no

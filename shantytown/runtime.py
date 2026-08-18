@@ -416,58 +416,82 @@ def _query_first_cmd() -> dict:
             "command": f"{_hook_interpreter()} -m shantytown.query_first"}
 
 
-# --- hank policy guard (first-class, Stiwi 2026-07-19) --------------------------
-# Every shantytown-launched agent runs its edits past hank's guard: the agent's
-# edit tool call IS the change event (hank FR-30), so hank answers with a blast-
-# radius advisory and MAY deny. Wired here, once, rather than per-agent — that is
-# what "first class" means: you cannot launch an unguarded agent by forgetting a
-# flag.
+# --- yupana policy guard (first-class, Stiwi 2026-07-19) ------------------------
+# Every shantytown-launched agent runs its edits past yupana's guard: the agent's
+# edit tool call IS the change event (yupana FR-30), so yupana answers with a
+# blast-radius advisory and MAY deny. Wired here, once, rather than per-agent —
+# that is what "first class" means: you cannot launch an unguarded agent by
+# forgetting a flag.
 #
-# FAIL OPEN, deliberately and non-negotiably. `command -v` short-circuits when
-# hank is not installed, and `|| exit 0` swallows ANY hank failure (absent
-# subcommand, crashed daemon, timeout) into "allow". A guard that failed CLOSED
-# would brick every crew agent the moment hank was down or lagging a release —
-# turning a code-intelligence nicety into a fleet outage. hank denies by emitting
-# the block JSON on stdout with exit 0, so a real deny is never confused with a
-# failure, and this wrapper cannot swallow it.
-# 2026-07-19 (window, kelly): the "hank never exits 2" contract was
+# THE BINARY IS `yupana`. It was named `hank` until v0.6.0 and this line said
+# `hank` for nine days after the rename, which is the most expensive kind of
+# stale reference: `hank` is not on PATH, so the command exits 127, `|| exit 0`
+# swallows it, stdout is empty — and EMPTY STDOUT IS ALLOW. The wrapper below is
+# built to convert any yupana failure into an allow, so it converted "this
+# binary does not exist" into an allow too, silently, on every edit by every
+# agent, while every settings file still reported the guard as wired. That is
+# the could-not-fail failure class yupana's own docs put third in their incident
+# list, introduced by a rename nobody propagated. There is no error to notice:
+# the only symptom is that nothing is ever denied.
+#
+# So the guard's liveness cannot be inferred from this file. `yupana hook
+# pre-edit` emits a `pre_edit_invoked` record on the metrics spool BEFORE it
+# inspects its payload, precisely so "never ran" and "ran and allowed" stop
+# looking identical. If you are asking whether the guard is live, read the
+# spool; do not read this line.
+#
+# FAIL OPEN, deliberately and non-negotiably. `|| exit 0` swallows ANY yupana
+# failure (absent subcommand, crashed daemon, timeout) into "allow". A guard that
+# failed CLOSED would brick every crew agent the moment yupana was down or
+# lagging a release — turning a code-intelligence nicety into a fleet outage.
+# yupana denies by emitting the block JSON on stdout with exit 0, so a real deny
+# is never confused with a failure, and this wrapper cannot swallow it.
+# 2026-07-19 (window, kelly): the "yupana never exits 2" contract was
 # FALSIFIED IN PRODUCTION and this line hard-blocked the whole fleet. Installed
-# hank 0.1.0 implements only `post-edit`; `hank hook pre-edit` is a clap USAGE
+# hank 0.1.0 implemented only `post-edit`; `hook pre-edit` was a clap USAGE
 # error, and clap exits 2 — Claude Code's one blocking code. Every Write/Edit by
 # every shantytown worker was refused with:
 #   PreToolUse:Write hook error: invalid value 'pre-edit' for '<EVENT>'
-# The old fail-open test only ever ran with hank ABSENT (127), so it stayed green
-# through the outage. Fail-open cannot be delegated to someone else's exit codes.
+# The old fail-open test only ever ran with the binary ABSENT (127), so it stayed
+# green through the outage. Fail-open cannot be delegated to someone else's exit
+# codes — and, per the rename above, neither can liveness.
 #
 # The wrapper below launders the exit code WITHOUT the hazard the pinned contract
-# warned about: stdout is captured, and it is echoed ONLY when hank exited 0. A
-# crashed or stale hank therefore contributes exactly nothing to stdout, so no
+# warned about: stdout is captured, and it is echoed ONLY when yupana exited 0. A
+# crashed or stale yupana therefore contributes exactly nothing to stdout, so no
 # partial output can ever be read as a forged permission decision.
-_HANK_GUARD = 'out=$(hank hook pre-edit) || exit 0; printf %s "$out"'
+_YUPANA_GUARD = 'out=$(yupana hook pre-edit) || exit 0; printf %s "$out"'
 
 
 def _guard_hook() -> dict:
-    """Emitted EXACTLY as hank pinned it (hank#20 contract, weaver 2026-07-19).
+    """Emitted EXACTLY as yupana pinned it (yupana#20 contract, weaver 2026-07-19).
 
     Deliberately a bare command with no shell wrapper. An earlier version wrapped
-    it in `command -v hank ... || exit 0` to force fail-open; that is both
+    it in `command -v <binary> ... || exit 0` to force fail-open; that is both
     redundant and harmful under the pinned contract:
 
-      - Exit 2 is Claude Code's ONLY blocking channel, and hank never exits 2.
-        So no hank crash — and no missing binary (127) — can hard-block an agent.
-        Fail-open is a property of the contract, not of a wrapper we bolt on.
+      - Exit 2 is Claude Code's ONLY blocking channel, and yupana never exits 2.
+        So no yupana crash — and no missing binary (127) — can hard-block an
+        agent. Fail-open is a property of the contract, not of a wrapper we
+        bolt on.
       - ALLOW IS SILENCE: allow is exit 0 with EMPTY stdout. The guard must never
         emit permissionDecision:"allow", because that value SUPPRESSES the user's
         own permission prompt — a guard that emitted it would silently downgrade
         every agent's permission posture. The guard only ever SUBTRACTS permission.
         A `|| exit 0` wrapper risks passing through partial stdout from a crashed
-        hank, which is exactly the thing that must never be forged.
+        yupana, which is exactly the thing that must never be forged.
+
+    The cost of that contract, stated because it has already been paid once: a
+    guard nothing can hard-block is also a guard whose ABSENCE is indistinguishable
+    from silence. `command -v` would have caught the hank->yupana rename; the
+    contract says not to use it, and it did not. Liveness is answered by
+    yupana's own `pre_edit_invoked` spool record, not by this file.
 
     DENY is exit 0 + hookSpecificOutput{permissionDecision:"deny", ...}.
     """
     return {
         "matcher": "Edit|Write|MultiEdit",
-        "hooks": [{"type": "command", "command": _HANK_GUARD, "timeout": 5}],
+        "hooks": [{"type": "command", "command": _YUPANA_GUARD, "timeout": 5}],
     }
 
 
@@ -658,7 +682,7 @@ def bash_guard_group(root=None) -> dict | None:
     translation at all — both were run against a real codex payload and refused
     the two commands they exist to refuse, while benign commands passed.
 
-    DELIBERATELY NOT GENERALISED TO THE OTHER TWO GUARDS. The hank edit guard
+    DELIBERATELY NOT GENERALISED TO THE OTHER TWO GUARDS. The yupana edit guard
     (`Edit|Write|MultiEdit`) and the MCP guard (`mcp__.*`) stay Claude-only,
     because that probe run only ever made codex call a SHELL tool — no edit and
     no MCP call happened, so those six silent candidates are silent about
@@ -675,7 +699,7 @@ def bash_guard_group(root=None) -> dict | None:
 
 
 def pre_tool_use_hooks(root=None) -> list[dict]:
-    """The matcher-scoped guards: hank on every edit, and whatever the deployment
+    """The matcher-scoped guards: yupana on every edit, and whatever the deployment
     configures for Bash and MCP.
 
     MATCHER-SCOPED, and a matcher is a claim about the HOST PROGRAM'S TOOL NAMES
@@ -730,7 +754,7 @@ def claude_settings_for_role(role: str, root=None) -> dict:
             # QUERY-FIRST at session start (aegis-rcyd). See session_start_hooks.
             "SessionStart": session_start_hooks(),
             "Stop": [{"hooks": role_stop_hooks(role, root=root)}],
-            # hank policy guard on every edit-shaped tool call. See _HANK_GUARD.
+            # yupana policy guard on every edit-shaped tool call. See _YUPANA_GUARD.
             "PreToolUse": pre_tool_use_hooks(root),
             # NOTE: metrics capture (PostToolUse, matcher '.*') is delivered via
             # the PROVISION consent settings (provision._with_capture_hook), NOT
@@ -750,10 +774,10 @@ def claude_settings_for_role(role: str, root=None) -> dict:
         # — and therefore ITS .mcp.json — by putting it on the card. This only stops
         # us asking a human to re-affirm a choice the card already made.
         "enableAllProjectMcpServers": True,
-        # BOBBIN_ROLE in the SETTINGS env, per hank's shipped spec — not only as a
+        # BOBBIN_ROLE in the SETTINGS env, per yupana's shipped spec — not only as a
         # launch-string export. The launch export sets it for the agent PROCESS;
         # a hook is re-exec'd by the harness, and settings.env is what the shipped
-        # contract names as the place hank reads its tenant from. Without it the
+        # contract names as the place yupana reads its tenant from. Without it the
         # guard resolves no scope and decides nothing — running, wired, and inert,
         # which is the failure mode this repo keeps naming.
         "env": _settings_env(role, root),
