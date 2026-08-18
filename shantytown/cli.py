@@ -3031,6 +3031,23 @@ def _cmd_go(a) -> int:
     except LookupError as e:
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED
+    # PUBLISH THE PLATE AT ASSIGNMENT (aegis-qdjof, completing it). This is the
+    # moment `(agent -> work item)` becomes authoritative: the payload is on the
+    # pane, verify() read it back, and the tracker write landed and was read
+    # back. Before this, `plate_publish.publish` had exactly ONE caller —
+    # `st anchor` — so a freshly dispatched agent's plate still named its
+    # PREVIOUS item, and every yupana guard decision, every spool record and
+    # every briefing keyed on it was attributed to the wrong work until the
+    # agent happened to anchor. An agent that never anchored never updated.
+    #
+    # Deliberately AFTER the try/except, on the success path only: a refused or
+    # unverified dispatch wrote nothing and sent nothing, and publishing there
+    # would put an item on a plate the agent was never given.
+    #
+    # Fail-silent by construction, so it cannot change what `st go` prints or
+    # returns — the same contract the anchor-side publish holds, and for the
+    # same reason.
+    plate_publish.publish_id(Path(a.root), a.agent, p.item_id)
     print(f"  {p.item_id} -> {p.agent}          in progress")
     print(f"  sent to pane {p.pane}")
     if p.track_attempts > 1:
