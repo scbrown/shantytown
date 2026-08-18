@@ -42,7 +42,7 @@ def test_policy_ranker_skips_candidates_without_a_symbol():
 
 def test_policy_ranker_raises_when_the_backend_cannot_look():
     def boom(_sym):
-        raise RankUnavailable("hank unreachable")
+        raise RankUnavailable("yupana unreachable")
 
     with pytest.raises(RankUnavailable):
         PolicyRanker(impact_fn=boom).weigh([_cand("graph::reachable")])

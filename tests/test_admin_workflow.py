@@ -86,7 +86,7 @@ def test_admin_drain_degrades_when_the_ranker_is_unavailable(tmp_path, capsys):
 
     class _Boom:
         def weigh(self, _candidates):
-            raise RankUnavailable("hank down")
+            raise RankUnavailable("yupana down")
 
     rc = stop_event._drain(ev, "goldblum", reg=reg, panes=_Panes({"p-gb"}),
                            plate=lambda _w: None, rank=_Boom())

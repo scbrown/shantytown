@@ -4,14 +4,20 @@ Two implementations, per the leak-detector discipline (protocols.py):
 
   NullRanker  — the DEFAULT and the leak detector. No backend; the rule-based
                 order (workflow.prioritize) stands. The whole feature works on
-                this, which proves Hank/Quipu have not leaked into the core.
+                this, which proves Yupana/Quipu have not leaked into the core.
 
   PolicyRanker — first-class: weight a candidate by the blast radius of the
-                symbol its work item names, via `hank impact <symbol> --json`
+                symbol its work item names, via `yupana impact <symbol> --json`
                 (the `count` is the weight). Governed policy from Quipu folds in
-                later (the same shape). It carries Hank's honesty out to the
+                later (the same shape). It carries Yupana's honesty out to the
                 caller: RankUnavailable when it could not look, NEVER an unweighted
                 list pretending it ranked (mirrors bobbin.BobbinContext).
+
+The binary is `yupana`; it was named `hank` until v0.6.0. This adapter kept
+saying `hank` after the rename, and because every could-not-look outcome here
+is an honest RankUnavailable, the breakage presented as "the ranker is
+unavailable" — indistinguishable from a legitimately absent backend. Honest
+degradation hides a stale name as effectively as it reports a missing one.
 
 Opt-in only: stop_event.main selects PolicyRanker when SHANTY_RANKER=policy, else
 NullRanker — the hook never reaches for a backend unless asked.
@@ -34,12 +40,12 @@ class NullRanker:
 
 
 class PolicyRanker:
-    """Blast-radius weighting via Hank. `impact_fn(symbol) -> int` is injected so
-    tests drive it with captured `hank impact` output (mirrors test_reactor's
-    _Fake); the default shells the real `hank` CLI."""
+    """Blast-radius weighting via Yupana. `impact_fn(symbol) -> int` is injected
+    so tests drive it with captured `yupana impact` output (mirrors test_reactor's
+    _Fake); the default shells the real `yupana` CLI."""
 
     def __init__(self, impact_fn: Callable[[str], int] | None = None):
-        self._impact = impact_fn or _hank_impact
+        self._impact = impact_fn or _yupana_impact
 
     def weigh(self, candidates: list) -> list:
         """Weight each candidate whose item names a symbol. Raises RankUnavailable
@@ -68,21 +74,21 @@ def _symbol_of(c) -> str | None:
     return None
 
 
-def _hank_impact(symbol: str) -> int:
-    """`hank impact <symbol> --json` -> the blast-radius `count`. Raises
-    RankUnavailable on any could-not-look outcome, carrying hank's own words."""
-    if shutil.which("hank") is None:
-        raise RankUnavailable("hank CLI not on PATH — cannot weigh")
-    cmd = ["hank", "impact", symbol, "--json"]
+def _yupana_impact(symbol: str) -> int:
+    """`yupana impact <symbol> --json` -> the blast-radius `count`. Raises
+    RankUnavailable on any could-not-look outcome, carrying yupana's own words."""
+    if shutil.which("yupana") is None:
+        raise RankUnavailable("yupana CLI not on PATH — cannot weigh")
+    cmd = ["yupana", "impact", symbol, "--json"]
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
     except (OSError, subprocess.TimeoutExpired) as e:
-        raise RankUnavailable(f"hank impact failed: {e}") from e
+        raise RankUnavailable(f"yupana impact failed: {e}") from e
     if r.returncode != 0:
         first = (r.stderr or r.stdout or f"exit {r.returncode}").strip().splitlines()
-        raise RankUnavailable(f"hank could not answer: {first[0] if first else r.returncode}")
+        raise RankUnavailable(f"yupana could not answer: {first[0] if first else r.returncode}")
     try:
         payload = json.loads(r.stdout)
     except json.JSONDecodeError as e:
-        raise RankUnavailable(f"hank impact returned unparseable output: {e}") from e
+        raise RankUnavailable(f"yupana impact returned unparseable output: {e}") from e
     return int(payload.get("count", 0))

@@ -124,7 +124,7 @@ CONFIG_FILE = "config.toml"
 # firing candidate is a result rather than a match-all.
 #
 # WHAT REMAINS UNMEASURED, and stays unemitted for exactly the original reason:
-# the hank edit guard's `Edit|Write|MultiEdit` and the MCP guard's `mcp__.*`.
+# the yupana edit guard's `Edit|Write|MultiEdit` and the MCP guard's `mcp__.*`.
 # That probe only ever made codex call a SHELL tool, so it observed nothing
 # about edit or MCP vocabulary. The six silent candidates are silent about
 # shell, not about editing. Measuring those is the same script with a different
