@@ -86,3 +86,41 @@ def test_the_remedy_line_is_specific_to_RESTART(tmp_path, monkeypatch, capsys):
     err = capsys.readouterr().err
     assert "REFUSE" in err
     assert "st stop" not in err, "told the operator to kill an agent that is mid-flight"
+
+
+def test_a_successful_dispatch_publishes_the_agents_plate(tmp_path, monkeypatch):
+    """THE GAP aegis-qdjof LEFT OPEN. `plate_publish.publish` had exactly one
+    caller — `st anchor` — so a freshly dispatched agent's plate still named its
+    PREVIOUS item until it happened to anchor, and an agent that never anchored
+    never updated at all.
+
+    That is not a cosmetic lag. Every yupana surface keyed on the plate — the
+    guard's scope check, the `item` on every spool record, the work-item
+    briefing, the out-of-ground notice — would attribute the agent's actions to
+    the wrong piece of work, plausibly, which is the dangerous kind of wrong.
+    The module's own docstring claimed the publisher "rewrites the plate at
+    every point it resolves one"; assignment is the point where it resolves one
+    most authoritatively, and it was not writing there.
+    """
+    from shantytown import plate_publish
+    root = _root(tmp_path)
+    monkeypatch.setattr(cli, "Tmux", lambda *a, **k: NullPanes(screen=""))
+    assert main(["--root", str(root), "go", "item-1", "ellie"]) == OK
+    assert plate_publish.read(root, "ellie") == "item-1"
+
+
+def test_a_REFUSED_dispatch_publishes_nothing(tmp_path, monkeypatch):
+    """The control, and the invariant that matters more than the one above. A
+    dispatch that wrote nothing and sent nothing must not put an item on a plate
+    the agent was never given — that would manufacture exactly the false
+    attribution the publish exists to prevent.
+
+    An unverified send is the sharpest case: the tracker was deliberately left
+    untouched, so a plate written here would be the ONLY record claiming the
+    agent holds this work.
+    """
+    from shantytown import plate_publish
+    root = _root(tmp_path)
+    monkeypatch.setattr(cli, "Tmux", lambda *a, **k: NullPanes(screen="", drops=True))
+    assert main(["--root", str(root), "go", "item-1", "ellie"]) == CANNOT_TELL
+    assert plate_publish.read(root, "ellie") is None

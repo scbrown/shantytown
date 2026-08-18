@@ -106,7 +106,37 @@ def test_non_item_payloads_are_unknown(tmp_path, bad):
 # --- fail-silence ----------------------------------------------------------
 
 def test_publish_never_raises_on_an_unwritable_root(tmp_path):
-    """A read-only root must not turn `st anchor` into a traceback."""
+    """A root it cannot write must not turn `st anchor` into a traceback.
+
+    THE MECHANISM IS NOT A CHMOD, and that is the point. This used to make the
+    directory 0o500 and assert the write was refused — which is a no-op for
+    uid 0, so under root the write SUCCEEDED and the test failed on a clean
+    tree. Worse than failing: had the assertion been the other way round it
+    would have been VACUOUS, exercising the success path while claiming to
+    exercise the failure path, and reporting green about coverage it did not
+    have.
+
+    A path component that is a regular FILE cannot be turned into a directory
+    by anybody, root included — `mkdir(parents=True)` raises whatever the uid.
+    Same fault class (the tree cannot be created), asserted by a means the
+    kernel enforces for every caller rather than one it waives for a
+    privileged one.
+    """
+    blocked = tmp_path / "not-a-dir"
+    blocked.write_text("a file where the crew tree needs a directory")
+    assert publish(blocked, "grant", _Item("aegis-6")) is False
+
+
+def test_publish_never_raises_when_permissions_forbid_it(tmp_path):
+    """The chmod case, kept — it is the fault operators actually hit — but
+    SKIPPED rather than silently waived where the bits do not apply. An honest
+    "not measured here" is worth more than a pass that means nothing, which is
+    what this assertion was under root."""
+    import os
+    import pytest
+    if os.geteuid() == 0:
+        pytest.skip("root ignores permission bits; see the file-in-the-path "
+                    "case above, which holds for every uid")
     root = tmp_path / "ro"
     root.mkdir()
     root.chmod(0o500)
@@ -129,3 +159,11 @@ def test_read_never_raises_on_a_directory_in_the_files_place(tmp_path):
     p = plate_path(tmp_path, "grant")
     p.mkdir(parents=True)
     assert read(tmp_path, "grant") is None
+
+
+def test_the_file_in_the_path_case_is_not_vacuous(tmp_path):
+    """The control for the mechanism above. A test that asserts `is False` is
+    only worth something if the same call returns True when the tree IS
+    creatable — otherwise it would pass against a publish that had simply
+    stopped working."""
+    assert publish(tmp_path, "grant", _Item("aegis-6")) is True

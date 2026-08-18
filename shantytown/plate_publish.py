@@ -56,7 +56,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-__all__ = ["plate_path", "publish", "read"]
+__all__ = ["plate_path", "publish", "publish_id", "read"]
 
 
 def plate_path(root: Path | str, agent: str) -> Path:
@@ -94,8 +94,26 @@ def publish(
     Never raises. Returns False if the write did not land, for a caller that
     wants to log it; no caller is obliged to look.
     """
+    item_id = getattr(item, "id", None) if item is not None else None
+    return publish_id(root, agent, item_id, session=session, _now=_now)
+
+
+def publish_id(
+    root: Path | str,
+    agent: str,
+    item_id: str | None,
+    session: str | None = None,
+    _now: float | None = None,
+) -> bool:
+    """[`publish`] for a caller that holds an ID rather than a WorkItem.
+
+    The dispatcher is that caller: its Plan carries `item_id` as a string,
+    because a Plan describes what a dispatch WOULD do and never needed the row
+    itself. Rather than have it manufacture an object with an `.id` to satisfy
+    a getattr, both entry points meet here — ONE writer, so the payload shape
+    and the atomic-replace cannot drift into two versions.
+    """
     try:
-        item_id = getattr(item, "id", None) if item is not None else None
         payload = {
             "item": item_id,
             "at": int(_now if _now is not None else time.time()),
