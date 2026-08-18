@@ -290,3 +290,74 @@ def test_settings_does_not_carry_the_untracked_nudge():
         assert not [c for c in cmds if "shantytown.untracked" in c], (
             f"{role}'s --settings carries the untracked hook as well as the "
             f"provision consent file; it will fire twice per tool call")
+
+
+def test_every_role_gets_the_yupana_work_item_briefing():
+    """The CONTEXT consumer of yupana's scope ladder must actually reach agents.
+
+    It was built, ablation-evaluated at macro-F1 0.954, and wired to NOBODY:
+    SessionStart emitted only the static query-first directive, so the briefing
+    ran zero times in the fleet. A control that is fully built and never invoked
+    is the failure class yupana's own docs put third in their incident list, and
+    it is invisible precisely because nothing errors — the briefing simply never
+    appears.
+
+    Asserted per role, because "first-class" means you cannot launch an
+    unbriefed agent by forgetting a flag.
+    """
+    for role in ("worker", "lead", "administrator"):
+        cmds = [h["command"]
+                for group in settings_for_role(role)["hooks"]["SessionStart"]
+                for h in group["hooks"]]
+        assert any("yupana hook session-start" in c for c in cmds), \
+            f"{role} gets no work-item briefing: {cmds}"
+
+
+def test_the_briefing_does_not_displace_the_query_first_directive():
+    """The control for the test above. The two are COMPLEMENTARY — query_first
+    tells an agent to ask the graph, the briefing hands over what the graph
+    already knows about the item on its hook — so an assertion that only checks
+    for the briefing would pass against a change that dropped the directive."""
+    cmds = [h["command"]
+            for group in settings_for_role("worker")["hooks"]["SessionStart"]
+            for h in group["hooks"]]
+    assert any("shantytown.query_first" in c for c in cmds), \
+        f"query_first was displaced rather than joined: {cmds}"
+
+
+def test_bash_calls_are_traced_even_with_no_deployment_guard():
+    """yupana's action trace must be emitted unconditionally.
+
+    The promotion ladder from advise to enforce is gated on REPLAY over recorded
+    actions — "would this rule have blocked anything that actually happened" —
+    and the hook was wired nowhere, so there were no records. The roadmap was
+    stalled on missing data, not missing code.
+
+    The trace gets its OWN matcher group rather than riding the deployment's
+    Bash guard, because that guard is emitted only when SHANTY_BASH_GUARD is
+    configured. A deployment with no host guard still needs its actions
+    attributable. This test runs with no guard configured, which is the case
+    that would silently lose the trace.
+    """
+    cmds = [h["command"]
+            for group in settings_for_role("worker")["hooks"]["PreToolUse"]
+            if group.get("matcher") == "Bash"
+            for h in group["hooks"]]
+    assert any("yupana hook pre-bash" in c for c in cmds), \
+        f"Bash calls are not traced: {cmds}"
+
+
+def test_the_trace_can_never_block_a_bash_call():
+    """RECORD-ONLY is not a claim to make in a docstring alone. Exit 2 is Claude
+    Code's only blocking channel; the trace command must never reach it, however
+    yupana exits — including 127 when the binary is absent, which is the case
+    that made the edit guard's own rename go unnoticed."""
+    import subprocess
+    cmd = [h["command"]
+           for group in settings_for_role("worker")["hooks"]["PreToolUse"]
+           if group.get("matcher") == "Bash"
+           for h in group["hooks"]
+           if "pre-bash" in h["command"]][0]
+    r = subprocess.run(cmd, shell=True, input="{}", capture_output=True,
+                       text=True, env={"PATH": "/nonexistent"})
+    assert r.returncode != 2, f"the trace hard-blocked Bash (rc={r.returncode})"

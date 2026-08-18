@@ -200,14 +200,17 @@ def settings_for_role(role: str, root=None) -> dict:
     the key is absent entirely rather than empty when it does not, because an
     empty PreToolUse array is a claim of coverage this file cannot back.
     """
-    from .runtime import bash_guard_group, role_stop_hooks, session_start_hooks
+    from .runtime import bash_group, role_stop_hooks, session_start_hooks
     hooks: dict[str, Any] = {
         "SessionStart": session_start_hooks(),
         "Stop": [{"hooks": role_stop_hooks(role, root=root)}],
     }
-    bash_group = bash_guard_group(root)
-    if bash_group:
-        hooks["PreToolUse"] = [bash_group]
+    # The SAME group Claude gets (runtime.bash_group): the deployment's guard
+    # when configured, and yupana's action trace always. Emitted unconditionally
+    # now, because there is always something real in it — see the note on
+    # `test_NO_deployment_guard_means_NO_PreToolUse_key_at_all`, whose original
+    # objection was to an EMPTY array claiming coverage nobody could back.
+    hooks["PreToolUse"] = [bash_group(root)]
     return {
         # Root scalars first: TOML puts bare keys before any [table] header, and
         # dumps() emits scalars ahead of children for exactly that reason.
@@ -403,7 +406,7 @@ def bash_guard(text: str) -> str | None:
     presence-only reader called it wired, which is aegis-ac5x's defect wearing
     the checker's uniform.
     """
-    from .runtime import BASH_MATCHER
+    from .runtime import BASH_MATCHER, is_trace_command
     try:
         data = tomllib.loads(text)
     except (ValueError, TypeError):
@@ -423,7 +426,11 @@ def bash_guard(text: str) -> str | None:
                 continue
             for hook in group["hooks"]:
                 cmd = hook.get("command", "")
-                if cmd:
+                # yupana's action trace shares this matcher and is NOT a guard:
+                # it never denies. Counting it as one would report coverage for
+                # a deployment that configured none — the false clear this
+                # function's three-state contract exists to refuse.
+                if cmd and not is_trace_command(cmd):
                     return cmd
     except (KeyError, TypeError, AttributeError):
         return None

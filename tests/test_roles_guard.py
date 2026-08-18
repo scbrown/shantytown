@@ -280,3 +280,48 @@ def test_positive_control_the_reader_sees_the_real_emitted_artifact(tmp_path: Pa
     _card(tmp_path / "crew", "gennaro", role="worker", harness="codex")
     got = _reader(tmp_path)(FilesRegistry(tmp_path / "crew").all()[0])
     assert got == GUARD
+
+
+def test_the_action_trace_is_NOT_reported_as_a_deployment_guard(tmp_path: Path, monkeypatch):
+    """A RECORDER IS NOT A GUARD, and the reader must know the difference.
+
+    yupana's action trace shares the `Bash` matcher with the deployment guard —
+    it has to, that is the tool it records. A reader that returned the first
+    command under that matcher would answer "guard: yupana hook pre-bash" for a
+    store that configures no guard at all, and `roles --check` would print
+    coverage for a surface where nothing can refuse anything.
+
+    That is the false clear this file's three-state contract exists to refuse,
+    and it would have been introduced by the very change that made actions
+    attributable. Asserted for BOTH harnesses, because both readers parse the
+    same group out of two different formats.
+    """
+    monkeypatch.delenv("SHANTY_BASH_GUARD", raising=False)
+    from shantytown import runtime, codex as codex_mod, harness as harness_mod
+
+    # The trace IS emitted...
+    group = runtime.bash_group(root=tmp_path)
+    assert any(runtime.is_trace_command(h["command"]) for h in group["hooks"])
+
+    # ...and neither reader counts it as a guard.
+    claude_settings = runtime.claude_settings_for_role("worker", root=tmp_path)
+    claude = harness_mod.get("claude").read_bash_guard(json.dumps(claude_settings))
+    assert claude == "", f"claude reader mistook the recorder for a guard: {claude!r}"
+
+    codex_text = codex_mod.render(codex_mod.settings_for_role("worker", root=tmp_path))
+    assert codex_mod.bash_guard(codex_text) == "", "codex reader mistook the recorder for a guard"
+
+
+def test_a_real_guard_is_still_found_beside_the_trace(tmp_path: Path, monkeypatch):
+    """The control. Without it the test above would pass against a reader that
+    had simply stopped finding guards at all — which is the same false clear
+    pointing the other way."""
+    monkeypatch.setenv("SHANTY_BASH_GUARD", "/usr/local/lib/guards/host-policy.sh")
+    from shantytown import runtime, codex as codex_mod, harness as harness_mod
+
+    claude_settings = runtime.claude_settings_for_role("worker", root=tmp_path)
+    assert harness_mod.get("claude").read_bash_guard(json.dumps(claude_settings)) == \
+        "/usr/local/lib/guards/host-policy.sh"
+
+    codex_text = codex_mod.render(codex_mod.settings_for_role("worker", root=tmp_path))
+    assert codex_mod.bash_guard(codex_text) == "/usr/local/lib/guards/host-policy.sh"
