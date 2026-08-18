@@ -501,13 +501,19 @@ class ClaudeHarness:
             # Readable settings of ours, carrying no PreToolUse at all: an
             # observation ("" = no guard), not a failure to look (None).
             return "" if ("Stop" in hooks or "SessionStart" in hooks) else None
+        from .runtime import is_trace_command
         try:
             for group in groups:
                 if group.get("matcher") != BASH_MATCHER:
                     continue
                 for hook in group["hooks"]:
                     cmd = hook.get("command", "")
-                    if cmd:
+                    # yupana's action trace shares this matcher and is NOT a
+                    # guard: it never denies. Returning it here would report
+                    # coverage to `roles --check` for a deployment that
+                    # configured none — a false clear of exactly the kind the
+                    # three-state contract above exists to prevent.
+                    if cmd and not is_trace_command(cmd):
                         return cmd
         except (KeyError, TypeError, AttributeError):
             return None

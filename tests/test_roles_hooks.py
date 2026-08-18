@@ -209,11 +209,20 @@ from shantytown import runtime
 
 
 def test_no_bash_guard_emitted_by_default(tmp_path):
-    """Shantytown ships no guard and hardcodes no path: absent the deployment
-    config, PreToolUse carries only the edit-policy hook."""
+    """Shantytown ships no GUARD and hardcodes no path: absent the deployment
+    config, nothing on the Bash surface can refuse anything.
+
+    A `Bash` matcher IS emitted, and always was going to be once yupana's action
+    trace was wired — but a recorder is not a guard. This asserts the invariant
+    that actually matters, which is sharper than the matcher-absence it
+    replaces: no command we did not configure, and the one hook present is
+    yupana's record-only trace, which never denies and always exits 0.
+    """
     s = runtime.claude_settings_for_role("worker", root=tmp_path)
-    matchers = [h.get("matcher") for h in s["hooks"]["PreToolUse"]]
-    assert "Bash" not in matchers
+    bash = [h for h in s["hooks"]["PreToolUse"] if h.get("matcher") == "Bash"]
+    assert len(bash) == 1
+    cmds = [h["command"] for h in bash[0]["hooks"]]
+    assert cmds == ["yupana hook pre-bash || exit 0"], cmds
 
 
 def test_metrics_capture_is_NOT_in_settings_but_carries_the_right_interpreter(tmp_path):
@@ -238,8 +247,12 @@ def test_env_json_bash_guard_is_emitted_for_every_role(tmp_path):
         s = runtime.claude_settings_for_role(role, root=tmp_path)
         bash = [h for h in s["hooks"]["PreToolUse"] if h.get("matcher") == "Bash"]
         assert len(bash) == 1, role
-        assert bash[0]["hooks"] == [{"type": "command",
-                                     "command": "/usr/local/lib/guards/host-policy.sh"}]
+        # The guard runs FIRST and is unwrapped, exactly as configured. yupana's
+        # action trace rides beside it in the same group — one matcher, two
+        # hooks, guard before recorder.
+        assert bash[0]["hooks"][0] == {"type": "command",
+                                       "command": "/usr/local/lib/guards/host-policy.sh"}
+        assert any("yupana hook pre-bash" in h["command"] for h in bash[0]["hooks"]), role
         # the edit-policy hook is untouched beside it
         assert any(h.get("matcher") != "Bash" for h in s["hooks"]["PreToolUse"])
 
@@ -299,11 +312,16 @@ def test_env_json_capture_wins_over_ambient(tmp_path, monkeypatch):
 def test_NO_matcher_covers_the_mcp_surface_without_deployment_config(tmp_path):
     """Shantytown ships no MCP policy, so absent config the surface is
     DELIBERATELY unguarded — asserted as a positive shape, not an absence, so
-    this pins WHICH matchers exist rather than merely that one is missing."""
+    this pins WHICH matchers exist rather than merely that one is missing.
+
+    `Bash` is in the list unconditionally now: it carries yupana's record-only
+    action trace, which is emitted whether or not the deployment configures a
+    host guard. Attribution is not a deployment choice.
+    """
     for role in ("worker", "lead", "administrator"):
         s = runtime.claude_settings_for_role(role, root=tmp_path)
         matchers = [h.get("matcher") for h in s["hooks"]["PreToolUse"]]
-        assert matchers == ["Edit|Write|MultiEdit"], f"{role}: {matchers}"
+        assert matchers == ["Edit|Write|MultiEdit", "Bash"], f"{role}: {matchers}"
 
 
 def test_env_json_mcp_guard_is_emitted_for_every_role(tmp_path):
@@ -348,8 +366,16 @@ def test_the_bash_guard_and_the_mcp_guard_are_INDEPENDENT(tmp_path):
     s = runtime.claude_settings_for_role("worker", root=tmp_path)
     assert [h.get("matcher") for h in s["hooks"]["PreToolUse"]] == \
         ["Edit|Write|MultiEdit", "Bash"]
+    assert not any(h.get("matcher") == "mcp__.*" for h in s["hooks"]["PreToolUse"])
 
+    # `Bash` stays present here for yupana's trace, so independence is asserted
+    # on the GUARD COMMANDS rather than on matcher presence — which is the
+    # sharper claim anyway: configuring the MCP guard must not put /mcp.sh, or
+    # anything else, on the Bash surface.
     (tmp_path / "env.json").write_text('{"SHANTY_MCP_GUARD": "/mcp.sh"}')
     s = runtime.claude_settings_for_role("worker", root=tmp_path)
     assert [h.get("matcher") for h in s["hooks"]["PreToolUse"]] == \
-        ["Edit|Write|MultiEdit", "mcp__.*"]
+        ["Edit|Write|MultiEdit", "Bash", "mcp__.*"]
+    bash_cmds = [h["command"] for g in s["hooks"]["PreToolUse"]
+                 if g.get("matcher") == "Bash" for h in g["hooks"]]
+    assert bash_cmds == ["yupana hook pre-bash || exit 0"], bash_cmds

@@ -249,7 +249,12 @@ def test_a_codex_role_DOES_carry_the_deployment_bash_guard(monkeypatch):
     settings = codex.settings_for_role("worker", root="/tmp/r")
     groups = settings["hooks"]["PreToolUse"]
     assert [g["matcher"] for g in groups] == [runtime_mod.BASH_MATCHER]
-    assert groups[0]["hooks"] == [{"type": "command", "command": "/guard.sh"}]
+    # The guard runs FIRST and is unwrapped, exactly as configured. yupana's
+    # record-only action trace rides beside it in the same group — one matcher,
+    # guard before recorder — so the assertion is on position rather than on the
+    # group being a singleton.
+    assert groups[0]["hooks"][0] == {"type": "command", "command": "/guard.sh"}
+    assert any("yupana hook pre-bash" in h["command"] for h in groups[0]["hooks"])
     # and it survives the TOML round trip — an emitter that produces a config
     # codex rejects at launch is the same inert guard by another route.
     back = tomllib.loads(codex.render(settings))
@@ -272,15 +277,26 @@ def test_the_bash_guard_matcher_is_the_SAME_ONE_claude_emits(monkeypatch):
     assert claude_bash == codex_bash
 
 
-def test_NO_deployment_guard_means_NO_PreToolUse_key_at_all(monkeypatch):
-    """An empty PreToolUse array is a claim of coverage the emitter cannot back.
-    shantytown ships no guard and hardcodes no path, so a store that configures
-    none must get a config with the key ABSENT — not present-and-empty, which
-    reads to every downstream reader as "guards were considered here"."""
+def test_NO_deployment_guard_still_means_NO_GUARD_COMMAND(monkeypatch):
+    """The original objection here was to an EMPTY PreToolUse array: a key
+    present with nothing under it reads to every downstream reader as "guards
+    were considered here" while backing no coverage at all.
+
+    The key is present now, and the objection does not apply, because there is
+    something real under it: yupana's record-only action trace, emitted
+    unconditionally because attribution is not a deployment's choice the way
+    refusal is. So the assertion moves from the KEY to the COMMANDS — which is
+    the sharper claim anyway, and the one that would actually catch shantytown
+    growing a guard of its own.
+
+    A recorder is not a guard. The trace never denies, never prints, and always
+    exits 0; nothing here can refuse a codex agent's shell command.
+    """
     monkeypatch.delenv("SHANTY_BASH_GUARD", raising=False)
     settings = codex.settings_for_role("worker", root="/tmp/r")
-    assert "PreToolUse" not in settings["hooks"]
-    assert set(settings["hooks"]) == {"SessionStart", "Stop"}
+    assert set(settings["hooks"]) == {"SessionStart", "Stop", "PreToolUse"}
+    cmds = [h["command"] for g in settings["hooks"]["PreToolUse"] for h in g["hooks"]]
+    assert cmds == ["yupana hook pre-bash || exit 0"], cmds
 
 
 @pytest.mark.parametrize("text,expected,why", [

@@ -416,6 +416,57 @@ def _query_first_cmd() -> dict:
             "command": f"{_hook_interpreter()} -m shantytown.query_first"}
 
 
+def _yupana_brief_cmd() -> dict:
+    """The SessionStart WORK-ITEM BRIEFING (`yupana hook session-start`).
+
+    yupana builds this and, until now, nothing ran it. The briefing resolves the
+    agent's plate and injects the item's observed ground, the central entities
+    around it, similar past work with outcomes, related in-flight items and the
+    governed rules in force — measured at macro-F1 0.954 with every retrieval
+    source ablation-proven (yupana docs/briefing-retrieval-eval.md). It reached
+    zero agents, because SessionStart emitted only the static query-first
+    directive.
+
+    That is the shape yupana's own docs call a control believed to be working:
+    the CONTEXT consumer of the scope ladder was fully built, evaluated, and
+    wired to nobody.
+
+    COMPLEMENTARY TO query_first, not a replacement. That one is a static
+    directive telling an agent to ASK the graph; this one hands over what the
+    graph already knows about the specific item on the agent's hook. Both are
+    emitted; neither makes the other redundant.
+
+    SAME LAUNDERED-EXIT SHAPE AS THE EDIT GUARD, and for the same reason: stdout
+    is captured and echoed only on exit 0, so a yupana that is absent, stale or
+    crashed contributes nothing rather than a fragment. A SessionStart hook's
+    stdout is injected as context, so a partial write from a dying process would
+    become part of the agent's briefing."""
+    return {"type": "command",
+            "command": 'out=$(yupana hook session-start) || exit 0; printf %s "$out"',
+            "timeout": 10}
+
+
+def _yupana_trace_cmd() -> dict:
+    """The PreToolUse:Bash ACTION TRACE (`yupana hook pre-bash`).
+
+    RECORD-ONLY by yupana's design — it never denies, never warns, prints
+    nothing, and always exits 0. It resolves a command line to
+    (verb, target, target_class) and spools one record.
+
+    Why it matters that this runs: yupana's advise-to-enforce promotion ladder
+    is gated on REPLAY over recorded actions — "would this rule have blocked
+    anything that actually happened" — and with the hook unwired there were no
+    records to replay. The whole enforcement roadmap was stalled on missing
+    data, not on missing code.
+
+    Emitted ALONGSIDE any deployment Bash guard rather than instead of it. Both
+    match `Bash`; Claude Code runs every matching hook, and a recorder that
+    displaced a guard would trade enforcement for bookkeeping."""
+    return {"type": "command",
+            "command": _YUPANA_TRACE,
+            "timeout": 5}
+
+
 # --- yupana policy guard (first-class, Stiwi 2026-07-19) ------------------------
 # Every shantytown-launched agent runs its edits past yupana's guard: the agent's
 # edit tool call IS the change event (yupana FR-30), so yupana answers with a
@@ -641,9 +692,14 @@ def session_start_hooks() -> list[dict]:
     bobbin-first hint works. Every role gets it — query-first is not role-scoped.
     Best-effort, fail-open, blocks nothing.
 
+    Plus the yupana WORK-ITEM BRIEFING (_yupana_brief_cmd), which was built,
+    evaluated and wired to nobody. The two are complementary: query_first tells
+    an agent to ask the graph, the briefing hands over what the graph already
+    knows about the item on its hook.
+
     MATCHER-FREE, which is what makes it emittable for a harness whose tool
     vocabulary we have not measured (codex.MATCHERS_NOT_EMITTED)."""
-    return [{"hooks": [_query_first_cmd()]}]
+    return [{"hooks": [_query_first_cmd(), _yupana_brief_cmd()]}]
 
 
 # THE MATCHER, once. Both harnesses emit it and both readers look for it, so a
@@ -698,6 +754,62 @@ def bash_guard_group(root=None) -> dict | None:
             "hooks": [{"type": "command", "command": guard_cmd}]}
 
 
+# The trace command's own name, so the READERS can tell a recorder from a guard.
+#
+# `roles --check` reads the emitted Bash group back off disk and reports the
+# GUARD it finds. Once yupana's action trace rides in that same group, a reader
+# that returned the first command it saw would report "guard: <the recorder>"
+# for a deployment that configures no guard at all — a false clear, and exactly
+# the class of defect `read_bash_guard`'s three-state contract was built to
+# prevent. So the predicate lives here, once, beside the emitter, rather than as
+# a substring test copied into each harness's parser.
+_YUPANA_TRACE = 'yupana hook pre-bash || exit 0'
+
+
+def is_trace_command(cmd: str) -> bool:
+    """Whether an emitted Bash hook is yupana's record-only action trace rather
+    than a deployment guard. A recorder cannot refuse anything, so it must never
+    be counted as coverage."""
+    return cmd.strip() == _YUPANA_TRACE
+
+
+def bash_group(root=None) -> dict:
+    """The `Bash` matcher group: the deployment's guard when it configures one,
+    plus yupana's action trace, ALWAYS.
+
+    SHARED BY BOTH HARNESSES, which is the point (aegis-610jv). The matcher and
+    the payload shape are one measured fact — `tool_name: "Bash"` with
+    `tool_input: {"command": …}`, byte-identical on Claude Code and on
+    codex-cli 0.146.1 (scripts/probe-codex-pretooluse.sh) — so a group built
+    twice could drift into two answers to one question, leaving an agent traced
+    under one shape and CHECKED under another.
+
+    THE TRACE IS UNCONDITIONAL AND THE GUARD IS NOT, and the asymmetry is
+    deliberate. `SHANTY_BASH_GUARD` is a deployment's choice about what to
+    REFUSE; attribution is not a choice. A deployment with no host guard still
+    has to be able to say which agent and which work item caused an action —
+    that is the question the whole work-scoped-governance epic exists to answer,
+    and yupana's advise-to-enforce promotion is gated on REPLAYING those
+    records. With this hook wired nowhere there were none, so the enforcement
+    roadmap was stalled on missing data rather than on missing code.
+
+    ONE GROUP, not two, and the guard runs FIRST. Two groups under one matcher
+    is legal for Claude Code and confusing for every reader of the emitted
+    settings — and `st roles --check` reads that shape back.
+
+    The trace cannot refuse anything: `yupana hook pre-bash` is record-only by
+    construction (never denies, never prints, always exit 0) and the `|| exit 0`
+    means no absent or crashed binary can reach exit 2, the one code Claude Code
+    treats as a hard block.
+    """
+    hooks = []
+    guard = bash_guard_group(root)
+    if guard:
+        hooks.extend(guard["hooks"])
+    hooks.append(_yupana_trace_cmd())
+    return {"matcher": BASH_MATCHER, "hooks": hooks}
+
+
 def pre_tool_use_hooks(root=None) -> list[dict]:
     """The matcher-scoped guards: yupana on every edit, and whatever the deployment
     configures for Bash and MCP.
@@ -727,9 +839,7 @@ def pre_tool_use_hooks(root=None) -> list[dict]:
     # command an agent runs passes the host's policy first. Built by
     # bash_guard_group so the codex emitter and this one cannot drift into two
     # different matchers for one measured fact.
-    bash_group = bash_guard_group(root)
-    if bash_group:
-        pre_tool.append(bash_group)
+    pre_tool.append(bash_group(root))
     # Deployment MCP guard (aegis-uy8e8). The matcher is a NAME REGEX covering
     # the whole MCP surface, because matchers cannot see ARGUMENTS — the handler
     # filters itself. That is not a style choice: `Bash(pattern)` matchers are
