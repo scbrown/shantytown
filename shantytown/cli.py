@@ -1,6 +1,6 @@
-"""st — the CLI. Twenty-four commands, and the count is load-bearing: each earns its slot.
+"""st — the CLI. Twenty-five commands, and the count is load-bearing: each earns its slot.
 
-    anchor [--short|--events|--harness] · go · inbox [--count] · task
+    anchor [--short|--events|--harness] · go · repool · inbox [--count] · task
     · crew [--count|--governor] · input [--show|--clear|--dismiss] · ask · answer
     · roles [--check|set|band|sync] · init · new · start [--mode]
     · stop · log · context · doctor [--install]
@@ -28,7 +28,7 @@ already made itself the centre of the world.
 
 Gas Town ships ~110. This is not a smaller version of that list; it is the short
 set we measurably use, and the discipline is the point (docs/cli.md). The surface
-grew past the original ten by seven, each on a specific ask — not drift:
+grew well past the original ten, each slot on a specific ask — not drift:
   · context — the bobbin Context protocol
   · doctor  — out-of-box tool detect/install, Stiwi's direct ask
   · tend    — crew supervision, native. Owner-directed, and it is a COMMAND and
@@ -63,6 +63,12 @@ grew past the original ten by seven, each on a specific ask — not drift:
               this is the only verb in the repo that acts inside ANOTHER agent's
               decision. A consequence behind a flag on a read is a consequence
               somebody triggers by running the safe-looking thing.
+  · repool  — hand an item back to the pool as ONE verified write: status ->
+              open AND assignee cleared. The halves existed separately and the
+              documented hand-back did only one of them, leaving the item
+              in_progress-and-unassigned — outside `bd ready`, every haul, and
+              every plate at once. A hand-back that drops work off the board is
+              the defect; the command is the whole gesture.
   · init    — scaffold a NEW deployment by asking: the store, the crew cards (with
               generated panes), their hooks, and shantytown.toml. It writes through
               the EXISTING seams — the registry, tier.role_set, the same settings
@@ -108,7 +114,7 @@ from .tmux import PaneNotAgent
 from .dispatch import (Dispatcher, TriageRefused, SendUnverified,
                        DispatchedButUntracked, AlreadyAssigned, Blocked, Closed,
                        HasOpenBlocker,
-                       GovernorRefused)
+                       GovernorRefused, RepoolRefused, TrackerWriteLost)
 from . import forgejo as forgejo_mod
 from . import governor as gov_mod
 from . import guard as guard_mod
@@ -554,6 +560,18 @@ def build_parser() -> argparse.ArgumentParser:
                          "dispatching shared-repo work with no isolation is the "
                          "clobber bug, not a fallback.")
 
+    # The whole hand-back, in one verified write (aegis-ap4gm fix #1): the
+    # documented `bd update -a ""` clears the assignee and LEAVES the status at
+    # in_progress, dropping the item off every feed mechanism at once.
+    rp = sub.add_parser(
+        "repool",
+        help="hand an item back to the pool: status -> open AND assignee "
+             "cleared, in one verified write. Clearing the assignee alone "
+             "leaves the status at in_progress, which drops the item out of "
+             "`bd ready`, every haul, and every plate.")
+    rp.add_argument("item")
+    rp.add_argument("-n", "--dry-run", action="store_true")
+
     cr = sub.add_parser("crew", help="who exists, what state, what role")
     cr.add_argument("--count", action="store_true",
                     help="print ONLY `busy/total` — the same verdict the table "
@@ -947,6 +965,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_anchor(a)
     if a.cmd == "go":
         return _cmd_go(a)
+    if a.cmd == "repool":
+        return _cmd_repool(a)
     if a.cmd == "crew":
         return _cmd_crew(a)
     if a.cmd == "roles":
@@ -2858,6 +2878,38 @@ def _anchor_events(a, me: str) -> int:
     told it had them. Counting is events.pending(): a read that marks nothing.
     """
     print(len(FilesEvents(Path(a.root) / "events").pending(me)))
+    return OK
+
+
+def _cmd_repool(a) -> int:
+    """Hand an item back to the pool — the WHOLE hand-back (aegis-ap4gm #1).
+
+    Exit codes match `st go`: 0 done (or already pooled), 1 refused with nothing
+    written, 2 the write could not be confirmed — read the bead before retrying.
+    """
+    d = _wire(a)
+    try:
+        r = d.repool(a.item, dry_run=a.dry_run)
+    except (RepoolRefused, LookupError) as e:
+        print(f"  refused: {e}", file=sys.stderr)
+        return REFUSED
+    except TrackerWriteLost as e:
+        # The write was attempted and the read-back still disagrees. Do NOT
+        # blind-retry: read the bead first — the row may hold half the update.
+        print(f"  ⚠ COULD NOT CONFIRM: {e}\n  Read the bead (`bd show {a.item}`)"
+              f" before retrying — the row may be half-updated.", file=sys.stderr)
+        return CANNOT_TELL
+    if r.noop:
+        print(f"  {a.item} is already open and unassigned — nothing to write.")
+        return OK
+    frm = f"{r.was_status}/{r.holder or 'UNASSIGNED'}"
+    if a.dry_run:
+        print(f"  would repool {a.item}: {frm} -> open/unassigned. 1 tracker "
+              f"read, 0 writes.")
+        return OK
+    extra = f" ({r.track_attempts} attempts)" if r.track_attempts > 1 else ""
+    print(f"  ✓ {a.item} repooled: {frm} -> open/unassigned, verified by "
+          f"read-back{extra}. It is back on `bd ready` and feedable.")
     return OK
 
 

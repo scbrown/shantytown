@@ -69,9 +69,15 @@ def _applied(got, want) -> bool:
     empty. A tracker that namespaces a name (`aegis/ellie` for `ellie`) has
     recorded the same assignment and must not be called a loss.
     """
-    if got is None:
-        return False
-    g, w = str(got).strip(), str(want).strip()
+    g, w = ("" if got is None else str(got)).strip(), str(want).strip()
+    if not w:
+        # THE CLEARING DIRECTION (aegis-ap4gm, `st repool`). A hand-back writes
+        # an EMPTY assignee, so "did the row change" means the field is now
+        # empty — None and "" are the same answer from different backends.
+        # Without this clause an applied clear read back as a loss, earned the
+        # silent-loss retries, and then raised TrackerWriteLost on a write that
+        # had landed on the first attempt.
+        return not g
     if not g:
         return False
     return g == w or g.split("/")[-1] == w.split("/")[-1]
@@ -333,6 +339,28 @@ class AlreadyAssigned(Exception):
             f"{requested}. Re-dispatch to {holder} to re-nudge, or pass --reassign "
             f"to take it deliberately."
         )
+
+
+class RepoolRefused(Exception):
+    """Repool hands WORKABLE work back to the pool — it neither revives a
+    terminal state nor clears a decision. Maps to exit 1: nothing written.
+
+    Same two refusals as the serve path, arrived at from the other side:
+    repooling a CLOSED item would resurrect finished work, and repooling a
+    BLOCKED item would put "nobody should work this yet" onto `bd ready` as
+    though it were workable. Both are deliberate acts if they are ever right,
+    never a hand-back side effect.
+    """
+
+
+@dataclass
+class Repool:
+    """What a repool did (or would do). `noop` = already open and unassigned."""
+    item_id: str
+    holder: str = ""          # who had it; "" = nobody (the orphan case)
+    was_status: str = ""
+    noop: bool = False
+    track_attempts: int = 0   # 0 on --dry-run and on noop
 
 
 @dataclass
@@ -688,6 +716,39 @@ class Dispatcher:
             if not missing:
                 return attempt
         raise TrackerWriteLost(item_id, missing, _TRACK_ATTEMPTS)
+
+    def repool(self, item_id: str, dry_run: bool = False) -> Repool:
+        """Hand an item back to the pool so it RETURNS TO THE BOARD (aegis-ap4gm #1).
+
+        The documented hand-back (`bd update -a ""`) clears the assignee and
+        LEAVES the status at in_progress. The item is then in no haul, on no
+        plate, and outside `bd ready` — the agent did everything right and the
+        work silently left the system; that is the mechanism behind every
+        unassigned-in_progress orphan measured on that bead. Repool is the whole
+        hand-back in one verified write: status -> open AND assignee cleared,
+        read back like a dispatch write, because the fault this class keeps
+        producing is precisely a write that reported success and did not land.
+        """
+        item = self.tracker.get(item_id)               # 1 tracker read
+        if item.status == "closed":
+            raise RepoolRefused(
+                f"{item_id} is closed — closed is terminal and there is nothing "
+                f"to hand back. Reopening is a deliberate act "
+                f"(`bd update {item_id} --status open`), never a repool side effect.")
+        if item.status == "blocked":
+            raise RepoolRefused(
+                f"{item_id} is blocked — blocked is a decision, and repooling it "
+                f"would serve that decision to the next free agent via `bd ready`. "
+                f"Clear the blocker deliberately first, then repool.")
+        holder = (item.assignee or "").strip()
+        if item.status == "open" and not holder:
+            return Repool(item_id, noop=True)
+        r = Repool(item_id, holder=holder, was_status=item.status)
+        if dry_run:
+            return r
+        r.track_attempts = self._track(item_id,
+                                       {"status": "open", "assignee": ""})
+        return r
 
     def verify(self, pane: str, item_id: str) -> bool:
         """Did the send land? Read the pane back and look for the item id.
