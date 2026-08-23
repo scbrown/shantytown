@@ -90,6 +90,7 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 
 # The series this governor consumes, named once, and VERIFIED AGAINST THE LIVE
@@ -163,7 +164,7 @@ FIVE_HOUR, SEVEN_DAY = "five_hour", "seven_day"
 # Override with `length` on the pace row if the producer is ever found to disagree.
 WINDOW_LENGTH_S: dict[str, int] = {FIVE_HOUR: 5 * 3600, SEVEN_DAY: 7 * 86400}
 
-SOURCES = ("prometheus", "textfile", "stub")
+SOURCES = ("prometheus", "textfile", "codex_sessions", "stub")
 WARN, FREEZE = "warn", "freeze"
 ON_SIGNAL_LOST = (WARN, FREEZE)
 
@@ -921,6 +922,96 @@ class TextfileReader:
                                    account_metric=self.account_metric)
 
 
+class CodexSessionReader:
+    """Read Codex's own persisted rate-limit snapshots.
+
+    Codex records a ``token_count`` event after responses.  Its ``rate_limits``
+    object is server-provided account state, not a token estimate derived from
+    the transcript.  A deployment root may contain several role homes, so scan
+    newest session files first and use the freshest snapshot across them.
+    """
+
+    WINDOWS = {300: FIVE_HOUR, 10080: SEVEN_DAY}
+
+    def __init__(self, path, window: str = FIVE_HOUR):
+        self.path = Path(path).expanduser()
+        self.window = window
+
+    @staticmethod
+    def _timestamp(raw) -> float | None:
+        if not isinstance(raw, str):
+            return None
+        try:
+            return datetime.fromisoformat(raw.replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            return None
+
+    def _latest(self) -> tuple[dict[str, Reading], str]:
+        try:
+            files = sorted(self.path.glob("**/sessions/**/*.jsonl"),
+                           key=lambda p: p.stat().st_mtime, reverse=True)
+        except OSError as e:
+            return {}, f"cannot scan Codex sessions under {self.path}: {e}"
+        if not files:
+            return {}, f"no Codex session files under {self.path}"
+
+        freshest: dict[str, Reading] = {}
+        saw_snapshot = False
+        for session in files:
+            try:
+                lines = session.read_text(errors="replace").splitlines()
+            except OSError:
+                continue
+            for line in reversed(lines):
+                try:
+                    event = json.loads(line)
+                except (ValueError, TypeError):
+                    continue
+                payload = event.get("payload") or {}
+                limits = payload.get("rate_limits")
+                if payload.get("type") != "token_count" or not isinstance(limits, dict):
+                    continue
+                saw_snapshot = True
+                at = self._timestamp(event.get("timestamp"))
+                if at is None:
+                    continue
+                for key in ("primary", "secondary"):
+                    value = limits.get(key)
+                    if not isinstance(value, dict):
+                        continue
+                    minutes, pct = value.get("window_minutes"), value.get("used_percent")
+                    if isinstance(minutes, bool) or not isinstance(minutes, (int, float)):
+                        continue
+                    if isinstance(pct, bool) or not isinstance(pct, (int, float)):
+                        continue
+                    window = self.WINDOWS.get(int(minutes))
+                    if window is None or window in freshest:
+                        continue
+                    reset = value.get("resets_at")
+                    reset_at = float(reset) if isinstance(reset, (int, float)) else None
+                    freshest[window] = Reading(pct=float(pct), at=at, ok=True,
+                                               source="codex_sessions",
+                                               reset_at=reset_at)
+                # One event carries all limits Codex exposed at that instant.
+                if freshest:
+                    return freshest, ""
+        if saw_snapshot:
+            return {}, "Codex rate-limit snapshots carry no supported 300/10080-minute window"
+        return {}, f"no Codex rate-limit snapshot under {self.path}"
+
+    def read_all(self) -> dict[str, Reading]:
+        readings, _ = self._latest()
+        return readings
+
+    def read(self) -> Reading:
+        readings, error = self._latest()
+        if self.window in readings:
+            return readings[self.window]
+        return Reading(source="codex_sessions", error=error or
+                       f"no Codex rate-limit snapshot for window {self.window!r}; "
+                       f"available windows: {sorted(readings) or 'none'}")
+
+
 class PrometheusReader:
     """`/api/v1/query` against a Prometheus. One request, not three: the whole
     `claude_usage_*` family comes back in a single instant-vector query, so a
@@ -1050,6 +1141,11 @@ def reader_for(policy: Policy, *, now=time.time):
                                 "node_exporter textfile to read")
         return TextfileReader(policy.path, policy.window, policy.metric,
                               policy.account_metric)
+    if policy.source == "codex_sessions":
+        if not policy.path:
+            raise GovernorError("source = \"codex_sessions\" needs `path` — the "
+                                "Codex settings root containing role sessions")
+        return CodexSessionReader(policy.path, policy.window)
     if policy.source == "prometheus":
         if not policy.url:
             raise GovernorError("source = \"prometheus\" needs `url` — e.g. "
