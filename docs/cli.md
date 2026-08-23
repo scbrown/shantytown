@@ -13,6 +13,10 @@
 st anchor [--short|--events|--harness]
                               who am I, what's on my plate         <- the anchor
 st go <item> [agent]          dispatch. this is the one that matters.
+st repool <item>              hand an item back to the pool: status -> open AND
+                              assignee cleared, one verified write. Clearing the
+                              assignee alone leaves it in_progress — off `bd ready`,
+                              every haul, and every plate at once.
 st inbox <agent> <message>    put a message in an agent's inbox (send-keys; -d persists)
 st inbox [--count|--read]     read your own inbox
 st task <title>               create a work item
@@ -52,11 +56,13 @@ st worktree <repo> [agent]    provision an agent's isolated worktree off a SHARE
 st push <repo> [agent]        push your branch to EVERY remote — pushing one forks a repo with two
 ```
 
-Twenty-four. `--dry-run` is on every command that writes, from commit one. The surface grew past the
-original eight by nine, each on a specific ask — not drift: **inbox**/**task** (the dispatch/tracker
+Twenty-five. `--dry-run` is on every command that writes, from commit one. The surface grew past the
+original eight, each slot on a specific ask — not drift: **inbox**/**task** (the dispatch/tracker
 pair, owner-directed), **context** (the bobbin Context protocol), **doctor**
-(out-of-box detect/install, Stiwi's direct ask), and **subscribe** (the quipu events adapter,
-routing governed workflows to the admin). Each is named on purpose: this doc once
+(out-of-box detect/install, Stiwi's direct ask), **subscribe** (the quipu events adapter,
+routing governed workflows to the admin), and **repool** (the whole hand-back in one verified
+write — clearing an assignee alone leaves an item in_progress, which parks it outside `bd ready`,
+every haul, and every plate; a hand-back that drops work off the board was the measured defect). Each is named on purpose: this doc once
 said "eight" while the code had twelve, and a count nobody enforces is a comment — in the one repo
 whose whole pitch is the exact count, that was the bug.
 
