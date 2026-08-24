@@ -71,6 +71,15 @@ def _capped(monkeypatch, sender="arnold"):
                         lambda a, default="files": TrackerInbox(_CappedTracker(),
                                                                 items=lambda: []))
     monkeypatch.setattr(cli, "_me", lambda a: sender)
+    monkeypatch.setattr(cli, "Tmux", lambda *a, **k: _NoSend())
+
+
+class _NoSend:
+    def exists(self, pane):
+        return False
+
+    def send(self, pane, text):
+        raise AssertionError("an inbox unit test must never call real send-keys")
 
 
 def test_refusal_names_the_signature_and_the_senders_own_budget(tmp_path, capsys,
