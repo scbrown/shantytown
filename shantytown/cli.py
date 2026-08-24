@@ -2683,12 +2683,31 @@ def _inbox_durable(a, agent, msg: str, panes, typed: str | None = None) -> int:
         # did not answer the question the caller had, which is "how long may MY
         # text be". That is the same shape as every other trap this repo keeps
         # finding: a true report of the wrong quantity.
-        overhead = len(msg) - len(typed) if typed is not None else 0
+        # SUBTRACT IN THE SAME UNIT THE BUDGET IS QUOTED IN (aegis-2bjel). The
+        # signature is ASCII today, so bytes and chars coincide FOR IT — and
+        # relying on that is how the mismatch got here in the first place, so
+        # the measure follows the exception's own unit rather than a habit.
+        unit = getattr(e, "unit", "chars")
+        size = (lambda t: len(t.encode("utf-8"))) if unit == "bytes" else len
+        sig = msg[:len(msg) - len(typed)] if typed is not None else ""
+        overhead = size(sig)
         if overhead and e.budget is not None:
-            print(f"    {overhead} of those chars are the {msg[:overhead]!r} "
-                  f"signature st adds for you, so YOUR text has a budget of "
-                  f"{e.budget - overhead}; you typed {len(typed)}.",
+            typed_size = size(typed)
+            extra = (f" ({len(typed)} characters, but the cap counts bytes)"
+                     if unit == "bytes" and typed_size != len(typed) else "")
+            print(f"    {overhead} of those {unit} are the {sig!r} signature st "
+                  f"adds for you, so YOUR text has a budget of "
+                  f"{e.budget - overhead} {unit}; you typed {typed_size}{extra}.",
                   file=sys.stderr)
+        return REFUSED
+    except beads_mod.BeadsValidationError as e:
+        # bd REFUSED it, permanently — not a store outage (aegis-2bjel). This
+        # used to fall into the handler below and print "could not tell", which
+        # names a transient condition and invites a retry that reproduces the
+        # failure exactly. Reported with bd's OWN error rather than whatever
+        # happened to be on the first line of its stderr.
+        print(f"  refused: durable persist for {agent.name} was REJECTED by the "
+              f"store, not lost by it: {e}", file=sys.stderr)
         return REFUSED
     except Exception as e:                        # bd/store unreachable, etc. — TRANSIENT
         print(f"  could not tell: durable persist FAILED for {agent.name} "

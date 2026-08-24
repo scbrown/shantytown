@@ -127,3 +127,50 @@ def test_an_unattributed_send_gets_no_extra_line(tmp_path, capsys, monkeypatch):
     err = capsys.readouterr().err
     assert "carries at most 493" in err, "it still refuses, and still says why"
     assert "signature st adds for you" not in err
+
+
+# --- aegis-2bjel: the cap is measured in BYTES, and bd's error says "characters"
+
+class _ByteCappedTracker(_CappedTracker):
+    """bd's real shape: 500 UTF-8 BYTES, reported as "characters"."""
+    _TITLE_MAX_UNIT = "bytes"
+
+
+def test_the_budget_is_measured_in_the_unit_the_tracker_ENFORCES():
+    """Measured against bd 2026-08-24 with an em dash in the title:
+    498 chars/500 bytes CREATES; 499 chars/501 bytes fails "(got 501)";
+    500 chars/502 bytes fails "(got 502)". `got N` tracks bytes exactly — bd is
+    Go, where len(s) on a string is bytes.
+
+    A message of 493 CHARACTERS containing em dashes is 533 bytes and bd refuses
+    it, while a character-counting pre-flight waves it through. That is not a
+    cosmetic miscount: the refusal then arrives from bd instead of from here, and
+    the caller is told the store failed rather than that their message is long.
+    """
+    inbox = TrackerInbox(_ByteCappedTracker(), items=lambda: [])
+
+    # 493 characters — exactly the character budget — but 513 bytes.
+    body = "K" * 473 + "—" * 20
+    assert len(body) == 493
+    assert len(body.encode("utf-8")) == 533   # 20 em dashes cost 3 bytes each
+
+    with pytest.raises(MessageTooLong) as ei:
+        inbox.deliver("dearing", body)
+    assert ei.value.unit == "bytes"
+    assert "533" in str(ei.value), "the refusal must quote the size that failed"
+    assert "BYTES" in str(ei.value), (
+        "a byte budget quoted to someone counting characters is unreconcilable")
+
+    # The counterpart: the SAME character count in ASCII fits and must NOT be
+    # refused, or this check has simply become stricter rather than correct.
+    inbox.deliver("dearing", "K" * 493)
+
+
+def test_an_ascii_message_is_unaffected_by_the_unit_change():
+    """chars == bytes for ASCII, so every previously-accepted message still is.
+    Without this, "measure in bytes" could have silently tightened the cap for
+    everyone."""
+    inbox = TrackerInbox(_ByteCappedTracker(), items=lambda: [])
+    inbox.deliver("dearing", "K" * 493)
+    with pytest.raises(MessageTooLong):
+        inbox.deliver("dearing", "K" * 494)
