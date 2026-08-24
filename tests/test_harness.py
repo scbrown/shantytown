@@ -162,7 +162,8 @@ def test_query_first_directive_is_actionable_and_host_agnostic():
     from shantytown import query_first
     d = query_first.DIRECTIVE
     assert "QUERY-FIRST" in d
-    assert "$QUIPU_SERVER" in d and "/ask" in d, "no runnable, host-agnostic one-liner"
+    assert "quipu_search" in d, "does not name the provisioned MCP tool"
+    assert "$QUIPU_SERVER" in d and "/search" in d, "no runnable REST fallback"
     assert "grep-first" in d, "does not name the behavior it displaces"
     assert ".lan" not in d and ".svc" not in d, "leaks an internal host"
     assert query_first.main() == 0
