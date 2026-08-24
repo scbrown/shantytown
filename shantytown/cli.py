@@ -3270,6 +3270,11 @@ def _cmd_crew(a) -> int:
         return _crew_governor(a)
     if rules := getattr(a, "check_alert_keepers", None):
         return _check_alert_keepers(a, rules)
+    # A self-cycle request exists before tend stops the pane and persists while
+    # it relaunches.  It therefore protects the acknowledgement window that
+    # would otherwise be delivered to a pane that cannot answer.
+    from . import cycle as cycle_mod
+    cycling = set(cycle_mod.Requests(a.root).pending())
     panes = _panes(a)
     try:
         agents = _registry(a).all()
@@ -3290,6 +3295,7 @@ def _cmd_crew(a) -> int:
     free, busy, queued, shelled = [], [], [], []
     work_unknown = []
     deliberate = []
+    cycling_agents = []
     tree_stale = []
     verdicts = []
     waiting = []
@@ -3305,7 +3311,10 @@ def _cmd_crew(a) -> int:
     _live = ((lambda pane: live_wiring(pane, _cmdline)) if _cmdline
              else (lambda pane: None))
     print()
-    for ag, state, work, posture in _crew_states(agents, panes, runtime):
+    for ag, state, work, posture in _crew_states(agents, panes, runtime,
+                                                  cycling=cycling):
+        if state == "cycling":
+            cycling_agents.append(ag.name)
         if work.endswith("sh"):
             shelled.append(f"{ag.name}({work.rsplit('+', 1)[1][:-2]})")
         if work.startswith(triage_mod.IDLE):
@@ -3398,6 +3407,11 @@ def _cmd_crew(a) -> int:
               f"{who}")
         print(f"    `st new <agent>` brings one back. Still respawned by "
               f"`st tend` — use `st tend --retire` to make it stay down.")
+    if cycling_agents:
+        print(f"  {len(cycling_agents)} planned context cycle(s): "
+              f"{', '.join(cycling_agents)}")
+        print("    Temporarily unavailable for dispatch and alert acknowledgements; "
+              "the escalation poller holds the window until relaunch completes.")
     # The dispatcher's answer, said out loud. A column still makes the operator
     # scan 14 rows; the question is "who can take this", so print the list.
     if free:
@@ -3719,7 +3733,7 @@ def _keeper_findings(agents, rule_path: Path, alert) -> list[str]:
     return []
 
 
-def _crew_states(agents, panes, runtime):
+def _crew_states(agents, panes, runtime, cycling=()):
     """(agent, pane state, work verdict, permission posture) per agent, by name.
     THE code path for the busy/idle judgment — the table renders it and `--count`
     counts it, so the number a status bar shows can never disagree with the roster
@@ -3737,8 +3751,14 @@ def _crew_states(agents, panes, runtime):
     this column existed the only way to see it was to capture the pane footer by
     hand, which is why three agents sat that way for a night.
     """
+    cycling = set(cycling)
     for ag in sorted(agents, key=lambda x: x.name):
-        if ag.pane:
+        if ag.name in cycling:
+            # A durable request is stronger than a still-live pane during the
+            # brief pre-stop interval: consumers must not mistake that pane for
+            # an acknowledgement-capable destination.
+            state = "cycling"
+        elif ag.pane:
             state = "up" if panes.exists(ag.pane) else "down"
         else:
             state = "no pane"          # not "down" — we did not look

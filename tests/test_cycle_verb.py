@@ -180,7 +180,8 @@ def test_a_self_request_is_durable(tmp_path):
     r = Requests(tmp_path)
     assert r.pending() == {}
     r.request("gennaro", CHECKPOINT)
-    assert Requests(tmp_path).pending() == {"gennaro": CHECKPOINT}
+    assert Requests(tmp_path).pending() == {
+        "gennaro": {"checkpoint": CHECKPOINT, "checkpoint_bead": ""}}
 
 
 def test_a_second_request_replaces_the_first(tmp_path):
@@ -189,7 +190,8 @@ def test_a_second_request_replaces_the_first(tmp_path):
     r = Requests(tmp_path)
     r.request("gennaro", "old")
     r.request("gennaro", "newer and more accurate")
-    assert r.pending() == {"gennaro": "newer and more accurate"}
+    assert r.pending() == {"gennaro": {
+        "checkpoint": "newer and more accurate", "checkpoint_bead": ""}}
 
 
 def test_a_request_is_cleared_only_after_the_cycle(tmp_path):
@@ -199,7 +201,8 @@ def test_a_request_is_cleared_only_after_the_cycle(tmp_path):
     r = Requests(tmp_path)
     r.request("gennaro", CHECKPOINT)
     r.clear("malcolm")                       # someone else's — must not touch it
-    assert r.pending() == {"gennaro": CHECKPOINT}
+    assert r.pending() == {
+        "gennaro": {"checkpoint": CHECKPOINT, "checkpoint_bead": ""}}
     r.clear("gennaro")
     assert r.pending() == {}
 
@@ -213,7 +216,8 @@ def test_a_malformed_ledger_reads_as_no_requests_not_as_a_crash(tmp_path):
     r.path.write_text("{not json at all")
     assert r.pending() == {}
     r.request("gennaro", CHECKPOINT)         # and it recovers on the next write
-    assert r.pending() == {"gennaro": CHECKPOINT}
+    assert r.pending() == {
+        "gennaro": {"checkpoint": CHECKPOINT, "checkpoint_bead": ""}}
 
 
 def test_a_json_non_object_also_reads_as_empty(tmp_path):
@@ -239,4 +243,7 @@ def test_requests_are_written_atomically(tmp_path):
     r = Requests(tmp_path)
     r.request("a", "one")
     r.request("b", "two")
-    assert json.loads(r.path.read_text()) == {"a": "one", "b": "two"}
+    assert json.loads(r.path.read_text()) == {
+        "a": {"checkpoint": "one", "checkpoint_bead": ""},
+        "b": {"checkpoint": "two", "checkpoint_bead": ""},
+    }

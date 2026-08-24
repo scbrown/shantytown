@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 
 from shantytown import cli
+from shantytown.cycle import Requests
 from shantytown import triage
 from shantytown.tmux import NullPanes
 
@@ -136,6 +137,24 @@ def test_a_down_agent_is_never_free(tmp_path, monkeypatch, capsys):
     # under test is that it is not offered as available.
     free_line = next(l for l in out.splitlines() if "1 free:" in l)
     assert "ian" not in free_line
+
+
+def test_pending_cycle_is_visible_and_not_offered_for_time_sensitive_work(
+        tmp_path, monkeypatch, capsys):
+    """The durable request protects the interval before tend stops the pane."""
+    root = _roster(tmp_path, {"ellie": "p-ellie", "ian": "p-ian"})
+    Requests(root).request("ian", "checkpoint is durable")
+    monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: _Panes(
+        {"p-ellie": IDLE_SCREEN, "p-ian": IDLE_SCREEN}))
+
+    assert cli._cmd_crew(_Args(root)) == cli.OK
+    out = capsys.readouterr().out
+    row = next(line for line in out.splitlines() if line.split() and
+               line.split()[0] == "ian")
+    assert "cycling" in row
+    assert "planned context cycle(s): ian" in out
+    assert "holds the window until relaunch completes" in out
+    assert "1 free: ellie" in out
 
 
 def test_work_is_answered_for_agents_with_no_launch_stamp(tmp_path, monkeypatch, capsys):
