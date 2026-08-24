@@ -63,6 +63,7 @@ OK = "ok"                     # up, wired, nothing to do
 RESPAWNED = "respawned"       # it was down; it is not any more
 WOULD = "would-respawn"       # --dry-run: down, and we stopped there
 RETIRED = "retired"           # deliberately retired. NOT a fault, NOT respawned
+SURVIVOR = "survivor"         # retired after this still-live session was born
 STOPPED = "stopped"           # down because somebody ran `st stop` (aegis-k9068).
                               # NOT a fault, NOT respawned, and NOT a retirement:
                               # `st new <agent>` brings it straight back.
@@ -399,7 +400,29 @@ class Tender:
         if is_retired(card):
             prov = retirement_provenance(card)
             if up:
-                # The alarm. We did not do this, and something did.
+                # TWO WORLDS used to share one accusation. If the session was
+                # born BEFORE the retirement, nothing resurrected it: retirement
+                # does not kill a running pane, so this is a benign survivor.
+                # Missing/unreadable timestamps stay on the loud path; a survivor
+                # claim without the ordering evidence would be flattery.
+                born = None
+                try:
+                    get_created = getattr(self._panes, "session_created")
+                    born = get_created(card.pane)
+                    from datetime import datetime
+                    retired = datetime.fromisoformat(
+                        (card.retired_at or "").replace("Z", "+00:00")
+                    ).timestamp()
+                except (AttributeError, TypeError, ValueError):
+                    retired = None
+                if born is not None and retired is not None and born < retired:
+                    why = (f"session predates retirement — SURVIVED the decision "
+                           f"without a respawn (session_created={born:.0f}, "
+                           f"retired_at={card.retired_at}).{prov}")
+                    self._log(f"SURVIVOR {card.name}: {why}")
+                    return Finding(card.name, "up", SURVIVOR, why)
+                # The alarm. It was born at/after retirement, or we cannot prove
+                # otherwise. Something started it after the stop decision.
                 why = (f"marked RETIRED and yet ALIVE in {card.pane!r} — this "
                        f"supervisor did not start it. Something else is "
                        f"respawning agents we agreed to stop. Find it before "

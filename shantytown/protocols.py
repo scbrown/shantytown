@@ -343,6 +343,11 @@ class Panes(Protocol):
     # session it does not own, even on an exact name match — the registry pane
     # names collide with the live crew, so a name match is not permission to kill.
     def owns(self, name: str) -> bool: ...
+    # Unix epoch when tmux created this session, or None when it cannot be read.
+    # Retirement forensics compares this observed birth with card.retired_at;
+    # unreadable must stay None so the caller fails toward RESURRECTED, never a
+    # flattering survivor verdict built from missing evidence.
+    def session_created(self, name: str) -> float | None: ...
     # ENUMERATION, as opposed to every other verb here, which needs the name
     # first. That asymmetry is a blind spot with a cost attached: a fleet running
     # under a retired naming scheme is invisible to name-addressed checks, and

@@ -257,11 +257,23 @@ def sock():
 @pytestmark_tmux
 def test_real_new_session_is_owned_and_reapable(sock):
     t = Tmux(socket=sock)
+    before = time.time()
     t.new_session("st-owned")
+    after = time.time()
     assert t.exists("st-owned")
     assert t.owns("st-owned")                       # SHANTY_OWNED marker on the real session
+    born = t.session_created("st-owned")
+    assert born is not None and before - 1 <= born <= after + 1
     t.kill_session("st-owned")
     assert not t.exists("st-owned")
+    assert t.session_created("st-owned") is None
+
+
+def test_null_panes_carries_seeded_session_birth_and_forgets_it_on_kill():
+    panes = NullPanes(live={"p-a"}, created={"p-a": 1234.0})
+    assert panes.session_created("p-a") == 1234.0
+    panes.kill_session("p-a")
+    assert panes.session_created("p-a") is None
 
 
 @pytestmark_tmux

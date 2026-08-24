@@ -37,9 +37,9 @@ class _Panes(NullPanes):
     """Per-pane screens and cmdlines — a roster needs both, and `cmdline` is what
     separates "the pane is up" from "the agent can report"."""
 
-    def __init__(self, screens=None, cmdlines=None, live=None):
+    def __init__(self, screens=None, cmdlines=None, live=None, created=None):
         super().__init__(live=set(live if live is not None else (screens or {})),
-                         cmdlines=cmdlines)
+                         cmdlines=cmdlines, created=created)
         self._screens = screens or {}
 
     def capture(self, pane, history=0, **kw):
@@ -93,15 +93,44 @@ def test_a_retired_agent_is_never_respawned(settings):
 
 
 def test_a_retired_agent_found_ALIVE_escalates(settings):
-    """We did not start it, and something did. That is not a log line."""
-    card = Agent(name="ellie", pane="p-ellie", retired=True)
+    """A session born after retirement really was resurrected."""
+    card = Agent(name="ellie", pane="p-ellie", retired=True,
+                 retired_at="2026-08-02T03:28:51+00:00")
     said = []
-    rep = _tender(_Panes({"p-ellie": IDLE}), _Runtime(),
+    rep = _tender(_Panes({"p-ellie": IDLE}, created={"p-ellie": 1785642000}), _Runtime(),
                   log=said.append).pass_over([card])
 
     assert rep.findings[0].verdict == tend_mod.RESURRECTED
     assert not rep.healthy(), "a resurrected retiree must not exit clean"
     assert any("ESCALATE" in m for m in said), "acted invisibly"
+
+
+def test_a_session_older_than_its_retirement_is_a_SURVIVOR_not_a_fault(settings):
+    """Measured zia case: session 03:05, retirement 03:28. It cannot have
+    respawned after a decision that had not happened yet."""
+    card = Agent(name="zia", pane="p-zia", retired=True,
+                 retired_by="sattler",
+                 retired_at="2026-08-02T03:28:51+00:00")
+    born = 1785639947  # 2026-08-02T03:05:47Z, the measured session birth
+    said = []
+    rep = _tender(_Panes({"p-zia": IDLE}, created={"p-zia": born}), _Runtime(),
+                  log=said.append).pass_over([card])
+
+    f, = rep.findings
+    assert f.verdict == tend_mod.SURVIVOR
+    assert rep.healthy()
+    assert "SURVIVED" in f.why and "session_created" in f.why
+    assert any("SURVIVOR" in m for m in said)
+    assert not any("ESCALATE" in m for m in said)
+
+
+def test_unreadable_session_birth_stays_RESURRECTED(settings):
+    """Cannot-ask is not permission to invent the reassuring ordering."""
+    card = Agent(name="ellie", pane="p-ellie", retired=True,
+                 retired_at="2026-08-02T03:28:51+00:00")
+    rep = _tender(_Panes({"p-ellie": IDLE}), _Runtime()).pass_over([card])
+    assert rep.findings[0].verdict == tend_mod.RESURRECTED
+    assert not rep.healthy()
 
 
 def test_retirement_survives_a_restart_because_it_lives_on_the_card(tmp_path):
