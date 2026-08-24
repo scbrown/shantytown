@@ -86,6 +86,7 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 import time
 import urllib.error
 import urllib.request
@@ -164,7 +165,8 @@ FIVE_HOUR, SEVEN_DAY = "five_hour", "seven_day"
 # Override with `length` on the pace row if the producer is ever found to disagree.
 WINDOW_LENGTH_S: dict[str, int] = {FIVE_HOUR: 5 * 3600, SEVEN_DAY: 7 * 86400}
 
-SOURCES = ("prometheus", "textfile", "codex_sessions", "stub")
+SOURCES = ("prometheus", "textfile", "codex_sessions",
+           "codex_app_server", "stub")
 WARN, FREEZE = "warn", "freeze"
 ON_SIGNAL_LOST = (WARN, FREEZE)
 
@@ -450,6 +452,13 @@ class Policy:
     username: str | None = None
     password_file: str | None = None
     stub_pct: float | None = None
+    # WHICH METERED BUCKET to govern by, for sources that expose more than one
+    # (aegis-ftsqh). Codex meters `codex` and `codex_bengalfox` with DIFFERENT
+    # windows, so "the five-hour reading" is not a well-formed request until you
+    # say whose. None lets `codex_sessions` take the freshest snapshot whatever
+    # it describes — which is what it always did — while `codex_app_server`
+    # defaults to `codex` rather than to dict order.
+    limit_id: str | None = None
     tiers: tuple[Tier, ...] = ()
     # Agents whose dispatches the PRIORITY FLOOR does not apply to (aegis-yegfx).
     #
@@ -651,6 +660,14 @@ class Reading:
     # power to stop a fleet. Letting a missing ON-ramp input blind the governor
     # would make a nice-to-have able to do what the fail-safe forbids.
     reset_at: float | None = None
+    # WHICH METERED LIMIT this reading describes (aegis-ftsqh). Codex meters more
+    # than one bucket — `codex` and `codex_bengalfox` (GPT-5.3-Codex-Spark) were
+    # both live on this host 2026-08-24 — and their WINDOWS DIFFER: `codex` has
+    # only a 10080-minute window, Spark has 300 and 10080. A reader that records
+    # "the five-hour reading" without saying whose it is can file a number about
+    # one limit under the window of another, and nothing downstream can tell.
+    # None = the source does not distinguish limits (Prometheus, textfile, stub).
+    limit_id: str | None = None
 
     def resets_in(self, now: float) -> float | None:
         """Seconds until this budget refills, or None if nothing published one.
@@ -922,6 +939,196 @@ class TextfileReader:
                                    account_metric=self.account_metric)
 
 
+class CodexAppServerReader:
+    """Ask Codex for the account's rate limits, instead of scraping what a
+    session happened to write down (aegis-ftsqh / aegis-1jmy9).
+
+    `codex app-server` speaks JSON-RPC over stdio and answers
+    `account/rateLimits/read` with the whole account's metered state. Verified
+    live against codex-cli 0.147.0 on this host 2026-08-24; the request and
+    response shapes are not guesses — `codex app-server generate-json-schema`
+    emits them (`GetAccountRateLimitsResponse`, `RateLimitSnapshot`,
+    `RateLimitWindow`), so this contract can be re-checked from the binary
+    rather than from anyone's memory.
+
+    WHY THIS EXISTS ALONGSIDE `CodexSessionReader`, which is not broken. The
+    scrape reads server-provided numbers and its staleness handling is sound.
+    But its freshness is not something the governor can cause: a session file is
+    only as new as the last Codex response, so on a quiet fleet the signal ages
+    out and the window goes SIGNAL LOST — and the fleet is quietest right after
+    the governor throttles it. Measured 2026-08-24: `~/.codex` yielded a
+    197-hour-old reading while the deployment root yielded a 48-minute-old one.
+    A pull breaks that loop.
+
+    It also sees what one snapshot cannot. The response carries
+    `rateLimitsByLimitId` — every metered bucket at once. On this host that was
+    `codex` (10080-minute window) AND `codex_bengalfox` / GPT-5.3-Codex-Spark
+    (300 AND 10080). `codex` publishes NO five-hour window, so a five-hour codex
+    reading cannot come from that bucket at all; a scrape with no bucket
+    discrimination cannot say that, and this can.
+
+    EXPERIMENTAL, AND SAID OUT LOUD: `codex app-server` is marked experimental in
+    `codex --help`, and the protocol already ships a v2 schema beside a v1. This
+    reader therefore fails to a clear error rather than a number, and never
+    invents one — a governor reading a fabricated percentage is the failure this
+    whole module is built around.
+    """
+
+    WINDOWS = {300: FIVE_HOUR, 10080: SEVEN_DAY}
+    DEFAULT_LIMIT_ID = "codex"
+
+    def __init__(self, window: str = FIVE_HOUR, limit_id: str | None = None,
+                 command: "list[str] | None" = None, timeout: float = 30.0):
+        self.window = window
+        # Which bucket to govern by. Defaults to `codex` rather than to "whatever
+        # came first": the buckets have DIFFERENT windows, so an unpinned default
+        # would make the answer depend on dict order.
+        self.limit_id = limit_id or self.DEFAULT_LIMIT_ID
+        self.command = list(command) if command else ["codex", "app-server"]
+        self.timeout = timeout
+
+    def _rpc(self) -> "tuple[dict, str]":
+        """(result, error). Never raises: a governor source that throws takes the
+        fleet's dispatch decision with it."""
+        request = "".join(json.dumps(m) + "\n" for m in (
+            {"jsonrpc": "2.0", "id": 1, "method": "initialize",
+             "params": {"clientInfo": {"name": "shantytown-governor",
+                                       "version": "1"}}},
+            {"jsonrpc": "2.0", "method": "initialized", "params": {}},
+            {"jsonrpc": "2.0", "id": 2, "method": "account/rateLimits/read",
+             "params": {}},
+        ))
+        # STREAM IT, and keep stdin OPEN while reading. `subprocess.run(input=…)`
+        # closes stdin as soon as the request is written and the app-server exits
+        # on that EOF before answering — measured: exit 0, empty stdout, and a
+        # reader that reported "no response" for a server that was working
+        # perfectly. A source whose failure mode is a false SIGNAL LOST is worse
+        # than no source, so this is worth the extra handling.
+        try:
+            proc = subprocess.Popen(self.command, stdin=subprocess.PIPE,
+                                    stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE, text=True, bufsize=1)
+        except FileNotFoundError:
+            return {}, (f"{self.command[0]} is not on PATH — this host has no "
+                        f"codex CLI to ask")
+        except OSError as e:
+            return {}, f"cannot run {' '.join(self.command)}: {e}"
+        try:
+            try:
+                proc.stdin.write(request)
+                proc.stdin.flush()
+            except OSError as e:
+                return {}, f"{' '.join(self.command)} closed its input: {e}"
+            deadline = time.monotonic() + self.timeout
+            while time.monotonic() < deadline:
+                line = proc.stdout.readline()
+                if not line:
+                    break
+                try:
+                    message = json.loads(line)
+                except (ValueError, TypeError):
+                    continue
+                if message.get("id") != 2:
+                    continue
+                if "error" in message:
+                    return {}, f"account/rateLimits/read failed: {message['error']}"
+                result = message.get("result")
+                if isinstance(result, dict):
+                    return result, ""
+                return {}, f"account/rateLimits/read returned {result!r}"
+            return {}, (f"no account/rateLimits/read response from "
+                        f"{' '.join(self.command)} within {self.timeout:g}s")
+        finally:
+            # ALWAYS reap it. This runs on every governor pass; a leaked
+            # app-server per pass is a slow-motion outage of its own.
+            proc.kill()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
+
+    @staticmethod
+    def _snapshot_readings(snapshot: dict, at: float
+                           ) -> "tuple[dict[str, Reading], list[int]]":
+        readings: dict[str, Reading] = {}
+        unmapped: list[int] = []
+        limit_id = snapshot.get("limitId")
+        limit_id = limit_id if isinstance(limit_id, str) else None
+        for key in ("primary", "secondary"):
+            value = snapshot.get(key)
+            if not isinstance(value, dict):
+                continue
+            pct = value.get("usedPercent")
+            minutes = value.get("windowDurationMins")
+            if isinstance(pct, bool) or not isinstance(pct, (int, float)):
+                continue
+            if isinstance(minutes, bool) or not isinstance(minutes, (int, float)):
+                continue
+            window = CodexAppServerReader.WINDOWS.get(int(minutes))
+            if window is None:
+                unmapped.append(int(minutes))
+                continue
+            reset = value.get("resetsAt")
+            reset_at = float(reset) if isinstance(reset, (int, float)) else None
+            readings[window] = Reading(pct=float(pct), at=at, ok=True,
+                                       source="codex_app_server",
+                                       reset_at=reset_at, limit_id=limit_id)
+        return readings, unmapped
+
+    def _latest(self) -> "tuple[dict[str, Reading], str, str]":
+        result, error = self._rpc()
+        if error:
+            return {}, error, ""
+        # `at` is NOW, and that is the whole point of this source: the answer is
+        # produced on demand, so its age is the age of this call. The scrape
+        # could only ever report when somebody else last wrote a file.
+        at = time.time()
+        buckets = result.get("rateLimitsByLimitId")
+        snapshot = None
+        if isinstance(buckets, dict) and self.limit_id in buckets:
+            snapshot = buckets[self.limit_id]
+        elif isinstance(result.get("rateLimits"), dict):
+            # The documented backward-compatible single-bucket view. Only used
+            # when the multi-bucket map does not carry the pinned limit, and only
+            # when it IS that limit — never as a silent substitute for another.
+            single = result["rateLimits"]
+            if single.get("limitId") in (None, self.limit_id):
+                snapshot = single
+        if not isinstance(snapshot, dict):
+            available = sorted(buckets) if isinstance(buckets, dict) else []
+            return {}, (f"no rate-limit bucket {self.limit_id!r} in the account's "
+                        f"response; available: {available or 'none'}"), ""
+        readings, unmapped = self._snapshot_readings(snapshot, at)
+        note = ""
+        if unmapped:
+            note = (f"limit {self.limit_id!r} also publishes "
+                    f"{sorted(unmapped)}-minute window(s) this source does not "
+                    f"map; they are NOT reported")
+        if not readings:
+            return {}, (f"limit {self.limit_id!r} published no window this source "
+                        f"maps ({sorted(self.WINDOWS)})"), note
+        return readings, "", note
+
+    def read_all(self) -> "dict[str, Reading]":
+        readings, _error, _note = self._latest()
+        return readings
+
+    def note(self) -> str:
+        _readings, _error, note = self._latest()
+        return note
+
+    def read(self) -> Reading:
+        readings, error, note = self._latest()
+        if self.window in readings:
+            return readings[self.window]
+        detail = (error or
+                  f"limit {self.limit_id!r} publishes no {self.window!r} window; "
+                  f"available: {sorted(readings) or 'none'}")
+        if note:
+            detail = f"{detail} ({note})"
+        return Reading(source="codex_app_server", error=detail)
+
+
 class CodexSessionReader:
     """Read Codex's own persisted rate-limit snapshots.
 
@@ -933,9 +1140,13 @@ class CodexSessionReader:
 
     WINDOWS = {300: FIVE_HOUR, 10080: SEVEN_DAY}
 
-    def __init__(self, path, window: str = FIVE_HOUR):
+    def __init__(self, path, window: str = FIVE_HOUR, limit_id: str | None = None):
         self.path = Path(path).expanduser()
         self.window = window
+        # Pin which metered bucket to govern by, or None to take the freshest
+        # snapshot whatever it describes. Either way the Reading CARRIES the id,
+        # so a caller can see which limit it was handed (aegis-ftsqh).
+        self.limit_id = limit_id
 
     @staticmethod
     def _timestamp(raw) -> float | None:
@@ -946,14 +1157,21 @@ class CodexSessionReader:
         except ValueError:
             return None
 
-    def _latest(self) -> tuple[dict[str, Reading], str]:
+    def _latest(self) -> tuple[dict[str, Reading], str, str]:
+        """(readings, error, note).
+
+        `error` is why there is nothing to report; `note` is what the scan saw
+        and could not map. They are separate because a PARTIAL map is not a
+        failure — and must not overwrite the more specific "no reading for the
+        window you asked for" message, which is what a caller acts on.
+        """
         try:
             files = sorted(self.path.glob("**/sessions/**/*.jsonl"),
                            key=lambda p: p.stat().st_mtime, reverse=True)
         except OSError as e:
-            return {}, f"cannot scan Codex sessions under {self.path}: {e}"
+            return {}, f"cannot scan Codex sessions under {self.path}: {e}", ""
         if not files:
-            return {}, f"no Codex session files under {self.path}"
+            return {}, f"no Codex session files under {self.path}", ""
 
         freshest: dict[str, Reading] = {}
         saw_snapshot = False
@@ -975,6 +1193,17 @@ class CodexSessionReader:
                 at = self._timestamp(event.get("timestamp"))
                 if at is None:
                     continue
+                # WHOSE LIMIT IS THIS? (aegis-ftsqh) One snapshot describes ONE
+                # metered bucket, and the payload names it. Reading the windows
+                # without the name is how a Spark 300-minute number gets filed as
+                # "the five-hour codex reading" — a true number about the wrong
+                # limit, which is the failure this reader existed to avoid one
+                # level up.
+                limit_id = limits.get("limit_id")
+                limit_id = limit_id if isinstance(limit_id, str) else None
+                if self.limit_id is not None and limit_id != self.limit_id:
+                    continue
+                unmapped: list[int] = []
                 for key in ("primary", "secondary"):
                     value = limits.get(key)
                     if not isinstance(value, dict):
@@ -985,31 +1214,65 @@ class CodexSessionReader:
                     if isinstance(pct, bool) or not isinstance(pct, (int, float)):
                         continue
                     window = self.WINDOWS.get(int(minutes))
-                    if window is None or window in freshest:
+                    if window is None:
+                        # SAY SO. Silently dropping it is how 77 real 43200-minute
+                        # (30-day) readings went unreported with no error on this
+                        # host — a partial map looked identical to a full one.
+                        unmapped.append(int(minutes))
+                        continue
+                    if window in freshest:
                         continue
                     reset = value.get("resets_at")
                     reset_at = float(reset) if isinstance(reset, (int, float)) else None
                     freshest[window] = Reading(pct=float(pct), at=at, ok=True,
                                                source="codex_sessions",
-                                               reset_at=reset_at)
+                                               reset_at=reset_at,
+                                               limit_id=limit_id)
                 # One event carries all limits Codex exposed at that instant.
                 if freshest:
-                    return freshest, ""
+                    note = ""
+                    if unmapped:
+                        note = (f"limit {limit_id!r} also published "
+                                f"{sorted(unmapped)}-minute window(s) this source "
+                                f"cannot map to a governed window; they are NOT "
+                                f"reported")
+                    return freshest, "", note
+                if unmapped:
+                    return {}, (f"limit {limit_id!r} published only "
+                                f"{sorted(unmapped)}-minute window(s); this source "
+                                f"maps {sorted(self.WINDOWS)} only"), ""
         if saw_snapshot:
-            return {}, "Codex rate-limit snapshots carry no supported 300/10080-minute window"
-        return {}, f"no Codex rate-limit snapshot under {self.path}"
+            if self.limit_id is not None:
+                return {}, (f"no Codex rate-limit snapshot for limit "
+                            f"{self.limit_id!r} under {self.path}"), ""
+            return {}, ("Codex rate-limit snapshots carry no supported "
+                        "300/10080-minute window"), ""
+        return {}, f"no Codex rate-limit snapshot under {self.path}", ""
 
     def read_all(self) -> dict[str, Reading]:
-        readings, _ = self._latest()
+        readings, _error, _note = self._latest()
         return readings
 
+    def note(self) -> str:
+        """What the scan saw and could NOT report — empty when nothing was
+        dropped. A partial map is not a failure, but it must not be invisible
+        either (aegis-ftsqh)."""
+        _readings, _error, note = self._latest()
+        return note
+
     def read(self) -> Reading:
-        readings, error = self._latest()
+        readings, error, note = self._latest()
         if self.window in readings:
             return readings[self.window]
-        return Reading(source="codex_sessions", error=error or
-                       f"no Codex rate-limit snapshot for window {self.window!r}; "
-                       f"available windows: {sorted(readings) or 'none'}")
+        detail = (error or
+                  f"no Codex rate-limit snapshot for window {self.window!r}; "
+                  f"available windows: {sorted(readings) or 'none'}")
+        # The note APPENDS; it never replaces. "I could not map the 30-day
+        # window" must not stand in for "you asked for five_hour and there is
+        # none", which is the sentence that names the actual gap.
+        if note:
+            detail = f"{detail} ({note})"
+        return Reading(source="codex_sessions", error=detail)
 
 
 class PrometheusReader:
@@ -1145,7 +1408,12 @@ def reader_for(policy: Policy, *, now=time.time):
         if not policy.path:
             raise GovernorError("source = \"codex_sessions\" needs `path` — the "
                                 "Codex settings root containing role sessions")
-        return CodexSessionReader(policy.path, policy.window)
+        return CodexSessionReader(policy.path, policy.window, policy.limit_id)
+    if policy.source == "codex_app_server":
+        # No `path`: this source asks the codex CLI, which finds its own home and
+        # holds its own auth. Requiring a path here would invite someone to point
+        # it at a session directory and wonder why it was ignored.
+        return CodexAppServerReader(policy.window, policy.limit_id)
     if policy.source == "prometheus":
         if not policy.url:
             raise GovernorError("source = \"prometheus\" needs `url` — e.g. "
@@ -2565,12 +2833,30 @@ def render_drain(rows: list[Drained]) -> str:
     return "\n".join(lines)
 
 
+def _limit_id(tbl) -> "str | None":
+    """`limit_id` from the [governor] table, or None.
+
+    REFUSES a non-string rather than coercing. This value decides WHICH metered
+    bucket the fleet is governed by, and a silent `str(4)` would pin the governor
+    to a limit that does not exist — which reports SIGNAL LOST and reads as an
+    outage rather than as a typo (aegis-ftsqh).
+    """
+    value = tbl.get("limit_id")
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise GovernorError(
+            f"[governor] limit_id must be a non-empty string naming a metered "
+            f"bucket (e.g. \"codex\"), got {value!r}")
+    return value.strip()
+
+
 # --- parsing (called by config.py, which owns the file and the error text) ----
 
 _GOV_KEYS = {"source", "window", "on_signal_lost", "relax_margin",
              "max_age_seconds", "url", "path", "username", "password_file",
              "stub_pct", "tier", "exempt", "burndown", "pace", "max_agents",
-             "metric", "by_harness"}
+             "metric", "by_harness", "limit_id"}
 _TIER_KEYS = {"at", "min_priority", "traits", "action", "window", "max_agents"}
 _BURN_KEYS = {"window", "within", "reserve"}
 _PACE_KEYS = {"window", "ratio", "length"}
@@ -2741,6 +3027,7 @@ def parse(tbl: dict) -> Policy:
                   url=tbl.get("url"), path=tbl.get("path"),
                   username=tbl.get("username"),
                   password_file=tbl.get("password_file"), stub_pct=stub,
+                  limit_id=_limit_id(tbl),
                   tiers=tiers, exempt=tuple(exempt), burndowns=burndowns,
                   paces=paces, max_agents=_cap(tbl, "[governor]"),
                   metric=_metric(tbl, "metric", USAGE_METRIC),
