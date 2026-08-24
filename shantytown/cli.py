@@ -883,6 +883,8 @@ def build_parser() -> argparse.ArgumentParser:
                          "mid-task on, decisions already made, the exact next "
                          "step. Unwritten context is the only thing a cycle "
                          "destroys")
+    cy.add_argument("--checkpoint-bead", default="",
+                    help="durable checkpoint bead id; read back before a self-cycle request")
     cy.add_argument("--self", dest="self_", action="store_true",
                     help="REQUEST your own cycle. An agent cannot cycle itself "
                          "in-process (the stop kills the session doing the "
@@ -4644,7 +4646,15 @@ def _cmd_cycle(a) -> int:
         if a.dry_run:
             print(f"  would: request a cycle for {agent_name}")
             return OK
-        cycle_mod.Requests(a.root).request(agent_name, a.reason.strip())
+        checkpoint_bead = getattr(a, "checkpoint_bead", "").strip()
+        if checkpoint_bead:
+            try:
+                _tracker(a).get(checkpoint_bead)
+            except Exception as e:
+                print(f"  refused: checkpoint bead {checkpoint_bead!r} could not be read ({e})",
+                      file=sys.stderr)
+                return REFUSED
+        cycle_mod.Requests(a.root).request(agent_name, a.reason.strip(), checkpoint_bead)
         print(f"  {agent_name}: cycle REQUESTED — checkpoint recorded.")
         print(f"  `st tend` performs it. You stay up until it does, so keep "
               f"working; nothing is lost if it never fires.")
@@ -4709,11 +4719,11 @@ def _cmd_cycle(a) -> int:
 
     cycle_mod.Requests(a.root).clear(agent_name)   # only now: the cycle happened
     print(f"  {agent_name}: CYCLED — context cleared, runtime intact.")
-    _redispatch_after_cycle(a, agent_name)
+    _redispatch_after_cycle(a, agent_name, getattr(a, "checkpoint_bead", ""))
     return OK
 
 
-def _redispatch_after_cycle(a, agent_name: str) -> None:
+def _redispatch_after_cycle(a, agent_name: str, checkpoint_bead: str = "") -> None:
     """Put the agent's plate item back on its hook after a relaunch.
 
     Today the coordinator hand-re-dispatches after every cycle, which is most of
@@ -4743,9 +4753,10 @@ def _redispatch_after_cycle(a, agent_name: str) -> None:
         # reassign=True: the item is ALREADY assigned to this agent — that is the
         # whole point — so the assignee guard would otherwise refuse the very
         # re-dispatch the cycle exists to automate.
+        checkpoint_note = (f" checkpoint: {checkpoint_bead}." if checkpoint_bead
+                           else " checkpoint is on the stop record.")
         d.go(item.id, agent_name, reassign=True,
-             note="resumed after a context cycle — your checkpoint is on the "
-                  "stop record")
+             note="resumed after a context cycle — your" + checkpoint_note)
         print(f"  re-dispatched {item.id} -> {agent_name}")
     except Exception as e:  # noqa: BLE001
         print(f"  note: {agent_name} is UP but {item.id} was not re-dispatched "
@@ -5978,12 +5989,15 @@ def _tend_once(a, quiet: bool = False) -> int:
         #
         # Deliberately AFTER the saturation sweep, so an agent that just asked for
         # a cycle is not also prompted for one in the same pass.
-        for who, checkpoint in _sweep(
+        for who, request in _sweep(
                 "cycle-requests",
                 lambda: sorted(cycle_mod.Requests(a.root).pending().items())) or []:
-            rc_c = _sweep(f"cycle:{who}", lambda w=who, c=checkpoint: _cmd_cycle(
+            checkpoint = request.get("checkpoint", "")
+            checkpoint_bead = request.get("checkpoint_bead", "")
+            rc_c = _sweep(f"cycle:{who}", lambda w=who, c=checkpoint, b=checkpoint_bead: _cmd_cycle(
                 argparse.Namespace(**{**vars(a), "cmd": "cycle", "agent": w,
                                       "reason": c, "self_": False,
+                                      "checkpoint_bead": b,
                                       "allow_loss": False, "dry_run": False})))
             # The request is cleared by _cmd_cycle ONLY on a completed cycle, so a
             # refusal (dirty tree, no checkpoint) leaves it pending and the agent

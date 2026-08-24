@@ -159,7 +159,7 @@ class Requests:
     measurement problem at all — the agent that KNOWS it is degrading gets a way to
     say so that does not require a coordinator to be watching.
 
-    A JSON map agent -> checkpoint. Not a queue: a second request from the same
+    A JSON map agent -> checkpoint record. Not a queue: a second request from the same
     agent REPLACES the first, because the newer checkpoint is the better one and a
     backlog of stale self-reports is worse than none.
     """
@@ -182,13 +182,16 @@ class Requests:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         write_json_atomic(self.path, data)
 
-    def request(self, agent: str, checkpoint: str) -> None:
+    def request(self, agent: str, checkpoint: str, checkpoint_bead: str = "") -> None:
         data = self._load()
-        data[agent] = checkpoint
+        data[agent] = {"checkpoint": checkpoint, "checkpoint_bead": checkpoint_bead}
         self._save(data)
 
     def pending(self) -> dict:
-        return self._load()
+        # Old string entries remain readable after the record upgrade.
+        return {agent: (value if isinstance(value, dict) else
+                        {"checkpoint": str(value), "checkpoint_bead": ""})
+                for agent, value in self._load().items()}
 
     def clear(self, agent: str) -> None:
         """Drop a request. Called AFTER the cycle is performed, never before — a
