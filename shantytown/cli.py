@@ -1142,6 +1142,39 @@ def _launched_now(a, card_name: str, settings_path=None) -> None:
     _stops(a).forget(card_name)
 
 
+def _record_launch_unretirement(a, card) -> bool:
+    """A sanctioned launch is an explicit re-arm; persist that transition.
+
+    Retirement is durable precisely so an unattended supervisor cannot undo it.
+    Conversely, a human/operator invoking the shared launch seam has explicitly
+    asked for this card to run. Leaving ``retired=true`` after that launch makes
+    Tender report a fake RESURRECTED fault forever and makes the card's shutdown
+    state disagree with the process the same command just created.
+
+    Called only AFTER runtime.start returned. Every refusal and dry-run therefore
+    preserves retirement. Failure is loud and makes launch verification
+    CANNOT_TELL; a live process plus an unchanged ledger must never be reported as
+    a fully successful launch.
+    """
+    if not card.retired:
+        return True
+    actor, at = _actor(), _now_iso()
+    try:
+        reg = _registry(a)
+        if not hasattr(reg, "set"):
+            raise RuntimeError("crew registry is read-only")
+        reg.set(replace(card, retired=False, retired_by=actor, retired_at=at))
+    except Exception as e:  # noqa: BLE001 — report the split state, never hide it
+        print(f"  could not tell: {card.name} was launched, but its RETIRED "
+              f"ledger could not be cleared ({e}). The process is live while "
+              f"the card still says stopped; tend will flag that split state.",
+              file=sys.stderr)
+        return False
+    print(f"  {card.name}: sanctioned launch cleared RETIRED "
+          f"(UN-RETIRED by {actor} at {at}).")
+    return True
+
+
 def _launches(a) -> FilesLaunches:
     """The launch-stamp store for this invocation. Beside events/."""
     return FilesLaunches(Path(a.root) / "launched")
@@ -1396,8 +1429,10 @@ def _launch(a, card, panes, runtime, *, dry_run: bool = False) -> int:
     # be written leaves the agent reporting `unknown`, which is the truth. It must
     # never turn a successful launch into a failure.
     _launched_now(a, card.name, runtime.settings_path(card))
+    ledger_ok = _record_launch_unretirement(a, card)
     if _observe_live(runtime, panes, session, card):
-        return _verify_live_hooks(a, card, runtime, panes, session)
+        verified = _verify_live_hooks(a, card, runtime, panes, session)
+        return verified if ledger_ok else CANNOT_TELL
     # Not observed live. Distinguish "waiting for a human" (a first-run consent
     # prompt) from "unknown" — both are could-not-tell (2), but they need
     # different human actions (live-fire found the consent case).
