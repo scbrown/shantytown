@@ -156,6 +156,52 @@ BACKOFF_RETRIES = 5           # then retire rather than thrash
 _TIER_ORDER = {"administrator": 0, "lead": 1, "worker": 2}
 
 
+def _tree_depth(agent, fleet, _max_hops: int = 64) -> int:
+    """How far this agent sits from the root of the REPORTING TREE (aegis-6snzw).
+
+    Bring-up order exists for one reason, stated at the top of this module: boot a
+    lead before its reports, or their stop events rise with lead-unreachable. That
+    is a statement about the TREE, and the sort keyed on ROLE NAME — a proxy that
+    does not track it.
+
+    dearing measured the gap on this fleet (aegis-j5uek): 7 of 13 live agents are
+    workers reporting straight to the root, so they sit at depth 1 alongside the
+    leads. The invariant held anyway, but BY COINCIDENCE — no two agents shared a
+    role while one reported to the other. THE FAILURE NEEDS ONLY A LEAD REPORTING
+    TO A LEAD: both land in the same `_TIER_ORDER` tier, are then ordered
+    alphabetically, and the subordinate can boot before its supervisor — exactly
+    what the ordering exists to prevent. Nothing forbids that shape, and the trait
+    model exists so a deployment can add role shapes st never anticipated.
+
+    Depth makes it hold BY CONSTRUCTION: a supervisor's depth is strictly less
+    than its report's, so the sort cannot invert them whatever their roles are.
+
+    CYCLE-SAFE, deliberately. A malformed `reports_to` cycle (a->b->a) is a config
+    error, not something bring-up should hang or crash on — tend runs unattended
+    on a timer. The hop cap returns a large depth, which sorts the cycle LAST:
+    agents whose position cannot be established do not get to go first.
+
+    An agent naming a `reports_to` that is not in the fleet is treated as reporting
+    to the root. That is the same "unknown sorts as shallow-but-known" answer the
+    old `_TIER_ORDER.get(role, len(...))` gave for unknown ROLES, and it keeps a
+    partial roster from reordering everyone else.
+    """
+    by_name = {a.name: a for a in fleet}
+    depth, seen, cur = 0, {agent.name}, agent
+    for _ in range(_max_hops):
+        parent = getattr(cur, "reports_to", None)
+        if not parent:
+            return depth                      # reports to the root
+        if parent in seen:
+            return _max_hops                  # cycle: position unknowable, sort last
+        if parent not in by_name:
+            return depth                      # off-roster parent: treat as root
+        seen.add(parent)
+        cur = by_name[parent]
+        depth += 1
+    return _max_hops                          # deeper than any real tree
+
+
 @dataclass(frozen=True)
 class Finding:
     agent: str
@@ -365,7 +411,7 @@ class Tender:
         if room <= 0:
             return set()
         down = [a for a in tendable if not self._panes.exists(a.pane)]
-        down.sort(key=lambda a: (_TIER_ORDER.get(a.role, len(_TIER_ORDER)), a.name))
+        down.sort(key=lambda a: (_tree_depth(a, tendable), a.name))
         return {a.name for a in down[:room]}
 
     # --- one agent -----------------------------------------------------------
