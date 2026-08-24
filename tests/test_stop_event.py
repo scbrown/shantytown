@@ -5,6 +5,7 @@ survival-vs-delivery are separate, and BLOCK-ONCE (deliver once, then idle).
 from __future__ import annotations
 import pathlib
 import tempfile
+import time
 import json
 from pathlib import Path
 
@@ -452,3 +453,76 @@ def test_plate_reader_defaults_to_files_when_undeclared(tmp_path):
     (root / "items").mkdir()
     reader = stop_event._plate_reader(root)
     assert reader("nobody") is None            # empty files tracker, honest empty
+
+
+# ---------------------------------------------------------------------------
+# aegis-d1qko — the defer gate must have a CEILING.
+# ---------------------------------------------------------------------------
+
+def _age_event(tmp_path, ev_id: str, seconds: float) -> None:
+    """Backdate one persisted event by `seconds`."""
+    p = tmp_path / "events" / f"{ev_id}.json"
+    d = json.loads(p.read_text())
+    d["ts"] = time.time() - seconds
+    p.write_text(json.dumps(d, indent=2, sort_keys=True))
+
+
+def test_a_deferred_event_is_delivered_once_it_beats_the_ceiling(tmp_path, capsys):
+    """THE BUG (sattler, 2026-08-24, aegis-d1qko). "busy" is measured at the
+    coordinator's drain, but the event records something that already happened.
+    An agent that stops and immediately takes the next item is busy at EVERY
+    later drain, so its stop events were deferred again and again while
+    pending() kept counting them — the coordinator's hook re-fired with the same
+    count every turn and a genuinely new event hid behind the stale ones.
+    Measured: 9 events to sattler from two agents each holding one in_progress
+    item across repeated stops.
+
+    The gate stays (aegis-w9z1); it just cannot hold an event forever."""
+    reg = _reg(tmp_path)
+    ev = FilesEvents(tmp_path / "events")
+    persisted = ev.persist(to="maldoon", frm="ellie", reason=None, rose=False)
+    busy = _Panes({"p-ellie"}, {"p-ellie": BUSY_SCREEN})
+
+    # Young + busy -> still deferred. The w9z1 protection is intact.
+    assert stop_event._drain(ev, "maldoon", reg, busy, _ready) == 0
+    assert len(_pending(tmp_path, "maldoon")) == 1
+    capsys.readouterr()
+
+    # Same event, same busy sender, only older than the ceiling -> DELIVERED.
+    _age_event(tmp_path, persisted.id, stop_event.DEFER_MAX_AGE_S + 60)
+    stop_event._drain(ev, "maldoon", reg, busy, _ready)
+    payload = json.loads(capsys.readouterr().out)
+    assert "ellie stopped" in payload["reason"]
+    assert _pending(tmp_path, "maldoon") == [], \
+        "beat the ceiling but stayed pending — the count still never converges"
+
+
+def test_an_event_with_no_timestamp_is_delivered_not_deferred_forever(tmp_path, capsys):
+    """ts == 0 marks an event written before timestamps existed, so its age
+    cannot be measured. Holding it forever on a measurement we cannot make is
+    the bug this ceiling exists to kill, not the guard working."""
+    reg = _reg(tmp_path)
+    ev = FilesEvents(tmp_path / "events")
+    persisted = ev.persist(to="maldoon", frm="ellie", reason=None, rose=False)
+    p = tmp_path / "events" / f"{persisted.id}.json"
+    d = json.loads(p.read_text())
+    d["ts"] = 0
+    p.write_text(json.dumps(d, indent=2, sort_keys=True))
+
+    stop_event._drain(ev, "maldoon", reg,
+                      _Panes({"p-ellie"}, {"p-ellie": BUSY_SCREEN}), _ready)
+    payload = json.loads(capsys.readouterr().out)
+    assert "ellie stopped" in payload["reason"]
+
+
+def test_the_held_back_line_names_the_sender_and_the_ceiling(tmp_path, capsys):
+    """A bare count is what made this read as a phantom: the operator could not
+    tell a held event from a stuck one, nor see that it converges."""
+    reg = _reg(tmp_path)
+    ev = FilesEvents(tmp_path / "events")
+    ev.persist(to="maldoon", frm="ellie", reason=None, rose=False)
+    stop_event._drain(ev, "maldoon", reg,
+                      _Panes({"p-ellie"}, {"p-ellie": BUSY_SCREEN}), _ready)
+    err = capsys.readouterr().err
+    assert "ellie" in err, "the held-back line must name WHO"
+    assert "delivered regardless after" in err, "must say the hold is bounded"

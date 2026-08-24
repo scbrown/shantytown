@@ -453,6 +453,7 @@ What `st` puts INTO an agent's session at launch — read by the agent, not by `
 | `SHANTY_FORGEJO_TOKEN` | API token for `--backend forgejo` (issue read/write on the repo) | — |
 | `SHANTY_REACTOR_URL` | reactor, if you use it as an event source | `http://localhost:8075` |
 | `SHANTY_CANONICAL_SOURCE` | the checkout a fleet deploy must be built from, for `st doctor`'s self-check. Unset and not in a git checkout → the check is `CANNOT_TELL`, never OK. | the MAIN working tree of the running package's checkout (a linked worktree resolves to its primary, never itself) |
+| `SHANTY_DEFER_MAX_AGE_S` | ceiling on how long a stop event may be held back because its sender is still mid-flight. The defer gate measures "busy" at the coordinator's drain, so an agent that stops and immediately takes the next item is busy at every later drain and its events were deferred indefinitely while the pending count kept reporting them (aegis-d1qko). Past this age the event is delivered regardless. | `1800` (30m) |
 
 ⚠️ **`SHANTY_ONTO_NS` is data identity, not cosmetics.** Every triple in a graph is keyed under it.
 Pick one per graph, set it before the first write, and never change it — repointing it does not
