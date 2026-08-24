@@ -4110,7 +4110,7 @@ def _crew_governor(a) -> int:
     # `Verdict.effect()` already use inside one.
     label = "; ".join(t.label() for t in verdict.restrictions)
     # THE FLEET CAP IS PRINTED SEPARATELY because the baseline is not a tier and
-    # would otherwise be invisible here (aegis-3vt4h) — it engages at 0% usage,
+    # would otherwise be invisible here (aegis-tzpo1) — it engages at 0% usage,
     # when `restrictions` is empty and every other field says "wide open". A cap
     # that silently holds a fleet at 6 while the bar reads unrestricted is the
     # aegis-yc864 shape: a display disagreeing with enforcement.
@@ -5971,7 +5971,7 @@ def _tend_once(a, quiet: bool = False) -> int:
         retire=lambda name: _retire_card(a, name),
         log=lambda msg: print(f"  {msg}", file=sys.stderr),
         # THE EFFECTIVE TARGET: the STRICTER of what the operator asked for and
-        # what the governor caps (aegis-3vt4h). `--target` is a request; the cap
+        # what the governor caps (aegis-tzpo1). `--target` is a request; the cap
         # is a budget constraint, and a request cannot exceed a constraint. Either
         # may be None (no cap), so this is a min over what is actually declared —
         # and with neither declared it stays None, which is the whole-roster

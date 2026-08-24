@@ -349,7 +349,7 @@ class Tender:
         # target: how many agents this fleet should have LIVE. None = every
         # non-retired card, which is what a pass has always meant.
         self._target = target
-        # WHERE the target came from, for the held message only (aegis-3vt4h).
+        # WHERE the target came from, for the held message only (aegis-tzpo1).
         # "--target 6 is already met" sent an operator hunting for a flag they
         # never passed, when the 6 was the governor's `max_agents`. A report that
         # names the wrong SOURCE is the aegis-yc864 shape one layer down: the
