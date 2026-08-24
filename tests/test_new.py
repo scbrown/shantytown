@@ -99,6 +99,48 @@ def test_new_starts_and_verifies_live(tmp_path, monkeypatch, capsys):
     assert panes.exists("crew-ellie")
 
 
+def test_sanctioned_new_clears_retired_with_transition_provenance(
+        tmp_path, monkeypatch, capsys):
+    """The incident: st launched a retired card but left the durable ledger
+    saying stopped, so every tend pass called the healthy process RESURRECTED."""
+    root = _world(tmp_path, retired=True, retired_by="sattler",
+                  retired_at="2026-08-01T00:00:00+00:00")
+    panes = NullPanes(screen=READY, live=set())
+    monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: panes)
+    monkeypatch.setenv("SHANTY_AGENT", "franklin")
+
+    assert cli._cmd_new(_Args(root=root)) == cli.OK
+    card = json.loads((root / "crew" / "ellie.json").read_text())
+    assert card["retired"] is False
+    assert card["retired_by"] == "franklin"
+    assert card["retired_at"] != "2026-08-01T00:00:00+00:00"
+    assert "sanctioned launch cleared RETIRED" in capsys.readouterr().out
+
+
+def test_dry_run_never_clears_retired(tmp_path, monkeypatch):
+    root = _world(tmp_path, retired=True, retired_by="sattler",
+                  retired_at="2026-08-01T00:00:00+00:00")
+    monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: NullPanes(live=set()))
+
+    assert cli._cmd_new(_Args(root=root, dry_run=True)) == cli.OK
+    card = json.loads((root / "crew" / "ellie.json").read_text())
+    assert card["retired"] is True
+    assert card["retired_by"] == "sattler"
+
+
+def test_refused_new_never_clears_retired(tmp_path, monkeypatch):
+    root = _world(tmp_path, settings=False, retired=True,
+                  retired_by="sattler", retired_at="2026-08-01T00:00:00+00:00")
+    panes = NullPanes(live=set())
+    monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: panes)
+
+    assert cli._cmd_new(_Args(root=root)) == cli.REFUSED
+    card = json.loads((root / "crew" / "ellie.json").read_text())
+    assert card["retired"] is True
+    assert card["retired_by"] == "sattler"
+    assert not panes.sent
+
+
 # --- exit 2: launched but never observed live (THE negative control) --------
 
 def test_new_returns_2_when_runtime_never_comes_up(tmp_path, monkeypatch, capsys):
