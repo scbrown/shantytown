@@ -111,6 +111,52 @@ class Inputs:
     minutes_quiet: float | None = None
     fleet: "config.Fleet | None" = None
     load_per_core: float | None = None      # None = could not measure
+    # Senders observed mid-flight at THIS sweep. Empty = nothing known busy, so
+    # everything is deliverable — the same fail-open `_drain` uses when it has no
+    # pane backend: refusing to act on a check we did not run would be worse than
+    # the bug. See `deliverable`.
+    busy_senders: set = field(default_factory=set)
+
+    @property
+    def deliverable(self) -> list:
+        """Pending events that would ACTUALLY be handed over on this stop.
+
+        RANK 4 SAYS "a DELIVERABLE pending event" AND THE CODE READ `pending`
+        (aegis-d1qko). `_drain` holds an event back while its SENDER is
+        mid-flight, so on a busy fleet the coordinator blocked on events that the
+        very next call then declined to deliver: ~10 no-op turns in one night
+        against 2 held events. Blocking on a set larger than the deliverable one
+        is a wake with nothing to do, every turn, for as long as the senders keep
+        working — which on a healthy fleet is indefinitely.
+
+        Urgent events are deliverable BY DEFINITION: `_drain` never defers a
+        governance alert or a risen event, so the two filters must agree or a
+        rank-1 block would hand over nothing."""
+        import time as _t
+        now = _t.time()
+        out = []
+        for e in self.pending:
+            if is_governance(e.reason) or e.rose:
+                out.append(e)                     # never deferred by _drain
+                continue
+            # getattr, not attribute access: an event that cannot tell us its
+            # sender is treated as DELIVERABLE, never held. Fail-open is this
+            # module's rule everywhere else (see the unknown-role branch in
+            # gather) and it is the right direction here too — holding a stop
+            # back on a field we could not read is the aegis-d1qko bug wearing a
+            # different hat.
+            frm = getattr(e, "frm", None)
+            if frm is None or frm not in self.busy_senders:
+                out.append(e)
+                continue
+            # Sender is busy — held, UNLESS it has beaten _drain's ceiling.
+            # This must use the same bound _drain does, or the two disagree
+            # again and we are back to blocking on undeliverable events.
+            ts = getattr(e, "ts", 0)
+            age = (now - ts) if ts else float("inf")
+            if age > stop_event.DEFER_MAX_AGE_S:
+                out.append(e)
+        return out
 
     @property
     def urgent(self) -> list:
@@ -192,8 +238,16 @@ def decide(inp: Inputs) -> Verdict:
                            f"Next wake: a tend push, an inbox, a dispatch{left}.",
                            BY_HIBERNATE)
 
-    if inp.pending:
-        return Verdict(True, f"{len(inp.pending)} pending event(s) to deliver.",
+    if inp.deliverable:
+        held = len(inp.pending) - len(inp.deliverable)
+        # Name the held-back remainder IN the block line. Its absence is what
+        # sent a coordinator to the events directory hunting a stuck-delivery bug
+        # that was disclosed design all along (aegis-d1qko).
+        note = (f" ({held} more held back — sender(s) still mid-flight)"
+                if held else "")
+        return Verdict(True,
+                       f"{len(inp.deliverable)} pending event(s) to deliver."
+                       f"{note}",
                        BY_EVENTS)
 
     # RANK 5. Nothing to dispatch — and the governor is WHY. Said out loud, on an
@@ -253,7 +307,23 @@ def gather(root, me: str, *, reg=None, panes=None, runtime=None,
               f"{me!r} as a worker, so Rule Zero and hibernate are OFF this stop",
               file=sys.stderr)
 
-    inp = Inputs(me=me, role=role, pending=list(events.pending(me)))
+    pending = list(events.pending(me))
+    # WHO IS MID-FLIGHT — measured once, here, in the same sweep as every other
+    # rank, so the block decision and the drain that follows it cannot disagree
+    # about who is busy. A failure to measure leaves the sender OUT of the set,
+    # i.e. treated as deliverable: same fail-open as `_drain` without a pane
+    # backend. `_liveness` is imported rather than reimplemented on purpose —
+    # two copies of this predicate is how rank 4 and the drain drifted apart.
+    busy: set = set()
+    for name in {e.frm for e in pending}:
+        try:
+            if stop_event._liveness(reg, panes, runtime.shows_ready_ui,
+                                    name) == triage.BUSY:
+                busy.add(name)
+        except Exception as e:  # noqa: BLE001 — unreadable pane is not busy
+            print(f"stop_policy: could not read liveness for {name!r} ({e!r}) "
+                  f"— treating as deliverable", file=sys.stderr)
+    inp = Inputs(me=me, role=role, pending=pending, busy_senders=busy)
 
     if role != "administrator":
         # Rule Zero and hibernate are the coordinator's. A lead's drain is how it

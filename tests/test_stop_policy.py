@@ -15,6 +15,7 @@ from shantytown import stop_policy as sp
 from shantytown.config import Hibernate
 from shantytown.events import StopEvent
 from shantytown.tier import Reason
+from shantytown import stop_event as se
 
 
 def _ev(frm="billy", reason=None, rose=False, eid="ev-1"):
@@ -291,3 +292,70 @@ def test_the_unified_entry_still_reads_as_DRAIN_wiring(tmp_path):
     (tmp_path / "administrator.settings.json").write_text(
         json.dumps(settings_for_role("administrator")))
     assert stop_directions_in(tmp_path / "administrator.settings.json") == {"drain"}
+
+
+# ---------------------------------------------------------------------------
+# aegis-d1qko — BLOCK on the DELIVERABLE set, not on raw pending.
+# ---------------------------------------------------------------------------
+
+def _d1qko_ev(frm="ellie", reason=None, rose=False, ts=None):
+    import time as _t
+    return StopEvent(id="ev-1", to="maldoon", frm=frm, reason=reason, rose=rose,
+                     ts=_t.time() if ts is None else ts)
+
+
+def test_a_held_event_does_not_block_the_coordinator(tmp_path):
+    """THE BUG (sattler, 2026-08-24). Rank 4's own docstring says "a DELIVERABLE
+    pending event" and the code read `pending`. _drain holds an event back while
+    its sender is mid-flight, so the coordinator BLOCKED on events the very next
+    call then declined to hand over: ~10 no-op turns in one night against 2 held
+    events. On a healthy fleet the senders keep working, so that is indefinite."""
+    inp = sp.Inputs(me="maldoon", role="administrator",
+                             pending=[_d1qko_ev(frm="ellie")],
+                             busy_senders={"ellie"})
+    assert inp.deliverable == [], "a busy sender's event is not deliverable"
+    v = sp.decide(inp)
+    assert v.block is False, \
+        "blocked on an event the drain will refuse to deliver — a no-op wake"
+
+
+def test_a_deliverable_event_still_blocks(tmp_path):
+    """The other half: this must not turn into 'never block'."""
+    inp = sp.Inputs(me="maldoon", role="administrator",
+                             pending=[_d1qko_ev(frm="ellie")], busy_senders=set())
+    v = sp.decide(inp)
+    assert v.block is True
+    assert "1 pending event(s) to deliver" in v.reason
+
+
+def test_the_block_line_names_the_held_back_remainder(tmp_path):
+    """Its absence is what sent a coordinator to the events directory hunting a
+    stuck-delivery bug that was disclosed design all along."""
+    inp = sp.Inputs(me="maldoon", role="administrator",
+                             pending=[_d1qko_ev(frm="ellie"), _d1qko_ev(frm="tim")],
+                             busy_senders={"tim"})
+    v = sp.decide(inp)
+    assert v.block is True
+    assert "1 pending event(s) to deliver" in v.reason
+    assert "1 more held back" in v.reason
+
+
+def test_urgent_events_are_deliverable_even_from_a_busy_sender(tmp_path):
+    """_drain NEVER defers a governance alert or a risen event, so the two
+    filters must agree — otherwise a rank-1 block hands over nothing."""
+    gov = _d1qko_ev(frm="ellie", reason="untracked-work")
+    inp = sp.Inputs(me="maldoon", role="administrator",
+                             pending=[gov], busy_senders={"ellie"})
+    assert len(inp.urgent) == 1
+    assert inp.deliverable == [gov], \
+        "urgent-but-not-deliverable would block forever and deliver nothing"
+
+
+def test_a_held_event_past_the_ceiling_becomes_deliverable(tmp_path):
+    """stop_policy and _drain must share the ceiling, or they disagree again."""
+    import time as _t
+    old = _d1qko_ev(frm="ellie", ts=_t.time() - (se.DEFER_MAX_AGE_S + 60))
+    inp = sp.Inputs(me="maldoon", role="administrator",
+                             pending=[old], busy_senders={"ellie"})
+    assert len(inp.deliverable) == 1, \
+        "past the ceiling _drain WILL deliver it, so rank 4 must block for it"
