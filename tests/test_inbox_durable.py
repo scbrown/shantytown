@@ -104,6 +104,7 @@ class _CappedTracker:
     """A tracker that caps a title like bd does (TITLE_MAX=500). Records creates so
     a test can prove a too-long message NEVER reached the store."""
     _TITLE_MAX = 500
+    _TITLE_MAX_UNIT = "bytes"
 
     def __init__(self):
         self.created = []
@@ -122,6 +123,7 @@ def test_durable_REFUSES_a_too_long_message_and_does_not_call_it_cannot_tell(tmp
     tracker = _CappedTracker()
     box = TrackerInbox(tracker, lambda: [])
     monkeypatch.setattr(cli, "_inbox", lambda a, **kw: box)
+    monkeypatch.setattr(cli, "_me", lambda a: "dearing")
     monkeypatch.setattr(cli, "Tmux", lambda *a, **k: _NoSend())
     body = "x" * 494                              # title = "inbox: " + 494 = 501 > 500
     rc = main(["--root", str(_root(tmp_path)), "inbox", "-d", "ian", body])
@@ -129,6 +131,8 @@ def test_durable_REFUSES_a_too_long_message_and_does_not_call_it_cannot_tell(tmp
     err = capsys.readouterr().err
     assert "refused" in err and "carries at most" in err   # names the real limit
     assert "494" in err, "the refusal states the actual length that overflowed"
+    assert "15 of those bytes are the '[from dearing] ' signature" in err
+    assert "YOUR text has a budget of 478 bytes; you typed 494" in err
     assert "bead" in err, "the refusal must name the remedy (put it in a bead)"
     assert "could not tell" not in err, "must not read as a transient store outage"
     assert tracker.created == [], "a refused message must NOT be written to the store"
