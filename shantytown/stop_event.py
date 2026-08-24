@@ -747,7 +747,16 @@ def _compose_workflow(reg, panes, plate, rank, events, me: str, *,
                                    stopped=stopped, now=now)
     candidates = workflow.fold_events(candidates, events)
     try:
-        candidates = (rank or NullRanker()).weigh(candidates)
+        # `at_least()`, not `exact()`: a partial weighting is USABLE here — the
+        # rule-based order still stands underneath it and an unweighed candidate
+        # simply keeps its rule position. `exact()` would raise on the ordinary
+        # case (any candidate without a mod::sym title) and degrade a haul that
+        # was working. The caveat is what we surface instead (aegis-q0bzh).
+        weighed = (rank or NullRanker()).weigh(candidates)
+        candidates = weighed.at_least()
+        note = weighed.note()
+        if note:
+            print(f"  note: {note}", file=sys.stderr)
     except RankUnavailable:
         pass                                      # degrade to the rule-based order
     return workflow.prioritize(candidates, stood_down=stood_down).render()

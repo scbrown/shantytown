@@ -24,6 +24,8 @@ NullRanker — the hook never reaches for a backend unless asked.
 """
 from __future__ import annotations
 
+from .answer import Answer
+
 import json
 import shutil
 import subprocess
@@ -35,8 +37,12 @@ from .protocols import RankUnavailable
 class NullRanker:
     """No backend. Returns candidates unchanged so the rule-based order stands."""
 
-    def weigh(self, candidates: list) -> list:
-        return candidates
+    def weigh(self, candidates: list) -> Answer:
+        # COMPLETE, not capped. NullRanker deliberately weighs nothing, and that
+        # is the whole search space it claims to cover: there is no backend that
+        # could have said more. An unweighted answer here MEANS unweighted.
+        return Answer.complete_read(
+            candidates, how="NullRanker: no backend, rule-based order stands")
 
 
 class PolicyRanker:
@@ -47,18 +53,33 @@ class PolicyRanker:
     def __init__(self, impact_fn: Callable[[str], int] | None = None):
         self._impact = impact_fn or _yupana_impact
 
-    def weigh(self, candidates: list) -> list:
+    def weigh(self, candidates: list) -> Answer:
         """Weight each candidate whose item names a symbol. Raises RankUnavailable
         (propagated from the impact fn) the first time the backend cannot answer —
         the drain catches it and degrades, so a partial weighting never masquerades
-        as a complete one."""
+        as a complete one.
+
+        AND THE OTHER PARTIAL, which the exception does not cover (aegis-q0bzh):
+        a candidate whose title carries no `mod::sym` token is SKIPPED, keeping
+        `weight = 0`. That is indistinguishable from a real blast radius of zero,
+        so the answer says how many were skipped rather than leaving the caller to
+        infer it from weights that look like measurements."""
+        skipped = 0
         for c in candidates:
             symbol = _symbol_of(c)
             if not symbol:
+                skipped += 1
                 continue
             c.weight = float(self._impact(symbol))     # may raise RankUnavailable
             c.why = f"blast radius {int(c.weight)}"
-        return candidates
+        how = f"PolicyRanker: yupana impact over {len(candidates)} candidate(s)"
+        if skipped:
+            return Answer.capped(
+                candidates, how=how,
+                caveat=(f"{skipped} of {len(candidates)} candidate(s) name no "
+                        f"mod::sym symbol and were never weighed — their weight 0 "
+                        f"is 'not asked', not 'no blast radius'"))
+        return Answer.complete_read(candidates, how=how)
 
 
 def _symbol_of(c) -> str | None:
