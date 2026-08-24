@@ -228,8 +228,14 @@ class MessageTooLong(ValueError):
     persisted and nothing is silently truncated (aegis-csuo). The inbox is a thin
     pointer channel by design (see the module docstring), not a document store."""
 
-    def __init__(self, message: str, *, budget: int | None = None):
+    def __init__(self, message: str, *, budget: int | None = None,
+                 unit: str = "chars"):
         super().__init__(message)
+        # The UNIT the budget is expressed in. bd counts UTF-8 bytes while
+        # saying "characters" (aegis-2bjel), so a caller doing arithmetic on
+        # `budget` — cli subtracts its `[from <who>] ` signature — must subtract
+        # in the same unit or reintroduce the very mismatch this carries.
+        self.unit = unit
         # THE BUDGET, AS A NUMBER AND NOT ONLY AS PROSE. The cap is measured
         # against the text this layer is handed, which is not always the text the
         # human typed — cli attributes a `[from <who>] ` signature onto it first.
@@ -350,16 +356,41 @@ class TrackerInbox:
         # refusal before the write beats bd rejecting the create with a validation
         # string the caller then misreads as a store outage (aegis-csuo). A tracker
         # with no cap (FilesTracker) skips this and carries any length.
+        # MEASURE IN THE UNIT THE TRACKER ENFORCES (aegis-2bjel). bd's cap is 500
+        # UTF-8 BYTES while its error message says "characters", and this check
+        # used Python's `len`, which counts characters. Every non-ASCII character
+        # — em dash, arrow, ✓, curly quote, all routine in crew prose — costs 2-3
+        # bytes and was counted as 1, so a message that fit the advertised budget
+        # sailed past this pre-flight and was rejected by bd instead. That path
+        # surfaces as "could not tell: durable persist FAILED (RuntimeError...)",
+        # i.e. a TRANSIENT store problem, for a permanent refusal the sender could
+        # have fixed in seconds. The clean-refusal mechanism aegis-csuo added was
+        # correct and simply could not see the case it most needed to catch.
         cap = getattr(self._tracker, "_TITLE_MAX", None)
-        if cap is not None and len(title) > cap:
-            budget = cap - len(PREFIX) - 1
+        unit = getattr(self._tracker, "_TITLE_MAX_UNIT", "chars")
+        measure = (lambda t: len(t.encode("utf-8"))) if unit == "bytes" else len
+        if cap is not None and measure(title) > cap:
+            budget = cap - measure(PREFIX) - 1
+            typed_size = measure(body)
+            # Say the unit, and say it AGAIN when the two disagree — a byte
+            # budget quoted at someone counting characters is a number they
+            # cannot reconcile against anything they typed, which is the defect
+            # this whole check exists to avoid repeating one level down.
+            note = ""
+            if unit == "bytes" and typed_size != len(body):
+                note = (f" NOTE: your text is {len(body)} characters but "
+                        f"{typed_size} BYTES — it contains non-ASCII (em dashes, "
+                        f"arrows, ✓), and the cap is on bytes. Trimming to "
+                        f"{budget} characters will not be enough.")
             raise MessageTooLong(
-                f"durable message is {len(body)} chars; this inbox carries at most "
-                f"{budget} (it maps to a tracker item titled {PREFIX!r}, capped at "
-                f"{cap}). The inbox is a thin pointer channel, not a document store: "
-                f"put the substance in a bead and send a pointer "
-                f"(e.g. `st inbox {to} 'see <bead-id>'`), or `bd comment <id> --file`.",
+                f"durable message is {typed_size} {unit}; this inbox carries at most "
+                f"{budget} {unit} (it maps to a tracker item titled {PREFIX!r}, capped "
+                f"at {cap} {unit}). The inbox is a thin pointer channel, not a document "
+                f"store: put the substance in a bead and send a pointer "
+                f"(e.g. `st inbox {to} 'see <bead-id>'`), or `bd comment <id> --file`."
+                f"{note}",
                 budget=budget,
+                unit=unit,
             )
         fields = {"assignee": to, "labels": "inbox"}
         if frm:

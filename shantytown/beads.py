@@ -60,15 +60,88 @@ def parse_extra_repos(value: "str | list | None") -> list[str]:
     return [p.strip() for p in parts if p and p.strip()]
 
 
+# bd's WARNINGS SHARE STDERR WITH ITS ERRORS, and a warning is not a cause
+# (aegis-2bjel). Reporting `stderr[:120]` made whichever line came FIRST the
+# stated reason, so an unrelated advisory — `warning: beads.role not configured
+# (GH#2950)` — was surfaced as why a create failed. It reads as "your write was
+# rejected because beads.role is unset", which is a config claim about the
+# operator's clone; ellie surveyed the fleet on it, found 17 of 23 crew clones
+# UNSET, and was one step from remediating all 17. `beads.role` is not a gate:
+# with it unset, `bd create` warns, creates the issue, and exits 0. The whole
+# implication was manufactured by the truncation.
+#
+# So: take bd's STRUCTURED error when it has one, then an `Error:`/`error:` line,
+# and only then fall back to whole stderr — with warning lines dropped, because
+# they are context and never the reason.
+_BD_WARNING = re.compile(r"^\s*(warning|note|hint)\b", re.IGNORECASE)
+
+
+class BeadsValidationError(RuntimeError):
+    """bd REFUSED the write on its own validation — permanent, not transient.
+
+    Distinguished so a caller can say REFUSED (act on it) rather than "could not
+    tell" (retry later). Retrying an invalid title reproduces it exactly.
+    """
+
+
+def _bd_error_text(r) -> str:
+    """The reason bd failed, in bd's own words — never a warning that rode along."""
+    for stream in (r.stdout or "", r.stderr or ""):
+        for line in stream.splitlines():
+            line = line.strip()
+            if not line.startswith("{"):
+                continue
+            try:
+                d = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(d, dict) and d.get("error"):
+                return str(d["error"]).strip()
+    lines = [ln.strip() for ln in (r.stderr or "").splitlines() if ln.strip()]
+    substantive = [ln for ln in lines if not _BD_WARNING.match(ln)]
+    for ln in substantive:
+        if ln.lower().startswith("error"):
+            return ln
+    if substantive:
+        return " ".join(substantive)
+    # Nothing but warnings, or nothing at all. Say THAT rather than quoting a
+    # warning as the cause; "bd failed and said only <warning>" is honest and
+    # does not send anyone to fix beads.role.
+    if lines:
+        return f"bd exited {r.returncode} and emitted only advisories: {lines[0][:120]}"
+    return f"bd exited {r.returncode} with no output"
+
+
+def _bd_failure(what: str, r) -> RuntimeError:
+    detail = _bd_error_text(r)
+    if "validation failed" in detail.lower():
+        return BeadsValidationError(f"{what} refused by bd: {detail}")
+    return RuntimeError(f"{what} failed: {detail}")
+
+
 class BeadsTracker:
-    # bd validates a title at <= 500 characters (measured 2026-07-20: a 500-char
-    # title creates, 501 fails "title must be 500 characters or less"). Declared
-    # here, on the concrete tracker, because the limit is bd's — not every Tracker
-    # has one (FilesTracker does not). TrackerInbox reads it to refuse a too-long
-    # message CLEANLY, before the store round-trip, instead of letting bd reject it
-    # with a leaked validation string the caller then misreads as a store outage
-    # (aegis-csuo).
+    # bd caps a title at 500 **UTF-8 BYTES**, though its error says "characters"
+    # (aegis-2bjel, measured 2026-08-24 with an em dash in the title):
+    #
+    #     498 chars / 500 bytes -> CREATED
+    #     499 chars / 501 bytes -> "title must be 500 characters or less (got 501)"
+    #     500 chars / 502 bytes -> "... (got 502)"
+    #
+    # `got N` tracks BYTES exactly. bd is Go, where `len(s)` on a string is bytes.
+    #
+    # The 2026-07-20 measurement recorded here previously ("a 500-char title
+    # creates, 501 fails") was run on ASCII, where the two units coincide, so it
+    # could not see the difference — and this crew writes em dashes, arrows and
+    # ✓ constantly, each costing 2-3 bytes while Python's `len` counts 1. Every
+    # such character made the advertised budget too generous, the pre-flight
+    # refusal silently miss, and bd's rejection escape as a "could not tell"
+    # store error. Declared here because the limit is bd's; not every Tracker has
+    # one (FilesTracker does not).
     _TITLE_MAX = 500
+    # The unit the cap is measured in. TrackerInbox measures the same way rather
+    # than assuming; a tracker that really did count characters would set this
+    # to "chars" and the arithmetic would follow it.
+    _TITLE_MAX_UNIT = "bytes"
 
     def __init__(self, repo: str | None = None, timeout: int = 30,
                  extra_repos: "list[str] | None" = None):
@@ -230,7 +303,7 @@ class BeadsTracker:
             args.append(f"--{k.replace('_', '-')}={v}")
         r = self._bd(*args)
         if r.returncode != 0:
-            raise RuntimeError(f"bd create failed: {r.stderr.strip()[:120]}")
+            raise _bd_failure("bd create", r)
         try:
             d = json.loads(r.stdout)
             if isinstance(d, list):
