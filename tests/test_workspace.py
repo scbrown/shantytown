@@ -172,6 +172,10 @@ def test_git_clone_clones_a_real_repo(tmp_path):
 
     assert Path(got, "README.md").read_text() == "hello"
     assert Path(got, ".git").exists()
+    assert subprocess.run(
+        ["git", "config", "--get", "beads.role"], cwd=got,
+        capture_output=True, text=True, check=True,
+    ).stdout.strip() == "maintainer"
 
 
 def test_git_clone_failure_raises_workspace_error(tmp_path):

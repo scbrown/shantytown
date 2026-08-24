@@ -63,6 +63,19 @@ class WorkspaceError(RuntimeError):
 Cloner = Callable[[str, Path], None]
 
 
+def configure_beads_role(path: Path) -> None:
+    """Make a freshly cloned crew workspace able to send durable Beads mail."""
+    r = subprocess.run(
+        ["git", "-C", str(path), "config", "beads.role", "maintainer"],
+        capture_output=True, text=True,
+    )
+    if r.returncode != 0:
+        raise WorkspaceError(
+            f"could not configure beads.role in fresh workspace {path} "
+            f"(exit {r.returncode}): {(r.stderr or r.stdout).strip()}"
+        )
+
+
 def git_clone(source: str, dest: Path) -> None:
     """The default cloner: `git clone <source> <dest>`. Raises on failure.
 
@@ -291,6 +304,10 @@ def ensure_workspace(card: Agent, clone: Cloner = git_clone,
                 f"clone of {card.workspace_source!r} for {card.name} reported "
                 f"success but produced no directory at {staging}. Refusing."
             )
+        # Configure before the atomic rename: a failed provision is discarded
+        # rather than becoming a present-but-broken workspace on the next launch.
+        if (staging / ".git").exists():
+            configure_beads_role(staging)
         try:
             staging.rename(path)
         except OSError:
