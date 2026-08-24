@@ -44,7 +44,7 @@ st tend --reauth              relaunch every AUTH-DEAD agent (run AFTER the oper
 st tend --target N            respawn only toward N LIVE agents (scale UP on loss; never stops a surplus)
 st attach [agent]             attach to a crew member — STARTING them if down (pane+socket resolved)
 st attach --no-start          attach only if already running; never create a session
-st stats [agent] [--files]    what the crew did: files/skills (capture store), tokens by provider (local transcripts)
+st stats [agent] [--files]    files/skills plus provider tokens and cache dimensions
 st dashboard [admin]          live, tier-scoped view: roster/state/work, self-refreshing
 st subscribe                  watch quipu entity events; route governed workflows to the admin
 st cycle <agent> [--self]     clear an agent's context WITHOUT destroying its runtime:
@@ -55,6 +55,14 @@ st cycle <agent> [--self]     clear an agent's context WITHOUT destroying its ru
 st worktree <repo> [agent]    provision an agent's isolated worktree off a SHARED project repo
 st push <repo> [agent]        push your branch to EVERY remote — pushing one forks a repo with two
 ```
+
+`st stats` keeps its row extensible through `key=value` fields. When at least
+one local transcript has a usage snapshot, the row includes
+`usage_known=1 usage_in=N usage_out=N cache_read=N`. `usage_in` is normalized
+prompt traffic: Claude's base, cache-read and cache-creation fields are summed;
+Codex input already includes its cached subset. This makes
+`cache_read / usage_in` a provider-independent prompt-cache hit rate. The fields
+are omitted—not zeroed—when every matching transcript is unknown.
 
 Twenty-five. `--dry-run` is on every command that writes, from commit one. The surface grew past the
 original eight, each slot on a specific ask — not drift: **inbox**/**task** (the dispatch/tracker
