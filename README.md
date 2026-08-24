@@ -301,7 +301,7 @@ st cycle <agent> [--self]         clear context WITHOUT destroying the runtime: 
                                   stop -> relaunch -> re-dispatch (/clear drops bypass; this keeps it)
 st worktree <repo> [agent]        provision an agent's isolated worktree off a SHARED project repo
 st push <repo> [agent]            push your branch to EVERY remote — pushing one forks a repo with two
-st stats [agent]                  what the crew actually did: files, skills, tokens (local store)
+st stats [agent]                  files/skills plus provider tokens and cache dimensions
 ```
 
 Twenty, and the count is load-bearing: a test pins this block to the parser, so the next command
