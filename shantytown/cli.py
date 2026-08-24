@@ -884,7 +884,7 @@ def build_parser() -> argparse.ArgumentParser:
                          "step. Unwritten context is the only thing a cycle "
                          "destroys")
     cy.add_argument("--checkpoint-bead", default="",
-                    help="durable checkpoint bead id; read back before a self-cycle request")
+                    help="durable checkpoint bead id; required for administrators and read back before a self-cycle request")
     cy.add_argument("--self", dest="self_", action="store_true",
                     help="REQUEST your own cycle. An agent cannot cycle itself "
                          "in-process (the stop kills the session doing the "
@@ -4667,6 +4667,16 @@ def _cmd_cycle(a) -> int:
             print(f"  would: request a cycle for {agent_name}")
             return OK
         checkpoint_bead = getattr(a, "checkpoint_bead", "").strip()
+        try:
+            role = _registry(a).get(agent_name).role
+        except Exception as e:
+            print(f"  refused: could not read {agent_name}'s role for checkpoint policy ({e})",
+                  file=sys.stderr)
+            return REFUSED
+        if cycle_mod.requires_checkpoint_bead(role, checkpoint_bead):
+            print("  refused: administrator cycles require --checkpoint-bead <id>. "
+                  "Create or use the durable handoff bead, then retry.", file=sys.stderr)
+            return REFUSED
         if checkpoint_bead:
             try:
                 _tracker(a).get(checkpoint_bead)

@@ -201,3 +201,14 @@ class Requests:
         data = self._load()
         if data.pop(agent, None) is not None:
             self._save(data)
+
+
+def requires_checkpoint_bead(role: str, checkpoint_bead: str) -> bool:
+    """Whether this cycle must name a durable bead checkpoint.
+
+    An administrator is the sole coordinator tier during a handoff.  Free text
+    cannot restore that responsibility after a relaunch, so its bead pointer is
+    mandatory.  Other roles keep the compatible request form while the fleet
+    migrates to named checkpoints.
+    """
+    return role == "administrator" and not checkpoint_bead.strip()
