@@ -648,6 +648,18 @@ class Tmux:
         )
         return r.returncode == 0 and r.stdout.startswith(f"{_OWNED_ENV}=")
 
+    def session_created(self, name: str) -> float | None:
+        """Tmux session birth as a Unix epoch; None when it cannot be read."""
+        r = subprocess.run(
+            self._cmd("display-message", "-t", name, "-p", "#{session_created}"),
+            capture_output=True, text=True,
+        )
+        raw = r.stdout.strip()
+        try:
+            return float(raw) if r.returncode == 0 and raw else None
+        except ValueError:
+            return None
+
     def kill_session(self, name: str) -> None:
         """Destroy the session AND the process tree in its pane. IDEMPOTENT.
 
@@ -713,6 +725,7 @@ class NullPanes:
     def __init__(self, screen: str = "", drops: bool = False,
                  live: set | None = None, owned: set | None = None,
                  cmdlines: dict | None = None,
+                 created: dict[str, float] | None = None,
                  foreground_cmd: str = "claude") -> None:
         # What the pane's foreground process is, so a test can model the DEAD
         # pane the send guard exists for (aegis-ikj4t). Defaults to a runtime
@@ -741,6 +754,7 @@ class NullPanes:
         # path). A session that is `live` but NOT `owned` models the footgun: a
         # real crew session behind a colliding name that st must refuse to reap.
         self._owned: set = set(owned) if owned is not None else set()
+        self._created = dict(created or {})
         # drops=True models a send that does NOT land — send-keys "succeeds" but
         # the pane never shows the text. This is what #2's verify must catch, and
         # it is the ONLY way to prove verify can fail (a verifier never seen
@@ -849,10 +863,14 @@ class NullPanes:
             raise RuntimeError(f"session {name!r} already exists — stop it first")
         self._live.add(name)
         self._owned.add(name)       # st launched it -> st owns it
+        self._created[name] = time.time()
         return name
 
     def owns(self, name: str) -> bool:
         return name in self._owned
+
+    def session_created(self, name: str) -> float | None:
+        return self._created.get(name)
 
     def sessions(self) -> list[str] | None:
         """The seeded `live` set, or None in ambient mode.
@@ -871,3 +889,4 @@ class NullPanes:
             self._live = set()
         self._live.discard(name)
         self._owned.discard(name)
+        self._created.pop(name, None)
