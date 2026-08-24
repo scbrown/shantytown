@@ -495,8 +495,24 @@ class Tmux:
         # is what this always did — the split of an empty string is no chunks.
         chunks = [text[i:i + _SEND_CHUNK]
                   for i in range(0, len(text), _SEND_CHUNK)] or [""]
+        # `--` BEFORE THE LITERAL, or a chunk beginning with `-` is parsed as a
+        # FLAG (aegis-5993y). `-l` says the ARGUMENT is literal; it does not stop
+        # tmux's own option parser from reaching it first. Measured on tmux 3.6:
+        #
+        #     send-keys -t <p> -l    "-node ingest has the data."
+        #         -> "command send-keys: unknown flag -n", exit 1
+        #     send-keys -t <p> -l -- "-node ingest has the data."
+        #         -> exit 0
+        #
+        # And the failure mode is the one this file already exists to prevent:
+        # chunking splits a body at a fixed width, so WHETHER a message survives
+        # depends on where the boundary lands — a body whose 1000th character is
+        # followed by a hyphen dies mid-delivery. The recipient keeps everything
+        # up to the break and is told nothing; the sender gets a traceback
+        # instead of a delivery line. Partial delivery reported as neither
+        # success nor failure is the worst of the three outcomes.
         for n, chunk in enumerate(chunks):
-            subprocess.run(self._cmd("send-keys", "-t", pane, "-l", chunk),
+            subprocess.run(self._cmd("send-keys", "-t", pane, "-l", "--", chunk),
                            check=True)
             if n + 1 < len(chunks):
                 time.sleep(_SEND_CHUNK_GAP_S)
@@ -566,7 +582,11 @@ class Tmux:
                 f"{', '.join(sorted(OPTION_KEYS))}. One keystroke cannot address "
                 f"a two-digit option.")
         _journal_send(pane, f"<option:{key}>")
-        subprocess.run(self._cmd("send-keys", "-t", pane, "-l", key), check=True)
+        # `--` for the same reason as in send() (aegis-5993y). The allowlist
+        # holds no hyphen today, so this is belt-and-braces — and the allowlist
+        # is the kind of thing that grows.
+        subprocess.run(self._cmd("send-keys", "-t", pane, "-l", "--", key),
+                       check=True)
 
     def new_session(self, name: str, cwd: str | None = None) -> str:
         """Create a DETACHED, EMPTY session; return its address (the name).

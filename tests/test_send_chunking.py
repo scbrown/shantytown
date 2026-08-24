@@ -56,8 +56,13 @@ class _Recorder:
         return [c for c in self.calls if "send-keys" in c]
 
     def literals(self):
-        """The text of each `send-keys -l` call, in order."""
-        return [c[c.index("-l") + 1] for c in self.sendkeys() if "-l" in c]
+        """The text of each `send-keys -l` call, in order.
+
+        The chunk is the LAST argument, not the one after `-l`: since
+        aegis-5993y a `--` sits between them so tmux cannot parse a chunk
+        beginning with `-` as a flag.
+        """
+        return [c[-1] for c in self.sendkeys() if "-l" in c]
 
     def keys(self):
         """Non-literal key sends (the submits)."""
@@ -213,3 +218,61 @@ def test_the_LAUNCHER_may_still_type_into_a_bash_pane():
     panes = NullPanes(foreground_cmd="bash")
     panes.send("shanty-x", "cd /w && claude --settings s.json", allow_shell=True)
     assert panes.sent == [("shanty-x", "cd /w && claude --settings s.json")]
+
+
+# --- aegis-5993y: a chunk beginning with `-` must not be read as a flag -------
+
+
+def test_every_literal_send_is_separated_by_a_double_dash(monkeypatch):
+    """`-l` says the ARGUMENT is literal. It does not stop tmux's own option
+    parser from reaching that argument first.
+
+    MEASURED on tmux 3.6, against a real pane:
+
+        send-keys -t <p> -l    "-node ingest has the data."
+            -> "command send-keys: unknown flag -n", exit 1
+        send-keys -t <p> -l -- "-node ingest has the data."
+            -> exit 0
+
+    `check=True` turns that exit 1 into a CalledProcessError partway through the
+    chunk loop, so the recipient keeps every chunk up to the break and is told
+    nothing, while the sender gets a traceback instead of a delivery line —
+    partial delivery reported as neither success nor failure.
+    """
+    rec = _send(monkeypatch, "hello")
+    for call in rec.sendkeys():
+        if "-l" not in call:
+            continue
+        assert call[call.index("-l") + 1] == "--", (
+            f"no `--` guard before the literal: {call!r}")
+
+
+def test_a_body_that_CHUNKS_onto_a_leading_dash_still_sends(monkeypatch):
+    """The reason this is a correctness bug and not a rare edge case: chunking
+    splits at a fixed width, so whether a message survives depends on where the
+    boundary happens to land. Here the body is built so the SECOND chunk starts
+    with the hyphen that killed the live delivery."""
+    filler = "z" * tmux_mod._SEND_CHUNK
+    body = filler + "-node ingest has the data."
+    rec = _send(monkeypatch, body)
+    lits = rec.literals()
+    assert len(lits) > 1
+    assert lits[1].startswith("-"), "the fixture did not create the condition"
+    assert "".join(lits) == body, "the body did not survive the boundary"
+    for call in rec.sendkeys():
+        if "-l" in call:
+            assert "--" in call
+
+
+def test_the_option_key_send_is_guarded_too(monkeypatch):
+    """`control`/`option` type into another agent's live pane with `-l` as well.
+    The allowlist holds no hyphen today; allowlists grow."""
+    rec = _Recorder()
+    monkeypatch.setattr(tmux_mod.subprocess, "run", rec)
+    monkeypatch.setattr(tmux_mod, "_journal_send", lambda *_a: None)
+    tmux_mod.Tmux().option("some-pane", 1)
+    literal_calls = [c for c in rec.sendkeys() if "-l" in c]
+    assert literal_calls, "option() sent no literal"
+    for call in literal_calls:
+        assert call[call.index("-l") + 1] == "--", call
+        assert call[-1] == "1"
