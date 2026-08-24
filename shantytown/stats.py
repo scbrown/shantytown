@@ -532,15 +532,16 @@ def _claude_project_dir(workspace: str) -> str:
 
 
 def session_usage(root: Path, since_h: float = 24.0, home: Path | None = None
-                  ) -> dict[str, dict[str, tuple[Usage, int]]]:
+                  ) -> dict[str, dict[str, tuple[Usage, int, int]]]:
     """Observed per-agent, per-provider transcript usage in the requested window.
 
-    A tuple is ``(known totals, sessions whose usage is UNKNOWN)``.  UNKNOWN is
-    kept separate from zero: local records exist for sessions with no usage
-    snapshot, and rendering those as zero would understate consumption exactly
-    when the instrument is incomplete.  This scans harness-owned stores instead
-    of the hook capture database because Codex's Stop payload is not Claude's
-    payload and Codex has no Claude consent-file hook.
+    A tuple is ``(known totals, sessions whose usage is UNKNOWN, known
+    sessions)``. UNKNOWN is kept separate from zero: local records exist for
+    sessions with no usage snapshot, and rendering those as zero would
+    understate consumption exactly when the instrument is incomplete. This
+    scans harness-owned stores instead of the hook capture database because
+    Codex's Stop payload is not Claude's payload and Codex has no Claude
+    consent-file hook.
     """
     try:
         cards = FilesRegistry(Path(root) / "crew").all()
@@ -548,7 +549,7 @@ def session_usage(root: Path, since_h: float = 24.0, home: Path | None = None
         return {}
     base = Path.home() if home is None else Path(home)
     cutoff = time.time() - since_h * 3600
-    out: dict[str, dict[str, tuple[Usage, int]]] = {}
+    out: dict[str, dict[str, tuple[Usage, int, int]]] = {}
 
     # First resolve the card workspaces once.  Harness selection is a card fact;
     # a Claude transcript under a Codex card's workspace must not be credited to
@@ -560,9 +561,9 @@ def session_usage(root: Path, since_h: float = 24.0, home: Path | None = None
             cards_by_harness[program.name][str(Path(card.workspace))] = card.name
 
     def add(agent: str, provider: str, usage: Usage | None) -> None:
-        prior, unknown = out.setdefault(agent, {}).get(provider, (Usage(), 0))
+        prior, unknown, known = out.setdefault(agent, {}).get(provider, (Usage(), 0, 0))
         if usage is None:
-            out[agent][provider] = (prior, unknown + 1)
+            out[agent][provider] = (prior, unknown + 1, known)
             return
         out[agent][provider] = (Usage(
             prior.input_tokens + usage.input_tokens,
@@ -571,7 +572,7 @@ def session_usage(root: Path, since_h: float = 24.0, home: Path | None = None
             prior.output_tokens + usage.output_tokens,
             prior.reasoning_output_tokens + usage.reasoning_output_tokens,
             prior.total_tokens + usage.total_tokens,
-        ), unknown)
+        ), unknown, known + 1)
 
     claude_cards = cards_by_harness.get("claude", {})
     for path in (base / ".claude" / "projects").glob("*/*.jsonl"):
@@ -614,16 +615,35 @@ def session_usage(root: Path, since_h: float = 24.0, home: Path | None = None
     return out
 
 
-def _render_usage(by_provider: dict[str, tuple[Usage, int]]) -> str:
-    """Provider-labelled consumption, never a quota percentage or a zero guess."""
+def _render_usage(by_provider: dict[str, tuple[Usage, int, int]]) -> str:
+    """Machine-readable dimensions plus provider-labelled consumption.
+
+    ``usage_in`` is prompt traffic, not merely uncached input. Claude reports
+    base, cache-read and cache-creation input as disjoint fields, while Codex's
+    input total already contains its cached subset. Normalising here makes
+    ``cache_read / usage_in`` the same hit-rate question for both providers.
+    """
     bits = []
-    for provider, (usage, unknown) in sorted(by_provider.items()):
-        known = usage.total_tokens
-        bit = f"{provider}_tokens={known}"
+    usage_in = usage_out = cache_read = known_sessions = 0
+    for provider, (usage, unknown, known_count) in sorted(by_provider.items()):
+        bit = f"{provider}_tokens={usage.total_tokens}"
         if unknown:
             bit += f" ({unknown} session{'s' if unknown != 1 else ''} unknown)"
         bits.append(bit)
-    return " usage=" + ", ".join(bits) if bits else ""
+        # The tuple's third member says a zero-valued snapshot was observed;
+        # totals alone cannot distinguish that from no known session.
+        known_sessions += known_count
+        usage_out += usage.output_tokens
+        cache_read += usage.cached_input_tokens
+        if provider == "claude":
+            usage_in += (usage.input_tokens + usage.cached_input_tokens
+                         + usage.cache_write_input_tokens)
+        else:
+            usage_in += usage.input_tokens
+    machine = (f" usage_known=1 usage_in={usage_in} usage_out={usage_out}"
+               f" cache_read={cache_read}" if known_sessions else "")
+    human = " usage=" + ", ".join(bits) if bits else ""
+    return machine + human
 
 def stats_report(root: Path, agent: str | None = None, since_h: float = 24.0,
                  out=sys.stdout) -> int:
