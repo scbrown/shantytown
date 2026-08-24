@@ -270,3 +270,106 @@ def test_no_remotes_is_refused_not_silently_successful(tmp_path, capsys):
     _git(repo, "commit", "-q", "-m", "one")
     assert push_every_remote(repo, "main") == [], \
         "a repo with no remotes must report nothing pushed, not claim success"
+
+
+# --- requirement 3: never substitute a DIAGNOSIS for the mechanism's refusal --
+#
+# aegis-mmq38. Surfacing the hook's stderr (aegis-l3o0x) put guard prose into the
+# same string the classifier read, and English is not a protocol: a scrub guard
+# that writes "...or fetch first from the internal forge" made `st push` announce
+# a non-fast-forward for BOTH remotes — one of which was a clean fast-forward —
+# and prescribe a fetch-and-merge that cannot clear a content refusal at all. An
+# operator who runs that loop learns the push tool is flaky, not that they just
+# tried to publish an internal identifier; the next reach is `--no-verify`.
+#
+# Both arms, because a build that never says non-fast-forward would pass a
+# one-directional version of this and be just as wrong.
+
+def _refusing_hook(repo: Path, body: str) -> None:
+    hook = repo / ".git" / "hooks" / "pre-push"
+    hook.write_text(f"#!/bin/sh\n{body}\nexit 1\n")
+    hook.chmod(0o755)
+
+
+def test_hook_prose_quoting_git_is_NOT_diagnosed_as_non_fast_forward(
+        two_remotes, capsys):
+    repo, wt, origin, forge = two_remotes
+    _refusing_hook(repo, (
+        "echo 'REFUSED: this push would add internal identifiers to a PUBLIC "
+        "remote.' >&2\n"
+        "echo '  Scrub them and amend, or fetch first from the internal forge "
+        "instead.' >&2"))
+    _commit(wt, "carries-an-internal-identifier")
+
+    assert main(["push", str(repo), "ellie"]) == REFUSED
+    err = capsys.readouterr().err
+    assert "internal identifiers" in err, (
+        f"the guard's own refusal did not reach the operator: {err!r}")
+    # The guard said "fetch first" as ENGLISH. Git said nothing of the kind, and
+    # neither may we.
+    assert "REFUSED: non-fast-forward" not in err, (
+        f"hook prose was mistaken for git's verdict: {err!r}")
+    assert "NOT a non-fast-forward" in err, (
+        f"the operator was not told fetch-and-merge is the wrong remedy: {err!r}")
+    # and nothing landed anywhere — the hook refused every remote
+    assert _sha(origin, "main") != _sha(wt, "HEAD")
+    assert _sha(forge, "main") != _sha(wt, "HEAD")
+
+
+def test_a_real_non_fast_forward_is_STILL_diagnosed(two_remotes, capsys):
+    """The counterpart. Classifying from git's porcelain stdout must not have
+    cost us the diagnosis that was already right."""
+    repo, wt, origin, forge = two_remotes
+    other = repo.parent / "other-nff"
+    _git(repo.parent, "clone", "-q", str(forge), str(other))
+    _git(other, "config", "user.email", "t@example.invalid")
+    _git(other, "config", "user.name", "t")
+    (other / "theirs.txt").write_text("their work\n")
+    _git(other, "add", "-A")
+    _git(other, "commit", "-q", "-m", "their work")
+    _git(other, "push", "-q", "origin", "main")
+
+    _commit(wt, "mine")
+    assert main(["push", str(repo), "ellie"]) == REFUSED
+    err = capsys.readouterr().err
+    assert "forge REFUSED: non-fast-forward" in err, (
+        f"a genuine non-fast-forward lost its diagnosis: {err!r}")
+    assert "fetch" in err.lower() and "merge" in err.lower()
+
+
+def test_the_failure_names_what_it_actually_attempted(two_remotes, capsys):
+    """Two instruments disagreeing is what made this bug cost hours: `st push`
+    pushes `wt/<agent>` from the AGENT'S WORKTREE, while the operator's check was
+    a bare `git push` in whatever tree they were standing in. Naming the ref and
+    the directory makes st's claim reproducible with plain git."""
+    repo, wt, origin, forge = two_remotes
+    _refusing_hook(repo, "echo 'guard says no' >&2")
+    _commit(wt, "whatever")
+
+    assert main(["push", str(repo), "ellie"]) == REFUSED
+    err = capsys.readouterr().err
+    assert "wt/ellie" in err and "main" in err, (
+        f"the failure did not say WHICH ref it pushed: {err!r}")
+    assert str(wt) in err, (
+        f"the failure did not say WHERE it pushed from: {err!r}")
+
+
+def test_porcelain_classifier_reads_ref_status_lines_only():
+    """Unit-level, both directions. `_push_rejected_non_ff` is the whole reason
+    the streams are kept apart, so it is asserted directly."""
+    from shantytown.workspace import _push_rejected_non_ff
+
+    git_said_non_ff = ("To ../forge.git\n"
+                       "!\trefs/heads/wt/ellie:refs/heads/main\t"
+                       "[rejected] (fetch first)\nDone")
+    assert _push_rejected_non_ff(git_said_non_ff) is True
+
+    # A hook decline: git never reached the ref update, so porcelain STDOUT is
+    # empty. It has no opinion, and neither may we.
+    assert _push_rejected_non_ff("") is False
+
+    # Prose that quotes git's wording, on any stream, is not a ref-status line.
+    assert _push_rejected_non_ff(
+        "REFUSED: scrub the identifier, or fetch first from the forge") is False
+    assert _push_rejected_non_ff("! [rejected] fetch first") is False, (
+        "a bare bang line without the tab-separated ref-status shape is prose")

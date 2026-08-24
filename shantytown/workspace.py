@@ -439,12 +439,24 @@ def worktree_for(repo: Path | str, agent: str) -> Path:
 
 
 # Running git is INJECTED here for the same reason cloning and origin-reading are
-# above: the refusal has to be testable without a network. Returns (rc, output).
-# Most callers need stdout as structured input. Push is the exception: Git's
-# porcelain ref report is stdout, while pre-push hooks and Git's own actionable
-# refusal diagnostics are stderr. The default runner preserves both for push so
-# the operator sees the mechanism that refused publication (aegis-l3o0x).
+# above: the refusal has to be testable without a network. Returns (rc, stdout).
 GitRunner = Callable[..., "tuple[int, str]"]
+
+# PUSH GETS ITS OWN RUNNER, AND THE STREAMS STAY APART — (rc, stdout, stderr).
+# Git splits push reporting across both, and the split is not cosmetic: the
+# machine-readable `--porcelain` ref-status report is STDOUT, while pre-push
+# hooks and Git's own prose hints are STDERR. Measured 2026-08-23 (aegis-mmq38):
+# a non-fast-forward puts `!\t<src>:<dst>\t[rejected] (fetch first)` on stdout
+# and leaves the diagnosis nowhere else; a pre-push hook decline leaves stdout
+# EMPTY and speaks only on stderr.
+#
+# aegis-l3o0x merged the two so the operator would finally see the guard that
+# refused publication — necessary, and it is why the merged string must never be
+# the thing CLASSIFIED. Once hook prose shares a buffer with Git's ref status, a
+# guard that writes an ordinary English "fetch first" votes on the diagnosis and
+# `st push` prescribes a fetch-and-merge for a content refusal that no merge can
+# clear. Both streams are still SHOWN verbatim; only stdout is READ.
+PushRunner = Callable[..., "tuple[int, str, str]"]
 
 MAIN_CANDIDATES = ("main", "master")
 
@@ -452,10 +464,34 @@ MAIN_CANDIDATES = ("main", "master")
 def _git(dest: Path | str, *args: str) -> "tuple[int, str]":
     r = subprocess.run(["git", "-C", str(dest), *args],
                        capture_output=True, text=True, timeout=60)
-    output = r.stdout or ""
-    if args and args[0] == "push":
-        output += r.stderr or ""
-    return r.returncode, output.strip()
+    return r.returncode, (r.stdout or "").strip()
+
+
+def _git_push(dest: Path | str, *args: str) -> "tuple[int, str, str]":
+    r = subprocess.run(["git", "-C", str(dest), "push", *args],
+                       capture_output=True, text=True, timeout=60)
+    return r.returncode, (r.stdout or "").strip(), (r.stderr or "").strip()
+
+
+# A porcelain ref-status line, and nothing that merely reads like one. Git emits
+# `<flag>\t<src>:<dst>\t<summary>` on stdout; `!` is the rejected flag. Anchored
+# at the start of the line and requiring the tab-separated shape so that hook
+# text quoting Git's own wording cannot match.
+_PORCELAIN_REJECT = re.compile(r"^!\t[^\t]*\t(?P<summary>.*)$", re.MULTILINE)
+
+
+def _push_rejected_non_ff(porcelain_stdout: str) -> bool:
+    """Did GIT reject this push as a non-fast-forward? Read from stdout ONLY.
+
+    Returns False when stdout carries no ref-status line at all — which is
+    exactly the pre-push-hook decline: Git never reached the ref update, so it
+    has no opinion about fast-forwardness and neither do we.
+    """
+    for m in _PORCELAIN_REJECT.finditer(porcelain_stdout or ""):
+        summary = m.group("summary").lower()
+        if "non-fast-forward" in summary or "fetch first" in summary:
+            return True
+    return False
 
 
 def upstream_ref(dest: Path | str, run: GitRunner = _git
@@ -816,7 +852,8 @@ def _explicit_push_peer(dest: Path | str, remote: str,
 
 
 def push_every_remote(dest: Path | str, src: str, dst: str = "main",
-                      run: GitRunner = _git) -> "list[PushOutcome]":
+                      run: GitRunner = _git,
+                      push_run: PushRunner = _git_push) -> "list[PushOutcome]":
     """Push `src` to `dst` on EVERY configured remote. NEVER forces.
 
     WHY EVERY REMOTE. shantytown has two live peers, neither a mirror, and each
@@ -880,28 +917,41 @@ def push_every_remote(dest: Path | str, src: str, dst: str = "main",
 
     outcomes: list[PushOutcome] = []
     for remote in remotes:
-        rc, out = run(dest, "push", "--porcelain", remote, f"{src}:refs/heads/{dst}")
-        # --porcelain puts the per-ref result on stdout. The runner also retains
-        # stderr for push because hooks explain their refusals there; neither
-        # stream may be replaced by a generic failure (aegis-l3o0x).
-        text = out or ""
+        rc, out, err = push_run(dest, "--porcelain", remote,
+                                f"{src}:refs/heads/{dst}")
         if rc == 0:
             outcomes.append(PushOutcome(
                 remote=remote, ok=True,
-                up_to_date=any(ln.startswith("=") for ln in text.splitlines())))
+                up_to_date=any(ln.startswith("=") for ln in out.splitlines())))
             continue
-        low = text.lower()
-        non_ff = ("non-fast-forward" in low or "fetch first" in low
-                  or "[rejected]" in low)
-        detail = f"\n{text}" if text else ""
+        # CLASSIFY FROM STDOUT, SHOW BOTH STREAMS (aegis-mmq38). Git's porcelain
+        # ref status is the only place that says whether GIT rejected the ref,
+        # and a pre-push hook decline leaves it empty precisely because Git never
+        # got that far. Reading the merged text instead lets a guard's prose
+        # ("...or fetch first from the internal forge") be mistaken for Git's own
+        # verdict — measured to report BOTH remotes as non-fast-forward while one
+        # was a clean fast-forward and the other a content refusal, and then to
+        # prescribe a fetch-and-merge that cannot clear a content refusal at all.
+        non_ff = _push_rejected_non_ff(out)
+        joined = "\n".join(part for part in (out, err) if part)
+        detail = f"\n{joined}" if joined else ""
+        attempt = f"(pushing {src} -> {dst} from {dest})"
         if non_ff:
-            reason = (f"{remote} REFUSED: non-fast-forward. {remote} has commits "
-                      f"this branch does not. Fetch it and merge — never force: "
-                      f"`git fetch {remote} && git merge {remote}/{dst}` then push "
-                      f"again. A merge commit fast-forwards on BOTH remotes."
-                      f"{detail}")
+            reason = (f"{remote} REFUSED: non-fast-forward {attempt}. {remote} has "
+                      f"commits this branch does not. Fetch it and merge — never "
+                      f"force: `git fetch {remote} && git merge {remote}/{dst}` "
+                      f"then push again. A merge commit fast-forwards on BOTH "
+                      f"remotes.{detail}")
         else:
-            reason = f"{remote} FAILED:{detail or ' no output from git push'}"
+            # NO GUESS, AND NO REMEDY WE CANNOT JUSTIFY. Git or a hook refused
+            # and said why on the streams below; a wrapper that summarises a
+            # refusal destroys the only thing the refusal was worth.
+            fallback = (f" git produced no output — reproduce it directly with:"
+                        f" git -C {dest} push {remote} {src}:refs/heads/{dst}")
+            reason = (f"{remote} FAILED {attempt} — the push was rejected and the "
+                      f"reason is below verbatim. This is NOT a non-fast-forward:"
+                      f" fetching and merging will not clear it."
+                      f"{detail or fallback}")
         outcomes.append(PushOutcome(remote=remote, ok=False, non_ff=non_ff,
                                     reason=reason))
     return outcomes
