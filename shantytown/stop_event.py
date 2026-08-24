@@ -656,6 +656,27 @@ def _compose_reason(events: list[StopEvent], verdicts: dict, now: float,
     return "\n".join(lines)
 
 
+# DEFER HAS A CEILING (aegis-d1qko). The defer gate below holds an event back
+# while its SENDER is busy — but "busy" is measured NOW, at the coordinator's
+# drain, and the event is a record of something that already happened. An agent
+# that stops and immediately picks up the next item is busy at every drain that
+# follows, so its stop events are deferred again and again while pending() keeps
+# counting them: the coordinator's hook re-fires with the same count every turn
+# and a genuinely new event hides behind the stale ones. Measured 2026-08-24:
+# 9 events to sattler, all from two agents holding one in_progress item across
+# repeated stops.
+#
+# The gate is still right — a turn boundary must not wake a coordinator for an
+# agent that is mid-flight (aegis-w9z1) — it just must not be able to hold an
+# event indefinitely. Past this age the event is delivered regardless of what the
+# sender is doing, because at that point it is no longer a turn-boundary artifact.
+#
+# ts == 0 means the event predates timestamps and CANNOT be aged. Such an event
+# is delivered rather than deferred: refusing forever on a measurement we cannot
+# make is the bug, not the guard.
+DEFER_MAX_AGE_S = float(os.environ.get("SHANTY_DEFER_MAX_AGE_S", 30 * 60))
+
+
 def _drain(events: FilesEvents, me: str, reg=None, panes=None,
            shows_ready_ui=None, awaiting_answer=None, *, plate=None, rank=None,
            stood_down: bool = False, stopped=None) -> int:
@@ -679,6 +700,8 @@ def _drain(events: FilesEvents, me: str, reg=None, panes=None,
     now = time.time()
     verdicts: dict[str, str] = {}
     deferred = 0
+    deferred_by: dict[str, float] = {}   # sender -> oldest deferred age (s)
+    overdue: list[str] = []              # senders whose events beat the ceiling
     accept = None
     if reg is not None and panes is not None and shows_ready_ui is not None:
         def accept(ev: StopEvent) -> bool:            # noqa: F811 — the wired form
@@ -695,8 +718,15 @@ def _drain(events: FilesEvents, me: str, reg=None, panes=None,
                 verdicts[ev.frm] = _liveness(reg, panes, shows_ready_ui, ev.frm,
                                              awaiting_answer)
             if verdicts[ev.frm] == triage.BUSY:
-                deferred += 1
-                return False                          # DEFER — still pending
+                # Bounded: an event older than the ceiling is delivered anyway.
+                # ev.ts == 0 (pre-timestamp) is treated as ancient, not as
+                # "cannot tell, so hold" — see DEFER_MAX_AGE_S above.
+                age = (now - ev.ts) if ev.ts else float("inf")
+                if age <= DEFER_MAX_AGE_S:
+                    deferred += 1
+                    deferred_by[ev.frm] = max(deferred_by.get(ev.frm, 0.0), age)
+                    return False                      # DEFER — still pending
+                overdue.append(ev.frm)
             return True
 
     got = events.drain(me, accept)                 # BLOCK-ONCE happens in drain()
@@ -705,8 +735,15 @@ def _drain(events: FilesEvents, me: str, reg=None, panes=None,
         # case: every pending sender is still mid-flight, so there is no decision
         # to make and waking the destination would be the aegis-w9z1 bug itself.
         if deferred:
+            # Name the senders and the oldest age. A bare count is what made
+            # aegis-d1qko read as a phantom: the operator could not tell a held
+            # event from a stuck one, nor see it converging.
+            who = ", ".join(f"{a} ({m/60:.0f}m)"
+                            for a, m in sorted(deferred_by.items(),
+                                               key=lambda kv: -kv[1]))
             print(f"stop_event: {deferred} event(s) held back — sender(s) still "
-                  f"mid-flight", file=sys.stderr)
+                  f"mid-flight: {who}; delivered regardless after "
+                  f"{DEFER_MAX_AGE_S/60:.0f}m", file=sys.stderr)
         return 0
     reason = _compose_reason(got, verdicts, now, deferred)
     # ADMIN ENRICHMENT: only when a stop event actually fired (rides BLOCK-ONCE),
