@@ -4,6 +4,8 @@ The second implementation is not charity — it is the leak detector. If a secon
 impl is hard to write, the first one has leaked into the core.
 """
 from __future__ import annotations
+
+from .answer import Answer
 from dataclasses import dataclass
 from typing import Iterator, Protocol, runtime_checkable
 
@@ -408,8 +410,19 @@ class Ranker(Protocol):
     `weight`/`why` populated; it MUST raise RankUnavailable rather than return
     them unweighted when it could not reach its backend. The default impl
     (policy.NullRanker) needs no backend and returns them unchanged — the leak
-    detector that proves the whole feature runs without Hank/Quipu."""
-    def weigh(self, candidates: list) -> list: ...
+    detector that proves the whole feature runs without Hank/Quipu.
+
+    RETURNS AN `Answer`, NOT A BARE LIST (aegis-q0bzh). `RankUnavailable` already
+    covers "I could not reach the backend at all". It does NOT cover the case that
+    actually happens: a weighting that reached the backend and still left some
+    candidates untouched. `PolicyRanker` skips any candidate whose title carries no
+    `mod::sym` token, so those keep `weight = 0` — indistinguishable from a genuine
+    blast radius of zero, which is the ranking equivalent of an empty list that
+    might mean "nothing found" or "never looked".
+
+    `Answer.capped` makes the difference expressible: the list is REAL, it is just
+    not exhaustively weighed, and the caveat says how many were skipped and why."""
+    def weigh(self, candidates: list) -> "Answer[list]": ...
 
 
 @dataclass(frozen=True)

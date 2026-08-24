@@ -48,7 +48,6 @@ BASELINE = {
     # every impl changes with them, so they move as one deliberate change, not as
     # a drive-by.
     ("protocols.py", "Registry", "all"),
-    ("protocols.py", "Ranker", "weigh"),
     ("protocols.py", "Context", "relevant"),
     # Registry impls. `empty_note()` is today's partial mitigation here: it says
     # whether an EMPTY answer is trustworthy for this impl, which is the per-impl
@@ -62,9 +61,10 @@ BASELINE = {
     # not look at all" but NOT a bobbin that answered with a truncated page.
     ("bobbin.py", "BobbinContext", "relevant"),
     ("bobbin.py", "NoContext", "relevant"),
-    # Ranker impls. Mitigated by RankUnavailable, same gap as above.
-    ("policy.py", "NullRanker", "weigh"),
-    ("policy.py", "PolicyRanker", "weigh"),
+    # Ranker impls: ADOPTED (aegis-q0bzh) — Ranker.weigh returns Answer, so the
+    # three lines that were here are gone. RankUnavailable covered "could not
+    # reach the backend"; Answer.capped covers the partial it never did — a
+    # candidate with no mod::sym title, skipped, keeping weight 0.
     # Stop records read off disk; a partial directory read reads as "nobody
     # stopped", which is the aegis-19 blank-plate shape.
     ("stopped.py", "FilesStops", "all"),
