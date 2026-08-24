@@ -46,6 +46,12 @@ STALE = "stale"         # present, version known, older than the latest release
 CURRENT = "current"     # present, version known, == latest
 PRESENT = "present"     # present, version known, latest not checked/unknown
 
+# Probes answer a narrow question and must not hang a normal `st doctor` run.
+# Source installs compile a dependency graph and can legitimately take longer on
+# a cold cache; sharing the probe budget made a healthy build look broken.
+PROBE_TIMEOUT_S = 10
+INSTALL_TIMEOUT_S = 120
+
 
 @dataclass(frozen=True)
 class ToolSpec:
@@ -219,12 +225,19 @@ def _off_path_location(spec: ToolSpec, *, which, run) -> str | None:
     return None
 
 
-def _run(argv: tuple[str, ...]) -> tuple[int, str]:
+def _run(argv: tuple[str, ...], *, timeout: int = PROBE_TIMEOUT_S) -> tuple[int, str]:
     try:
-        r = subprocess.run(list(argv), capture_output=True, text=True, timeout=10)
+        r = subprocess.run(list(argv), capture_output=True, text=True, timeout=timeout)
         return r.returncode, (r.stdout or "") + (r.stderr or "")
+    except subprocess.TimeoutExpired:
+        return 124, f"command exceeded its {timeout}s timeout"
     except (OSError, subprocess.SubprocessError) as e:
         return 127, str(e)
+
+
+def _run_install(argv: tuple[str, ...]) -> tuple[int, str]:
+    """Run a mutating source install with its own, deliberately larger budget."""
+    return _run(argv, timeout=INSTALL_TIMEOUT_S)
 
 
 def _fetch_latest(release: str | None, *, opener=urllib.request.urlopen) -> tuple[str | None, str | None]:
@@ -396,7 +409,7 @@ def _install_steps(spec: ToolSpec, health: Health) -> tuple[str, ...]:
     return ()
 
 
-def run_install(plan: InstallPlan, *, run=_run, dry_run: bool = False) -> None:
+def run_install(plan: InstallPlan, *, run=_run_install, dry_run: bool = False) -> None:
     """Execute a plan. skip/refuse run nothing. --dry-run runs nothing (the steps
     were already shown by the report). Only this function ever mutates the box."""
     if plan.action in ("skip", "refuse") or dry_run:
@@ -404,6 +417,11 @@ def run_install(plan: InstallPlan, *, run=_run, dry_run: bool = False) -> None:
     for step in plan.steps:
         rc, out = run(tuple(step.split()))
         if rc != 0:
+            if rc == 124:
+                raise RuntimeError(
+                    f"{plan.tool}: install step exceeded its {INSTALL_TIMEOUT_S}s build budget; "
+                    f"it may have partly completed: {step}\n{out[:200]}"
+                )
             raise RuntimeError(f"{plan.tool}: install step failed: {step}\n{out[:200]}")
 
 
