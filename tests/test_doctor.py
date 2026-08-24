@@ -193,6 +193,33 @@ def test_non_dry_run_DOES_run_steps_the_control():
     assert ran, "if this is also empty, the dry-run test proves nothing"
 
 
+def test_install_has_its_own_larger_timeout(monkeypatch):
+    """A cold source build must not inherit the 10-second version-probe cap."""
+    seen = []
+
+    def fake_run(argv, *, timeout):
+        seen.append((argv, timeout))
+        return 0, ""
+
+    monkeypatch.setattr(doc, "_run", fake_run)
+    plan = doc.InstallPlan("desirepath", "install", "source build",
+                           ("go install example.invalid/dp@latest",))
+    run_install(plan)
+    assert seen == [(("go", "install", "example.invalid/dp@latest"),
+                     doc.INSTALL_TIMEOUT_S)]
+    assert doc.INSTALL_TIMEOUT_S > doc.PROBE_TIMEOUT_S
+
+
+def test_install_timeout_names_the_build_budget_and_partial_state():
+    plan = doc.InstallPlan("desirepath", "install", "source build",
+                           ("go install example.invalid/dp@latest",))
+    with pytest.raises(RuntimeError) as ei:
+        run_install(plan, run=lambda _argv: (124, "command exceeded its 120s timeout"))
+    text = str(ei.value)
+    assert "exceeded its 120s build budget" in text
+    assert "partly completed" in text
+
+
 def test_detect_touches_nothing_on_disk(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     ran = []
