@@ -22,7 +22,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 
-from shantytown.cycle import CYCLE_REASON, Requests, assess
+from shantytown.cycle import CYCLE_REASON, Requests, assess, requires_checkpoint_bead
 
 
 @dataclass
@@ -234,6 +234,13 @@ def test_the_cycle_reason_is_a_stable_marker():
     crash or a retirement. A constant precisely so two spellings cannot drift
     apart in two files."""
     assert CYCLE_REASON == "cycle-requested"
+
+
+def test_only_administrators_require_a_durable_checkpoint_bead():
+    assert requires_checkpoint_bead("administrator", "")
+    assert not requires_checkpoint_bead("administrator", "aegis-k0dko")
+    assert not requires_checkpoint_bead("lead", "")
+    assert not requires_checkpoint_bead("worker", "")
 
 
 def test_requests_are_written_atomically(tmp_path):
