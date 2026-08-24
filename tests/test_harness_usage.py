@@ -88,6 +88,7 @@ def test_stats_reads_each_harness_store_and_keeps_missing_usage_unknown(tmp_path
     assert got["claude-agent"]["claude"][0].total_tokens == 5
     assert got["codex-agent"]["codex"][0].total_tokens == 12
     assert got["codex-agent"]["codex"][1] == 1
+    assert got["codex-agent"]["codex"][2] == 1
     assert got["role-codex-agent"]["codex"][0].total_tokens == 9
     # A transcript-only agent is included even before a capture hook event exists.
     monkeypatch.setattr(stats.Path, "home", lambda: home)
@@ -96,3 +97,22 @@ def test_stats_reads_each_harness_store_and_keeps_missing_usage_unknown(tmp_path
     rendered = buf.getvalue()
     assert "claude_tokens=5" in rendered
     assert "codex_tokens=12 (1 session unknown)" in rendered
+    assert "usage_known=1 usage_in=8 usage_out=4 cache_read=0" in rendered
+
+
+def test_stats_normalises_cache_hit_denominator_across_providers():
+    rendered = stats._render_usage({
+        "claude": (stats.Usage(input_tokens=10, cached_input_tokens=30,
+                               cache_write_input_tokens=10, output_tokens=5,
+                               total_tokens=55), 0, 1),
+        # Codex input already includes its cached subset.
+        "codex": (stats.Usage(input_tokens=50, cached_input_tokens=20,
+                              output_tokens=7, total_tokens=57), 0, 1),
+    })
+    assert "usage_known=1 usage_in=100 usage_out=12 cache_read=50" in rendered
+
+
+def test_unknown_only_usage_does_not_claim_measured_zeros():
+    rendered = stats._render_usage({"codex": (stats.Usage(), 2, 0)})
+    assert "usage_known=" not in rendered
+    assert "codex_tokens=0 (2 sessions unknown)" in rendered
