@@ -4962,6 +4962,7 @@ def _cmd_subscribe(a) -> int:
     import time
 
     from . import quipu_events as qe
+    from . import shuttle_runs as sr
     from . import tier
 
     events = qe.QuipuEvents(server=a.server)
@@ -4974,6 +4975,14 @@ def _cmd_subscribe(a) -> int:
         admin = None
     state_path = a.root / "events" / "quipu-subscription.json"
     state = qe.SubscriptionState.load(state_path)
+    # The shuttle half: workflow runs in quipu's windowed operational graphs
+    # (scbrown/shuttle). Same watermarked-poll honesty, its own state file,
+    # and its own CANNOT TELL — a store that predates graph kinds reports
+    # loudly instead of reading as an empty workload, without failing the
+    # quipu-events half beside it.
+    runs_source = sr.ShuttleRuns(server=a.server)
+    runs_path = a.root / "events" / "shuttle-runs.json"
+    runs_state = sr.RunsState.load(runs_path)
 
     def route(w) -> None:
         # A governed workflow is assigned -> create the work and hand it to the
@@ -5006,10 +5015,37 @@ def _cmd_subscribe(a) -> int:
                 pass
         print(f"  routed {w.iri} -> {item.id}{mailed}")
 
+    def route_run(r, is_new_run: bool) -> None:
+        # First sight of a run opens a bead; each later state change nudges
+        # the administrator's pane, attributed to the router (aegis-5vxmz) —
+        # nobody composed these lines, the graph did.
+        short = r.iri.rsplit(":", 1)[-1]
+        wf = r.definition.rsplit(":", 1)[-1]
+        if is_new_run:
+            try:
+                item = tracker.create(
+                    f"shuttle run {short} ({wf}) — state {r.state}", assignee=admin)
+                print(f"  shuttle run {short} -> {item.id}")
+            except Exception as e:
+                print(f"  could not create a bead for {r.iri}: {e}", file=sys.stderr)
+                return
+        if admin:
+            try:
+                card = registry.get(admin)
+                if card.pane and panes.exists(card.pane):
+                    panes.send(card.pane, attribute(
+                        f"shuttle run {short} ({wf}) is now '{r.state}'",
+                        attribution_mod.ST_EVENTS))
+            except LookupError:
+                pass
+
     def one() -> int:
         report = qe.poll_and_route(events, state, route)
         state.save(state_path)
         print(report.render())
+        runs_report = sr.poll_runs(runs_source, runs_state, route_run)
+        runs_state.save(runs_path)
+        print(runs_report.render())
         return OK if report.reachable else CANNOT_TELL
 
     if a.once:
