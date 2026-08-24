@@ -96,6 +96,42 @@ def test_a_codex_active_anchor_blocks_with_resume_not_new_work(monkeypatch, caps
     assert "HAUL RESUME" in block["reason"] and "aegis-1" in block["reason"]
 
 
+def test_codex_resume_backs_off_identical_standing_anchor(tmp_path, monkeypatch,
+                                                           capsys):
+    """First continuation is immediate; a stop storm cannot re-serve it."""
+    codex = Agent(name="billy", role="worker", pane="p-b", harness="codex")
+    clock = [1_000.0]
+    monkeypatch.setattr(stop_event.time, "time", lambda: clock[0])
+    kwargs = {"reg": _Reg([codex]),
+              "in_progress": [{"id": "aegis-1", "title": "drain",
+                               "assignee": "billy"}]}
+    _rc, first = _haul_at(monkeypatch, capsys, tmp_path, **kwargs)
+    _rc, repeated = _haul_at(monkeypatch, capsys, tmp_path, **kwargs)
+    assert first and "HAUL RESUME" in first["reason"]
+    assert repeated is None
+
+    clock[0] += 60
+    _rc, second = _haul_at(monkeypatch, capsys, tmp_path, **kwargs)
+    assert second and "HAUL RESUME" in second["reason"]
+    clock[0] += 119
+    _rc, early = _haul_at(monkeypatch, capsys, tmp_path, **kwargs)
+    assert early is None, "the second identical prompt doubles the cooldown"
+
+
+def test_codex_resume_new_anchor_bypasses_old_anchor_backoff(tmp_path, monkeypatch,
+                                                             capsys):
+    codex = Agent(name="billy", role="worker", pane="p-b", harness="codex")
+    clock = [1_000.0]
+    monkeypatch.setattr(stop_event.time, "time", lambda: clock[0])
+    common = {"reg": _Reg([codex])}
+    _rc, first = _haul_at(monkeypatch, capsys, tmp_path, **common,
+                          in_progress=[{"id": "aegis-1", "assignee": "billy"}])
+    _rc, changed = _haul_at(monkeypatch, capsys, tmp_path, **common,
+                            in_progress=[{"id": "aegis-2", "assignee": "billy"}])
+    assert first and changed
+    assert "aegis-2" in changed["reason"]
+
+
 def test_a_codex_lead_active_anchor_resumes_too(monkeypatch, capsys):
     """Leads own beads; drain must not strand their own active anchor."""
     lead = Agent(name="billy", role="lead", pane="p-b", harness="codex")
@@ -237,9 +273,9 @@ def _armed_root(tmp_path, hours=3.0, items=4, risk=2, spend_hours=None,
     return tmp_path
 
 
-def _haul_at(monkeypatch, capsys, root, panes=None, **bd):
+def _haul_at(monkeypatch, capsys, root, panes=None, reg=None, **bd):
     _bd(monkeypatch, **bd)
-    rc = stop_event._haul(_Reg([WORKER]), panes or _Panes({"p-b": "❯ "}),
+    rc = stop_event._haul(reg or _Reg([WORKER]), panes or _Panes({"p-b": "❯ "}),
                           "billy", root)
     out = capsys.readouterr().out.strip()
     return rc, (json.loads(out) if out else None)

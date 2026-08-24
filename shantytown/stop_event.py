@@ -62,6 +62,69 @@ from .triage import running_shells, context_tokens_k, CYCLE_THRESHOLD_K
 from .tmux import Tmux
 
 
+# An active Codex anchor needs a continuation prompt, but that same prompt is
+# emitted from every Stop hook.  Without a rate limit a standing drain anchor
+# turns ordinary turn boundaries into coordinator churn (six stops in 70s,
+# aegis-nvz3s).  The first prompt is always immediate; subsequent prompts for
+# the *same* anchor back off exponentially.  A new anchor is a new piece of
+# work and starts fresh.
+HAUL_RESUME_INITIAL_BACKOFF_S = 60.0
+HAUL_RESUME_MAX_BACKOFF_S = 15 * 60.0
+
+
+def _haul_resume_marker(root: Path, agent: str) -> Path:
+    return Path(root) / "haul_resume" / f"{agent}.json"
+
+
+def _allow_haul_resume(root: Path | None, agent: str, nid: str,
+                       now: float | None = None) -> bool:
+    """Whether this active anchor may emit a continuation prompt now.
+
+    The marker is advisory only: unreadable state, a failed write, or a test
+    with no root all allow the prompt.  A limiter must never strand a Codex
+    worker merely because its small local state file is unavailable.
+    """
+    if root is None:
+        return True
+    try:
+        d = json.loads(_haul_resume_marker(root, agent).read_text(encoding="utf-8"))
+        if d.get("anchor") != nid:
+            return True
+        last = float(d["at"])
+        prompts = max(1, int(d.get("prompts", 1)))
+        delay = min(HAUL_RESUME_INITIAL_BACKOFF_S * (2 ** (prompts - 1)),
+                    HAUL_RESUME_MAX_BACKOFF_S)
+        current = time.time() if now is None else now
+        # A backwards or malformed clock is not evidence to suppress work.
+        return current < last or current - last >= delay
+    except FileNotFoundError:
+        return True
+    except Exception:                    # noqa: BLE001
+        return True
+
+
+def _mark_haul_resume(root: Path | None, agent: str, nid: str,
+                      now: float | None = None) -> None:
+    """Best-effort record of an emitted resume prompt; never blocks the hook."""
+    if root is None:
+        return
+    try:
+        p = _haul_resume_marker(root, agent)
+        prompts = 1
+        try:
+            old = json.loads(p.read_text(encoding="utf-8"))
+            if old.get("anchor") == nid:
+                prompts = max(1, int(old.get("prompts", 1))) + 1
+        except Exception:                # noqa: BLE001
+            pass
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps({"anchor": nid,
+                                 "at": time.time() if now is None else now,
+                                 "prompts": prompts}), encoding="utf-8")
+    except Exception:                    # noqa: BLE001
+        pass
+
+
 def _root(argv: list[str]) -> Path:
     """--root <dir>, else the shared discovery chain (deployment.resolve_root).
 
@@ -346,6 +409,9 @@ def _haul(reg: FilesRegistry, panes, me: str, root: Path) -> int:
         if resume is not None:
             from .feed_check import haul_resume_message
             rid = resume.get("id", "?")
+            if not _allow_haul_resume(root, me, rid):
+                return 0
+            _mark_haul_resume(root, me, rid)
             title = resume.get("title") or ""
             print(json.dumps({"decision": "block",
                               "reason": haul_resume_message(rid, title)}))
