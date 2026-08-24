@@ -71,6 +71,10 @@ INVENTORY: dict[tuple[str, str], tuple[str, str]] = {
         ATTRIBUTED_HERE,
         "governed-workflow assignment from the quipu event router; sender is the "
         "ROUTER (`st quipu-events`), because no person composed it."),
+    ("cli.py", "route_run"): (
+        ATTRIBUTED_HERE,
+        "shuttle run state change from the windowed-graph poll; same router, "
+        "same reason — the graph composed this line, not a person."),
     ("dispatch.py", "go"): (
         ATTRIBUTED_UPSTREAM,
         "p.text was signed in Dispatcher.plan(), so the prefix also reaches "

@@ -28,6 +28,13 @@ first didn't leak.
 | **panes** | bare `tmux` | `shanty` / `herdr` adapters, later |
 | **context** | **bobbin** | none-adapter (returns nothing, harness still works) |
 | **knowledge** *(planned — not built)* | quipu | none-adapter |
+| **shuttle runs** | quipu windowed graphs (`shuttle_runs.py`) | `NoShuttleRuns` — the negative control |
+
+**shuttle runs** is the events layer extended, not the knowledge layer built: `st subscribe`
+polls shuttle's workflow runs out of quipu's windowed operational graphs (scope named explicitly —
+the `urn:shuttle:dataset:open` dataset — because a default-graph read returns silent zero rows) and
+routes new run states to the administrator. The reserved knowledge layer (aegis-ks9b) stays
+reserved; nothing here reads or writes `Knowledge`/`Fact`/`Episode`.
 
 The **registry** row is the one that breaks the pattern and it's worth staring at: it is the only
 layer with **no `none` option** — you cannot start an agent whose identity you can't read. It still
