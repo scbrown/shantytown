@@ -1,4 +1,4 @@
-"""The governor's FLEET-SIZE CAP (aegis-3vt4h).
+"""The governor's FLEET-SIZE CAP (aegis-tzpo1).
 
 Stiwi, 2026-08-04: *"have the governor add a cap, we clearly need a mechanism."*
 

@@ -236,7 +236,7 @@ class Tier:
     traits: tuple[str, ...] = ()
     action: str | None = None
     window: str = FIVE_HOUR
-    # How many agents may be LIVE while this tier holds (aegis-3vt4h). A fourth
+    # How many agents may be LIVE while this tier holds (aegis-tzpo1). A fourth
     # kind of restriction, and the only one that acts on the SIZE of the fleet
     # rather than on what it is allowed to do. Composes like min_priority:
     # strictest (lowest) wins across engaged tiers, and a tier that declares none
@@ -481,7 +481,7 @@ class Policy:
     # remains dispatchable under a floor, which is a different question.
     exempt: tuple[str, ...] = ()
     # THE FLEET-SIZE CAP, and the only governor input that is NOT read from a
-    # meter (aegis-3vt4h). Stiwi, 2026-08-04: *"have the governor add a cap, we
+    # meter (aegis-tzpo1). Stiwi, 2026-08-04: *"have the governor add a cap, we
     # clearly need a mechanism."*
     #
     # WHY A BASELINE AND NOT ONLY TIERS. Every other restriction here engages as
@@ -1760,7 +1760,7 @@ class Verdict:
     # that was working. A display bug that manufactures a plausible false bug
     # report is more dangerous than one that merely confuses.
     by_window: dict = field(default_factory=dict)
-    # The BASELINE fleet-size cap, copied off the policy (aegis-3vt4h). Carried on
+    # The BASELINE fleet-size cap, copied off the policy (aegis-tzpo1). Carried on
     # the verdict rather than read from the policy at the call site for the same
     # reason `exempt` is: a Verdict must be able to explain every restriction it
     # implies without the caller needing a second object. Read it through
@@ -1885,7 +1885,7 @@ class Verdict:
     @property
     def max_agents(self) -> int | None:
         """How many agents may be LIVE: the STRICTEST of the baseline and every
-        engaged tier's own cap (aegis-3vt4h). None = uncapped.
+        engaged tier's own cap (aegis-tzpo1). None = uncapped.
 
         THE BASELINE SURVIVES A LOST SIGNAL AND THE TIER CAPS DO NOT, which is
         the whole reason both exist. `cap` is a static number an operator wrote
@@ -2407,7 +2407,7 @@ class Governor:
             # number failure wearing the other hat.
             return Verdict(
                 reading=reading, pct=reading.pct, signal_lost=True, frozen=frozen,
-                # THE BASELINE CAP SURVIVES A LOST SIGNAL (aegis-3vt4h). Every
+                # THE BASELINE CAP SURVIVES A LOST SIGNAL (aegis-tzpo1). Every
                 # tier is dropped here because a remembered tier must not be
                 # applied to an unmeasured present — but `cap` was never measured
                 # in the first place, so blindness is not a reason to relax it.
@@ -3278,7 +3278,7 @@ def _tier(spec) -> Tier:
             f"tier on a window nothing publishes would never engage, and a "
             f"threshold that can never fire reads exactly like one that is "
             f"simply never reached.")
-    # `max_agents` is the FOURTH kind of restriction (aegis-3vt4h) and had to be
+    # `max_agents` is the FOURTH kind of restriction (aegis-tzpo1) and had to be
     # added here too: a tier that caps the fleet and declares nothing else is a
     # real policy, not an empty one. Leaving it out of this check would have made
     # a size-only tier unconfigurable — the same class of bug as the (window, at)
