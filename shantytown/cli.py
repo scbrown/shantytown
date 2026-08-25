@@ -1,9 +1,9 @@
-"""st — the CLI. Twenty-five commands, and the count is load-bearing: each earns its slot.
+"""st — the CLI. Twenty-six commands, and the count is load-bearing: each earns its slot.
 
     anchor [--short|--events|--harness] · go · repool · inbox [--count] · task
     · crew [--count|--governor] · input [--show|--clear|--dismiss] · ask · answer
     · roles [--check|set|band|sync] · init · new · start [--mode]
-    · stop · log · context · doctor [--install]
+    · stop · log · context · doctor [--install] · dream [--run]
     · tend [--install|--status|--reauth|--target] · attach [-r|--no-start]
     · dashboard [admin] · subscribe · cycle [--self|--allow-loss] · worktree [--gc]
     · push [--branch] · stats
@@ -74,6 +74,9 @@ grew well past the original ten, each slot on a specific ask — not drift:
               the EXISTING seams — the registry, tier.role_set, the same settings
               emitter `roles set` uses — so it is not a second way to declare a
               crew, it is the first way to get one without hand-authoring JSON.
+  · dream   — schedule one bounded, reviewed reflection artifact on measured
+              spare provider capacity. It is not a tend flag because operators
+              need a read/preview surface for its due state and safety gates.
 The count is PINNED by a test (tests/test_command_count.py): the next command
 either updates this number or fails CI. This docstring used to say "ten" while the
 code had eleven (context landed unannounced) — a count nobody enforces is a
@@ -100,6 +103,7 @@ from pathlib import Path
 
 from . import beads as beads_mod
 from . import cycle as cycle_mod
+from . import dream as dream_mod
 from . import bootstrap as boot_mod
 from . import config
 from . import harness as harness_mod
@@ -787,6 +791,12 @@ def build_parser() -> argparse.ArgumentParser:
     tk.add_argument("-a", "--assignee")
     tk.add_argument("-n", "--dry-run", action="store_true")
 
+    dm = sub.add_parser("dream", help="inspect or run one bounded spare-capacity reflection cycle")
+    dm.add_argument("--run", action="store_true",
+                    help="run one cycle now (still requires idle work queue and measured headroom)")
+    dm.add_argument("-n", "--dry-run", action="store_true",
+                    help="show the cycle that would be created; write nothing")
+
     cx = sub.add_parser("context", help="what code should I be looking at?")
     cx.add_argument("query", nargs="+")
     cx.add_argument("-b", "--budget", type=int, default=5)
@@ -1045,6 +1055,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_start(a)
     if a.cmd == "tend":
         return _cmd_tend(a)
+    if a.cmd == "dream":
+        return _cmd_dream(a)
     if a.cmd == "attach":
         return _cmd_attach(a)
     if a.cmd == "input":
@@ -5852,6 +5864,97 @@ def _cmd_attach(a, *, execer=_exec_attach, which=None) -> int:
     return execer(argv, env)
 
 
+def _dream_sweep(a, cfg, agents, panes, *, force=False, dry_run=False):
+    """Create at most one due dream bead; return (plan, item-id, reason).
+
+    This is a best-effort tend layer.  Every capacity input is a measured,
+    persist=False provider verdict; signal loss removes a provider from
+    consideration rather than becoming fictional headroom.
+    """
+    from . import feed_check
+
+    policy = cfg.dream
+    state = dream_mod.State(a.root)
+    ready = feed_check._bd_ready(feed_check.bd_cwd(_registry(a)))
+    try:
+        active = feed_check.bd_in_progress(feed_check.bd_cwd(_registry(a)))
+    except Exception:
+        active = []
+    free = feed_check.free_feedable_workers(_registry(a), panes, _runtime(a, panes),
+                                            root=a.root)
+    free = [name for name in free if name not in feed_check.hauls(ready, active)]
+    cards = {card.name: card for card in agents}
+    candidates = []
+    cfg_now, governors = _governors(a)
+    verdicts = {name: governor.evaluate(persist=False)
+                for name, governor in governors.items()}
+    for name in free:
+        card = cards.get(name)
+        if card is None:
+            continue
+        harness, governor, unconfigured = _governor_for(
+            cfg_now, governors, card, a.root)
+        verdict = (unconfigured if unconfigured is not None else
+                   verdicts.get(harness, verdicts.get("base")))
+        if verdict is None or verdict.signal_lost:
+            continue
+        values = [pct for pct in verdict.by_window.values() if pct is not None]
+        pct = max(values) if values else verdict.pct
+        if pct is None or governor is None:
+            continue
+        headroom = 100.0 - float(pct)
+        # The foreground delegation reserve is protected even when dream's own
+        # threshold is looser.  Spare means above BOTH lines, never either.
+        if headroom < governor.policy.delegation_reserve_pct:
+            continue
+        candidates.append({"agent": name, "harness": harness,
+                           "headroom": headroom})
+    cycle, reason = dream_mod.plan(policy, state.read(), ready, candidates,
+                                   force=force)
+    if cycle is None:
+        return None, "", reason
+    if dry_run:
+        return cycle, "", "dry-run"
+    item = _tracker(a).create(cycle.title, assignee=cycle.agent, priority=4,
+                              labels=cycle.labels,
+                              description=cycle.description)
+    # Observed create first, state second. A tracker exception leaves the prior
+    # due time intact, so the next tend pass retries rather than losing a cycle.
+    state.record(cycle, item.id)
+    card = cards.get(cycle.agent)
+    if card is not None and card.pane and panes.exists(card.pane):
+        panes.send(card.pane, attribute(
+            f"Work is on your hook: {item.id} — {cycle.title} — scheduled DREAM "
+            f"cycle; read the bead and execute one bounded pass.", "st dream"))
+    return cycle, item.id, "created"
+
+
+def _cmd_dream(a) -> int:
+    cfg = config.load(Path(a.root))
+    state = dream_mod.State(a.root).read()
+    if not a.run:
+        due = state.get("last_at", 0) + cfg.dream.interval_minutes * 60
+        print(f"  dream {'on' if cfg.dream.enabled else 'off'} · interval "
+              f"{cfg.dream.interval_minutes}m · minimum headroom "
+              f"{cfg.dream.min_headroom_pct}%")
+        print(f"  last {state.get('last_item', 'never')} · next due "
+              f"{time.strftime('%Y-%m-%d %H:%M:%S %Z', time.localtime(due)) if state else 'now'}")
+        print(f"  rotation: {', '.join(cfg.dream.domains)}")
+        return OK
+    panes = _panes(a)
+    agents = _registry(a).all()
+    cycle, item_id, reason = _dream_sweep(a, cfg, agents, panes, force=True,
+                                          dry_run=a.dry_run)
+    if cycle is None:
+        print(f"  dream stayed asleep: {reason}")
+        return OK
+    verb = "would create" if a.dry_run else "created"
+    suffix = "" if a.dry_run else f" ({item_id})"
+    print(f"  {verb}: {cycle.title}{suffix} -> {cycle.agent} on {cycle.harness} "
+          f"({cycle.headroom:.0f}% headroom)")
+    return OK
+
+
 def _cmd_tend(a) -> int:
     """tend — one supervision pass, or manage the timer that runs them.
 
@@ -6150,6 +6253,16 @@ def _tend_once(a, quiet: bool = False) -> int:
         if idle:
             print(f"  ⚠ alerted the coordinator — {len(idle)} newly-idle feedable "
                   f"worker(s) with work ready: {', '.join(idle)}", file=sys.stderr)
+        # SLEEP/DREAM (aegis-2o5n2): only after the normal idle-work sweep has
+        # had first claim. The planner independently requires zero normal ready
+        # work, so ordering and predicate both encode "lowest priority".
+        dreamed = _sweep("dream", lambda: _dream_sweep(
+            a, cfg, agents, panes, force=False, dry_run=False))
+        if dreamed and dreamed[0] is not None:
+            cycle, item_id, _reason = dreamed
+            print(f"  ☾ DREAM queued {item_id} for {cycle.agent} on "
+                  f"{cycle.harness}: {cycle.mode}/{cycle.domain} "
+                  f"({cycle.headroom:.0f}% headroom)", file=sys.stderr)
         # BLOCKED ON A HUMAN (internal-ref): the beads NOTHING else looks at.
         # The plate-reader fix took blocked beads off plates — correct, and it
         # also removed the last thing that touched them at all. They are off

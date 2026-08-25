@@ -67,6 +67,10 @@ INVENTORY: dict[tuple[str, str], tuple[str, str]] = {
     ("cli.py", "_inbox_durable"): (
         ATTRIBUTED_UPSTREAM,
         "the same `msg` _cmd_inbox attributed, handed in as a parameter."),
+    ("cli.py", "_dream_sweep"): (
+        ATTRIBUTED_HERE,
+        "scheduled dream assignment into the selected agent's pane; sender is "
+        "the st dream scheduler, not a person."),
     ("cli.py", "route"): (
         ATTRIBUTED_HERE,
         "governed-workflow assignment from the quipu event router; sender is the "
