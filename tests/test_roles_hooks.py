@@ -189,7 +189,7 @@ def test_positive_control_ignoring_the_graph_hides_the_missing_drain(tmp_path: P
     catches it."""
     c = _crew(tmp_path)
     _emit(tmp_path, "administrator", "lead", "worker")
-    agents = FilesRegistry(c).all()
+    agents = FilesRegistry(c).all().exact()
     dearing = next(a for a in agents if a.name == "dearing")
 
     # honest reader, send-only lead

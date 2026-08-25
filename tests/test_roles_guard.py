@@ -278,7 +278,7 @@ def test_positive_control_the_reader_sees_the_real_emitted_artifact(tmp_path: Pa
     assert GUARD in p.read_text(), "the guard is not in the bytes on disk"
 
     _card(tmp_path / "crew", "gennaro", role="worker", harness="codex")
-    got = _reader(tmp_path)(FilesRegistry(tmp_path / "crew").all()[0])
+    got = _reader(tmp_path)(FilesRegistry(tmp_path / "crew").all().exact()[0])
     assert got == GUARD
 
 

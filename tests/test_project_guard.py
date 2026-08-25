@@ -17,6 +17,8 @@ The contract these pin:
     No individual row shows that, which is exactly why it needs its own check.
 """
 from __future__ import annotations
+
+from shantytown.answer import Answer
 import json
 from pathlib import Path
 
@@ -38,7 +40,7 @@ def graph(monkeypatch, *agents):
     """Point `project` at a fake graph. Read-only, so a stub registry is enough."""
     class FakeQuipu:
         def all(self):
-            return list(agents)
+            return Answer.complete_read(list(agents), how="test graph")
     monkeypatch.setattr(cli, "QuipuRegistry", FakeQuipu)
 
 
@@ -233,7 +235,7 @@ def test_a_clean_FILE_match_does_NOT_warn(tmp_path, monkeypatch, capsys):
     # construction whatever roles derive_agents assigns — the test is about the
     # warning, not about role inference.
     d = tmp_path / "crew"; d.mkdir()
-    for ag in FileHierarchy(h).all():
+    for ag in FileHierarchy(h).all().exact():
         (d / f"{ag.name}.json").write_text(json.dumps(
             {"role": ag.role, "reports_to": ag.reports_to,
              "pane": f"shanty-{ag.name}"}))

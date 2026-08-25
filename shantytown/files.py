@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 
+from .answer import Answer
 from .inbox import is_message, is_unworkable
 from .protocols import Agent, WorkItem
 # The pane-naming policy lives with the tier that writes cards. Imported under a
@@ -164,7 +165,7 @@ class FilesRegistry:
         existing.setdefault("pane", tier_pane_for(agent.name))
         p.write_text(json.dumps(existing, indent=2, sort_keys=True))
 
-    def all(self) -> list[Agent]:
+    def all(self) -> Answer[list[Agent]]:
         """Every agent. RAISES if there is no registry to read.
 
         This distinction is load-bearing and it was a real bug: glob() on a
@@ -179,7 +180,10 @@ class FilesRegistry:
         """
         if not self.root.is_dir():
             raise OSError(f"no registry to read: {self.root} does not exist")
-        return [self.get(p.stem) for p in sorted(self.root.glob("*.json"))]
+        return Answer.complete_read(
+            [self.get(p.stem) for p in sorted(self.root.glob("*.json"))],
+            how=f"FilesRegistry: every *.json card under {self.root}",
+        )
 
 
     def empty_note(self) -> str | None:

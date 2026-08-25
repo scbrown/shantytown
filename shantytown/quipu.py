@@ -25,7 +25,7 @@ import urllib.request
 from dataclasses import replace
 
 # Shared ancestor for every "I could not look" (see shantytown/answer.py).
-from shantytown.answer import CouldNotLook
+from shantytown.answer import Answer, CouldNotLook
 
 from .protocols import Agent
 
@@ -527,9 +527,21 @@ class QuipuRegistry:
             raise QuipuNotQuipu(not_quipu(
                 self.server, "/query",
                 f'"rows" is a {type(rows).__name__}, not a list'))
+        self._last_query_truncated = bool(body.get("truncated"))
         return rows
 
-    def all(self) -> list[Agent]:
+    def _query_answer(self, sparql: str) -> Answer[list[dict]]:
+        """Wrap `_query` without bypassing injected test/offline implementations."""
+        self._last_query_truncated = False
+        rows = self._query(sparql)
+        how = f"QuipuRegistry: POST {self.server}/query in namespace <{self.onto}>"
+        if self._last_query_truncated:
+            return Answer.capped(
+                rows, how=how,
+                caveat="quipu reported that the query result was truncated")
+        return Answer.complete_read(rows, how=how)
+
+    def all(self) -> Answer[list[Agent]]:
         """Every crew member, roles derived. RAISES `QuipuUnreachable` if quipu
         cannot be read — never returns `[]` on failure.
 
@@ -548,14 +560,27 @@ class QuipuRegistry:
         so this degrades in the direction that keeps `crew`, `tend` and the drain
         working on a graph that has not been migrated at all.
         """
-        agents = derive_agents(self._query(self._all))
+        roster = self._query_answer(self._all).map(derive_agents)
+        agents = roster.at_least()
         try:
             stacks = self.role_sets()
         except QuipuUnreachable:
-            return agents
-        if not stacks:
-            return agents
-        return [replace(a, roles=stacks.get(a.name, ())) for a in agents]
+            return Answer.capped(
+                agents,
+                how=roster.how,
+                caveat="crew roster was read but stacked-role enrichment was unavailable",
+            )
+        stack_values = stacks.at_least()
+        enriched = [replace(a, roles=stack_values.get(a.name, ())) for a in agents]
+        if not roster.complete:
+            return Answer.capped(enriched, how=roster.how,
+                                 caveat=roster.caveat or "roster query was incomplete")
+        if not stacks.complete:
+            return Answer.capped(enriched, how=stacks.how,
+                                 caveat=stacks.caveat or "role-set query was incomplete")
+        if not enriched:
+            return Answer.capped(enriched, how=roster.how, caveat=self.empty_note())
+        return Answer.complete_read(enriched, how=roster.how)
 
     def catalog(self):
         """The deployment's ROLE CATALOG, from the graph (GitHub #37).
@@ -569,7 +594,7 @@ class QuipuRegistry:
         return derive_catalog(self._query(catalog_query(self.onto)),
                               self._query(precedence_query(self.onto)))
 
-    def role_sets(self) -> dict[str, tuple[str, ...]]:
+    def role_sets(self) -> Answer[dict[str, tuple[str, ...]]]:
         """{member: (role, ...)} from `hasRole` — the STACK, where the single
         derived `role` is only the tree position.
 
@@ -580,11 +605,14 @@ class QuipuRegistry:
         un-migrated member indistinguishable from a migrated one.
         """
         out: dict[str, list[str]] = {}
-        for r in self._query(roles_query(self.onto)):
+        rows = self._query_answer(roles_query(self.onto))
+        for r in rows.at_least():
             member, role = _local(r.get("s") or ""), _local(r.get("r") or "")
             if member and role and role not in out.setdefault(member, []):
                 out[member].append(role)
-        return {k: tuple(sorted(v)) for k, v in out.items()}
+        return rows.map(lambda _rows: {
+            k: tuple(sorted(v)) for k, v in out.items()
+        })
 
     def empty_note(self) -> str | None:
         """A graph CANNOT vouch for its own empty answer, so this never returns None.
@@ -618,7 +646,7 @@ class QuipuRegistry:
     def get(self, name: str) -> Agent:
         """One agent by name. Raises `LookupError` if absent (a real answer),
         `QuipuUnreachable` if quipu can't be read (not an answer)."""
-        for a in self.all():
+        for a in self.all().exact():
             if a.name == name:
                 return a
         raise LookupError(f"no such agent in quipu: {name}")
@@ -726,7 +754,7 @@ class QuipuRegistry:
     def _reaches(self, start: str, target: str) -> bool:
         """Does `start` reach `target` by following reports_to (cycle check)?"""
         seen: set[str] = set()
-        agents = {a.name: a for a in self.all()}
+        agents = {a.name: a for a in self.all().exact()}
         cur: str | None = start
         while cur is not None and cur not in seen:
             if cur == target:
@@ -767,4 +795,3 @@ class QuipuRegistry:
 
 # The vocabulary is process-wide config, so this is resolved once, at import.
 QuipuRegistry._ALL = all_query()
-

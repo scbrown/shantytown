@@ -15,6 +15,8 @@ Two properties carry the weight here and both have a bug behind them:
 """
 from __future__ import annotations
 
+from shantytown.answer import Answer
+
 import pytest
 
 from shantytown import config, quipu, roles as roles_mod, tier, traits
@@ -104,7 +106,7 @@ class _Reg:
         return self._a[n]
 
     def all(self):
-        return list(self._a.values())
+        return Answer.complete_read(list(self._a.values()), how="test registry")
 
 
 def _catalog_with_advisor():

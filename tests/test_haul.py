@@ -8,6 +8,8 @@ stops the feed and instructs the reset instead; everything fails OPEN — a
 broken advance must never trap a worker at its own stop.
 """
 from __future__ import annotations
+
+from shantytown.answer import Answer
 import json
 
 import pytest
@@ -22,7 +24,7 @@ class _Reg:
     def get(self, name):
         return self._c[name]
     def all(self):
-        return list(self._c.values())
+        return Answer.complete_read(list(self._c.values()), how="test registry")
 
 
 class _Panes:

@@ -4,6 +4,8 @@ agent remembering. ff-only ALWAYS; the provisioned kit survives the pull; a
 refused pull is VISIBLE and never blocks the work.
 """
 from __future__ import annotations
+
+from shantytown.answer import Answer
 import json
 import subprocess
 from pathlib import Path
@@ -97,7 +99,7 @@ class _Reg:
     def get(self, name):
         return self._c[name]
     def all(self):
-        return list(self._c.values())
+        return Answer.complete_read(list(self._c.values()), how="test registry")
 
 
 def test_keep_current_pulls_the_agents_workspace(repo_pair, monkeypatch):
@@ -157,7 +159,7 @@ def test_the_cycle_pulls_the_workspace_before_the_prompt(tmp_path):
                     wiring=lambda a: LiveWiring(directions={"send"},
                                                 settings_path="/s.json"),
                     refresh=lambda ws: pulled.append(ws) or None)
-    assert d.sweep(reg.all(), _Runtime()) == ["g"]
+    assert d.sweep(reg.all().exact(), _Runtime()) == ["g"]
     assert pulled == ["/ws/g"], "pull must happen for the prompted agent"
 
 
@@ -170,7 +172,7 @@ def test_a_refused_cycle_pull_is_loud_and_does_not_block_the_cycle(tmp_path):
                                                 settings_path="/s.json"),
                     refresh=lambda ws: "fatal: Not possible to fast-forward",
                     log=logs.append)
-    assert d.sweep(reg.all(), _Runtime()) == ["g"], "the /clear matters more"
+    assert d.sweep(reg.all().exact(), _Runtime()) == ["g"], "the /clear matters more"
     assert any("NOT brought current" in m for m in logs)
 
 
@@ -180,7 +182,7 @@ def test_a_dark_agent_gets_no_pull_and_no_prompt(tmp_path):
     panes = _Panes({"p-g": IDLE_SAT})
     d = CycleDriver(tmp_path, reg, panes, wiring=lambda a: None,
                     refresh=lambda ws: pulled.append(ws) or None)
-    assert d.sweep(reg.all(), _Runtime()) == []
+    assert d.sweep(reg.all().exact(), _Runtime()) == []
     assert pulled == [], "not st's agent -> not st's pull either"
 
 

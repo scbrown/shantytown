@@ -41,6 +41,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from .answer import Answer
 from .protocols import Agent
 from .quipu import QuipuRegistry, derive_agents
 
@@ -237,11 +238,14 @@ class FileHierarchy:
     def __init__(self, path: str | Path):
         self.path = Path(path)
 
-    def all(self) -> list[Agent]:
-        return derive_agents(load_file_rows(self.path))
+    def all(self) -> Answer[list[Agent]]:
+        return Answer.complete_read(
+            derive_agents(load_file_rows(self.path)),
+            how=f"FileHierarchy: complete hierarchy file {self.path}",
+        )
 
     def get(self, name: str) -> Agent:
-        for a in self.all():
+        for a in self.all().exact():
             if a.name == name:
                 return a
         raise LookupError(f"no such agent in {self.path}: {name}")
@@ -283,18 +287,18 @@ def resolve(spec: str | None, *, file_default: str | Path | None = None,
 
     if kind == "quipu":
         src = quipu_factory()
-        src.all()  # probe now: an explicit --from quipu must fail loudly here
+        src.all().exact()  # probe now: an explicit source must be exhaustive
         return src, SourceInfo("quipu", "quipu", explicit=True)
 
     if kind == "file":
         src = file_factory(path)
-        src.all()  # probe now, same reason
+        src.all().exact()  # probe now, same reason
         return src, SourceInfo("file", str(path), explicit=True)
 
     # AUTO: ontology-first, file-fallback.
     try:
         src = quipu_factory()
-        src.all()
+        src.all().exact()
         return src, SourceInfo("quipu", "quipu")
     except Exception as e:
         if file_default is None:
@@ -305,7 +309,7 @@ def resolve(spec: str | None, *, file_default: str | Path | None = None,
         why = f"{type(e).__name__}: {e}"
         src = file_factory(file_default)
         try:
-            src.all()
+            src.all().exact()
         except Exception as fe:
             raise HierarchyUnavailable(
                 f"quipu could not be read ({e}) AND the fallback "

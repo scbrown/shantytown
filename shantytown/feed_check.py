@@ -135,7 +135,7 @@ def free_feedable_workers(reg, panes, runtime, root=None) -> list[str]:
     dark = dark_agents()
     stamped = st_launched_agents(root) if root is not None else None
     out = []
-    for ag in reg.all():
+    for ag in reg.all().exact():
         if ag.role != "worker" or not ag.pane or not panes.exists(ag.pane):
             continue
         # Cheap, and FIRST among the card checks — the same ordering rule
@@ -233,7 +233,7 @@ def bd_cwd(reg) -> str | None:
     coordinator itself runs bd, so it is the one directory that is correct for
     every caller.
     """
-    for card in reg.all():
+    for card in reg.all().exact():
         if card.role == "administrator":
             if not card.workspace:
                 return None

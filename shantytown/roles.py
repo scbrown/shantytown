@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from .answer import Answer
 from .protocols import Agent, Registry
 
 OK, BROKEN, CANNOT_TELL = "ok", "broken", "cannot tell"
@@ -378,7 +379,12 @@ def check(registry: Registry, emitted=None, live=None, catalog=None,
     for a real check, and the CLI passes the real value.
     """
     try:
-        agents: list[Agent] = registry.all()
+        answer = registry.all()
+        # Minimal duck-typed registries in checks/tests may predate Answer. They
+        # remain governed by empty_note's fail-safe default; real adapters are
+        # ratcheted by test_no_bare_collections and must return Answer.
+        agents: list[Agent] = (answer.exact()
+                               if isinstance(answer, Answer) else answer)
     except Exception as e:
         # The registry itself is unreachable. Not "everyone is fine".
         return Report([Row("(registry)", "—", None, CANNOT_TELL, str(e))])
@@ -488,8 +494,9 @@ class _Static:
     def __init__(self, agents: list[Agent]):
         self._agents = list(agents)
 
-    def all(self) -> list[Agent]:
-        return list(self._agents)
+    def all(self) -> Answer[list[Agent]]:
+        return Answer.complete_read(
+            list(self._agents), how="_Static: caller-provided complete agent list")
 
     def empty_note(self) -> str | None:
         return None
