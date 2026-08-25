@@ -3356,7 +3356,7 @@ def _cmd_crew(a) -> int:
     # --count answers BEFORE the empty-roster line: an empty roster is `0/0`, not
     # a sentence telling a status bar to run `st new`.
     if getattr(a, "count", False):
-        return _crew_count(agents, panes, runtime)
+        return _crew_count(agents, panes, runtime, untracked_root=a.root)
     if not agents:
         print("  no agents. `st new <agent>`.")
         return OK
@@ -3382,8 +3382,8 @@ def _cmd_crew(a) -> int:
     _live = ((lambda pane: live_wiring(pane, _cmdline)) if _cmdline
              else (lambda pane: None))
     print()
-    for ag, state, work, posture in _crew_states(agents, panes, runtime,
-                                                  cycling=cycling):
+    for ag, state, work, posture in _crew_states(
+            agents, panes, runtime, cycling=cycling, untracked_root=a.root):
         if state == "cycling":
             cycling_agents.append(ag.name)
         if work.endswith("sh"):
@@ -3804,7 +3804,7 @@ def _keeper_findings(agents, rule_path: Path, alert) -> list[str]:
     return []
 
 
-def _crew_states(agents, panes, runtime, cycling=()):
+def _crew_states(agents, panes, runtime, cycling=(), untracked_root=None):
     """(agent, pane state, work verdict, permission posture) per agent, by name.
     THE code path for the busy/idle judgment — the table renders it and `--count`
     counts it, so the number a status bar shows can never disagree with the roster
@@ -3878,6 +3878,19 @@ def _crew_states(agents, panes, runtime, cycling=()):
                 tokens = triage_mod.context_tokens_k(plain)
                 if tokens is not None:
                     work = f"{work}·{int(tokens)}k"
+            # PANE-IDLE IS NOT WORK-IDLE (aegis-eh6ok). The PreToolUse
+            # untracked-work detector already records a non-admin ACTING with an
+            # empty hook. Consume that ledger instead of building a second
+            # activity detector. Recent evidence turns an idle-looking pane into
+            # honest UNKNOWN; unreadable evidence does the same. This is a
+            # report, never a block, preserving the hook's fail-open contract.
+            if (work == triage_mod.IDLE and untracked_root is not None
+                    and ag.role != "administrator"):
+                from . import untracked as untracked_mod
+                activity, detail = untracked_mod.ledger_activity(
+                    untracked_root, ag.name)
+                if activity != untracked_mod.ACTIVITY_CLEAR:
+                    work = f"{triage_mod.UNSURE} ({detail})"
         else:
             work = "—"
             # A down pane has no posture to read. `—` and not MANUAL: the card
@@ -4166,7 +4179,7 @@ def _crew_governor(a) -> int:
     return OK
 
 
-def _crew_count(agents, panes, runtime) -> int:
+def _crew_count(agents, panes, runtime, untracked_root=None) -> int:
     """`st crew --count` — print `busy/total`, nothing else.
 
     TOTAL IS NOT THE ROSTER SIZE. It is the number of agents we can actually
@@ -4178,7 +4191,8 @@ def _crew_count(agents, panes, runtime) -> int:
     CLEAR for a check that could not reach its target).
     """
     busy = idle = 0
-    for _ag, _state, work, _posture in _crew_states(agents, panes, runtime):
+    for _ag, _state, work, _posture in _crew_states(
+            agents, panes, runtime, untracked_root=untracked_root):
         if work == triage_mod.BUSY:
             busy += 1
         elif work == triage_mod.IDLE:
@@ -4844,7 +4858,7 @@ def _redispatch_after_cycle(a, agent_name: str, checkpoint_bead: str = "") -> No
         print(f"  note: {agent_name} had no plate item to re-dispatch.")
         return
     try:
-        d = _dispatcher(a)
+        d = _wire(a)
         # reassign=True: the item is ALREADY assigned to this agent — that is the
         # whole point — so the assignee guard would otherwise refuse the very
         # re-dispatch the cycle exists to automate.
