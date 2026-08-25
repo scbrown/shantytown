@@ -4844,7 +4844,7 @@ def _redispatch_after_cycle(a, agent_name: str, checkpoint_bead: str = "") -> No
         print(f"  note: {agent_name} had no plate item to re-dispatch.")
         return
     try:
-        d = _dispatcher(a)
+        d = _wire(a)
         # reassign=True: the item is ALREADY assigned to this agent — that is the
         # whole point — so the assignee guard would otherwise refuse the very
         # re-dispatch the cycle exists to automate.
