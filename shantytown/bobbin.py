@@ -33,6 +33,7 @@ import os
 import shutil
 import subprocess
 
+from .answer import Answer
 from .protocols import ContextUnavailable, Snippet
 
 
@@ -49,10 +50,11 @@ class BobbinContext:
         self.mode = mode
         self.timeout = timeout
 
-    def relevant(self, query: str, budget: int = 5) -> list[Snippet]:
+    def relevant(self, query: str, budget: int = 5) -> Answer[list[Snippet]]:
         """Places to look, best-effort.
 
-        Returns [] ONLY when bobbin answered and had nothing — a real finding.
+        Returns a complete empty Answer ONLY when bobbin answered and had
+        nothing — a real finding.
         Raises ContextUnavailable when we could not get an answer at all:
         binary missing, connection refused, timeout, or a reply we cannot parse.
         Never silently empty. Never a partial list presented as complete.
@@ -61,6 +63,11 @@ class BobbinContext:
             # A precondition failure, not a backend failure: refuse (exit 1),
             # do not claim the graph is empty.
             raise ValueError("empty query")
+        if budget <= 0:
+            # A zero-row request cannot distinguish "nothing matched" from
+            # "nothing was requested". Refuse instead of manufacturing an
+            # empty-but-capped answer that the CLI could misrender as empty.
+            raise ValueError("budget must be greater than zero")
 
         if shutil.which("bobbin") is None:
             raise ContextUnavailable("bobbin CLI not on PATH — cannot look")
@@ -98,7 +105,7 @@ class BobbinContext:
         if results is None:
             raise ContextUnavailable("bobbin reply had no 'results' key")
 
-        return [
+        snippets = [
             Snippet(
                 path=str(hit.get("file_path", "")),
                 lines=self._lines(hit),
@@ -108,6 +115,17 @@ class BobbinContext:
             )
             for hit in results
         ]
+        how = f"bobbin search {query!r} --limit {budget} --mode {self.mode}"
+        if self.repo:
+            how += f" --repo {self.repo}"
+        if len(snippets) >= budget:
+            return Answer.capped(
+                snippets,
+                how=how,
+                caveat=(f"bobbin returned the requested budget of {budget} hit(s); "
+                        "more relevant context may exist"),
+            )
+        return Answer.complete_read(snippets, how=how)
 
     @staticmethod
     def _lines(hit: dict) -> str:
@@ -129,5 +147,6 @@ class NoContext:
     "same bytes" half, and ContextUnavailable is what keeps them apart.
     """
 
-    def relevant(self, query: str, budget: int = 5) -> list[Snippet]:
-        return []
+    def relevant(self, query: str, budget: int = 5) -> Answer[list[Snippet]]:
+        return Answer.complete_read(
+            [], how="NoContext: no context adapter configured; did not look")

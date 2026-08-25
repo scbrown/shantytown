@@ -44,11 +44,10 @@ BARE = ("list", "dict", "set", "frozenset")
 # Pre-existing sites, each with the reason it is not yet an Answer. Delete a line
 # when the site adopts Answer — this test will tell you to.
 BASELINE = {
-    # The CONTRACTS. Converting these three is the "eight adoptions" work itself:
+    # The CONTRACTS. Converting these is the "eight adoptions" work itself:
     # every impl changes with them, so they move as one deliberate change, not as
     # a drive-by.
     ("protocols.py", "Registry", "all"),
-    ("protocols.py", "Context", "relevant"),
     # Registry impls. `empty_note()` is today's partial mitigation here: it says
     # whether an EMPTY answer is trustworthy for this impl, which is the per-impl
     # half of what Answer does per-call.
@@ -57,10 +56,8 @@ BASELINE = {
     ("hierarchy.py", "FileHierarchy", "all"),
     ("quipu.py", "QuipuRegistry", "all"),
     ("quipu.py", "QuipuRegistry", "role_sets"),
-    # Context impls. Mitigated today by ContextUnavailable — which covers "I could
-    # not look at all" but NOT a bobbin that answered with a truncated page.
-    ("bobbin.py", "BobbinContext", "relevant"),
-    ("bobbin.py", "NoContext", "relevant"),
+    # Context contract + impls: ADOPTED (aegis-q0bzh). ContextUnavailable covers
+    # total failure; Answer.capped covers a budget-filled Bobbin result page.
     # Ranker impls: ADOPTED (aegis-q0bzh) — Ranker.weigh returns Answer, so the
     # three lines that were here are gone. RankUnavailable covered "could not
     # reach the backend"; Answer.capped covers the partial it never did — a

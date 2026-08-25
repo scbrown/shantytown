@@ -2482,7 +2482,7 @@ def _cmd_context(a) -> int:
     ctx = NoContext() if a.none else BobbinContext(repo=a.repo, mode=a.mode)
 
     try:
-        hits = ctx.relevant(query, a.budget)
+        answer = ctx.relevant(query, a.budget)
     except ValueError as e:
         print(f"refused: {e}", file=sys.stderr)
         return 1
@@ -2490,6 +2490,14 @@ def _cmd_context(a) -> int:
         # Say WHICH failure, in bobbin's own words. "unavailable" alone is a shrug.
         print(f"could not tell: {e}", file=sys.stderr)
         return 2
+
+    # Displaying the available context is useful even when a budget capped the
+    # search. The explicit accessor records that this caller accepts a lower
+    # bound; the adjacent note keeps a top-N page from looking exhaustive.
+    hits = answer.at_least()
+    note = answer.note()
+    if note:
+        print(note, file=sys.stderr)
 
     if not hits:
         # THREE kinds of "nothing", and they must not wear the same sentence.
