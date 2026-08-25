@@ -9,6 +9,7 @@ the "quipu has not leaked into the core" guarantee.
 import pytest
 
 from shantytown import roles
+from shantytown.answer import PartialAnswer
 from shantytown.protocols import Agent, Registry
 from shantytown.quipu import ONTO, QuipuRegistry, QuipuUnreachable, derive_agents
 
@@ -67,7 +68,41 @@ def test_all_RAISES_when_quipu_unreachable_never_returns_empty():
     reg._query = boom
     # The load-bearing distinction: unreachable is NOT an empty registry.
     with pytest.raises(QuipuUnreachable):
-        reg.all()
+        reg.all().exact()
+
+
+def test_query_truncation_is_a_partial_answer(monkeypatch):
+    class Response:
+        def __enter__(self): return self
+        def __exit__(self, *_args): return False
+        def read(self):
+            return b'{"rows":[{"s":"one"}],"truncated":true}'
+
+    monkeypatch.setattr("urllib.request.urlopen", lambda *_a, **_k: Response())
+    answer = QuipuRegistry(server="http://test.invalid")._query_answer("SELECT ?s {}")
+    assert answer.at_least() == [{"s": "one"}]
+    assert "truncated" in (answer.note() or "")
+    with pytest.raises(PartialAnswer):
+        answer.exact()
+
+
+def test_roster_survives_failed_role_enrichment_but_is_marked_partial():
+    reg = QuipuRegistry(server="http://test.invalid")
+    calls = 0
+
+    def query(_sparql):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return FIXTURE
+        raise QuipuUnreachable("role enrichment down")
+
+    reg._query = query
+    answer = reg.all()
+    assert {a.name for a in answer.at_least()} >= {"hammond", "ian"}
+    assert "enrichment" in (answer.note() or "")
+    with pytest.raises(PartialAnswer):
+        answer.exact()
 
 
 def test_the_same_check_runs_over_quipu_and_flags_the_orphan():
@@ -162,7 +197,7 @@ def test_all_query_excludes_crewStatus_bearing_members():
     r = QuipuRegistry(server="http://test.invalid")
     r._query = lambda sparql: seen.append(sparql) or []
     try:
-        r.all()
+        r.all().exact()
     except Exception:
         pass  # empty rows are fine; we care about the query text
     assert seen, "all() never issued its query"

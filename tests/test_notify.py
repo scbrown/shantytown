@@ -7,6 +7,8 @@ block a worker, DO NOT touch the coordinator, the coordinator's pane receives it
 and the dedup invariant that keeps a heartbeat from becoming a spam channel.
 """
 from __future__ import annotations
+
+from shantytown.answer import Answer
 import json
 from pathlib import Path
 
@@ -57,7 +59,7 @@ class _Reg:
         return self._c[name]
 
     def all(self):
-        return list(self._c.values())
+        return Answer.complete_read(list(self._c.values()), how="test registry")
 
 
 def _world(screens, coord_pane="p-sattler"):
@@ -85,7 +87,7 @@ def test_an_idle_worker_is_not_blocked():
 
 def test_a_block_pushes_to_the_coordinator_without_touching_it(tmp_path):
     reg, panes, rt = _world({"p-kelly": PICKER, "p-sattler": IDLE})
-    woke = Notifier(tmp_path, reg, panes).sweep(reg.all(), rt)
+    woke = Notifier(tmp_path, reg, panes).sweep(reg.all().exact(), rt)
 
     assert woke == ["kelly"]
     # The coordinator's pane — and ONLY it — got the push. Nothing was sent to the
@@ -105,7 +107,7 @@ def test_the_push_goes_to_the_route_stop_recipient(tmp_path):
         Agent(name="sattler", role="administrator", pane="p-sattler"),
     ])
     panes = _Panes({"p-ellie": PICKER, "p-maldoon": IDLE, "p-sattler": IDLE})
-    Notifier(tmp_path, reg, panes).sweep(reg.all(), _Runtime())
+    Notifier(tmp_path, reg, panes).sweep(reg.all().exact(), _Runtime())
     assert [p for p, _ in panes.sent] == ["p-maldoon"]
 
 
@@ -115,18 +117,18 @@ def test_a_still_blocked_worker_is_not_re_notified(tmp_path):
     reg, panes, rt = _world({"p-kelly": PICKER, "p-sattler": IDLE})
     n = Notifier(tmp_path, reg, panes)
 
-    assert n.sweep(reg.all(), rt) == ["kelly"]      # first sweep: pushed
-    assert n.sweep(reg.all(), rt) == []             # still blocked: silent
-    assert n.sweep(reg.all(), rt) == []
+    assert n.sweep(reg.all().exact(), rt) == ["kelly"]      # first sweep: pushed
+    assert n.sweep(reg.all().exact(), rt) == []             # still blocked: silent
+    assert n.sweep(reg.all().exact(), rt) == []
     assert len(panes.sent) == 1, "a heartbeat re-spammed a still-blocked worker"
 
 
 def test_dedup_survives_the_process_restarting(tmp_path):
     reg, panes, rt = _world({"p-kelly": PICKER, "p-sattler": IDLE})
-    assert Notifier(tmp_path, reg, panes).sweep(reg.all(), rt) == ["kelly"]
+    assert Notifier(tmp_path, reg, panes).sweep(reg.all().exact(), rt) == ["kelly"]
     # A brand-new Notifier (the sweeper restarted) must read the durable ledger
     # and stay quiet — otherwise every restart re-spams.
-    assert Notifier(tmp_path, reg, panes).sweep(reg.all(), rt) == []
+    assert Notifier(tmp_path, reg, panes).sweep(reg.all().exact(), rt) == []
 
 
 def test_recovery_re_arms_the_notification(tmp_path):
@@ -136,16 +138,16 @@ def test_recovery_re_arms_the_notification(tmp_path):
     ])
     blocked = _Panes({"p-kelly": PICKER, "p-sattler": IDLE})
     n = Notifier(tmp_path, reg, blocked)
-    assert n.sweep(reg.all(), _Runtime()) == ["kelly"]
+    assert n.sweep(reg.all().exact(), _Runtime()) == ["kelly"]
 
     # kelly answers and goes idle — the ledger must forget it.
     recovered = _Panes({"p-kelly": IDLE, "p-sattler": IDLE})
     n2 = Notifier(tmp_path, reg, recovered)
-    assert n2.sweep(reg.all(), _Runtime()) == []
+    assert n2.sweep(reg.all().exact(), _Runtime()) == []
 
     # kelly blocks AGAIN — a fresh episode, so it notifies again.
     n3 = Notifier(tmp_path, reg, blocked)
-    assert n3.sweep(reg.all(), _Runtime()) == ["kelly"]
+    assert n3.sweep(reg.all().exact(), _Runtime()) == ["kelly"]
 
 
 # --- a failed push must NOT be recorded as delivered ------------------------
@@ -160,11 +162,11 @@ def test_an_unreachable_coordinator_is_not_swallowed(tmp_path):
     logs = []
     n = Notifier(tmp_path, reg, panes, log=logs.append)
 
-    assert n.sweep(reg.all(), _Runtime()) == []    # nothing DELIVERED
+    assert n.sweep(reg.all().exact(), _Runtime()) == []    # nothing DELIVERED
     assert any("unreachable" in m for m in logs)
     # and it stays PENDING: when the coordinator comes back, the retry fires.
     panes._screens["p-sattler-down"] = IDLE
-    assert n.sweep(reg.all(), _Runtime()) == ["kelly"]
+    assert n.sweep(reg.all().exact(), _Runtime()) == ["kelly"]
 
 
 def test_wake_recipient_returns_None_when_there_is_nowhere_to_send(tmp_path):

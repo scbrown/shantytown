@@ -17,7 +17,7 @@ at a different call site by whoever remembered:
         — a verdict triad, for health
     Registry.empty_note()                        (protocols.py)
         — a per-IMPL annotation of whether an empty answer is trustworthy
-    FilesRegistry.all() raising on a missing dir
+    FilesRegistry.all().exact() raising on a missing dir
         — the same rule, hand-applied, in one adapter
 
 THE GAP THOSE DO NOT COVER, AND WHY A NEW TYPE IS NEEDED RATHER THAN A FIFTH

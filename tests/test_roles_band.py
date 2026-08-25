@@ -91,7 +91,7 @@ def test_the_roster_and_the_governor_AGREE_about_who_is_shed(tmp_path: Path):
     cat = _Catalog()
     c = _roster(tmp_path)
     rows = {r.agent: r for r in roles.check(FilesRegistry(c), catalog=cat).rows}
-    agents = {a.name: a for a in FilesRegistry(c).all()}
+    agents = {a.name: a for a in FilesRegistry(c).all().exact()}
 
     tier = gov.Tier(at=80, window=gov.SEVEN_DAY, traits=("support",))
     v = gov.Verdict(reading=gov.Reading(pct=85, at=time.time()), tier=tier,

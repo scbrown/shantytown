@@ -7,6 +7,8 @@ regression is attributable to the report that found it.
 """
 from __future__ import annotations
 
+from shantytown.answer import Answer
+
 import json
 from pathlib import Path
 
@@ -323,7 +325,7 @@ def test_gh20_a_failed_tracker_write_after_a_LANDED_send_is_named(tmp_path):
             return Agent(name=n, role="worker", pane="p-kelly")
 
         def all(self):
-            return [self.get("kelly")]
+            return Answer.complete_read([self.get("kelly")], how="test registry")
 
     d = Dispatcher(_Reg(), _Tracker(), _Panes())
     with pytest.raises(DispatchedButUntracked) as e:
@@ -679,7 +681,7 @@ model = "opus"
 dangerous = true
 ''')
     reg = TomlRegistry(root)
-    assert [a.name for a in reg.all()] == ["billy", "sattler"]
+    assert [a.name for a in reg.all().exact()] == ["billy", "sattler"]
     billy = reg.get("billy")
     assert billy.role == "worker" and billy.reports_to == "sattler"
     assert billy.workspace == "/srv/crew/billy"
@@ -737,7 +739,7 @@ def test_gh11_an_empty_crew_table_RAISES_rather_than_rendering_nobody(tmp_path):
     from shantytown.config import TomlRegistry
     root = _toml_root(tmp_path, '[startup]\nmode = "lite"\n')
     with pytest.raises(LookupError) as e:
-        TomlRegistry(root).all()
+        TomlRegistry(root).all().exact()
     assert "declares no [crew" in str(e.value)
 
 

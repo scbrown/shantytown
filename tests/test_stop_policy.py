@@ -7,6 +7,8 @@ the other's verdict.
 """
 from __future__ import annotations
 
+from shantytown.answer import Answer
+
 import json
 
 import pytest
@@ -187,7 +189,7 @@ def test_one_invocation_sweeps_the_panes_ONCE(tmp_path, monkeypatch):
             return Agent(name=n, role="administrator", pane="p-sattler")
 
         def all(self):
-            return [self.get("sattler")]
+            return Answer.complete_read([self.get("sattler")], how="test registry")
 
     class _Events:
         def pending(self, me):
@@ -209,7 +211,7 @@ def test_an_unreadable_card_allows_the_stop_but_says_what_it_disabled(tmp_path, 
             raise RuntimeError("registry unreadable")
 
         def all(self):
-            return []
+            return Answer.complete_read([], how="test registry")
 
     class _Events:
         def pending(self, me):
@@ -247,7 +249,7 @@ def test_a_broken_gate_does_not_block(tmp_path, monkeypatch):
             return Agent(name=n, role="administrator", pane="p")
 
         def all(self):
-            return [self.get("sattler")]
+            return Answer.complete_read([self.get("sattler")], how="test registry")
 
     class _Events:
         def pending(self, me):
@@ -270,7 +272,7 @@ def test_a_worker_gets_no_rule_zero_and_no_hibernate(tmp_path):
             return Agent(name=n, role="worker", pane="p")
 
         def all(self):
-            return [self.get("billy")]
+            return Answer.complete_read([self.get("billy")], how="test registry")
 
     class _Events:
         def pending(self, me):

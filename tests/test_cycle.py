@@ -7,6 +7,8 @@ pin the delivery: the prompt lands on the agent itself, it CHECKPOINTS BEFORE
 CLEARING (never a bare /clear), and it fires once per saturation episode.
 """
 from __future__ import annotations
+
+from shantytown.answer import Answer
 import json
 from pathlib import Path
 
@@ -68,7 +70,7 @@ class _Reg:
         return self._c[name]
 
     def all(self):
-        return list(self._c.values())
+        return Answer.complete_read(list(self._c.values()), how="test registry")
 
 
 def _world(panes_map):
@@ -81,26 +83,26 @@ def _world(panes_map):
 
 def test_saturated_idle_agent_is_detected():
     reg, panes, rt = _world({"shanty-gennaro": _saturated_pane(687.0)})
-    assert saturated_agents(reg.all(), panes, rt) == ["gennaro"]
+    assert saturated_agents(reg.all().exact(), panes, rt) == ["gennaro"]
 
 
 def test_a_busy_agent_past_the_threshold_is_NOT_cycled():
     # Its footer is unreadable mid-turn; it reads busy, and we never interrupt a
     # working agent with a cycle prompt.
     reg, panes, rt = _world({"shanty-tim": BUSY})
-    assert saturated_agents(reg.all(), panes, rt) == []
+    assert saturated_agents(reg.all().exact(), panes, rt) == []
 
 
 def test_an_under_threshold_idle_agent_is_not_cycled():
     reg, panes, rt = _world({"shanty-ellie": _saturated_pane(120.0)})
-    assert saturated_agents(reg.all(), panes, rt) == []
+    assert saturated_agents(reg.all().exact(), panes, rt) == []
 
 
 # --- the delivery: checkpoint BEFORE clear, to the agent's OWN pane ----------
 
 def test_the_prompt_lands_on_the_agents_own_pane(tmp_path):
     reg, panes, rt = _world({"shanty-gennaro": _saturated_pane(687.0)})
-    prompted = _driver(tmp_path, reg, panes).sweep(reg.all(), rt)
+    prompted = _driver(tmp_path, reg, panes).sweep(reg.all().exact(), rt)
 
     assert prompted == ["gennaro"]
     assert len(panes.sent) == 1
@@ -150,30 +152,30 @@ def test_the_prompt_says_why_clear_is_wrong_not_just_that_it_is():
 def test_a_still_saturated_agent_is_not_re_prompted(tmp_path):
     reg, panes, rt = _world({"shanty-gennaro": _saturated_pane(687.0)})
     d = _driver(tmp_path, reg, panes)
-    assert d.sweep(reg.all(), rt) == ["gennaro"]
-    assert d.sweep(reg.all(), rt) == []          # still saturated -> silent
-    assert d.sweep(reg.all(), rt) == []
+    assert d.sweep(reg.all().exact(), rt) == ["gennaro"]
+    assert d.sweep(reg.all().exact(), rt) == []          # still saturated -> silent
+    assert d.sweep(reg.all().exact(), rt) == []
     assert len(panes.sent) == 1, "a heartbeat re-spammed a still-saturated agent"
 
 
 def test_dedup_survives_the_process_restarting(tmp_path):
     reg, panes, rt = _world({"shanty-gennaro": _saturated_pane(687.0)})
-    assert _driver(tmp_path, reg, panes).sweep(reg.all(), rt) == ["gennaro"]
+    assert _driver(tmp_path, reg, panes).sweep(reg.all().exact(), rt) == ["gennaro"]
     # A fresh driver (the sweeper restarted) reads the durable ledger and stays quiet.
-    assert _driver(tmp_path, reg, panes).sweep(reg.all(), rt) == []
+    assert _driver(tmp_path, reg, panes).sweep(reg.all().exact(), rt) == []
 
 
 def test_recovery_re_arms_the_prompt(tmp_path):
     reg = _Reg([Agent(name="gennaro", role="worker", pane="shanty-gennaro")])
     sat = _Panes({"shanty-gennaro": _saturated_pane(687.0)})
-    assert _driver(tmp_path, reg, sat).sweep(reg.all(), _Runtime()) == ["gennaro"]
+    assert _driver(tmp_path, reg, sat).sweep(reg.all().exact(), _Runtime()) == ["gennaro"]
 
     # It cycled and dropped below the threshold -> ledger forgets it.
     recovered = _Panes({"shanty-gennaro": _saturated_pane(30.0)})
-    assert _driver(tmp_path, reg, recovered).sweep(reg.all(), _Runtime()) == []
+    assert _driver(tmp_path, reg, recovered).sweep(reg.all().exact(), _Runtime()) == []
 
     # It saturates AGAIN -> a fresh episode, prompt again.
-    assert _driver(tmp_path, reg, sat).sweep(reg.all(), _Runtime()) == ["gennaro"]
+    assert _driver(tmp_path, reg, sat).sweep(reg.all().exact(), _Runtime()) == ["gennaro"]
 
 
 def test_an_unreachable_pane_is_not_swallowed(tmp_path):
@@ -182,11 +184,11 @@ def test_an_unreachable_pane_is_not_swallowed(tmp_path):
     panes = _Panes({})            # no live pane
     logs = []
     d = _driver(tmp_path, reg, panes, log=logs.append)
-    assert d.sweep(reg.all(), _Runtime()) == []
+    assert d.sweep(reg.all().exact(), _Runtime()) == []
     # once it comes back saturated-and-live, the retry fires.
     live = _Panes({"shanty-gennaro": _saturated_pane(687.0)})
     d2 = _driver(tmp_path, reg, live, log=logs.append)
-    assert d2.sweep(reg.all(), _Runtime()) == ["gennaro"]
+    assert d2.sweep(reg.all().exact(), _Runtime()) == ["gennaro"]
 
 
 # --- the dark gate (aegis-arma follow-up): not st's agents, not st's to drive
@@ -199,7 +201,7 @@ def test_a_DARK_saturated_agent_is_never_prompted(tmp_path):
     reg, panes, rt = _world({"aegis-crew-ellie": _saturated_pane(576.0)})
     logs = []
     d = _driver(tmp_path, reg, panes, wiring=lambda a: None, log=logs.append)
-    assert d.sweep(reg.all(), rt) == []
+    assert d.sweep(reg.all().exact(), rt) == []
     assert panes.sent == [], "typed into a foreign agent's pane"
     assert any("DARK" in m for m in logs)
 
@@ -210,7 +212,7 @@ def test_empty_wiring_is_dark_too(tmp_path):
     reg, panes, rt = _world({"aegis-crew-ellie": _saturated_pane(576.0)})
     d = _driver(tmp_path, reg, panes,
                 wiring=lambda a: LiveWiring(directions=set(), settings_path="/g.json"))
-    assert d.sweep(reg.all(), rt) == []
+    assert d.sweep(reg.all().exact(), rt) == []
     assert panes.sent == []
 
 
@@ -218,9 +220,9 @@ def test_the_dark_skip_is_said_once_not_every_sweep(tmp_path):
     reg, panes, rt = _world({"aegis-crew-ellie": _saturated_pane(576.0)})
     logs = []
     d = _driver(tmp_path, reg, panes, wiring=lambda a: None, log=logs.append)
-    d.sweep(reg.all(), rt)
-    d.sweep(reg.all(), rt)
-    d.sweep(reg.all(), rt)
+    d.sweep(reg.all().exact(), rt)
+    d.sweep(reg.all().exact(), rt)
+    d.sweep(reg.all().exact(), rt)
     assert sum("DARK" in m for m in logs) == 1, "a 30s heartbeat would spam this"
 
 
@@ -229,16 +231,16 @@ def test_a_dark_agent_that_gets_wired_while_still_saturated_is_prompted(tmp_path
     relaunch that wires the agent must not stay stuck behind an old 'dark'."""
     reg, panes, rt = _world({"aegis-crew-ellie": _saturated_pane(576.0)})
     d = _driver(tmp_path, reg, panes, wiring=lambda a: None)
-    assert d.sweep(reg.all(), rt) == []
+    assert d.sweep(reg.all().exact(), rt) == []
     d2 = _driver(tmp_path, reg, panes)              # now wired (default stub)
-    assert d2.sweep(reg.all(), rt) == ["ellie"]
+    assert d2.sweep(reg.all().exact(), rt) == ["ellie"]
 
 
 def test_positive_control_the_wired_twin_is_prompted(tmp_path):
     """Same world, wiring present: the prompt fires. Without this, the dark gate
     could be a constant skip and every test above would still pass."""
     reg, panes, rt = _world({"shanty-gennaro": _saturated_pane(687.0)})
-    assert _driver(tmp_path, reg, panes).sweep(reg.all(), rt) == ["gennaro"]
+    assert _driver(tmp_path, reg, panes).sweep(reg.all().exact(), rt) == ["gennaro"]
     assert len(panes.sent) == 1
 
 
@@ -263,16 +265,16 @@ def test_positive_control_the_wired_twin_is_prompted(tmp_path):
 def test_being_BUSY_does_not_re_arm_the_prompt(tmp_path):
     reg = _Reg([Agent(name="gennaro", role="worker", pane="shanty-gennaro")])
     sat = _Panes({"shanty-gennaro": _saturated_pane(687.0)})
-    assert _driver(tmp_path, reg, sat).sweep(reg.all(), _Runtime()) == ["gennaro"]
+    assert _driver(tmp_path, reg, sat).sweep(reg.all().exact(), _Runtime()) == ["gennaro"]
 
     # It starts working. Depth is now UNREADABLE — this is not recovery, and
     # treating it as recovery is the bug.
     busy = _Panes({"shanty-gennaro": BUSY})
-    assert _driver(tmp_path, reg, busy).sweep(reg.all(), _Runtime()) == []
+    assert _driver(tmp_path, reg, busy).sweep(reg.all().exact(), _Runtime()) == []
 
     # Back to idle, still saturated. It must stay silent: nothing observed it
     # recover, so the episode never ended.
-    assert _driver(tmp_path, reg, sat).sweep(reg.all(), _Runtime()) == [], \
+    assert _driver(tmp_path, reg, sat).sweep(reg.all().exact(), _Runtime()) == [], \
         "re-prompted after merely being busy — the agent was punished for working"
 
 
@@ -281,9 +283,9 @@ def test_an_UNREADABLE_pane_does_not_re_arm_either(tmp_path):
     restarting, tmux hiccup) must not silently end the episode."""
     reg = _Reg([Agent(name="gennaro", role="worker", pane="shanty-gennaro")])
     sat = _Panes({"shanty-gennaro": _saturated_pane(687.0)})
-    assert _driver(tmp_path, reg, sat).sweep(reg.all(), _Runtime()) == ["gennaro"]
+    assert _driver(tmp_path, reg, sat).sweep(reg.all().exact(), _Runtime()) == ["gennaro"]
 
     gone = _Panes({})
-    assert _driver(tmp_path, reg, gone).sweep(reg.all(), _Runtime()) == []
-    assert _driver(tmp_path, reg, sat).sweep(reg.all(), _Runtime()) == [], \
+    assert _driver(tmp_path, reg, gone).sweep(reg.all().exact(), _Runtime()) == []
+    assert _driver(tmp_path, reg, sat).sweep(reg.all().exact(), _Runtime()) == [], \
         "an unreadable pane ended the episode — cannot-tell read as recovered"

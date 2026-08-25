@@ -40,6 +40,8 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+from .answer import Answer
+
 
 @dataclass(frozen=True)
 class Stop:
@@ -97,14 +99,26 @@ class FilesStops:
         rec = self.get(agent)
         return rec.at if rec else None
 
-    def all(self) -> dict[str, Stop]:
+    def all(self) -> Answer[dict[str, Stop]]:
         """Every current record, by agent. Unreadable files are skipped, not
         guessed at."""
         out: dict[str, Stop] = {}
         if not self.root.is_dir():
-            return out
+            return Answer.complete_read(
+                out, how=f"FilesStops: no stop-store directory at {self.root}")
+        unreadable: list[str] = []
         for p in sorted(self.root.glob("*.json")):
             rec = self.get(p.stem)
             if rec is not None:
                 out[p.stem] = rec
-        return out
+            else:
+                unreadable.append(p.name)
+        how = f"FilesStops: every *.json record under {self.root}"
+        if unreadable:
+            return Answer.capped(
+                out,
+                how=how,
+                caveat=(f"{len(unreadable)} stop record(s) were unreadable: "
+                        + ", ".join(unreadable)),
+            )
+        return Answer.complete_read(out, how=how)

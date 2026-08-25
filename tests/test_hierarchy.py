@@ -17,6 +17,7 @@ from pathlib import Path
 
 import pytest
 
+from shantytown.answer import Answer
 from shantytown.hierarchy import (
     FileHierarchy, HierarchyUnavailable, SourceInfo, default_file,
     load_file_rows, parse_spec, resolve, _rows_from_mapping, _rows_from_ttl,
@@ -97,14 +98,15 @@ def test_file_and_graph_rows_derive_IDENTICAL_agents(tmp_path):
     graph_rows = [{"s": "http://x/dearing"}, {"s": "http://x/ian", "rt": "http://x/dearing"}]
     p = tmp_path / "hierarchy.json"
     p.write_text(json.dumps({"dearing": None, "ian": "dearing"}))
-    assert FileHierarchy(p).all() == derive_agents(graph_rows)
+    assert FileHierarchy(p).all().exact() == derive_agents(graph_rows)
 
 
 # ── resolve: the substitution rules ──────────────────────────────────────────
 
 class _Src:
     def __init__(self, agents): self._a = agents
-    def all(self): return list(self._a)
+    def all(self):
+        return Answer.complete_read(list(self._a), how="test hierarchy source")
 
 
 class _Dead:
@@ -127,7 +129,7 @@ def test_explicit_quipu_that_is_DOWN_refuses_and_does_NOT_fall_back(tmp_path):
 
 def test_auto_prefers_the_graph_and_says_so():
     src, info = resolve(None, quipu_factory=lambda: _Src(_agents()))
-    assert src.all() == _agents()
+    assert src.all().exact() == _agents()
     assert info.kind == "quipu" and info.fallback_reason is None
     assert "ontology-first default" in info.render()
 
@@ -136,7 +138,7 @@ def test_auto_falls_back_to_the_file_and_CARRIES_THE_REASON(tmp_path):
     p = tmp_path / "hierarchy.json"
     p.write_text(json.dumps({"dearing": None, "ian": "dearing"}))
     src, info = resolve(None, file_default=p, quipu_factory=_Dead)
-    assert src.all() == _agents()
+    assert src.all().exact() == _agents()
     assert info.kind == "file"
     assert "quipu is down" in info.fallback_reason
     assert "FELL BACK from quipu" in info.render()
@@ -156,7 +158,7 @@ def test_explicit_file_is_used_and_marked_explicit(tmp_path):
     p = tmp_path / "hierarchy.json"
     p.write_text(json.dumps({"dearing": None, "ian": "dearing"}))
     src, info = resolve(f"file:{p}", quipu_factory=_Dead)
-    assert src.all() == _agents()
+    assert src.all().exact() == _agents()
     assert info.explicit and "named with --from" in info.render()
 
 

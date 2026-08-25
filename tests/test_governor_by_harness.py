@@ -25,6 +25,7 @@ from __future__ import annotations
 import pytest
 import types
 
+from shantytown.answer import Answer
 from shantytown import governor as gov
 from shantytown import cli
 from shantytown.config import ConfigError, load
@@ -281,7 +282,8 @@ def test_dispatch_gate_resolves_the_governor_for_the_target_card(monkeypatch):
     cards = [Agent(name="claire", role="worker", pane="p1", harness="claude"),
              Agent(name="sattler", role="administrator", pane="p2", harness="codex")]
     monkeypatch.setattr(cli, "_governors", lambda a: (types.SimpleNamespace(governor=base), governors))
-    monkeypatch.setattr(cli, "_registry", lambda a: types.SimpleNamespace(all=lambda: cards))
+    monkeypatch.setattr(cli, "_registry", lambda a: types.SimpleNamespace(
+        all=lambda: Answer.complete_read(cards, how="test registry")))
     gate = cli._dispatch_gate(types.SimpleNamespace(root="/tmp"))
     item = types.SimpleNamespace(priority=2)
     assert gate(item, "claire")
@@ -304,7 +306,8 @@ def test_delegation_reserve_holds_same_subscription_and_admits_other(monkeypatch
     cfg = types.SimpleNamespace(governor=base,
                                 fleet=types.SimpleNamespace(stood_down=False))
     monkeypatch.setattr(cli, "_governors", lambda a: (cfg, governors))
-    monkeypatch.setattr(cli, "_registry", lambda a: types.SimpleNamespace(all=lambda: cards))
+    monkeypatch.setattr(cli, "_registry", lambda a: types.SimpleNamespace(
+        all=lambda: Answer.complete_read(cards, how="test registry")))
     monkeypatch.setattr(cli, "_me", lambda a: "claire")
     gate = cli._dispatch_gate(types.SimpleNamespace(root="/tmp"))
     item = types.SimpleNamespace(id="x", priority=1)
@@ -321,7 +324,8 @@ def test_stood_down_refuses_same_subscription_but_allows_delegation(monkeypatch)
     cfg = types.SimpleNamespace(governor=base,
                                 fleet=types.SimpleNamespace(stood_down=True))
     monkeypatch.setattr(cli, "_governors", lambda a: (cfg, {}))
-    monkeypatch.setattr(cli, "_registry", lambda a: types.SimpleNamespace(all=lambda: cards))
+    monkeypatch.setattr(cli, "_registry", lambda a: types.SimpleNamespace(
+        all=lambda: Answer.complete_read(cards, how="test registry")))
     monkeypatch.setattr(cli, "_me", lambda a: "claire")
     gate = cli._dispatch_gate(types.SimpleNamespace(root="/tmp"))
     item = types.SimpleNamespace(id="x", priority=1)
@@ -353,7 +357,8 @@ def test_dispatch_signal_lost_is_qualified_by_target_harness(monkeypatch, capsys
     cards = [Agent(name="claire", role="worker", pane="p1", harness="claude"),
              Agent(name="sattler", role="administrator", pane="p2", harness="codex")]
     monkeypatch.setattr(cli, "_governors", lambda a: (types.SimpleNamespace(governor=base), governors))
-    monkeypatch.setattr(cli, "_registry", lambda a: types.SimpleNamespace(all=lambda: cards))
+    monkeypatch.setattr(cli, "_registry", lambda a: types.SimpleNamespace(
+        all=lambda: Answer.complete_read(cards, how="test registry")))
     gate = cli._dispatch_gate(types.SimpleNamespace(root="/tmp"))
     item = types.SimpleNamespace(priority=2)
 

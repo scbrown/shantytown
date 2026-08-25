@@ -117,7 +117,7 @@ def test_a_new_agent_is_actually_queryable(reg):
     pid = os.getpid()
     root = reg._track(f"ct{pid}root")
     reg.set(Agent(name=root, role="administrator"))
-    names = {a.name for a in reg.all()}
+    names = {a.name for a in reg.all().exact()}
     assert root in names, "a set() agent did not appear in a real graph query"
 
 

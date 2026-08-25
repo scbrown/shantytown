@@ -8,6 +8,8 @@ push, the dedup (still-idle does not re-spam; newly-idle does), the dark
 exclusion (reused from feed_check), and FAIL-OPEN.
 """
 from __future__ import annotations
+
+from shantytown.answer import Answer
 import json
 
 from shantytown import notify
@@ -20,7 +22,7 @@ class _Reg:
         self._a = {x.name: x for x in agents}
 
     def all(self):
-        return list(self._a.values())
+        return Answer.complete_read(list(self._a.values()), how="test registry")
 
     def get(self, name):
         return self._a[name]
@@ -68,7 +70,7 @@ def test_pushes_the_coordinator_when_free_and_work_coexist(tmp_path, monkeypatch
                         lambda *a, **k: ["kelly", "weaver"])
     a = IdleFleetAlerter(tmp_path, reg, panes, runtime=None,
                          bd_ready=lambda: READY)
-    newly = a.sweep(reg.all())
+    newly = a.sweep(reg.all().exact())
 
     assert sorted(newly) == ["kelly", "weaver"]
     assert len(panes.sent) == 1
@@ -87,7 +89,7 @@ def test_stood_down_fleet_is_logged_and_never_alerted(tmp_path, monkeypatch):
     a = IdleFleetAlerter(tmp_path, reg, panes, runtime=None,
                          bd_ready=lambda: READY, log=log.append)
 
-    assert a.sweep(reg.all()) == []
+    assert a.sweep(reg.all().exact()) == []
     assert panes.sent == []
     assert log == ["idle-fleet: fleet stood down — correctly not alerting"]
 
@@ -99,9 +101,9 @@ def test_a_still_idle_fleet_does_not_re_spam(tmp_path, monkeypatch):
     monkeypatch.setattr("shantytown.feed_check.free_feedable_workers",
                         lambda *a, **k: ["kelly", "weaver"])
     mk = lambda: IdleFleetAlerter(tmp_path, reg, panes, None, bd_ready=lambda: READY)
-    assert sorted(mk().sweep(reg.all())) == ["kelly", "weaver"]   # first: push
-    assert mk().sweep(reg.all()) == []                            # same set: silent
-    assert mk().sweep(reg.all()) == []
+    assert sorted(mk().sweep(reg.all().exact())) == ["kelly", "weaver"]   # first: push
+    assert mk().sweep(reg.all().exact()) == []                            # same set: silent
+    assert mk().sweep(reg.all().exact()) == []
     assert len(panes.sent) == 1, "a still-idle fleet was re-spammed"
 
 
@@ -111,24 +113,24 @@ def test_a_newly_idle_agent_re_alerts(tmp_path, monkeypatch):
     monkeypatch.setattr("shantytown.feed_check.free_feedable_workers",
                         lambda *a, **k: seq[0])
     a1 = IdleFleetAlerter(tmp_path, reg, panes, None, bd_ready=lambda: READY)
-    assert a1.sweep(reg.all()) == ["kelly"]
+    assert a1.sweep(reg.all().exact()) == ["kelly"]
     monkeypatch.setattr("shantytown.feed_check.free_feedable_workers",
                         lambda *a, **k: seq[1])
     a2 = IdleFleetAlerter(tmp_path, reg, panes, None, bd_ready=lambda: READY)
-    assert a2.sweep(reg.all()) == ["weaver"], "the newly-idle agent must alert"
+    assert a2.sweep(reg.all().exact()) == ["weaver"], "the newly-idle agent must alert"
     assert len(panes.sent) == 2
 
 
 def test_a_worker_that_leaves_free_is_re_armed(tmp_path, monkeypatch):
     reg, panes = _world(tmp_path)
     monkeypatch.setattr("shantytown.feed_check.free_feedable_workers", lambda *a, **k: ["kelly"])
-    assert IdleFleetAlerter(tmp_path, reg, panes, None, bd_ready=lambda: READY).sweep(reg.all()) == ["kelly"]
+    assert IdleFleetAlerter(tmp_path, reg, panes, None, bd_ready=lambda: READY).sweep(reg.all().exact()) == ["kelly"]
     # kelly gets dispatched (no longer free) -> ledger forgets it.
     monkeypatch.setattr("shantytown.feed_check.free_feedable_workers", lambda *a, **k: [])
-    assert IdleFleetAlerter(tmp_path, reg, panes, None, bd_ready=lambda: READY).sweep(reg.all()) == []
+    assert IdleFleetAlerter(tmp_path, reg, panes, None, bd_ready=lambda: READY).sweep(reg.all().exact()) == []
     # kelly goes idle AGAIN -> fresh episode, alerts again.
     monkeypatch.setattr("shantytown.feed_check.free_feedable_workers", lambda *a, **k: ["kelly"])
-    assert IdleFleetAlerter(tmp_path, reg, panes, None, bd_ready=lambda: READY).sweep(reg.all()) == ["kelly"]
+    assert IdleFleetAlerter(tmp_path, reg, panes, None, bd_ready=lambda: READY).sweep(reg.all().exact()) == ["kelly"]
 
 
 # --- no false alert: free but no work, or dark-only -------------------------
@@ -139,19 +141,19 @@ def test_free_workers_but_no_dispatchable_work_does_not_alert(tmp_path, monkeypa
     # ready beads all dark-assigned -> dispatchable() returns [] -> not neglect.
     a = IdleFleetAlerter(tmp_path, reg, panes, None,
                          bd_ready=lambda: [{"id": "x", "assignee": "crew/arnold"}])
-    assert a.sweep(reg.all()) == []
+    assert a.sweep(reg.all().exact()) == []
     assert panes.sent == []
     # and it did NOT record kelly, so when work appears the alert fires.
     monkeypatch.setattr("shantytown.feed_check.free_feedable_workers", lambda *a, **k: ["kelly"])
     a2 = IdleFleetAlerter(tmp_path, reg, panes, None, bd_ready=lambda: READY)
-    assert a2.sweep(reg.all()) == ["kelly"]
+    assert a2.sweep(reg.all().exact()) == ["kelly"]
 
 
 def test_no_free_workers_is_silent(tmp_path, monkeypatch):
     reg, panes = _world(tmp_path)
     monkeypatch.setattr("shantytown.feed_check.free_feedable_workers", lambda *a, **k: [])
     a = IdleFleetAlerter(tmp_path, reg, panes, None, bd_ready=lambda: READY)
-    assert a.sweep(reg.all()) == [] and panes.sent == []
+    assert a.sweep(reg.all().exact()) == [] and panes.sent == []
 
 
 def test_tend_resumes_idle_codex_lead_with_active_anchor(tmp_path, monkeypatch):
@@ -173,12 +175,12 @@ def test_tend_resumes_idle_codex_lead_with_active_anchor(tmp_path, monkeypatch):
         tmp_path, reg, panes, runtime=None, bd_ready=lambda: [],
         bd_in_progress=lambda cwd: active)
 
-    assert alerter.sweep(reg.all()) == ["dearing"]
+    assert alerter.sweep(reg.all().exact()) == ["dearing"]
     assert panes.sent == [("p-dearing", panes.sent[0][1])]
     assert "HAUL RESUME: aegis-pimvc" in panes.sent[0][1]
     assert "p-admin" not in [pane for pane, _ in panes.sent]
     # Still-idle is deduplicated; leaving/re-entering idle re-arms elsewhere.
-    assert alerter.sweep(reg.all()) == []
+    assert alerter.sweep(reg.all().exact()) == []
 
 
 # --- FAIL OPEN --------------------------------------------------------------
@@ -189,7 +191,7 @@ def test_a_broken_detector_stays_quiet(tmp_path, monkeypatch):
         raise RuntimeError("tmux gone")
     monkeypatch.setattr("shantytown.feed_check.free_feedable_workers", boom)
     a = IdleFleetAlerter(tmp_path, reg, panes, None, bd_ready=lambda: READY)
-    assert a.sweep(reg.all()) == [] and panes.sent == []
+    assert a.sweep(reg.all().exact()) == [] and panes.sent == []
 
 
 def test_a_bd_hiccup_does_not_alert_and_leaves_it_pending(tmp_path, monkeypatch):
@@ -198,12 +200,12 @@ def test_a_bd_hiccup_does_not_alert_and_leaves_it_pending(tmp_path, monkeypatch)
     def bd_boom():
         raise RuntimeError("bd down")
     a = IdleFleetAlerter(tmp_path, reg, panes, None, bd_ready=bd_boom)
-    assert a.sweep(reg.all()) == []               # fail-open, no push
+    assert a.sweep(reg.all().exact()) == []               # fail-open, no push
     assert panes.sent == []
     # bd recovers -> kelly (never recorded) alerts.
     a2 = IdleFleetAlerter(tmp_path, reg, panes, None, bd_ready=lambda: READY)
     monkeypatch.setattr("shantytown.feed_check.free_feedable_workers", lambda *a, **k: ["kelly"])
-    assert a2.sweep(reg.all()) == ["kelly"]
+    assert a2.sweep(reg.all().exact()) == ["kelly"]
 
 
 def test_an_unreachable_coordinator_is_not_recorded(tmp_path, monkeypatch):
@@ -212,12 +214,12 @@ def test_an_unreachable_coordinator_is_not_recorded(tmp_path, monkeypatch):
     panes._live.discard("p-down")
     monkeypatch.setattr("shantytown.feed_check.free_feedable_workers", lambda *a, **k: ["kelly"])
     a = IdleFleetAlerter(tmp_path, reg, panes, None, bd_ready=lambda: READY)
-    assert a.sweep(reg.all()) == []
+    assert a.sweep(reg.all().exact()) == []
     # admin comes back -> retry fires.
     panes._live.add("p-down")
     a2 = IdleFleetAlerter(tmp_path, reg, panes, None, bd_ready=lambda: READY)
     monkeypatch.setattr("shantytown.feed_check.free_feedable_workers", lambda *a, **k: ["kelly"])
-    assert a2.sweep(reg.all()) == ["kelly"]
+    assert a2.sweep(reg.all().exact()) == ["kelly"]
 
 
 def test_the_message_names_who_is_free_and_what_is_ready():
@@ -392,7 +394,7 @@ def test_does_NOT_alert_when_the_floor_admits_NOTHING(tmp_path, monkeypatch):
                         lambda _root: (lambda item: "below the P0 floor"))
     a = IdleFleetAlerter(tmp_path, reg, panes, runtime=None,
                          bd_ready=lambda: READY, log=lambda m: None)
-    a.sweep(list(reg.all()))
+    a.sweep(list(reg.all().exact()))
     assert panes.sent == [], (
         "pushed DISPATCH at the coordinator while the governor refuses every "
         f"one of those beads: {panes.sent}")
@@ -408,6 +410,6 @@ def test_STILL_alerts_when_the_floor_admits_the_work(tmp_path, monkeypatch):
                         lambda _root: (lambda item: ""))     # admits everything
     a = IdleFleetAlerter(tmp_path, reg, panes, runtime=None,
                          bd_ready=lambda: READY, log=lambda m: None)
-    a.sweep(list(reg.all()))
+    a.sweep(list(reg.all().exact()))
     assert panes.sent, "the alerter went silent even though the floor admits the work"
     assert "RULE ZERO" in panes.sent[0][1]
