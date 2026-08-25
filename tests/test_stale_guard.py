@@ -274,6 +274,25 @@ def test_tend_refreshes_worktrees_only_at_RESPAWN(tmp_path):
     assert called == ["zia"], "the respawn path did not refresh worktrees"
 
 
+def test_respawn_refresh_uses_actual_agent_trees_not_repo_name_roundtrip(
+        tmp_path, monkeypatch):
+    """The live ib65p gap: guard discovery found the repo correctly, then
+    name-derived worktree_for silently mapped it back to a different container.
+    The refresh consumer must receive the actual paths verbatim."""
+    from types import SimpleNamespace
+    from shantytown import cli
+
+    actual = [tmp_path / "misleading-wt" / "zia",
+              tmp_path / "outside-wt" / "zia"]
+    refreshed = []
+    monkeypatch.setattr(cli, "agent_worktrees", lambda name: actual)
+    monkeypatch.setattr(cli, "_refresh_worktree",
+                        lambda path: refreshed.append(path) or None)
+    assert cli._refresh_agent_worktrees(SimpleNamespace(),
+                                        SimpleNamespace(name="zia")) == []
+    assert refreshed == actual
+
+
 def test_a_worktree_refresh_failure_NEVER_blocks_the_respawn(tmp_path):
     """Same trade as the clone refresh: refusing to start an agent because a
     git fetch failed swaps a stale tree for an outage."""
