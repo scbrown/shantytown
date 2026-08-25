@@ -74,9 +74,14 @@ class _Args:
 
 def _roster(tmp_path: Path, cards: dict) -> Path:
     crew = tmp_path / "crew"; crew.mkdir()
+    untracked = tmp_path / "untracked"; untracked.mkdir()
     for name, pane in cards.items():
         (crew / f"{name}.json").write_text(
             json.dumps({"role": "worker", "pane": pane} if pane else {"role": "worker"}))
+        # Most roster tests exercise pane classification, not the independent
+        # untracked-work evidence. Seed the positive control they previously
+        # assumed: the hook has run and last saw work on the hook.
+        (untracked / f"{name}.json").write_text(json.dumps({"hooked": True}))
     return tmp_path
 
 
