@@ -35,9 +35,13 @@ class _RecordingInbox:
     by --backend), so this is what durable mail actually calls."""
     def __init__(self):
         self.delivered = []
+        self.marked = []
     def deliver(self, to, body, frm=None):
         self.delivered.append((to, body, frm))
         return Message(id="st-dur1", to=to, body=body, frm=frm)
+    def mark_read(self, me, ids=None):
+        self.marked.append((me, ids))
+        return []
 
 
 class _DeadInbox:
@@ -63,6 +67,7 @@ def test_durable_persists_when_recipient_is_down(tmp_path, monkeypatch):
     to, body, _frm = box.delivered[0]
     assert body == "HANDOFF: finish the swap"
     assert to == "ian"
+    assert box.marked == []
 
 
 def test_durable_persists_AND_sends_when_recipient_is_live(tmp_path, monkeypatch):
@@ -78,6 +83,46 @@ def test_durable_persists_AND_sends_when_recipient_is_live(tmp_path, monkeypatch
     assert rc == OK
     assert len(box.delivered) == 1         # survived
     assert sent == [("crew-ian", "protocol step 3")]   # and delivered live
+    assert box.marked == [("ian", ["st-dur1"])], "only the live-delivered pointer closes"
+
+
+def test_durable_keeps_pointer_open_when_live_input_is_stranded(tmp_path, monkeypatch):
+    box = _RecordingInbox()
+    monkeypatch.setattr(cli, "_inbox", lambda a, **kw: box)
+    monkeypatch.setattr(cli, "_looks_stranded", lambda panes, pane: True)
+    class StrandedTmux:
+        def exists(self, pane): return True
+        def send(self, pane, text): pass
+    monkeypatch.setattr(cli, "Tmux", lambda *a, **k: StrandedTmux())
+    assert main(["--root", str(_root(tmp_path)), "inbox", "-d", "ian", "still typed"]) == OK
+    assert box.marked == [], "unsubmitted live input must retain its durable pointer"
+
+
+def test_durable_keeps_pointer_open_when_live_send_fails(tmp_path, monkeypatch):
+    box = _RecordingInbox()
+    monkeypatch.setattr(cli, "_inbox", lambda a, **kw: box)
+    class FailedTmux:
+        def exists(self, pane): return True
+        def send(self, pane, text): raise RuntimeError("pane vanished")
+    monkeypatch.setattr(cli, "Tmux", lambda *a, **k: FailedTmux())
+    assert main(["--root", str(_root(tmp_path)), "inbox", "-d", "ian", "survive failure"]) == OK
+    assert box.marked == []
+
+
+def test_durable_reports_pointer_close_failure_without_inviting_resend(tmp_path, monkeypatch, capsys):
+    class AckFailureInbox(_RecordingInbox):
+        def mark_read(self, me, ids=None):
+            raise RuntimeError("store unavailable")
+    box = AckFailureInbox()
+    monkeypatch.setattr(cli, "_inbox", lambda a, **kw: box)
+    class LiveTmux:
+        def exists(self, pane): return True
+        def send(self, pane, text): pass
+    monkeypatch.setattr(cli, "Tmux", lambda *a, **k: LiveTmux())
+    assert main(["--root", str(_root(tmp_path)), "inbox", "-d", "ian", "already live"]) == OK
+    out = capsys.readouterr().out
+    assert "pointer close FAILED" in out
+    assert "remains open" in out
 
 
 # --- the negative control: persist FAILED must NOT report success -----------

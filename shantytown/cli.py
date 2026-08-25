@@ -2709,7 +2709,7 @@ def _looks_stranded(panes, pane: str) -> bool:
 
 
 def _inbox_durable(a, agent, msg: str, panes, typed: str | None = None) -> int:
-    """Persist-then-deliver. The inbox write is the guarantee; the send is speed."""
+    """Persist, deliver live when possible, then retire that delivered pointer."""
     # BEADS BY DEFAULT for -d (dearing, qdal.2 follow-up). `-d` is the flag you
     # reach for when the message MUST survive your session dying. A local files
     # store survives the session but NOT the host, not a clone being cleaned, and
@@ -2730,7 +2730,8 @@ def _inbox_durable(a, agent, msg: str, panes, typed: str | None = None) -> int:
     # PERSIST FIRST — the survival guarantee. If this cannot be done, the durable
     # promise cannot be kept; say so (2) rather than silently downgrade to routine.
     try:
-        item = _inbox(a, default="beads").deliver(a.agent, msg, frm=_me(a))
+        box = _inbox(a, default="beads")
+        item = box.deliver(a.agent, msg, frm=_me(a))
     except MessageTooLong as e:                  # PERMANENT: the message will never fit
         # Not a "could not tell" (2) — the store is fine; the message is too long,
         # and retrying it unchanged will fail identically. That is a REFUSED (1)
@@ -2787,11 +2788,24 @@ def _inbox_durable(a, agent, msg: str, panes, typed: str | None = None) -> int:
     if live:
         try:
             panes.send(agent.pane, msg)
-            print(f"  -> {agent.name}    delivered to inbox as {item.id} ({backend}) + live to {agent.pane}")
+            if _looks_stranded(panes, agent.pane):
+                print(f"  -> {agent.name}    delivered to inbox as {item.id} ({backend}); "
+                      f"live input is still stranded — the open pointer survives for `st inbox`.")
+                return OK
         except Exception as e:                    # noqa: BLE001 — never fatal here
             print(f"  -> {agent.name}    delivered to inbox as {item.id} ({backend}); "
                   f"the live nudge FAILED ({type(e).__name__}: {str(e)[:80]}) — "
                   f"the message survives and they read it with `st inbox`.")
+            return OK
+
+        try:
+            box.mark_read(agent.name, ids=[item.id])
+            print(f"  -> {agent.name}    delivered to inbox as {item.id} ({backend}) "
+                  f"+ live to {agent.pane}; pointer closed on live delivery")
+        except Exception as e:                    # noqa: BLE001 — delivery already succeeded
+            print(f"  -> {agent.name}    delivered to inbox as {item.id} ({backend}) "
+                  f"+ live to {agent.pane}; pointer close FAILED "
+                  f"({type(e).__name__}: {str(e)[:80]}) — it remains open for `st inbox`.")
     else:
         print(f"  -> {agent.name}    delivered to inbox as {item.id} ({backend}); "
               f"recipient not live — they read it with `st inbox`.")

@@ -31,8 +31,9 @@ THE SHAPE (three methods, and the split is the same one events.py makes):
                  and a counter that consumed what it counted would destroy the
                  delivery it was reporting on (see events.py's RAIL comment; we
                  are not making that mistake twice in one codebase).
-    mark_read()  the state change, on its own, explicit. Reading your inbox is an
-                 ACT, not a side effect of asking how full it is.
+    mark_read()  the state change, separate from observation. The CLI invokes it
+                 explicitly for `--read`, or for the one pointer whose live pane
+                 submission it just verified; counting/listing remain pure.
 
 Not four methods: there is no get(id). An inbox you can query by id is a mail
 store, and a harness that grows a message store is on its way to being a town
