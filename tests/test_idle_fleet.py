@@ -78,6 +78,20 @@ def test_pushes_the_coordinator_when_free_and_work_coexist(tmp_path, monkeypatch
     assert "DISPATCH" in text
 
 
+def test_stood_down_fleet_is_logged_and_never_alerted(tmp_path, monkeypatch):
+    reg, panes = _world(tmp_path)
+    (tmp_path / "shantytown.toml").write_text("[fleet]\nstood_down = true\n")
+    monkeypatch.setattr("shantytown.feed_check.free_feedable_workers",
+                        lambda *a, **k: ["kelly", "weaver"])
+    log = []
+    a = IdleFleetAlerter(tmp_path, reg, panes, runtime=None,
+                         bd_ready=lambda: READY, log=log.append)
+
+    assert a.sweep(reg.all()) == []
+    assert panes.sent == []
+    assert log == ["idle-fleet: fleet stood down — correctly not alerting"]
+
+
 # --- dedup: still-idle silent, newly-idle alerts ----------------------------
 
 def test_a_still_idle_fleet_does_not_re_spam(tmp_path, monkeypatch):
