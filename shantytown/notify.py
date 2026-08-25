@@ -1069,12 +1069,25 @@ def _bead_age_days(row: dict, now: float | None = None) -> float | None:
         return None
 
 
+def _blocked_kind(detail: dict) -> tuple[str, list[str]]:
+    """Classify a blocked bead from the status of its issue blockers.
+
+    The binary is operational, not ontological: an OPEN `blocks` dependency is
+    work the tracker can watch; with no open issue blocker, only a human can
+    clear/correct the blocked status. Closed dependencies deliberately count as
+    no blocker — dependency_count was refuted because it includes them.
+    """
+    deps = [d for d in (detail.get("dependencies") or [])
+            if d.get("dependency_type") == "blocks"]
+    open_ids = [d.get("id", "?") for d in deps
+                if (d.get("status") or "").lower() != "closed"]
+    return ("work", open_ids) if open_ids else ("human", [])
+
+
 class BlockedStaleAlerter:
     """RE-SURFACE beads that have been BLOCKED long enough to be forgotten.
 
-    IT DOES NOT TRY TO CLASSIFY WHY, and that is a measured decision, not
-    laziness. Two candidate discriminators were tested against the live store
-    and BOTH failed:
+    It classifies from dependency STATUS, not the two refuted proxies:
 
       * a decision LABEL — 0 of 16 blocked beads carry one, INCLUDING the
         seventeen-day P1 security specimen. A label-gated alerter is inert.
@@ -1082,12 +1095,10 @@ class BlockedStaleAlerter:
         only dependency had closed weeks earlier; nothing held it, and it would
         have been classified "blocked on work" and stayed silent.
 
-    The second failure is the more interesting one, because it inverts the
-    priority: a blocked bead whose blockers have all CLOSED is the WORST case,
-    not an excluded one. It is unblocked in reality and blocked on paper, and
-    nothing anywhere notices. So the alarm covers every aged blocked bead and
-    lets a human read the reason — which they can do in seconds and this cannot
-    do reliably at all.
+    A bead with at least one open `blocks` dependency is BLOCKED-ON-WORK. With
+    no open issue blocker it is BLOCKED-ON-HUMAN: only a person can clear or
+    correct the status. This includes the sharp all-dependencies-closed case;
+    dependency count must never silence it.
 
     The gap this closes: a bead blocked on a human is not waiting, it is
     STOPPED. Nothing in this system asked a person a second time, so
@@ -1105,12 +1116,13 @@ class BlockedStaleAlerter:
     """
 
     def __init__(self, root, reg, panes, *, push=push_to_admin,
-                 bd_blocked=None, now=None, log=None):
+                 bd_blocked=None, bd_show=None, now=None, log=None):
         self.path = Path(root) / "notify" / "blocked_stale.json"
         self._reg = reg
         self._panes = panes
         self._push = push
         self._bd_blocked = bd_blocked
+        self._bd_show = bd_show
         self._now = now
         self._log = log or (lambda msg: None)
 
@@ -1128,15 +1140,23 @@ class BlockedStaleAlerter:
     def sweep(self) -> list[str]:
         """One pass. Returns the bead ids actually re-surfaced (usually none)."""
         from .inbox import is_blocked
+        from .feed_check import bd_cwd, bd_show
+        cwd = bd_cwd(self._reg) if self._bd_blocked is None else None
         try:
             if self._bd_blocked is not None:
                 rows = self._bd_blocked()
             else:
-                from .feed_check import bd_blocked, bd_cwd
+                from .feed_check import bd_blocked
                 rows = bd_blocked(bd_cwd(self._reg))
         except Exception as e:                      # FAIL OPEN
             self._log(f"blocked-stale: could not read the store ({e!r})")
             return []
+        if self._bd_show is None and cwd is None:
+            try:
+                cwd = bd_cwd(self._reg)
+            except Exception as e:
+                self._log(f"blocked-stale: could not resolve the store ({e!r})")
+                return []
 
         now = self._now() if callable(self._now) else self._now
         if now is None:
@@ -1157,7 +1177,13 @@ class BlockedStaleAlerter:
             last = ledger.get(bid)
             if isinstance(last, (int, float)) and (now - last) < BLOCKED_RENOTIFY_DAYS * 86400:
                 continue                            # already nudged this cadence
-            due.append((bid, r, age))
+            try:
+                detail = self._bd_show(bid) if self._bd_show else bd_show(cwd, bid)
+            except Exception as e:
+                self._log(f"blocked-stale: could not inspect {bid} ({e!r})")
+                continue
+            kind, blockers = _blocked_kind(detail)
+            due.append((bid, r, age, kind, blockers))
 
         # Re-arm: a bead that is no longer blocked-on-human is forgotten, so if it
         # returns to that state it alerts again rather than staying suppressed by
@@ -1175,7 +1201,7 @@ class BlockedStaleAlerter:
         # is not an emergency, and treating it as one would let a malformed row
         # displace a real P1.
         def _rank(item):
-            _bid, row, age = item
+            _bid, row, age, _kind, _blockers = item
             try:
                 prio = int(row.get("priority"))
             except (TypeError, ValueError):
@@ -1183,17 +1209,23 @@ class BlockedStaleAlerter:
             return (prio, -age)
         due.sort(key=_rank)
         held_back = max(0, len(due) - BLOCKED_MAX_PER_PASS)
-        for i, (bid, r, age) in enumerate(due[:BLOCKED_MAX_PER_PASS]):
+        for i, (bid, r, age, kind, blockers) in enumerate(due[:BLOCKED_MAX_PER_PASS]):
             who = (r.get("assignee") or "").split("/")[-1] or "nobody"
+            if kind == "work":
+                classification = (f"BLOCKED-ON-WORK: open issue blocker(s) "
+                                  f"{', '.join(blockers)}. Chase that work; do "
+                                  f"not re-ask a human for the blocked bead.")
+            else:
+                classification = ("BLOCKED-ON-HUMAN: no open issue blocker "
+                                  "exists. A person must clear/correct the status "
+                                  "or supply the external decision/action.")
             msg = (f"⚠ BLOCKED and going stale: {bid} "
                    f"(p{r.get('priority')}, assignee {who}) — created "
                    f"{age:.0f}d ago, still blocked. {(r.get('title') or '')[:90]}. "
+                   f"{classification} "
                    f"BLOCKED is invisible everywhere else — off bd ready, off the "
                    f"Rule Zero sweep, off every capacity report — so it is STOPPED, "
-                   f"not waiting, and nothing re-asks. CHECK ITS BLOCKER IS STILL "
-                   f"REAL: a closed dependency does NOT clear this status, so a "
-                   f"bead whose blocker closed is unblocked in fact and blocked on "
-                   f"paper. Then unblock it, get the decision, or re-route it. "
+                   f"not waiting. "
                    f"(age is created_at, an UPPER bound — bd records no "
                    f"blocked-at timestamp.)")
             if held_back and i == min(BLOCKED_MAX_PER_PASS, len(due)) - 1:
