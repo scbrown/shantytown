@@ -4732,6 +4732,40 @@ def _resolve_repo(repo: str) -> Path:
     return direct
 
 
+def _resolve_push_worktree(repo: str, agent: str) -> Path:
+    """Resolve an EXISTING agent worktree for ``st push``.
+
+    Bare repo names may live in either of the two established source roots on
+    this host: ``$GT_ROOT`` (normally ``~/gt``) or ``$WORKSPACE_ROOT``
+    (normally ``~/workspace``).  Push must follow the worktree that already
+    exists; resolving the shared checkout under ``~/gt`` first made a real
+    workspace worktree invisible and prescribed creating a misleading duplicate.
+
+    Explicit paths retain their literal meaning.  If the same bare name and
+    agent exist under both roots, refuse rather than guessing which repository
+    the operator intended to publish.
+    """
+    p = Path(repo).expanduser()
+    if p.is_absolute() or "/" in repo:
+        return worktree_for(p, agent)
+
+    roots = (
+        Path(os.environ.get("GT_ROOT", Path.home() / "gt")),
+        Path(os.environ.get("WORKSPACE_ROOT", Path.home() / "workspace")),
+    )
+    matches = [root / f"{repo}-wt" / agent for root in roots
+               if (root / f"{repo}-wt" / agent).is_dir()]
+    if len(matches) > 1:
+        listed = ", ".join(str(path) for path in matches)
+        raise WorkspaceError(
+            f"ambiguous worktree for {repo}/{agent}; found {listed}. "
+            "Pass the shared checkout or worktree path explicitly."
+        )
+    if matches:
+        return matches[0]
+    return worktree_for(_resolve_repo(repo), agent)
+
+
 def _cmd_cycle(a) -> int:
     """cycle <agent> — clear context WITHOUT destroying the runtime (aegis-3laza).
 
@@ -4993,9 +5027,8 @@ def _cmd_push(a) -> int:
         print("  refused: no agent. `st push <repo> <agent>` or set "
               "$SHANTY_AGENT.", file=sys.stderr)
         return REFUSED
-    repo = _resolve_repo(a.repo)
     try:
-        dest = worktree_for(repo, agent)
+        dest = _resolve_push_worktree(a.repo, agent)
     except WorkspaceError as e:
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED
