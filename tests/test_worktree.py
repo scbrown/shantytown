@@ -13,8 +13,9 @@ from pathlib import Path
 
 import pytest
 
-from shantytown.workspace import (WorkspaceError, cleanup_worktree,
-                                  ensure_worktree, worktree_for)
+from shantytown.workspace import (WorkspaceError, agent_worktrees,
+                                  cleanup_worktree, ensure_worktree,
+                                  worktree_for)
 
 
 def _fake_add(marker="wt"):
@@ -50,6 +51,44 @@ def test_worktree_for_tolerates_being_handed_the_wt_dir(tmp_path):
     # per-agent path — so callers can pass either spelling without forking dirs.
     assert worktree_for(tmp_path / "quipu-wt", "billy") == tmp_path / "quipu-wt" / "billy"
     assert worktree_for(tmp_path / "quipu-wt" / "zia", "billy") == tmp_path / "quipu-wt" / "billy"
+
+
+def test_agent_worktrees_reads_actual_containers_across_both_roots(tmp_path):
+    gt = tmp_path / "gt"
+    workspace = tmp_path / "workspace"
+    expected = []
+    for root, container in ((gt, "misleading-wt"),
+                            (workspace, "outside-wt")):
+        tree = root / container / "billy"
+        tree.mkdir(parents=True)
+        (tree / ".git").write_text("gitdir: elsewhere")
+        expected.append(tree)
+    assert agent_worktrees("billy", roots=(gt, workspace)) == expected
+
+
+def test_agent_worktrees_ignores_other_agents_and_loose_debris(tmp_path):
+    root = tmp_path / "gt"
+    real = root / "mixed-wt" / "billy"
+    real.mkdir(parents=True)
+    (real / ".git").write_text("gitdir: elsewhere")
+    (root / "mixed-wt" / "zia").mkdir()
+    (root / "not-a-container" / "billy").mkdir(parents=True)
+    (root / "debris-wt" / "billy").mkdir(parents=True)  # no own .git
+    assert agent_worktrees("billy", roots=(root,)) == [real]
+
+
+def test_agent_worktrees_defaults_to_both_configured_roots(tmp_path, monkeypatch):
+    gt = tmp_path / "gt"
+    workspace = tmp_path / "workspace"
+    monkeypatch.setenv("GT_ROOT", str(gt))
+    monkeypatch.setenv("WORKSPACE_ROOT", str(workspace))
+    expected = []
+    for root, name in ((gt, "one-wt"), (workspace, "two-wt")):
+        tree = root / name / "billy"
+        tree.mkdir(parents=True)
+        (tree / ".git").write_text("gitdir: elsewhere")
+        expected.append(tree)
+    assert agent_worktrees("billy") == expected
 
 
 # --- ensure_worktree: absent -> provisioned ----------------------------------

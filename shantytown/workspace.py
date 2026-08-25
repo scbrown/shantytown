@@ -36,6 +36,7 @@ concurrent operations on a shared checkout swallowed one agent's commit and
 BOTH SIDES reported success. Present means present. That is the whole check.
 """
 from __future__ import annotations
+import os
 import re
 import shutil
 import subprocess
@@ -436,6 +437,52 @@ def worktree_for(repo: Path | str, agent: str) -> Path:
     """Where agent's isolated worktree of <repo> lives: <repo>-wt/<agent>."""
     shared = _shared_repo(repo)
     return shared.parent / f"{shared.name}-wt" / agent
+
+
+def agent_worktrees(agent: str,
+                    roots: tuple[Path | str, ...] | None = None) -> list[Path]:
+    """Existing project worktrees owned by *agent*, read directly from disk.
+
+    This deliberately does NOT round-trip through ``repo -> <repo>-wt``.  That
+    mapping is a provisioning convention, not an inverse: live containers can
+    hang off a differently named checkout, a checkout outside ``GT_ROOT``, or
+    (historically) more than one repo.  The old sweep asked Git which repo was
+    behind a container and then inferred the container back from the repo name;
+    twelve real worktrees disappeared at the second step (aegis-ib65p/gmsza).
+
+    Enumerating ``<root>/*-wt/<agent>`` answers the consumer's actual question
+    without a Git subprocess.  An own ``.git`` marker is required so loose
+    debris or a coincidentally named directory cannot render as a healthy tree.
+    Both established roots are scanned; duplicate paths are returned once.
+    """
+    if roots is None:
+        roots = (
+            Path(os.environ.get("GT_ROOT", Path.home() / "gt")),
+            Path(os.environ.get("WORKSPACE_ROOT", Path.home() / "workspace")),
+        )
+    out: list[Path] = []
+    seen: set[Path] = set()
+    for raw_root in roots:
+        root = Path(raw_root).expanduser()
+        try:
+            containers = sorted(
+                p for p in root.iterdir()
+                if p.is_dir() and p.name.endswith("-wt")
+            )
+        except OSError:
+            continue
+        for container in containers:
+            tree = container / agent
+            if not tree.is_dir() or not (tree / ".git").exists():
+                continue
+            try:
+                key = tree.resolve()
+            except OSError:
+                key = tree
+            if key not in seen:
+                seen.add(key)
+                out.append(tree)
+    return out
 
 
 # Running git is INJECTED here for the same reason cloning and origin-reading are
