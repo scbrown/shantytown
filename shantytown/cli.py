@@ -4057,6 +4057,54 @@ def _crew_governor(a) -> int:
     extended a hysteresis hold, merely LOOKING at the bar would ratchet fleet
     policy. `st tend` remains the one writer of the engaged tier.
     """
+    def _render(multi) -> str:
+        """Render one provider with the same two-window contract in every fleet.
+
+        The mixed-fleet branch used to call ``Verdict.render()``, whose human
+        sentence carries only the policy's primary window.  That made a 4%
+        five-hour reading say "wide open" while seven-day was 93% and the
+        delegation reserve was engaged (aegis-ta96y).
+        """
+        try:
+            readings = multi.reader.read_all()
+            verdict = multi.evaluate(persist=False)
+        except Exception:
+            return "lost"
+        if verdict.signal_lost:
+            return "lost"
+
+        clock = time.time()
+
+        def _pct(window: str) -> str:
+            r = readings.get(window)
+            if r is None or not r.ok or r.pct is None:
+                return "?/?/?"
+            now = int(round(r.pct))
+            higher = sorted(t.at for t in multi.policy.tiers_for(window)
+                            if t.at > now)
+            left = r.resets_in(clock)
+            reset = "-" if left is None else str(max(0, int(left)))
+            return f"{now}/{higher[0] if higher else '-'}/{reset}"
+
+        burn = ""
+        if verdict.burning:
+            burn = " ".join(
+                f"BURNDOWN[{b.window} capped {b.ceiling:.0f}% "
+                f"+{b.headroom:.0f}pts {int(b.resets_in)}s]"
+                for b in verdict.burning)
+        pace = ""
+        if verdict.pacing:
+            pace = " ".join(
+                f"PACE[{p.window} {p.pct:.0f}%used/{p.elapsed_pct:.0f}%elapsed "
+                f"={p.ratio:.2f}x <={p.threshold:.2f}x]"
+                for p in verdict.pacing)
+        label = "; ".join(t.label() for t in verdict.restrictions)
+        cap = ("" if verdict.max_agents is None
+               else f"CAP[{verdict.max_agents} agents]")
+        detail = " ".join(x for x in (cap, burn, pace, label) if x)
+        return (f"ok {_pct(gov_mod.FIVE_HOUR)} "
+                f"{_pct(gov_mod.SEVEN_DAY)} {detail}").rstrip()
+
     # Mixed fleets cannot be represented by the legacy one-line value without
     # lying by omission.  Keep that exact line for old configs; emit one named
     # line per provider once [governor.by_harness] exists.
@@ -4068,9 +4116,7 @@ def _crew_governor(a) -> int:
         except Exception:
             cards = []
         for name, multi in sorted(governors.items()):
-            verdict = multi.evaluate(persist=False)
-            status = "lost" if verdict.signal_lost else verdict.render(time.time())
-            print(f"{name} {status}")
+            print(f"{name} {_render(multi)}")
         for harness in sorted({harness_mod.name_for(card, root=a.root) for card in cards}
                               - {"base"} - set(cfg.governor.by_harness)):
             if gov_mod.unconfigured(cfg.governor, harness):
@@ -4081,41 +4127,6 @@ def _crew_governor(a) -> int:
     if gov is None:
         print("off")
         return OK
-    try:
-        readings = gov.reader.read_all()
-        verdict = gov.evaluate(persist=False)
-    except Exception:
-        # Any failure to READ is `lost`, never a number. The reader already
-        # distinguishes its own failure modes for the operator-facing path; a
-        # status bar needs exactly one bit and must not guess.
-        print("lost")
-        return OK
-    if verdict.signal_lost:
-        print("lost")
-        return OK
-
-    clock = time.time()
-
-    def _pct(window: str) -> str:
-        r = readings.get(window)
-        # A window the producer does not publish is not a zero. Rendering 0 for
-        # an absent budget would read as "plenty of headroom" — the most
-        # expensive possible direction for this particular wrong answer.
-        if r is None or not r.ok or r.pct is None:
-            return "?/?/?"
-        now = int(round(r.pct))
-        # The lowest tier this window has NOT yet reached. Read off the policy so
-        # the consumer never hardcodes thresholds that live in shantytown.toml.
-        higher = sorted(t.at for t in gov.policy.tiers_for(window) if t.at > now)
-        # SECONDS UNTIL THIS BUDGET REFILLS (aegis-9mehy) — seconds, not a clock
-        # time, because the consumer is a program and a duration needs no
-        # timezone, no date and no parsing. `-` is "nothing published one", which
-        # is a real answer and must not be rendered as 0: a bar reading 0 would
-        # say "resets now" forever.
-        left = r.resets_in(clock)
-        reset = "-" if left is None else str(max(0, int(left)))
-        return f"{now}/{higher[0] if higher else '-'}/{reset}"
-
     # BURNDOWN IS NAMED IN THE LABEL (aegis-yegfx), and it has to be, because the
     # bar's honest-looking failure is silence: burndown removes this window's
     # non-drain tiers, so `governing` goes None and the line renders exactly like
@@ -4124,26 +4135,12 @@ def _crew_governor(a) -> int:
     # to the operator reading the bar, and only one of them ends in an hour. This
     # is the same class of bug as aegis-yc864 — a display that disagreed with
     # enforcement — caught before shipping rather than after.
-    burn = ""
-    if verdict.burning:
-        burn = " ".join(
-            f"BURNDOWN[{b.window} capped {b.ceiling:.0f}% "
-            f"+{b.headroom:.0f}pts {int(b.resets_in)}s]"
-            for b in verdict.burning)
-
     # PACE IS NAMED FOR THE SAME REASON (aegis-7kwtu) — it withholds the same
     # non-drain tiers, so it has the same honest-looking failure: the bar goes
     # quiet and reads as "never throttled". BOTH NUMBERS GO IN THE LABEL, not the
     # ratio alone: an operator who sees `0.92x` cannot check it, and one who sees
     # `90%/98%` can tell at a glance that a normal end-of-week burn is being
     # correctly left alone rather than a guard having silently broken.
-    pace = ""
-    if verdict.pacing:
-        pace = " ".join(
-            f"PACE[{p.window} {p.pct:.0f}%used/{p.elapsed_pct:.0f}%elapsed "
-            f"={p.ratio:.2f}x <={p.threshold:.2f}x]"
-            for p in verdict.pacing)
-
     # EVERY ENGAGED RESTRICTION, not the governing one alone (aegis-upo93).
     #
     # NOT engaged[-1] either (aegis-yc864). That was a POSITIONAL pick resting on
@@ -4160,15 +4157,12 @@ def _crew_governor(a) -> int:
     # The parse contract is unchanged: three fields then a free-text label. The
     # label may now contain `; `, which is the separator `Tier.label()` and
     # `Verdict.effect()` already use inside one.
-    label = "; ".join(t.label() for t in verdict.restrictions)
     # THE FLEET CAP IS PRINTED SEPARATELY because the baseline is not a tier and
     # would otherwise be invisible here (aegis-tzpo1) — it engages at 0% usage,
     # when `restrictions` is empty and every other field says "wide open". A cap
     # that silently holds a fleet at 6 while the bar reads unrestricted is the
     # aegis-yc864 shape: a display disagreeing with enforcement.
-    cap = "" if verdict.max_agents is None else f"CAP[{verdict.max_agents} agents]"
-    print(f"ok {_pct(gov_mod.FIVE_HOUR)} {_pct(gov_mod.SEVEN_DAY)} "
-          f"{' '.join(x for x in (cap, burn, pace, label) if x)}".rstrip())
+    print(_render(gov))
     return OK
 
 
