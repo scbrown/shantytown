@@ -549,12 +549,36 @@ def _age(ts: float, now: float) -> str:
     return f"{d // 3600}h{(d % 3600) // 60:02d}m ago"
 
 
-def _item_note(e: StopEvent) -> str:
+def _item_snapshot(e: StopEvent) -> tuple[str | None, str | None]:
+    """The tracker answer persisted at stop time, in comparison form."""
+    return e.item, e.item_status
+
+
+def _item_note(e: StopEvent, age: str,
+               current: tuple[str | None, str | None] | None = None) -> str:
+    """Render the immutable stop snapshot and, when known, tracker state now.
+
+    The pane verdict and current tracker read happen at drain time.  The event's
+    item fields happened at stop time.  Keeping that boundary in the text avoids
+    presenting two different moments as one coherent fleet snapshot (aegis-35tdl).
+    """
     if e.item:
-        return f"held {e.item} ({e.item_status or 'status ?'})"
-    if e.item_status == "?":
-        return "item: could not read the tracker"
-    return "no open item"
+        snapshot = (f"held {e.item} ({e.item_status or 'status ?'}) "
+                    f"(as of stop {age})")
+    elif e.item_status == "?":
+        snapshot = f"item: could not read the tracker at stop ({age})"
+    else:
+        snapshot = f"no open item (as of stop {age})"
+
+    if current is None or current == _item_snapshot(e):
+        return snapshot
+    item, status = current
+    if status == "?":
+        return snapshot + " · tracker now: unreadable"
+    if item:
+        return (snapshot + f" · tracker now: held {item} "
+                f"({status or 'status ?'}; changed since stop)")
+    return snapshot + " · tracker now: no open item (changed since stop)"
 
 
 def _compose_governance(events: list[StopEvent], now: float) -> str:
@@ -587,7 +611,10 @@ def _compose_governance(events: list[StopEvent], now: float) -> str:
 
 
 def _compose_reason(events: list[StopEvent], verdicts: dict, now: float,
-                    deferred: int = 0) -> str:
+                    deferred: int = 0,
+                    current_items: dict[
+                        str, tuple[str | None, str | None]
+                    ] | None = None) -> str:
     """One line per AGENT, not per event — and every line carries the three facts
     the old payload lacked: when, what it held, and whether it is free now.
 
@@ -649,8 +676,11 @@ def _compose_reason(events: list[StopEvent], verdicts: dict, now: float,
             tag += (" — BLOCKED ON A QUESTION in its pane: it is stopped until "
                     "someone answers. Answer it, or tell it to put the decision on "
                     "the bead and carry on")
-        lines.append(f"  - {name} stopped {_age(e.ts, now)} — now: "
-                     f"{verdicts.get(name, '?')} · {_item_note(e)}{tag}{more}")
+        age = _age(e.ts, now)
+        current = (current_items or {}).get(name)
+        lines.append(f"  - {name} stopped {age} — now: "
+                     f"{verdicts.get(name, '?')} · "
+                     f"{_item_note(e, age, current)}{tag}{more}")
     if deferred:
         lines.append(f"  ({deferred} more held back: those agents are mid-flight "
                      f"right now. They will be delivered when they actually stop.)")
@@ -757,7 +787,21 @@ def _drain(events: FilesEvents, me: str, reg=None, panes=None,
         print(f"stop_event: {urgent_delivered} event(s) that must not wait "
               f"delivered now; ordinary held events are delivered regardless "
               f"after {DEFER_MAX_AGE_S/60:.0f}m", file=sys.stderr)
-    reason = _compose_reason(got, verdicts, now, deferred)
+    # The event's item fields are a stop-time snapshot, while the pane verdict
+    # above is read at drain time.  Re-read the tracker at that same drain seam
+    # so disagreements are visible instead of rendering stale and live facts as
+    # one current line (aegis-35tdl).  A failed read is explicit, never "empty".
+    current_items: dict[str, tuple[str | None, str | None]] = {}
+    if plate is not None:
+        for name in {e.frm for e in got if not is_governance(e.reason)}:
+            try:
+                item = plate(name)
+                current_items[name] = ((item.id, item.status)
+                                       if item else (None, None))
+            except Exception:                    # noqa: BLE001
+                current_items[name] = (None, "?")
+    reason = _compose_reason(got, verdicts, now, deferred,
+                             current_items=current_items)
     # ADMIN ENRICHMENT: only when a stop event actually fired (rides BLOCK-ONCE),
     # so a persistently-idle fleet can never re-block the admin every stop. A bare
     # _drain(events, me) is unaffected — the gate is inside _compose_workflow.

@@ -250,6 +250,37 @@ def test_the_delivered_line_carries_when_and_what(tmp_path, capsys):
     assert "now: idle" in reason
 
 
+def test_stop_snapshot_open_but_tracker_now_empty_names_both_moments(
+        tmp_path, capsys):
+    """A bead closed after stop must not keep rendering as current open work."""
+    reg = _reg(tmp_path)
+    ev = FilesEvents(tmp_path / "events")
+    ev.persist(to="maldoon", frm="ellie", reason=None, rose=False,
+               item="it-7", item_status="open")
+    stop_event._drain(ev, "maldoon", reg,
+                      _Panes({"p-ellie"}, {"p-ellie": IDLE_SCREEN}), _ready,
+                      plate=lambda _name: None)
+    reason = json.loads(capsys.readouterr().out)["reason"]
+    assert "held it-7 (open) (as of stop" in reason
+    assert "tracker now: no open item (changed since stop)" in reason
+
+
+def test_stop_snapshot_empty_but_tracker_now_in_progress_names_both_moments(
+        tmp_path, capsys):
+    """Work started after stop must not remain understated as an empty plate."""
+    reg = _reg(tmp_path)
+    ev = FilesEvents(tmp_path / "events")
+    ev.persist(to="maldoon", frm="ellie", reason=None, rose=False,
+               item=None, item_status=None)
+    current = type("Item", (), {"id": "it-9", "status": "in_progress"})()
+    stop_event._drain(ev, "maldoon", reg,
+                      _Panes({"p-ellie"}, {"p-ellie": IDLE_SCREEN}), _ready,
+                      plate=lambda _name: current)
+    reason = json.loads(capsys.readouterr().out)["reason"]
+    assert "no open item (as of stop" in reason
+    assert "tracker now: held it-9 (in_progress; changed since stop)" in reason
+
+
 def test_an_unstamped_event_says_age_unknown_never_just_now(tmp_path, capsys):
     """Events written before this change have no ts. The reader must say so — a
     stale event rendered as fresh is worse than one that admits it cannot tell."""
