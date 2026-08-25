@@ -23,6 +23,8 @@ mistake.
 """
 from __future__ import annotations
 
+from shantytown.answer import Answer
+
 import json
 import urllib.error
 from dataclasses import replace
@@ -684,7 +686,7 @@ class _Registry:
         return self._a[name]
 
     def all(self):
-        return list(self._a.values())
+        return Answer.complete_read(list(self._a.values()), how="test registry")
 
 
 class _Tracker:

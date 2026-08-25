@@ -916,7 +916,7 @@ def _settings_env(role: str, root=None) -> dict:
     no SHANTY_ONTO_NS, so that lead would launch pointed at the public default,
     which is a dead localhost and a namespace holding none of this crew's facts.
 
-    The failure is quiet in the worst way. `QuipuRegistry.all()` RAISES on an
+    The failure is quiet in the worst way. `QuipuRegistry.all().exact()` RAISES on an
     unreachable graph rather than returning [], so the agent gets an honest
     "could not tell" — but a wrong-but-reachable namespace would answer "nobody
     exists" with a straight face. Carrying the config is what keeps that from

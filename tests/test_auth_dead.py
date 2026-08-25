@@ -10,6 +10,8 @@ the state is NAMED, excluded from feedable, reported by tend, and recovered by
 ONE command (`st tend --reauth`).
 """
 from __future__ import annotations
+
+from shantytown.answer import Answer
 import json
 from pathlib import Path
 
@@ -127,7 +129,7 @@ class _Reg:
         self._a = agents
 
     def all(self):
-        return self._a
+        return Answer.complete_read(self._a, how="test registry")
 
 
 class _Panes(NullPanes):
@@ -174,9 +176,11 @@ class _Args:
 
 def _roster(tmp_path, cards):
     crew = tmp_path / "crew"; crew.mkdir()
+    untracked = tmp_path / "untracked"; untracked.mkdir()
     for name, pane in cards.items():
         (crew / f"{name}.json").write_text(
             json.dumps({"role": "worker", "pane": pane}))
+        (untracked / f"{name}.json").write_text(json.dumps({"hooked": True}))
     return tmp_path
 
 

@@ -43,43 +43,7 @@ BARE = ("list", "dict", "set", "frozenset")
 
 # Pre-existing sites, each with the reason it is not yet an Answer. Delete a line
 # when the site adopts Answer — this test will tell you to.
-BASELINE = {
-    # The CONTRACTS. Converting these is the "eight adoptions" work itself:
-    # every impl changes with them, so they move as one deliberate change, not as
-    # a drive-by.
-    ("protocols.py", "Registry", "all"),
-    # Registry impls. `empty_note()` is today's partial mitigation here: it says
-    # whether an EMPTY answer is trustworthy for this impl, which is the per-impl
-    # half of what Answer does per-call.
-    ("config.py", "TomlRegistry", "all"),
-    ("files.py", "FilesRegistry", "all"),
-    ("hierarchy.py", "FileHierarchy", "all"),
-    ("quipu.py", "QuipuRegistry", "all"),
-    ("quipu.py", "QuipuRegistry", "role_sets"),
-    # Context contract + impls: ADOPTED (aegis-q0bzh). ContextUnavailable covers
-    # total failure; Answer.capped covers a budget-filled Bobbin result page.
-    # Ranker impls: ADOPTED (aegis-q0bzh) — Ranker.weigh returns Answer, so the
-    # three lines that were here are gone. RankUnavailable covered "could not
-    # reach the backend"; Answer.capped covers the partial it never did — a
-    # candidate with no mod::sym title, skipped, keeping weight 0.
-    # Stop records read off disk; a partial directory read reads as "nobody
-    # stopped", which is the aegis-19 blank-plate shape.
-    ("stopped.py", "FilesStops", "all"),
-    # NOT AN ADAPTER — it reads nothing. `_Static` wraps a list the caller is
-    # already holding so `roles.check` can be asked its question about a
-    # HYPOTHETICAL crew (`roles sync`'s "would this manufacture an orphan",
-    # aegis-ftmfn). There is no external read, so there is no partial read to be
-    # indistinguishable from an empty one: the list IS the whole search space, by
-    # construction, which is precisely why its `empty_note` returns None.
-    #
-    # It is caught only because the lint keys on the METHOD NAME `all` — correctly:
-    # matching on the name is what makes the rule cheap and unavoidable, and a
-    # leading underscore on the class is not the exemption (that rule is for
-    # underscored METHODS). Baselined rather than renamed, because `all` is the
-    # name `check` calls and renaming it to dodge a lint would leave the next
-    # reader wondering which one is the real registry surface.
-    ("roles.py", "_Static", "all"),
-}
+BASELINE: set[tuple[str, str, str]] = set()
 
 
 def _adapter_methods_returning_bare() -> set[tuple[str, str, str]]:
@@ -128,13 +92,17 @@ def test_baseline_has_no_stale_entries():
     )
 
 
-def test_the_lint_can_actually_see_something():
+def test_the_lint_can_actually_see_something(tmp_path, monkeypatch):
     """A detector that finds nothing passes for the wrong reason forever. If the
     AST walk breaks, or the adapter heuristic stops matching, both tests above go
     green while checking nothing — the same-output-two-worlds failure this whole
     module is about, rebuilt inside its own guard."""
+    fixture = tmp_path / "known_positive.py"
+    fixture.write_text(
+        "class BrokenRegistry:\n"
+        "    def all(self) -> list[str]:\n"
+        "        return []\n")
+    monkeypatch.setattr(pathlib.Path, "glob", lambda self, pattern: [fixture])
     found = _adapter_methods_returning_bare()
-    assert found, "the detector matched no adapters at all — it is broken, not clean"
-    assert ("files.py", "FilesRegistry", "all") in found, (
-        "the known-positive control is missing; the walk or the heuristic changed"
-    )
+    assert ("known_positive.py", "BrokenRegistry", "all") in found, (
+        "the known-positive control is missing; the walk or heuristic changed")

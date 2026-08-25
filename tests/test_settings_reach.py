@@ -262,7 +262,7 @@ def test_crew_and_role_set_cannot_disagree(tmp_path, monkeypatch, capsys):
     class A:
         pass
     a = A(); a.root = root
-    agents = FilesRegistry(root / "crew").all()
+    agents = FilesRegistry(root / "crew").all().exact()
     rs_stale, rs_unknown = _settings_reach(a, FakePanes(live), agents)
 
     assert set(rs_stale) == crew_stale, (

@@ -7,6 +7,8 @@ that keep it from false-trapping: dark workers are not "free", and dark-assigned
 beads are not "dispatchable".
 """
 from __future__ import annotations
+
+from shantytown.answer import Answer
 import json
 
 import pytest
@@ -87,7 +89,7 @@ class _Reg:
         self._a = agents
 
     def all(self):
-        return self._a
+        return Answer.complete_read(self._a, how="test registry")
 
 
 def _send_settings(tmp_path):
