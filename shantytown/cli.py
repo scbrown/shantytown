@@ -143,9 +143,9 @@ from .runtime import (asks_a_question, auth_expired, bash_guard_command,
                       emitted_bash_guard, emitted_stop_directions,
                       live_stop_directions, live_wiring, settings_for_role)
 from .tmux import Tmux, declared_socket
-from .workspace import (WorkspaceError, cleanup_worktree, ensure_workspace,
-                        ensure_worktree, push_every_remote, tree_staleness,
-                        unlaunchable, upstream_ref, worktree_for)
+from .workspace import (WorkspaceError, agent_worktrees, cleanup_worktree,
+                        ensure_workspace, ensure_worktree, push_every_remote,
+                        tree_staleness, unlaunchable, upstream_ref, worktree_for)
 from .provision import ProvisionError, provision as provision_ws
 
 # `st new` liveness poll: how long to wait for the runtime to appear in the pane
@@ -5263,10 +5263,12 @@ def _agent_trees(a, ag, sweep: bool = False) -> list:
     exist on the developer's machine — measured, it silently changed three
     existing tests' output.
 
-    When it does sweep, repos are DISCOVERED, never configured — `guard.discover`
-    finds the `<repo>-wt` containers st created itself. A hardcoded repo list is
-    the failure mode here, measured: the deployment's own installer defaulted to
-    ONE repo when twelve were live.
+    When it does sweep, worktrees are DISCOVERED directly from the containers st
+    created itself. Never map container -> repo -> inferred container: those two
+    mappings are not inverses on the live fleet, and that round-trip silently
+    dropped twelve trees (aegis-gmsza). A hardcoded repo list is the failure mode
+    here, measured: the deployment's own installer defaulted to ONE repo when
+    twelve were live.
     """
     out = []
     if ag.workspace:
@@ -5275,13 +5277,7 @@ def _agent_trees(a, ag, sweep: bool = False) -> list:
             out.append(p)
     if not sweep:
         return out
-    try:
-        for repo in guard_mod.discover():
-            wt = worktree_for(repo, ag.name)
-            if wt.is_dir():
-                out.append(wt)
-    except Exception:
-        pass
+    out.extend(agent_worktrees(ag.name))
     return out
 
 
@@ -6880,10 +6876,7 @@ def _refresh_agent_worktrees(a, card) -> list:
     """
     out = []
     try:
-        for repo in guard_mod.discover():
-            wt = worktree_for(repo, card.name)
-            if not wt.is_dir():
-                continue
+        for wt in agent_worktrees(card.name):
             if warn := _refresh_worktree(wt):
                 out.append(f"{_tree_label(wt)}: {warn}")
     except Exception as e:

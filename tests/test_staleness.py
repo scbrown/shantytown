@@ -268,7 +268,7 @@ def test_the_full_worktree_sweep_is_OPT_IN(tmp_path, monkeypatch):
     three existing tests' output."""
     from shantytown import cli
     calls = []
-    monkeypatch.setattr(cli.guard_mod, "discover", lambda *a, **k: (calls.append(1) or []))
+    monkeypatch.setattr(cli, "agent_worktrees", lambda *a, **k: (calls.append(1) or []))
     up = _repo(tmp_path / "up"); wt = _clone(up, tmp_path / "wt")
 
     cli._agent_trees(None, _card("zia", str(wt)))
