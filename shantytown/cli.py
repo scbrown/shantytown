@@ -5956,7 +5956,7 @@ def _cmd_dream(a) -> int:
         print(f"  rotation: {', '.join(cfg.dream.domains)}")
         return OK
     panes = _panes(a)
-    agents = _registry(a).all()
+    agents = _registry(a).all().exact()
     cycle, item_id, reason = _dream_sweep(a, cfg, agents, panes, force=True,
                                           dry_run=a.dry_run)
     if cycle is None:
