@@ -62,6 +62,7 @@ from . import session_budget as session_budget_mod
 from .governor import Policy as GovernorPolicy
 from .session_budget import Limits as SessionLimits
 from .protocols import Agent
+from .dream import Policy as DreamPolicy
 
 CONFIG_NAME = "shantytown.toml"
 
@@ -187,6 +188,9 @@ class Config:
     # usage gauge, and it was the second that went unbounded for six hours. Same
     # default-off-by-omission rule as the governor.
     session_budget: SessionLimits = field(default_factory=SessionLimits)
+    # [dream] — bounded background reflection on measured spare provider budget.
+    # Default OFF: silence must never start spending tokens.
+    dream: DreamPolicy = field(default_factory=DreamPolicy)
     # [harness] — WHICH AGENT PROGRAM, for cards that do not say (harness.py).
     # Two levels, and a card still beats both:
     #
@@ -277,7 +281,7 @@ def load_or_default(root) -> tuple[Config, str | None]:
 
 # --- parsing ----------------------------------------------------------------
 
-_TOP_KEYS = {"startup", "modes", "hibernate", "fleet", "crew", "env", "tmux",
+_TOP_KEYS = {"startup", "modes", "hibernate", "fleet", "crew", "env", "tmux", "dream",
              "roles", "precedence", "governor", "session_budget", "harness",
              "model"}
 _HARNESS_KEYS = {"default", "by_role"}
@@ -285,6 +289,7 @@ _MODEL_KEYS = {"default", "by_role"}
 _STARTUP_KEYS = {"mode"}
 _HIB_KEYS = {"enabled", "max_quiet_minutes"}
 _TMUX_KEYS = {"socket"}
+_DREAM_KEYS = {"enabled", "interval_minutes", "min_headroom_pct", "domains"}
 
 
 def _refuse_unknown(path: Path, where: str, got, allowed: set[str]) -> None:
@@ -351,7 +356,30 @@ def _resolve(data: dict, path: Path) -> Config:
                   governor=_governor(path, _table(path, data, "governor")),
                   session_budget=_session_budget(
                       path, _table(path, data, "session_budget")),
+                  dream=_dream(path, _table(path, data, "dream")),
                   path=path)
+
+
+def _dream(path: Path, tbl: dict) -> DreamPolicy:
+    _refuse_unknown(path, "dream", tbl, _DREAM_KEYS)
+    enabled = tbl.get("enabled", False)
+    interval = tbl.get("interval_minutes", DreamPolicy.interval_minutes)
+    headroom = tbl.get("min_headroom_pct", DreamPolicy.min_headroom_pct)
+    domains = tbl.get("domains", list(DreamPolicy.domains))
+    if not isinstance(enabled, bool):
+        raise ConfigError(f"{path}: dream.enabled must be a boolean")
+    for key, value in (("interval_minutes", interval),
+                       ("min_headroom_pct", headroom)):
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            raise ConfigError(f"{path}: dream.{key} must be a positive integer")
+    if headroom > 100:
+        raise ConfigError(f"{path}: dream.min_headroom_pct must be 1-100")
+    if (not isinstance(domains, list) or not domains
+            or any(not isinstance(x, str) or not x.strip() for x in domains)):
+        raise ConfigError(f"{path}: dream.domains must be a non-empty string array")
+    return DreamPolicy(enabled=enabled, interval_minutes=interval,
+                       min_headroom_pct=headroom,
+                       domains=tuple(x.strip() for x in domains))
 
 
 def _harness(path: Path, tbl: dict,

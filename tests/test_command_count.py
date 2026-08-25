@@ -193,7 +193,7 @@ def test_the_surface_is_twenty():
     wrong.
 
     Each command still earns its slot."""
-    assert len(_actual_subcommands()) == 25, (
+    assert len(_actual_subcommands()) == 26, (
         "the command count changed. If that's intended, update the number here and "
         "the cli.py docstring together — and say why the surface grew in docs/cli.md."
     )

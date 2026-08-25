@@ -35,6 +35,26 @@ def test_no_file_means_builtin_defaults_and_says_so(tmp_path):
     assert cfg.path is None, (
         "path must be None with no file — 'you are on the defaults' and 'your "
         "config chose this' need different fixes")
+    assert cfg.dream.enabled is False, "absence must never spend background tokens"
+
+
+def test_dream_policy_parses_and_refuses_unsafe_values(tmp_path):
+    cfg = config.load(_write(tmp_path, """
+[dream]
+enabled = true
+interval_minutes = 90
+min_headroom_pct = 35
+domains = ["ontology", "infra"]
+"""))
+    assert cfg.dream.enabled is True
+    assert cfg.dream.interval_minutes == 90
+    assert cfg.dream.min_headroom_pct == 35
+    assert cfg.dream.domains == ("ontology", "infra")
+
+    with pytest.raises(config.ConfigError, match="min_headroom_pct"):
+        config.load(_write(tmp_path, "[dream]\nmin_headroom_pct = 101\n"))
+    with pytest.raises(config.ConfigError, match="domains"):
+        config.load(_write(tmp_path, "[dream]\ndomains = []\n"))
 
 
 def test_the_filename_is_shantytown_not_shanty(tmp_path):

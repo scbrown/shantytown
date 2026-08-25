@@ -39,6 +39,7 @@ st stop <agent> [--reason]    stop it, and RECORD that it was deliberate
 st log [agent]                what happened
 st context <query>            what code should I be looking at? (bobbin)
 st doctor [--install]         what's installed, stale, missing (out-of-box)
+st dream [--run]              inspect or run one bounded spare-capacity reflection cycle
 st tend                       supervise the crew: respawn what DIED, never what was RETIRED
 st tend --reauth              relaunch every AUTH-DEAD agent (run AFTER the operator re-logs in)
 st tend --target N            respawn only toward N LIVE agents (scale UP on loss; never stops a surplus)
@@ -64,7 +65,7 @@ Codex input already includes its cached subset. This makes
 `cache_read / usage_in` a provider-independent prompt-cache hit rate. The fields
 are omitted—not zeroed—when every matching transcript is unknown.
 
-Twenty-five. `--dry-run` is on every command that writes, from commit one. The surface grew past the
+Twenty-six. `--dry-run` is on every command that writes, from commit one. The surface grew past the
 original eight, each slot on a specific ask — not drift: **inbox**/**task** (the dispatch/tracker
 pair, owner-directed), **context** (the bobbin Context protocol), **doctor**
 (out-of-box detect/install, Stiwi's direct ask), **subscribe** (the quipu events adapter,
@@ -73,6 +74,11 @@ write — clearing an assignee alone leaves an item in_progress, which parks it 
 every haul, and every plate; a hand-back that drops work off the board was the measured defect). Each is named on purpose: this doc once
 said "eight" while the code had twelve, and a count nobody enforces is a comment — in the one repo
 whose whole pitch is the exact count, that was the bug.
+
+The twenty-sixth is **dream**: the inspect/preview/manual-run surface for bounded
+background reflection. It is not hidden behind `tend` because scheduling is a
+write while status is a read, and an operator must be able to see the due time,
+rotation, and capacity refusal without running supervision.
 
 The binary is **`st`**, not `shanty`: `shanty` is Stiwi's own tmux command and ours would shadow it
 on PATH. This doc said `shanty` in all 29 of its examples long after the entry point was `st`, so
