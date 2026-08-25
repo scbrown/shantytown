@@ -432,7 +432,7 @@ def _dispatch_gate(a):
     stood_down = bool(getattr(getattr(cfg, "fleet", None), "stood_down", False))
     if not governors and not stood_down:
         return None
-    cards = {card.name: card for card in _registry(a).all()}
+    cards = {card.name: card for card in _registry(a).all().exact()}
     verdicts = {}
     sender = cards.get(_me(a))
     sender_harness = (harness_mod.name_for(sender, root=a.root)
@@ -1292,7 +1292,7 @@ def _runtime(a, panes):
     move (harness.py's header says why, and what it costs).
     """
     try:
-        agents = _registry(a).all()
+        agents = _registry(a).all().exact()
     except Exception:
         agents = []
     return ClaudeRuntime(panes, _default_settings(a.root, agents), root=a.root)
@@ -1524,7 +1524,7 @@ def _verify_live_hooks(a, card, runtime, panes, session: str) -> int:
     one command. If arnold rules teardown belongs here, it is a small change —
     but it should be a ruling, not a side effect of adding a check.
     """
-    need = roles_mod.required_stop_directions(card, _registry(a).all())
+    need = roles_mod.required_stop_directions(card, _registry(a).all().exact())
     if not need:
         # NOTHING REQUIRED -> nothing to verify, and we must not manufacture
         # doubt about a requirement that does not exist. An isolated agent (no
@@ -1829,7 +1829,7 @@ def _cmd_start(a) -> int:
     """
     panes = _panes(a)
     try:
-        agents = _registry(a).all()
+        agents = _registry(a).all().exact()
     except Exception as e:                       # noqa: BLE001 — registry unreachable
         print(f"  could not tell: {e}", file=sys.stderr)
         return CANNOT_TELL
@@ -2044,7 +2044,7 @@ def _cmd_doctor(a) -> int:
     # registry we cannot read is a `?` row, not a crash in the command an operator
     # reaches for when things are already going wrong.
     try:
-        wire_v, wire_why = stats_mod.capture_wiring(_registry(a).all())
+        wire_v, wire_why = stats_mod.capture_wiring(_registry(a).all().exact())
     except Exception:          # noqa: BLE001 — doctor never fails on this leg
         wire_v, wire_why = stats_mod.WIRING_UNKNOWN, "registry unreadable"
 
@@ -2072,7 +2072,7 @@ def _cmd_doctor(a) -> int:
             from . import provision as prov_mod
             try:
                 uniform, uniform_broken = prov_mod.uniformity_report(
-                    _registry(a).all(), Path(a.root))
+                    _registry(a).all().exact(), Path(a.root))
             except Exception as e:       # doctor reports uncertainty, never dies
                 uniform, uniform_broken = (f"  TOOLING UNIFORMITY\n  ? {e}", True)
             print("\n" + uniform)
@@ -2128,7 +2128,7 @@ def _socket_check(a):
     """
     from . import doctor as doc
     try:
-        agents = _registry(a).all()
+        agents = _registry(a).all().exact()
     except Exception:
         return doc.SOCKET_UNKNOWN, "could not read the registry"
     panes = [ag.pane for ag in agents if ag.pane]
@@ -2181,7 +2181,7 @@ def _untracked_health(a):
     import time
     from pathlib import Path
     try:
-        agents = _registry(a).all()
+        agents = _registry(a).all().exact()
     except Exception as e:
         return [uh.Row("(registry)", uh.CANNOT_TELL, str(e))], None
 
@@ -2376,7 +2376,7 @@ def _report_who_the_rewrite_did_not_reach(a, roles: set[str]) -> None:
     `role set` into a failure would be a worse bug than the one it warns about.
     """
     # EVERYTHING that can reach outside this process is inside the try, not just
-    # the registry read. The recovered version guarded only `_registry(a).all()`
+    # the registry read. The recovered version guarded only `_registry(a).all().exact()`
     # while `_settings_reach` goes on to call `panes.exists()` per agent — so an
     # unreachable tmux raised straight out of a role set that had ALREADY written
     # the cards and emitted the hooks. Caught by test_report_is_never_fatal_when_
@@ -2386,7 +2386,7 @@ def _report_who_the_rewrite_did_not_reach(a, roles: set[str]) -> None:
     # function exists to give.
     try:
         panes = _panes(a)
-        agents = _registry(a).all()
+        agents = _registry(a).all().exact()
         agents = [ag for ag in agents if ag.role in roles]
         stale, unknown = _settings_reach(a, panes, agents)
     except Exception as e:
@@ -3360,7 +3360,7 @@ def _cmd_crew(a) -> int:
     cycling = set(cycle_mod.Requests(a.root).pending())
     panes = _panes(a)
     try:
-        agents = _registry(a).all()
+        agents = _registry(a).all().exact()
     except Exception as e:
         print(f"  could not tell: {e}", file=sys.stderr)
         return CANNOT_TELL
@@ -3368,7 +3368,7 @@ def _cmd_crew(a) -> int:
     # --count answers BEFORE the empty-roster line: an empty roster is `0/0`, not
     # a sentence telling a status bar to run `st new`.
     if getattr(a, "count", False):
-        return _crew_count(agents, panes, runtime)
+        return _crew_count(agents, panes, runtime, untracked_root=a.root)
     if not agents:
         print("  no agents. `st new <agent>`.")
         return OK
@@ -3394,8 +3394,8 @@ def _cmd_crew(a) -> int:
     _live = ((lambda pane: live_wiring(pane, _cmdline)) if _cmdline
              else (lambda pane: None))
     print()
-    for ag, state, work, posture in _crew_states(agents, panes, runtime,
-                                                  cycling=cycling):
+    for ag, state, work, posture in _crew_states(
+            agents, panes, runtime, cycling=cycling, untracked_root=a.root):
         if state == "cycling":
             cycling_agents.append(ag.name)
         if work.endswith("sh"):
@@ -3751,7 +3751,7 @@ def _check_alert_keepers(a, rules: list[Path]) -> int:
     template proved ownership.
     """
     try:
-        agents = {agent.name: agent for agent in _registry(a).all()}
+        agents = {agent.name: agent for agent in _registry(a).all().exact()}
     except Exception as e:
         print(f"could not tell: roster unreadable: {e}", file=sys.stderr)
         return CANNOT_TELL
@@ -3816,7 +3816,7 @@ def _keeper_findings(agents, rule_path: Path, alert) -> list[str]:
     return []
 
 
-def _crew_states(agents, panes, runtime, cycling=()):
+def _crew_states(agents, panes, runtime, cycling=(), untracked_root=None):
     """(agent, pane state, work verdict, permission posture) per agent, by name.
     THE code path for the busy/idle judgment — the table renders it and `--count`
     counts it, so the number a status bar shows can never disagree with the roster
@@ -3890,6 +3890,19 @@ def _crew_states(agents, panes, runtime, cycling=()):
                 tokens = triage_mod.context_tokens_k(plain)
                 if tokens is not None:
                     work = f"{work}·{int(tokens)}k"
+            # PANE-IDLE IS NOT WORK-IDLE (aegis-eh6ok). The PreToolUse
+            # untracked-work detector already records a non-admin ACTING with an
+            # empty hook. Consume that ledger instead of building a second
+            # activity detector. Recent evidence turns an idle-looking pane into
+            # honest UNKNOWN; unreadable evidence does the same. This is a
+            # report, never a block, preserving the hook's fail-open contract.
+            if (work == triage_mod.IDLE and untracked_root is not None
+                    and ag.role != "administrator"):
+                from . import untracked as untracked_mod
+                activity, detail = untracked_mod.ledger_activity(
+                    untracked_root, ag.name)
+                if activity != untracked_mod.ACTIVITY_CLEAR:
+                    work = f"{triage_mod.UNSURE} ({detail})"
         else:
             work = "—"
             # A down pane has no posture to read. `—` and not MANUAL: the card
@@ -4124,7 +4137,7 @@ def _crew_governor(a) -> int:
     if cfg.governor.by_harness:
         _cfg, governors = _governors(a)
         try:
-            cards = _registry(a).all()
+            cards = _registry(a).all().exact()
         except Exception:
             cards = []
         for name, multi in sorted(governors.items()):
@@ -4178,7 +4191,7 @@ def _crew_governor(a) -> int:
     return OK
 
 
-def _crew_count(agents, panes, runtime) -> int:
+def _crew_count(agents, panes, runtime, untracked_root=None) -> int:
     """`st crew --count` — print `busy/total`, nothing else.
 
     TOTAL IS NOT THE ROSTER SIZE. It is the number of agents we can actually
@@ -4190,7 +4203,8 @@ def _crew_count(agents, panes, runtime) -> int:
     CLEAR for a check that could not reach its target).
     """
     busy = idle = 0
-    for _ag, _state, work, _posture in _crew_states(agents, panes, runtime):
+    for _ag, _state, work, _posture in _crew_states(
+            agents, panes, runtime, untracked_root=untracked_root):
         if work == triage_mod.BUSY:
             busy += 1
         elif work == triage_mod.IDLE:
@@ -4202,7 +4216,7 @@ def _crew_count(agents, panes, runtime) -> int:
 def _cmd_roles(a) -> int:
     if not a.check:
         try:
-            agents = _registry(a).all()
+            agents = _registry(a).all().exact()
         except Exception as e:
             print(f"  could not tell: {e}", file=sys.stderr)
             return CANNOT_TELL
@@ -4422,7 +4436,7 @@ def _would_break(files, graph_agents, catalog):
     `files.get` already — but if it does, the caller's existing refusals stand.
     """
     try:
-        before = files.all()
+        before = files.all().exact()
     except Exception:      # noqa: BLE001 — no registry to read; see docstring
         return []
     current = {c.name: c for c in before}
@@ -4474,7 +4488,7 @@ def _cmd_project(a) -> int:
         source, src_info = hier_mod.resolve(
             spec, file_default=hier_mod.default_file(a.root),
             quipu_factory=QuipuRegistry)
-        agents = source.all()
+        agents = source.all().exact()
     except ValueError as e:                      # a mistyped --from is usage, not outage
         print(f"  {e}", file=sys.stderr)
         return REFUSED
@@ -5505,7 +5519,7 @@ def _dashboard_snapshot(a, reg, panes, runtime, now):
     without a clock or a foreground loop."""
     from . import dashboard as dash_mod
     from .tier import _find_administrator
-    agents = reg.all()
+    agents = reg.all().exact()
     admin = a.admin or _find_administrator(reg)
     if not admin:
         return None, "no administrator in the registry to show a tier for"
@@ -5802,7 +5816,7 @@ def _cmd_attach(a, *, execer=_exec_attach, which=None) -> int:
         if not name:
             # No administrator in the registry — LIST, don't error.
             try:
-                agents = reg.all()
+                agents = reg.all().exact()
             except Exception as e:
                 print(f"  could not tell: {e}", file=sys.stderr)
                 return CANNOT_TELL
@@ -6073,7 +6087,7 @@ def _code_fingerprint(pkg=None) -> str | None:
 def _tend_once(a, quiet: bool = False) -> int:
     panes = _panes(a)
     try:
-        agents = _registry(a).all()
+        agents = _registry(a).all().exact()
     except Exception as e:
         print(f"  could not tell: {e}", file=sys.stderr)
         return CANNOT_TELL
@@ -6477,7 +6491,7 @@ def _tend_reauth(a) -> int:
     """
     panes = _panes(a)
     try:
-        agents = _registry(a).all()
+        agents = _registry(a).all().exact()
     except Exception as e:
         print(f"  could not tell: {e}", file=sys.stderr)
         return CANNOT_TELL
@@ -6667,7 +6681,7 @@ def _tend_retire(a) -> int:
                   f"work count (still assigned to {name}).")
 
         dependents = sorted(
-            ag.name for ag in reg.all()
+            ag.name for ag in reg.all().exact()
             if ag.name != name and ag.reports_to == name and not ag.retired)
         if dependents:
             print(f"  refused: {name} is still reports_to for: "

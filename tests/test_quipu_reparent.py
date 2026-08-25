@@ -12,6 +12,8 @@ place nobody could safely write, so it drifted. These pin the fix.
 """
 from __future__ import annotations
 
+from shantytown.answer import Answer
+
 import pytest
 
 from shantytown.protocols import Agent
@@ -30,7 +32,7 @@ class Recorder(QuipuRegistry):
         self.retracts: list[tuple[str, str, str]] = []
 
     def all(self):
-        return list(self._agents)
+        return Answer.complete_read(list(self._agents), how="test registry")
 
     def _knot(self, turtle):
         self.knots.append(turtle)

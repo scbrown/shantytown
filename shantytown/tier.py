@@ -123,7 +123,7 @@ class RolePlan:
 
 
 def _reports_of(registry: Registry, lead: str) -> list[Agent]:
-    return [a for a in registry.all() if a.reports_to == lead]
+    return [a for a in registry.all().exact() if a.reports_to == lead]
 
 
 def plan_role_set(registry: Registry, agent_name: str, role: str,
@@ -424,7 +424,7 @@ def find_administrator(registry: Registry) -> str | None:
     the router it describes is worse than no diagnostic (aegis-j1dzp). One
     function, so the claim and the behaviour cannot drift apart.
     """
-    for a in registry.all():
+    for a in registry.all().exact():
         if a.role == "administrator":
             return a.name
     return None

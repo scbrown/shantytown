@@ -57,6 +57,8 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .answer import Answer
+
 from . import governor as governor_mod
 from . import session_budget as session_budget_mod
 from .governor import Policy as GovernorPolicy
@@ -783,7 +785,7 @@ class TomlRegistry:
                 f"{config_path(self._root)})")
         return crew[name]
 
-    def all(self) -> list[Agent]:
+    def all(self) -> Answer[list[Agent]]:
         crew = self._crew()
         if not crew:
             # EMPTY IS NOT NOBODY. A config with no [crew] table declares no crew
@@ -794,7 +796,10 @@ class TomlRegistry:
                 f"{config_path(self._root)} declares no [crew.<name>] tables, so "
                 f"the toml registry has nothing to read. Declare the crew there, "
                 f"or use --registry files/quipu.")
-        return sorted(crew.values(), key=lambda a: a.name)
+        return Answer.complete_read(
+            sorted(crew.values(), key=lambda a: a.name),
+            how=f"TomlRegistry: every [crew.<name>] in {config_path(self._root)}",
+        )
 
     def empty_note(self) -> str | None:
         """None — and this registry earns it the same way FilesRegistry does, by

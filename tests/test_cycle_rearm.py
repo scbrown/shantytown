@@ -38,19 +38,19 @@ def test_an_unreadable_depth_does_not_re_arm_the_prompt(tmp_path):
     reg, panes, rt = _world(panes_map)
     d = _driver(tmp_path, reg, panes)
 
-    assert d.sweep(reg.all(), rt) == ["sattler"], "first prompt should fire"
+    assert d.sweep(reg.all().exact(), rt) == ["sattler"], "first prompt should fire"
     assert _ledger(d).get("sattler") == "saturated"
 
     # A pane with the ready UI and NO "/clear to save" footer: work_state says
     # IDLE, context_tokens_k says None. This is the mid-transition read.
     panes._screens["shanty-sattler"] = IDLE
-    assert d.sweep(reg.all(), rt) == []
+    assert d.sweep(reg.all().exact(), rt) == []
     assert _ledger(d).get("sattler") == "saturated", (
         "an UNREADABLE depth is cannot-tell and must leave the episode armed")
 
     # Back to saturated. Under the bug this re-prompted; it must not.
     panes._screens["shanty-sattler"] = _saturated_pane(690.0)
-    assert d.sweep(reg.all(), rt) == [], (
+    assert d.sweep(reg.all().exact(), rt) == [], (
         "re-prompted an agent that already checkpointed — the aegis-rfz1b loop")
 
 
@@ -59,14 +59,14 @@ def test_a_busy_pane_also_does_not_re_arm(tmp_path):
     by the spinner, so the depth is equally unknown."""
     reg, panes, rt = _world({"shanty-sattler": _saturated_pane(687.0)})
     d = _driver(tmp_path, reg, panes)
-    d.sweep(reg.all(), rt)
+    d.sweep(reg.all().exact(), rt)
 
     panes._screens["shanty-sattler"] = BUSY
-    d.sweep(reg.all(), rt)
+    d.sweep(reg.all().exact(), rt)
     assert _ledger(d).get("sattler") == "saturated"
 
     panes._screens["shanty-sattler"] = _saturated_pane(700.0)
-    assert d.sweep(reg.all(), rt) == []
+    assert d.sweep(reg.all().exact(), rt) == []
 
 
 # --- the other direction: a REAL recovery must still re-arm ------------------
@@ -77,18 +77,18 @@ def test_a_measured_low_depth_DOES_re_arm(tmp_path):
     episode and must prompt again."""
     reg, panes, rt = _world({"shanty-sattler": _saturated_pane(687.0)})
     d = _driver(tmp_path, reg, panes)
-    assert d.sweep(reg.all(), rt) == ["sattler"]
+    assert d.sweep(reg.all().exact(), rt) == ["sattler"]
 
     # Footer PRESENT, reads 120k — measured, and under the 400k threshold. This
     # is what an actual /clear looks like, and it is state IDLE just like the
     # unreadable pane above. The depth is the only thing telling them apart.
     panes._screens["shanty-sattler"] = _saturated_pane(120.0)
-    assert d.sweep(reg.all(), rt) == []
+    assert d.sweep(reg.all().exact(), rt) == []
     assert "sattler" not in _ledger(d), (
         "a measured under-threshold depth is a real recovery and must re-arm")
 
     panes._screens["shanty-sattler"] = _saturated_pane(510.0)
-    assert d.sweep(reg.all(), rt) == ["sattler"], (
+    assert d.sweep(reg.all().exact(), rt) == ["sattler"], (
         "a LATER saturation is a new episode and must prompt again")
 
 
@@ -97,8 +97,8 @@ def test_an_agent_whose_pane_vanishes_stays_armed(tmp_path):
     recovery. A restart must not silently retire an unfinished episode."""
     reg, panes, rt = _world({"shanty-sattler": _saturated_pane(687.0)})
     d = _driver(tmp_path, reg, panes)
-    d.sweep(reg.all(), rt)
+    d.sweep(reg.all().exact(), rt)
 
     del panes._screens["shanty-sattler"]
-    d.sweep(reg.all(), rt)
+    d.sweep(reg.all().exact(), rt)
     assert _ledger(d).get("sattler") == "saturated"

@@ -78,6 +78,55 @@ BD_TIMEOUT_S = 10
 
 SILENT, WARN, ESCALATE = "silent", "warn", "escalate"
 
+# Read-side verdicts for consumers of the ledger. Kept separate from the hook's
+# action verdicts above: this reader never warns, escalates, or mutates.
+ACTIVITY_CLEAR = "clear"
+ACTIVITY_RECENT = "recent"
+ACTIVITY_UNKNOWN = "unknown"
+
+
+def ledger_activity(root, agent: str, *, now=None, read=None, stat=None):
+    """What the existing untracked ledger says about an idle-looking agent.
+
+    Returns ``(clear|recent|unknown, detail)``.  ``recent`` means the hook has
+    observed this non-admin acting with an empty hook within the same ten-minute
+    window used by the escalation ladder.  Missing, malformed, or unreadable
+    evidence is ``unknown`` — never a fabricated all-clear.
+
+    The file mtime is the last acting-tool observation: ``Governor.check`` writes
+    the ledger on every checked call, including cooldown-silent calls.  ``since``
+    is the start of the stretch and cannot answer when activity last occurred.
+    """
+    now = time.time() if now is None else float(now)
+    path = Path(root) / "untracked" / f"{agent}.json"
+    try:
+        text = read(path) if read is not None else path.read_text()
+        mtime = stat(path) if stat is not None else path.stat().st_mtime
+        data = json.loads(text)
+    except (OSError, ValueError, TypeError):
+        return ACTIVITY_UNKNOWN, "untracked ledger unreadable"
+    if not isinstance(data, dict) or not isinstance(mtime, (int, float)):
+        return ACTIVITY_UNKNOWN, "untracked ledger unreadable"
+    if data.get("hooked") is True:
+        return ACTIVITY_CLEAR, "hooked"
+    if data.get("hooked") is not False:
+        return ACTIVITY_UNKNOWN, "untracked ledger has no hook verdict"
+
+    age = max(0.0, now - float(mtime))
+    if age <= ESCALATE_AFTER_S:
+        return ACTIVITY_RECENT, f"untracked activity {_age(age)} ago"
+    return ACTIVITY_CLEAR, f"last untracked activity {_age(age)} ago"
+
+
+def _age(seconds: float) -> str:
+    seconds = int(seconds)
+    if seconds < 90:
+        return f"{seconds}s"
+    minutes = seconds // 60
+    if minutes < 90:
+        return f"{minutes}m"
+    return f"{minutes // 60}h{minutes % 60:02d}m"
+
 
 @dataclass(frozen=True)
 class Verdict:

@@ -49,6 +49,7 @@ from pathlib import Path
 
 from . import triage
 from . import workflow
+from .answer import PartialAnswer
 from .deployment import deployment_default, resolve_root
 from .events import FilesEvents, StopEvent
 from .inbox import is_decision, is_message
@@ -777,8 +778,8 @@ def _compose_workflow(reg, panes, plate, rank, events, me: str, *,
     except LookupError:
         return ""                                 # unknown identity -> no enrichment
     try:
-        agents = [a for a in reg.all() if a.name != me]   # never prioritize itself
-    except OSError:
+        agents = [a for a in reg.all().exact() if a.name != me]   # never prioritize itself
+    except (OSError, PartialAnswer):
         agents = []                               # no crew dir -> events-only workflow
     candidates = workflow.classify(agents, panes, plate,
                                    stopped=stopped, now=now)

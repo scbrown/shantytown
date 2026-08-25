@@ -544,7 +544,7 @@ def session_usage(root: Path, since_h: float = 24.0, home: Path | None = None
     consent-file hook.
     """
     try:
-        cards = FilesRegistry(Path(root) / "crew").all()
+        cards = FilesRegistry(Path(root) / "crew").all().exact()
     except (OSError, ValueError, LookupError):
         return {}
     base = Path.home() if home is None else Path(home)

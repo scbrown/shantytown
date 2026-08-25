@@ -68,7 +68,9 @@ def test_all_skips_what_it_cannot_read(tmp_path):
     s = FilesStops(d)
     s.record("felix", 1000.0)
     (d / "junk.json").write_text("nope")
-    assert list(s.all()) == ["felix"]
+    answer = s.all()
+    assert list(answer.at_least()) == ["felix"]
+    assert "junk.json" in (answer.note() or "")
 
 
 # --- the reading: classify ---------------------------------------------------
