@@ -2057,6 +2057,15 @@ def _cmd_doctor(a) -> int:
         # "has the fail-open governance nudge actually run?" Only on a full run —
         # `st doctor bobbin` asked about bobbin, not the fleet's hooks.
         if len(specs) == len(doc.SPECS):
+            from . import provision as prov_mod
+            try:
+                uniform, uniform_broken = prov_mod.uniformity_report(
+                    _registry(a).all(), Path(a.root))
+            except Exception as e:       # doctor reports uncertainty, never dies
+                uniform, uniform_broken = (f"  TOOLING UNIFORMITY\n  ? {e}", True)
+            print("\n" + uniform)
+            if uniform_broken:
+                code = _fold_generic(code, 1)
             from . import untracked_health as uh
             uh_rows, uh_text = _untracked_health(a)
             if uh_text is not None:

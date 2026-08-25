@@ -60,6 +60,7 @@ an unrecognised one.
 from __future__ import annotations
 from dataclasses import dataclass
 import json
+import shlex
 from pathlib import Path
 from typing import Protocol, runtime_checkable, TYPE_CHECKING
 
@@ -692,6 +693,12 @@ class CodexHarness:
             f"BOBBIN_ROLE={card.role} BEADS_ACTOR={card.name} "
             f"{st_roles}{st_domain}{st_reports}codex {flags}"
         )
+        # MCP bearer values stay in the deployment's 0600 provision file. Codex
+        # config names them through bearer_token_env_var; source the file into
+        # the process environment without putting a secret in the launch line.
+        secrets = Path(root) / "provision" / "secrets.env" if root else None
+        if secrets is not None and secrets.is_file():
+            launch = f"set -a; . {shlex.quote(str(secrets))}; set +a; {launch}"
         # Launch IN the agent's workspace, same as claude and for the same
         # reason: codex reads AGENTS.md and project config relative to its cwd.
         # A cd prefix, so the single send-keys still delivers one line. (codex
