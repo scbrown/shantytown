@@ -425,10 +425,19 @@ def _dispatch_gate(a):
     metric read — not one per plan()/triage()/go() call on the same Dispatcher.
     """
     cfg, governors = _governors(a)
-    if not governors:
+    stood_down = bool(getattr(getattr(cfg, "fleet", None), "stood_down", False))
+    if not governors and not stood_down:
         return None
     cards = {card.name: card for card in _registry(a).all()}
     verdicts = {}
+    sender = cards.get(_me(a))
+    sender_harness = (harness_mod.name_for(sender, root=a.root)
+                      if sender is not None else None)
+
+    def cross_subscription(target) -> bool:
+        if sender_harness is None or target is None:
+            return False
+        return harness_mod.name_for(target, root=a.root) != sender_harness
 
     def gate(item, agent=None):
         """SAY IT WHEN A WAIVER IS WHAT LET THIS THROUGH (aegis-yegfx).
@@ -442,6 +451,32 @@ def _dispatch_gate(a):
         card = cards.get(agent)
         if card is None:
             return ""
+        delegated = cross_subscription(card)
+        if stood_down and not delegated:
+            return ("FLEET STOOD DOWN — dispatch suppressed. Clear "
+                    "`[fleet] stood_down` to resume. Cross-subscription "
+                    "delegation remains available.")
+        if not governors:
+            return ""
+
+        if sender is not None and cfg.governor.by_harness and not delegated:
+            _sh, source_governor, source_unconfigured = _governor_for(
+                cfg, governors, sender, a.root)
+            if source_unconfigured is None and source_governor is not None:
+                key = f"reserve:{sender_harness}"
+                if key not in verdicts:
+                    verdicts[key] = source_governor.evaluate(persist=False)
+                source_verdict = verdicts[key]
+                readings = [p for p in source_verdict.by_window.values()
+                            if p is not None]
+                pct = max(readings) if readings else source_verdict.pct
+                reserve = source_governor.policy.delegation_reserve_pct
+                if reserve and pct is not None and pct >= 100 - reserve:
+                    return (f"the {sender_harness} usage governor is in its final "
+                            f"{reserve}% delegation reserve ({pct:.0f}% used): "
+                            "normal execution dispatch is held. Delegate to an "
+                            "agent on another subscription; coordination messages "
+                            "remain available.")
         harness, governor, unconfigured = _governor_for(cfg, governors, card, a.root)
         if harness not in verdicts:
             verdicts[harness] = (unconfigured if unconfigured is not None

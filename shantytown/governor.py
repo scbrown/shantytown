@@ -504,6 +504,9 @@ class Policy:
     # None = uncapped, and that is the default: a deployment that has never heard
     # of this key keeps the behaviour it has today.
     max_agents: int | None = None
+    # Preserve the final slice of a provider budget for moving work off that
+    # provider. Meaningful only when another harness subscription is configured.
+    delegation_reserve_pct: int = 10
     # Windows whose tiers stand down near a reset, because the budget they are
     # protecting is about to be destroyed rather than saved (aegis-yegfx). See
     # the Burndown docstring — in particular that its fail-safe runs the OTHER
@@ -2856,7 +2859,7 @@ def _limit_id(tbl) -> "str | None":
 _GOV_KEYS = {"source", "window", "on_signal_lost", "relax_margin",
              "max_age_seconds", "url", "path", "username", "password_file",
              "stub_pct", "tier", "exempt", "burndown", "pace", "max_agents",
-             "metric", "by_harness", "limit_id"}
+             "metric", "by_harness", "limit_id", "delegation_reserve_pct"}
 _TIER_KEYS = {"at", "min_priority", "traits", "action", "window", "max_agents"}
 _BURN_KEYS = {"window", "within", "reserve"}
 _PACE_KEYS = {"window", "ratio", "length"}
@@ -2895,6 +2898,12 @@ def parse(tbl: dict) -> Policy:
 
     margin = _int(tbl, "relax_margin", Policy.relax_margin, minimum=0)
     max_age = _int(tbl, "max_age_seconds", Policy.max_age_seconds, minimum=1)
+    delegation_reserve = _int(
+        tbl, "delegation_reserve_pct", Policy.delegation_reserve_pct,
+        minimum=0)
+    if delegation_reserve > 100:
+        raise GovernorError("[governor] delegation_reserve_pct must be 0-100, "
+                            f"got {delegation_reserve}")
 
     for key in ("url", "path", "username", "password_file"):
         v = tbl.get(key)
@@ -3030,6 +3039,7 @@ def parse(tbl: dict) -> Policy:
                   limit_id=_limit_id(tbl),
                   tiers=tiers, exempt=tuple(exempt), burndowns=burndowns,
                   paces=paces, max_agents=_cap(tbl, "[governor]"),
+                  delegation_reserve_pct=delegation_reserve,
                   metric=_metric(tbl, "metric", USAGE_METRIC),
                   account_metric=_metric(tbl, "account_metric",
                                          ACCOUNT_USAGE_METRIC),

@@ -288,6 +288,57 @@ def test_dispatch_gate_resolves_the_governor_for_the_target_card(monkeypatch):
     assert gate(item, "sattler") == ""
 
 
+def test_delegation_reserve_holds_same_subscription_and_admits_other(monkeypatch):
+    base = gov.Policy(source="stub", stub_pct=91, tiers=(
+        gov.Tier(at=50, min_priority=4),), by_harness={})
+    codex = gov.Policy(source="stub", stub_pct=10, tiers=(
+        gov.Tier(at=50, min_priority=4),))
+    base.by_harness["codex"] = codex
+    governors = {
+        "base": gov.Governor(base, gov.StubReader(91)),
+        "codex": gov.Governor(codex, gov.StubReader(10)),
+    }
+    cards = [Agent(name="claire", role="administrator", pane="p1", harness="claude"),
+             Agent(name="ian", role="worker", pane="p2", harness="claude"),
+             Agent(name="arnold", role="worker", pane="p3", harness="codex")]
+    cfg = types.SimpleNamespace(governor=base,
+                                fleet=types.SimpleNamespace(stood_down=False))
+    monkeypatch.setattr(cli, "_governors", lambda a: (cfg, governors))
+    monkeypatch.setattr(cli, "_registry", lambda a: types.SimpleNamespace(all=lambda: cards))
+    monkeypatch.setattr(cli, "_me", lambda a: "claire")
+    gate = cli._dispatch_gate(types.SimpleNamespace(root="/tmp"))
+    item = types.SimpleNamespace(id="x", priority=1)
+
+    assert "delegation reserve" in gate(item, "ian")
+    assert gate(item, "arnold") == ""
+
+
+def test_stood_down_refuses_same_subscription_but_allows_delegation(monkeypatch):
+    base = gov.Policy()
+    cards = [Agent(name="claire", role="administrator", pane="p1", harness="claude"),
+             Agent(name="ian", role="worker", pane="p2", harness="claude"),
+             Agent(name="arnold", role="worker", pane="p3", harness="codex")]
+    cfg = types.SimpleNamespace(governor=base,
+                                fleet=types.SimpleNamespace(stood_down=True))
+    monkeypatch.setattr(cli, "_governors", lambda a: (cfg, {}))
+    monkeypatch.setattr(cli, "_registry", lambda a: types.SimpleNamespace(all=lambda: cards))
+    monkeypatch.setattr(cli, "_me", lambda a: "claire")
+    gate = cli._dispatch_gate(types.SimpleNamespace(root="/tmp"))
+    item = types.SimpleNamespace(id="x", priority=1)
+
+    assert "FLEET STOOD DOWN" in gate(item, "ian")
+    assert gate(item, "arnold") == ""
+
+
+def test_delegation_reserve_is_parsed_and_bounded(tmp_path):
+    cfg = _cfg(tmp_path, BASE.replace("stub_pct = 10.0",
+                                     "stub_pct = 10.0\ndelegation_reserve_pct = 12"))
+    assert cfg.governor.delegation_reserve_pct == 12
+    with pytest.raises(ConfigError, match="must be 0-100"):
+        _cfg(tmp_path, BASE.replace("stub_pct = 10.0",
+                                    "stub_pct = 10.0\ndelegation_reserve_pct = 101"))
+
+
 def test_dispatch_signal_lost_is_qualified_by_target_harness(monkeypatch, capsys):
     """The Codex sentinel must not be misread as the Claude/base governor."""
     base = gov.Policy(source="stub", stub_pct=10, tiers=(

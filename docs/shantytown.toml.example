@@ -364,6 +364,7 @@ max_load_per_core = 4.0
 # ---------------------------------------------------------------------------
 
 # [governor]
+# delegation_reserve_pct = 10  # final band admits cross-harness delegation only
 # source = "textfile"
 # path = "/var/lib/node_exporter/textfile_collector/claude_usage.prom"
 # window = "five_hour"

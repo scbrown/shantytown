@@ -596,6 +596,10 @@ class IdleFleetAlerter:
 
         Returns the newly-idle names alerted/nudged this pass. Fully fail-open."""
         from . import feed_check
+        from .stop_event import _stood_down
+        if _stood_down(self._shanty_root):
+            self._log("idle-fleet: fleet stood down — correctly not alerting")
+            return []
         try:
             free = feed_check.free_feedable_workers(self._reg, self._panes, self._runtime,
                                                     root=self._shanty_root)
