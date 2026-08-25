@@ -850,6 +850,11 @@ st inbox --count                     one integer, for a status bar. Marks nothin
 st inbox --read                      ACK: mark my unread messages read
 ```
 
+When a durable message is successfully submitted to a live pane, `st` closes only
+that message's pointer after confirming the input is not stranded. The closed bead
+retains its content and history. If the recipient is down, the send fails, the input
+is stranded, or pointer closure fails, the pointer remains open for `st inbox`.
+
 The default send is unchanged and is still one line of `tmux send-keys`. What is new is the **type**.
 
 The old `mail -d` persisted a message as an ordinary tracker item assigned to the recipient, and then
