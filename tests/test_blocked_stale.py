@@ -14,7 +14,8 @@ from pathlib import Path
 
 from shantytown.inbox import is_blocked
 from shantytown.notify import (BLOCKED_MIN_AGE_DAYS, BlockedStaleAlerter,
-                               BlockedMisstatusAlerter, _bead_age_days)
+                               BlockedMisstatusAlerter, _bead_age_days,
+                               _blocked_kind)
 
 NOW = datetime(2026, 8, 2, tzinfo=timezone.utc).timestamp()
 
@@ -36,9 +37,11 @@ class _Push:
         self.msgs.append(msg); return "sattler" if self.ok else None
 
 
-def _alerter(tmp_path, rows, push, now=NOW):
+def _alerter(tmp_path, rows, push, now=NOW, details=None):
+    details = details or {row["id"]: _detail() for row in rows}
     return BlockedStaleAlerter(tmp_path, reg=None, panes=None, push=push,
-                                 bd_blocked=lambda: rows, now=now)
+                                 bd_blocked=lambda: rows,
+                                 bd_show=lambda bid: details[bid], now=now)
 
 
 def _detail(*deps):
@@ -120,8 +123,29 @@ def test_a_blocked_bead_whose_BLOCKER_CLOSED_is_re_surfaced_too(tmp_path):
     push = _Push()
     row = _row("7p0", 36, labels=["ci", "deploy"])
     row["dependency_count"] = 1          # ...and that dependency is closed
-    assert _alerter(tmp_path, [row], push).sweep() == ["7p0"]
-    assert "blocker" in push.msgs[0].lower(), "did not tell the reader to check the blocker"
+    details = {"7p0": _detail(("already-done", "closed"))}
+    assert _alerter(tmp_path, [row], push, details=details).sweep() == ["7p0"]
+    assert "BLOCKED-ON-HUMAN" in push.msgs[0]
+
+
+def test_open_dependency_is_classified_as_WORK_not_human(tmp_path):
+    """Acceptance control: dependency status, not count, discriminates."""
+    push = _Push()
+    rows = [_row("work-gated", 17, labels=[])]
+    details = {"work-gated": _detail(("done", "closed"), ("active", "open"))}
+    assert _alerter(tmp_path, rows, push, details=details).sweep() == ["work-gated"]
+    assert "BLOCKED-ON-WORK" in push.msgs[0]
+    assert "active" in push.msgs[0]
+    assert "BLOCKED-ON-HUMAN" not in push.msgs[0]
+
+
+def test_no_dependency_is_classified_as_HUMAN_without_a_label(tmp_path):
+    """Acceptance specimen: no hand-applied decision label is required."""
+    push = _Push()
+    rows = [_row("human-gated", 17, labels=[])]
+    assert _alerter(tmp_path, rows, push).sweep() == ["human-gated"]
+    assert "BLOCKED-ON-HUMAN" in push.msgs[0]
+    assert "BLOCKED-ON-WORK" not in push.msgs[0]
 
 
 # --- the sweep ----------------------------------------------------------------
