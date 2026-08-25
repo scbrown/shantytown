@@ -41,6 +41,7 @@ import os
 import re
 import shutil
 import stat
+import tomllib
 from pathlib import Path
 
 from .protocols import Agent
@@ -70,6 +71,7 @@ SECRETS = "secrets.env"
 # all. See link_skills().
 SKILLS_SRC = "skills"
 SKILLS_RUNTIME = (".claude", "skills")
+CODEX_SKILLS_RUNTIME = (".agents", "skills")
 
 _PLACEHOLDER = re.compile(r"\$\{([A-Z0-9_]+)\}")
 
@@ -185,6 +187,35 @@ def skills_linked(ws) -> list[str]:
     return out
 
 
+def codex_skills_linked(ws) -> list[str]:
+    """The same source skills, realized at Codex's documented repo location."""
+    ws = Path(ws).expanduser()
+    dst = ws.joinpath(*CODEX_SKILLS_RUNTIME)
+    return [src.name for src in _skill_sources(ws)
+            if (dst / src.name).is_symlink()
+            and os.readlink(dst / src.name) == str(src)
+            and (dst / src.name / "SKILL.md").is_file()]
+
+
+def _link_skill_runtime(ws: Path, runtime: tuple[str, str]) -> None:
+    dst = ws.joinpath(*runtime)
+    for src in _skill_sources(ws):
+        link = dst / src.name
+        try:
+            if (link.is_symlink() and os.readlink(link) == str(src)
+                    and (link / "SKILL.md").is_file()):
+                continue
+            dst.mkdir(parents=True, exist_ok=True)
+            if link.is_symlink() or link.exists():
+                if link.is_dir() and not link.is_symlink():
+                    shutil.rmtree(link)
+                else:
+                    link.unlink()
+            link.symlink_to(src)
+        except OSError:
+            continue
+
+
 def link_skills(ws) -> list[str]:
     """SYMLINK every <ws>/skills/<name> into <ws>/.claude/skills/. Never COPY.
 
@@ -217,23 +248,88 @@ def link_skills(ws) -> list[str]:
     srcs = _skill_sources(ws)
     if not srcs:
         return []                        # this workspace ships no skills: fine
-    dst = ws.joinpath(*SKILLS_RUNTIME)
-    for src in srcs:
-        link = dst / src.name
-        try:
-            if (link.is_symlink() and os.readlink(link) == str(src)
-                    and (link / "SKILL.md").is_file()):
-                continue                                     # already correct
-            dst.mkdir(parents=True, exist_ok=True)
-            if link.is_symlink() or link.exists():
-                if link.is_dir() and not link.is_symlink():
-                    shutil.rmtree(link)                      # a stale COPY
-                else:
-                    link.unlink()                # wrong or dangling symlink
-            link.symlink_to(src)
-        except OSError:
-            continue        # never fatal — the gap report names what is absent
+    _link_skill_runtime(ws, SKILLS_RUNTIME)
+    _link_skill_runtime(ws, CODEX_SKILLS_RUNTIME)
     return skills_linked(ws)               # verify by listing, not by existence
+
+
+def link_instructions(ws, harness: str | None) -> bool:
+    """Project the one rulebook into the filename each harness discovers."""
+    ws = Path(ws).expanduser()
+    source = ws / "CLAUDE.md"
+    if not source.is_file():
+        return False
+    if harness != "codex":
+        return True
+    target = ws / "AGENTS.md"
+    if target.is_symlink() and os.readlink(target) == "CLAUDE.md":
+        return True
+    if target.exists() and not target.is_symlink():
+        try:
+            if target.read_bytes() != source.read_bytes():
+                raise ProvisionError(
+                    f"cannot make tooling instructions uniform in {ws}: AGENTS.md "
+                    "differs from CLAUDE.md. Refusing to overwrite either source; "
+                    "reconcile them, then re-launch.")
+        except OSError as e:
+            raise ProvisionError(f"cannot compare instruction files in {ws}: {e}")
+        target.unlink()
+    elif target.is_symlink():
+        target.unlink()
+    target.symlink_to("CLAUDE.md")
+    return target.is_symlink() and os.readlink(target) == "CLAUDE.md"
+
+
+def _codex_config(card: Agent, root) -> Path | None:
+    from . import codex as codex_mod
+    settings = Path(root) / "settings" / "codex"
+    candidates = (settings / f"agent-{card.name}" / codex_mod.CONFIG_FILE,
+                  settings / card.role / codex_mod.CONFIG_FILE)
+    return next((p for p in candidates if p.is_file()), None)
+
+
+def _codex_servers(servers: dict, templates: dict | None = None) -> dict:
+    """Translate Claude's declarative MCP entries into Codex config values."""
+    out = {}
+    templates = templates or {}
+    for name, raw in servers.items():
+        spec = dict(raw)
+        spec.pop("type", None)
+        if "headers" in spec:
+            headers = dict(spec.pop("headers"))
+            template_headers = templates.get(name, {}).get("headers", {})
+            template_auth = template_headers.get("Authorization", "")
+            match = re.fullmatch(r"Bearer \$\{([A-Z0-9_]+)\}", template_auth)
+            if match:
+                spec["bearer_token_env_var"] = match.group(1)
+                headers.pop("Authorization", None)
+            if headers:
+                spec["http_headers"] = headers
+        out[name] = spec
+    return out
+
+
+def codex_servers_in(path) -> list[str]:
+    try:
+        data = tomllib.loads(Path(path).read_text())
+    except (OSError, ValueError, TypeError):
+        return []
+    return sorted((data.get("mcp_servers") or {}).keys())
+
+
+def _project_codex_mcp(card: Agent, root, rendered: str) -> None:
+    if card.harness != "codex":
+        return
+    config = _codex_config(card, root)
+    if config is None:
+        raise ProvisionError(f"cannot project MCP kit for {card.name}: no Codex "
+                             "config.toml exists for the agent or its role")
+    from . import codex as codex_mod
+    data = json.loads(rendered)
+    template_data = json.loads((provision_dir(root) / MCP_TEMPLATE).read_text())
+    servers = _codex_servers(data.get("mcpServers") or data,
+                             template_data.get("mcpServers") or template_data)
+    config.write_text(codex_mod.render({"mcp_servers": servers}, config.read_text()))
 
 
 def missing_kit(card: Agent, root) -> list[str]:
@@ -252,7 +348,7 @@ def missing_kit(card: Agent, root) -> list[str]:
     have = servers_in(ws / ".mcp.json")
     if want and sorted(have) != sorted(want):
         gaps.append(f"mcp({','.join(sorted(set(want) - set(have))) or 'mismatch'})")
-    if not (ws / ".claude" / CONSENT_TEMPLATE).is_file():
+    if card.harness != "codex" and not (ws / ".claude" / CONSENT_TEMPLATE).is_file():
         gaps.append("mcp-consent")
     # SKILLS ARE KIT TOO — and this is the "wire the detector to something that
     # runs" half of aegis-qvxd. The standing guard for skill drift was a shell
@@ -265,7 +361,35 @@ def missing_kit(card: Agent, root) -> list[str]:
     unlinked = sorted(want - set(skills_linked(ws)))
     if unlinked:
         gaps.append(f"skills({','.join(unlinked)})")
+    if card.harness == "codex":
+        codex_unlinked = sorted(want - set(codex_skills_linked(ws)))
+        if codex_unlinked:
+            gaps.append(f"codex-skills({','.join(codex_unlinked)})")
+        config = _codex_config(card, root)
+        have = codex_servers_in(config) if config else []
+        if expected_servers(root) and have != expected_servers(root):
+            gaps.append("codex-mcp(uniformity)")
+        if not (ws / "AGENTS.md").is_symlink() or os.readlink(ws / "AGENTS.md") != "CLAUDE.md":
+            gaps.append("instructions(AGENTS.md)")
     return gaps
+
+
+def uniformity_report(cards, root) -> tuple[str, bool]:
+    """Doctor's harness-neutral realization check; manifest data is discovered."""
+    rows = []
+    broken = False
+    for card in sorted(cards, key=lambda c: c.name):
+        if card.retired or not card.workspace:
+            continue
+        gaps = missing_kit(card, root)
+        harness = card.harness or "claude"
+        if gaps:
+            broken = True
+            rows.append(f"  ! {card.name:<12} {harness:<7} {', '.join(gaps)}")
+        else:
+            rows.append(f"  ✓ {card.name:<12} {harness:<7} uniform")
+    head = "  TOOLING UNIFORMITY (MCP + skills + instructions)"
+    return "\n".join([head] + (rows or ["  ? no provisionable crew cards"])), broken
 
 
 def _consent_for_role(text: str, role: str) -> str:
@@ -455,6 +579,7 @@ def provision(card: Agent, root, *, secrets=None) -> list[str]:
     # MCP template still has a workspace full of skills the runtime cannot see,
     # and the skill links depend on nothing but the clone itself.
     link_skills(ws)
+    link_instructions(ws, card.harness)
 
     # Codex does not read Claude Code's workspace consent file.  Its equivalent
     # self-healing channel is the config.toml selected by the card, so refresh
@@ -462,12 +587,7 @@ def provision(card: Agent, root, *, secrets=None) -> list[str]:
     # override exactly as the launcher does, then fall back to the role artifact.
     if card.harness == "codex":
         from . import codex as codex_mod
-        settings = Path(root) / "settings"
-        candidates = (
-            settings / "codex" / f"agent-{card.name}" / codex_mod.CONFIG_FILE,
-            settings / "codex" / card.role / codex_mod.CONFIG_FILE,
-        )
-        config = next((p for p in candidates if p.is_file()), None)
+        config = _codex_config(card, root)
         if config is not None:
             before = config.read_text()
             after = codex_mod.with_workspace_hooks(before, card.role, root)
@@ -512,6 +632,7 @@ def provision(card: Agent, root, *, secrets=None) -> list[str]:
     # 0600 BEFORE anyone else can read it. The file carries a bearer token; the
     # workspace is a git clone that other tooling walks.
     target.chmod(stat.S_IRUSR | stat.S_IWUSR)
+    _project_codex_mcp(card, root, rendered)
 
     consent = d / CONSENT_TEMPLATE
     if consent.is_file():

@@ -257,6 +257,7 @@ def test_provision_links_every_skill_into_the_runtime_dir(root, ws):
         assert (dst / n).is_symlink(), f"{n} must be a LINK — a copy tracks no fix"
         assert (dst / n / "SKILL.md").is_file(), "link must resolve to a real skill"
     assert P.skills_linked(ws) == ["bundle", "quipu"]
+    assert P.codex_skills_linked(ws) == ["bundle", "quipu"]
 
 
 def test_a_stale_COPY_is_replaced_by_a_link(root, ws):
