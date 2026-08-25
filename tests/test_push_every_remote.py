@@ -146,6 +146,59 @@ def test_mixed_authority_remotes_REFUSE_before_contacting_either(two_remotes, ca
     assert _sha(forge, "main") == before_forge
 
 
+def test_bare_name_finds_existing_workspace_worktree(
+        two_remotes, monkeypatch, tmp_path, capsys):
+    """aegis-ubss6: push follows the existing ~/workspace worktree.
+
+    A nonexistent ~/gt checkout must not hide it or cause the refusal to suggest
+    provisioning a duplicate under ~/gt.
+    """
+    repo, wt, origin, forge = two_remotes
+    monkeypatch.setenv("GT_ROOT", str(tmp_path / "gt"))
+    monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
+    _commit(wt, "workspace-work")
+
+    assert main(["push", "proj", "ellie"]) == OK
+    assert _sha(origin, "main") == _sha(wt, "HEAD")
+    assert _sha(forge, "main") == _sha(wt, "HEAD")
+    assert "no worktree" not in capsys.readouterr().err
+
+
+def test_bare_name_refuses_ambiguous_existing_worktrees(
+        two_remotes, monkeypatch, tmp_path, capsys):
+    """Never guess when ~/gt and ~/workspace both carry the requested agent."""
+    _, wt, _, _ = two_remotes
+    gt_root = tmp_path / "gt"
+    duplicate = gt_root / "proj-wt" / "ellie"
+    duplicate.mkdir(parents=True)
+    monkeypatch.setenv("GT_ROOT", str(gt_root))
+    monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
+
+    assert main(["push", "proj", "ellie"]) == REFUSED
+    err = capsys.readouterr().err
+    assert "ambiguous worktree" in err
+    assert str(wt) in err and str(duplicate) in err
+
+
+def test_workspace_resolution_keeps_third_party_remote_preflight(
+        two_remotes, monkeypatch, tmp_path, capsys):
+    """Finding a workspace worktree must not bypass the Thinker safety guard."""
+    repo, wt, origin, forge = two_remotes
+    monkeypatch.setenv("GT_ROOT", str(tmp_path / "gt"))
+    monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
+    _git(repo, "config", "--unset", "remote.origin.st-push-allowed")
+    _git(repo, "config", "--unset", "remote.forge.st-push-allowed")
+    before_origin, before_forge = _sha(origin, "main"), _sha(forge, "main")
+    _commit(wt, "workspace-must-not-land")
+
+    assert main(["push", "proj", "ellie"]) == REFUSED
+    err = capsys.readouterr().err
+    assert "REFUSED BEFORE PUSH" in err
+    assert "no remote was contacted" in err
+    assert _sha(origin, "main") == before_origin
+    assert _sha(forge, "main") == before_forge
+
+
 # --- requirement 1: refuse on non-ff, NEVER force ----------------------------
 
 def test_non_ff_is_REFUSED_and_the_remote_is_NOT_rewritten(two_remotes, capsys):
