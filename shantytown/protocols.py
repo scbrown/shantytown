@@ -469,5 +469,10 @@ class Context(Protocol):
 
     Implementations MUST raise ContextUnavailable rather than return [] when
     they could not reach their backend. Returning [] there is the defect.
+
+    RETURNS AN `Answer`, NOT A BARE LIST (aegis-q0bzh). A budgeted context
+    search that fills its budget cannot prove that it found every relevant
+    snippet. `Answer.capped` carries that uncertainty to the caller instead of
+    rendering a top-N page as the whole answer.
     """
-    def relevant(self, query: str, budget: int) -> list[Snippet]: ...
+    def relevant(self, query: str, budget: int) -> Answer[list[Snippet]]: ...

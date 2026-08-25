@@ -48,12 +48,14 @@ def test_context_interface_is_one_function():
 def test_none_adapter_returns_empty_and_does_not_raise():
     """[] is an ANSWER here: nothing is configured, so there is nothing to look at.
     It must NOT raise — a `none` context is a valid deployment, not a failure."""
-    assert NoContext().relevant("anything", 5) == []
+    assert NoContext().relevant("anything", 5).exact() == []
 
 
 def test_none_adapter_needs_no_backend():
     """The leak test in miniature: no server, no CLI, no network."""
-    assert NoContext().relevant("triage", 1) == []
+    answer = NoContext().relevant("triage", 1)
+    assert answer.exact() == []
+    assert "did not look" in answer.how
 
 
 # --- the hard half: unreachable is NOT empty ----------------------------------
@@ -120,13 +122,18 @@ def test_answered_with_nothing_is_empty_not_an_error(monkeypatch):
         returncode, stdout, stderr = 0, '{"count": 0, "results": []}', ""
     monkeypatch.setattr("shantytown.bobbin.shutil.which", lambda _: "/x/bobbin")
     monkeypatch.setattr("shantytown.bobbin.subprocess.run", lambda *a, **k: R())
-    assert BobbinContext().relevant("triage", 2) == []
+    assert BobbinContext().relevant("triage", 2).exact() == []
 
 
 def test_empty_query_refuses_rather_than_reporting_nothing():
     """A precondition failure is not evidence about the codebase."""
     with pytest.raises(ValueError):
         BobbinContext().relevant("   ", 2)
+
+
+def test_zero_budget_refuses_rather_than_reporting_nothing():
+    with pytest.raises(ValueError, match="greater than zero"):
+        BobbinContext().relevant("triage", 0)
 
 
 def test_parses_a_hit(monkeypatch):
@@ -140,7 +147,43 @@ def test_parses_a_hit(monkeypatch):
     monkeypatch.setattr("shantytown.bobbin.shutil.which", lambda _: "/x/bobbin")
     monkeypatch.setattr("shantytown.bobbin.subprocess.run", lambda *a, **k: R())
     got = BobbinContext().relevant("x", 1)
-    assert got == [Snippet(path="a/b.py", lines="1-9", score=0.5, repo="r", name="f")]
+    assert got.at_least() == [
+        Snippet(path="a/b.py", lines="1-9", score=0.5, repo="r", name="f")
+    ]
+    assert got.complete is False
+    assert "requested budget of 1" in (got.caveat or "")
+
+
+def test_fewer_hits_than_budget_is_a_complete_answer(monkeypatch):
+    class R:
+        returncode = 0
+        stdout = (
+            '{"count":1,"results":[{"file_path":"a/b.py","start_line":1,'
+            '"end_line":9,"score":0.5,"repo":"r","name":"f"}]}'
+        )
+        stderr = ""
+    monkeypatch.setattr("shantytown.bobbin.shutil.which", lambda _: "/x/bobbin")
+    monkeypatch.setattr("shantytown.bobbin.subprocess.run", lambda *a, **k: R())
+    got = BobbinContext().relevant("x", 2)
+    assert len(got.exact()) == 1
+    assert got.note() is None
+
+
+def test_cli_renders_budget_caveat_next_to_partial_results(monkeypatch, capsys):
+    class R:
+        returncode = 0
+        stdout = (
+            '{"count":1,"results":[{"file_path":"a/b.py","start_line":1,'
+            '"end_line":9,"score":0.5,"repo":"r","name":"f"}]}'
+        )
+        stderr = ""
+    monkeypatch.setattr("shantytown.bobbin.shutil.which", lambda _: "/x/bobbin")
+    monkeypatch.setattr("shantytown.bobbin.subprocess.run", lambda *a, **k: R())
+    assert main(["context", "x", "-b", "1"]) == 0
+    captured = capsys.readouterr()
+    assert "a/b.py:1-9" in captured.out
+    assert "INCOMPLETE" in captured.err
+    assert "requested budget of 1" in captured.err
 
 
 # --- the exit-code contract, which is the actual deliverable -------------------
