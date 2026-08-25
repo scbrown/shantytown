@@ -141,6 +141,28 @@ def test_drain_reason_flags_a_rise(tmp_path, capsys):
     assert "ROSE: lead-unreachable" in payload["reason"]
 
 
+def test_a_risen_event_drains_ONCE_even_when_its_sender_is_busy(tmp_path, capsys):
+    """aegis-lfo4l: rank 1 called this batch MUST NOT WAIT, but `_drain`
+    applied the ordinary mid-flight deferral and marked nothing delivered. The
+    same risen events re-blocked the administrator every turn until the 30m
+    ceiling. First drain delivers; the second is empty — BLOCK-ONCE."""
+    reg = _reg(tmp_path)
+    ev = FilesEvents(tmp_path / "events")
+    ev.persist(to="maldoon", frm="ellie", reason="lead-unreachable", rose=True)
+    busy = _Panes({"p-ellie"}, {"p-ellie": BUSY_SCREEN})
+
+    assert stop_event._drain(ev, "maldoon", reg, busy, _ready) == 0
+    first = capsys.readouterr()
+    assert "ROSE: lead-unreachable" in json.loads(first.out)["reason"]
+    assert "delivered regardless after 30m" in first.err
+    assert _pending(tmp_path, "maldoon") == []
+
+    assert stop_event._drain(ev, "maldoon", reg, busy, _ready) == 0
+    second = capsys.readouterr()
+    assert second.out == "", "same risen event re-blocked a second stop"
+    assert second.err == ""
+
+
 # --- main(): identity + mode guards ---------------------------------------------
 
 def test_main_refuses_without_identity(tmp_path, monkeypatch):

@@ -701,19 +701,26 @@ def _drain(events: FilesEvents, me: str, reg=None, panes=None,
     now = time.time()
     verdicts: dict[str, str] = {}
     deferred = 0
+    urgent_delivered = 0
     deferred_by: dict[str, float] = {}   # sender -> oldest deferred age (s)
     overdue: list[str] = []              # senders whose events beat the ceiling
     accept = None
     if reg is not None and panes is not None and shows_ready_ui is not None:
         def accept(ev: StopEvent) -> bool:            # noqa: F811 — the wired form
-            nonlocal deferred
-            if is_governance(ev.reason):
-                # NEVER defer an untracked-work alert. The defer gate exists to
+            nonlocal deferred, urgent_delivered
+            if is_governance(ev.reason) or ev.rose:
+                # NEVER defer an untracked-work alert OR a risen event. The defer gate exists to
                 # stop a TURN BOUNDARY waking a coordinator for an agent that is
                 # still mid-flight (aegis-w9z1) — but "that agent is mid-flight"
                 # IS this alert's content. Passing it through the same gate would
                 # hold back exactly the events that are true and release only the
                 # ones about agents that had already stopped working untracked.
+                # A risen event is the same urgency contract from the other side:
+                # its lead was unreachable, so it already waited once. Rank 1 in
+                # stop_policy calls it "must not wait"; deferring it here made
+                # that rank re-block the administrator with the same batch every
+                # turn while drain() marked nothing delivered (aegis-lfo4l).
+                urgent_delivered += 1
                 return True
             if ev.frm not in verdicts:
                 verdicts[ev.frm] = _liveness(reg, panes, shows_ready_ui, ev.frm,
@@ -746,6 +753,10 @@ def _drain(events: FilesEvents, me: str, reg=None, panes=None,
                   f"mid-flight: {who}; delivered regardless after "
                   f"{DEFER_MAX_AGE_S/60:.0f}m", file=sys.stderr)
         return 0
+    if urgent_delivered:
+        print(f"stop_event: {urgent_delivered} event(s) that must not wait "
+              f"delivered now; ordinary held events are delivered regardless "
+              f"after {DEFER_MAX_AGE_S/60:.0f}m", file=sys.stderr)
     reason = _compose_reason(got, verdicts, now, deferred)
     # ADMIN ENRICHMENT: only when a stop event actually fired (rides BLOCK-ONCE),
     # so a persistently-idle fleet can never re-block the admin every stop. A bare
