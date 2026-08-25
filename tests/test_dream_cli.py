@@ -3,12 +3,13 @@ from __future__ import annotations
 import types
 
 from shantytown import cli, dream, governor
+from shantytown.answer import Answer
 from shantytown.protocols import Agent, WorkItem
 
 
 class _Registry:
     def __init__(self, cards): self.cards = cards
-    def all(self): return self.cards
+    def all(self): return Answer.complete_read(self.cards, how="dream test roster")
 
 
 class _Panes:
