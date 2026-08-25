@@ -167,3 +167,28 @@ def test_above_every_tier_renders_a_dash_not_a_number(monkeypatch, capsys):
              _verdict())
     _, out = _run(monkeypatch, capsys, g)
     assert out.startswith("ok 97/-/- 24/45/-")
+
+
+def test_mixed_fleet_renders_both_windows_not_legacy_primary(monkeypatch, capsys):
+    """Regression for aegis-ta96y: 4% 5h must not hide a binding 93% 7d."""
+    seven_day = gov_mod.Tier(at=90, window=gov_mod.SEVEN_DAY, action="drain")
+    base = _Gov({gov_mod.FIVE_HOUR: _reading(4),
+                 gov_mod.SEVEN_DAY: _reading(93)},
+                _verdict(engaged=[seven_day]))
+    codex = _Gov({gov_mod.SEVEN_DAY: _reading(3)}, _verdict())
+    policy = types.SimpleNamespace(by_harness={"codex": codex.policy})
+    cfg = types.SimpleNamespace(governor=policy)
+    monkeypatch.setattr(cli.config, "load_or_default", lambda root: (cfg, None))
+    monkeypatch.setattr(cli, "_governors", lambda a: (cfg, {
+        "base": base, "codex": codex,
+    }))
+    monkeypatch.setattr(cli, "_registry",
+                        lambda a: types.SimpleNamespace(all=lambda: []))
+
+    rc = cli._crew_governor(types.SimpleNamespace(root="/nonexistent"))
+    lines = capsys.readouterr().out.strip().splitlines()
+
+    assert rc == cli.OK
+    assert lines[0].startswith("base ok 4/50/- 93/-/- ")
+    assert "FULL STOP" in lines[0]
+    assert lines[1] == "codex ok ?/?/? 3/45/-"
