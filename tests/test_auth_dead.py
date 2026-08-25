@@ -176,9 +176,11 @@ class _Args:
 
 def _roster(tmp_path, cards):
     crew = tmp_path / "crew"; crew.mkdir()
+    untracked = tmp_path / "untracked"; untracked.mkdir()
     for name, pane in cards.items():
         (crew / f"{name}.json").write_text(
             json.dumps({"role": "worker", "pane": pane}))
+        (untracked / f"{name}.json").write_text(json.dumps({"hooked": True}))
     return tmp_path
 
 
