@@ -180,7 +180,7 @@ def _registry(a):
     chosen = getattr(a, "registry", "files")
     if chosen == "quipu":
         # Pass the root so the ADDRESS and the NAMESPACE both come from the
-        # deployment's env.json rather than whatever this shell exported. Without
+        # deployment's shantytown.toml rather than whatever this shell exported. Without
         # it the client falls back to quipu's stock port — which on a host where
         # another service owns it means quietly querying a stranger — and to the
         # stock namespace, which means truthfully querying the real graph for
@@ -194,8 +194,8 @@ def _registry(a):
 
 
 def _deployment_default(a, key: str) -> str | None:
-    """A deployment-declared default for `key`: <root>/env.json (gitignored
-    deployment config), then the ambient env — the SAME source order the launch
+    """A deployment-declared default for `key`: [env] in shantytown.toml,
+    then the ambient env — the SAME source order the launch
     side already uses for carried env and SHANTY_BASH_GUARD (runtime.py), so
     "where deployment config lives" has one answer, not two.
 
@@ -215,7 +215,7 @@ def _deployment_default(a, key: str) -> str | None:
 
 def _backend(a, default="files") -> str:
     """The selected tracker backend: explicit --backend, else the deployment's
-    SHANTY_BACKEND (env.json/env), else `default` (per-command).
+    SHANTY_BACKEND (shantytown.toml/env), else `default` (per-command).
 
     ONE resolver, because the sentinel only buys honesty if nothing re-guesses
     it. `--backend` now defaults to None so "the user said files" and "the user
@@ -541,7 +541,7 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--backend", choices=["files", "beads", "forgejo"], default=None,
                     help="tracker backend (identity is always files). #3. "
                          "Unset means the deployment's SHANTY_BACKEND "
-                         "(<root>/env.json, then env), else per-command "
+                         "([env] in shantytown.toml, then env), else per-command "
                          "default: files everywhere, EXCEPT `mail -d`, which "
                          "defaults to beads because a must-survive message "
                          "belongs in the shared store (dearing, qdal.2). Pass "
@@ -4247,7 +4247,7 @@ def _cmd_roles(a) -> int:
                               a.root, card.role,
                               harness_mod.name_for(card, root=a.root)),
                           # WITH THE STORE ROOT. Without it the lookup sees only
-                          # the ambient environment, never the store's env.json,
+                          # the ambient environment, never the store's shantytown.toml,
                           # and every unguarded card downgrades from BROKEN to a
                           # silent unverified — measured on the live store.
                           # `or ""` distinguishes NOT CONFIGURED (ordinary) from

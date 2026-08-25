@@ -11,8 +11,6 @@ library default: a dead localhost, and a namespace containing none of this crew'
 facts. These pin the carry, and pin that no placeholder is ever invented.
 """
 from __future__ import annotations
-import json
-
 import pytest
 
 from shantytown.runtime import _CARRIED_ENV, claude_settings_for_role
@@ -32,11 +30,14 @@ def _unset_carried(monkeypatch):
         monkeypatch.delenv(key, raising=False)
 
 
+def _deployment(root, **env):
+    lines = ["[env]", *(f'{key} = "{value}"' for key, value in env.items())]
+    (root / "shantytown.toml").write_text("\n".join(lines) + "\n")
+
+
 def test_carries_deployment_env_from_root_config(tmp_path):
-    (tmp_path / "env.json").write_text(json.dumps({
-        "QUIPU_SERVER": "http://graph.example",
-        "SHANTY_ONTO_NS": "http://ns.example/ontology/",
-    }))
+    _deployment(tmp_path, QUIPU_SERVER="http://graph.example",
+                SHANTY_ONTO_NS="http://ns.example/ontology/")
 
     env = claude_settings_for_role("lead", root=tmp_path)["env"]
 
@@ -48,7 +49,7 @@ def test_carries_deployment_env_from_root_config(tmp_path):
 def test_every_role_carries_it_not_just_some(tmp_path):
     """The bug was role-shaped in practice: worker and administrator had the vars
     (hand-maintained) and the freshly-emitted lead did not."""
-    (tmp_path / "env.json").write_text(json.dumps({"QUIPU_SERVER": "http://graph.example"}))
+    _deployment(tmp_path, QUIPU_SERVER="http://graph.example")
 
     for role in ("worker", "lead", "administrator"):
         env = claude_settings_for_role(role, root=tmp_path)["env"]
@@ -65,7 +66,7 @@ def test_falls_back_to_ambient_environment(tmp_path, monkeypatch):
 
 def test_root_config_wins_over_ambient(tmp_path, monkeypatch):
     monkeypatch.setenv("QUIPU_SERVER", "http://ambient.example")
-    (tmp_path / "env.json").write_text(json.dumps({"QUIPU_SERVER": "http://deployed.example"}))
+    _deployment(tmp_path, QUIPU_SERVER="http://deployed.example")
 
     env = claude_settings_for_role("worker", root=tmp_path)["env"]
 
@@ -84,11 +85,11 @@ def test_omits_the_key_entirely_when_unconfigured(tmp_path, monkeypatch):
     assert env == {"BOBBIN_ROLE": "worker"}
 
 
-def test_unreadable_env_json_does_not_crash_the_emit(tmp_path, monkeypatch):
+def test_unreadable_toml_does_not_crash_the_emit(tmp_path, monkeypatch):
     """A corrupt deployment config must not take the launcher down with it — the
     settings still emit, just without the carry."""
     _unset_carried(monkeypatch)
-    (tmp_path / "env.json").write_text("{ not json")
+    (tmp_path / "shantytown.toml").write_text("[env\nbroken")
 
     env = claude_settings_for_role("worker", root=tmp_path)["env"]
 

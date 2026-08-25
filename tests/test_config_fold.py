@@ -1,20 +1,16 @@
-"""ONE hand-edited file: env.json and settings/tmux-socket fold into shantytown.toml.
+"""ONE hand-edited file: deployment config lives in shantytown.toml.
 
 Measured complaint (aegis-8calr): config lived in seven places — env.json,
 shantytown.toml, settings/<role>.settings.json, crew/<name>.json,
 settings/tmux-socket, hierarchy.*, ~/.config/shantytown/root — plus 19 SHANTY_*
 env vars, so "where do I configure this?" had no single answer.
 
-Two of those are now the same file. The legacy pair is still READ (both are live on
-real deployments) and says so once, on stderr — a deprecation that silently changed
-behaviour would be worse than the sprawl.
+The legacy pair completed its deprecation window and is no longer read.
 
 The tests that matter here are the PRECEDENCE ones. A fold that quietly reordered
 which source wins would break deployments in a way no config file mentions.
 """
 from __future__ import annotations
-
-import json
 
 from shantytown import config
 from shantytown.deployment import deployment_default
@@ -33,30 +29,11 @@ def test_env_table_answers(tmp_path, monkeypatch):
     assert deployment_default(tmp_path, "SHANTY_BACKEND") == "beads"
 
 
-def test_the_toml_BEATS_env_json(tmp_path, monkeypatch, capsys):
-    """Prefer the new home — otherwise a half-migrated deployment keeps obeying the
-    file the operator thinks they have retired."""
+def test_env_json_is_not_configuration(tmp_path, monkeypatch):
+    """Deletion lands the reduction: a legacy file cannot remain a second answer."""
     monkeypatch.delenv("SHANTY_BACKEND", raising=False)
-    _toml(tmp_path, '[env]\nSHANTY_BACKEND = "beads"\n')
-    (tmp_path / "env.json").write_text(json.dumps({"SHANTY_BACKEND": "files"}))
-    assert deployment_default(tmp_path, "SHANTY_BACKEND") == "beads"
-    assert "DEPRECATED" not in capsys.readouterr().err, \
-        "the legacy file was not consulted, so there is nothing to warn about"
-
-
-def test_env_json_still_works_and_warns_ONCE(tmp_path, monkeypatch, capsys):
-    monkeypatch.delenv("SHANTY_BACKEND", raising=False)
-    monkeypatch.delenv("SHANTY_BEADS_REPO", raising=False)
-    monkeypatch.setattr("shantytown.deployment._ENV_JSON_WARNED", set())
-    (tmp_path / "env.json").write_text(
-        json.dumps({"SHANTY_BACKEND": "beads", "SHANTY_BEADS_REPO": "/x"}))
-    assert deployment_default(tmp_path, "SHANTY_BACKEND") == "beads"
-    assert deployment_default(tmp_path, "SHANTY_BEADS_REPO") == "/x"
-    err = capsys.readouterr().err
-    assert err.count("DEPRECATED") == 1, \
-        "one line per process, not one per key — five identical lines get filtered out"
-    assert "SHANTY_BACKEND, SHANTY_BEADS_REPO" in err, "it names what to transcribe"
-    assert "shantytown.toml" in err, "and where to put it"
+    (tmp_path / "env.json").write_text('{"SHANTY_BACKEND": "files"}')
+    assert deployment_default(tmp_path, "SHANTY_BACKEND") is None
 
 
 def test_the_FILE_still_beats_the_environment(tmp_path, monkeypatch):
@@ -113,23 +90,11 @@ def test_tmux_socket_from_the_toml(tmp_path, monkeypatch):
     assert declared_socket(tmp_path) == "shanty"
 
 
-def test_the_toml_socket_beats_the_legacy_file(tmp_path, monkeypatch, capsys):
+def test_the_legacy_socket_file_is_not_configuration(tmp_path, monkeypatch):
     monkeypatch.delenv("SHANTY_TMUX_SOCKET", raising=False)
-    _toml(tmp_path, '[tmux]\nsocket = "new"\n')
     (tmp_path / "settings").mkdir()
     (tmp_path / "settings" / "tmux-socket").write_text("old\n")
-    assert declared_socket(tmp_path) == "new"
-    assert "DEPRECATED" not in capsys.readouterr().err
-
-
-def test_the_legacy_socket_file_still_works_and_warns(tmp_path, monkeypatch, capsys):
-    monkeypatch.delenv("SHANTY_TMUX_SOCKET", raising=False)
-    monkeypatch.setattr("shantytown.tmux._SOCKET_WARNED", set())
-    (tmp_path / "settings").mkdir()
-    (tmp_path / "settings" / "tmux-socket").write_text("shanty\n")
-    assert declared_socket(tmp_path) == "shanty"
-    err = capsys.readouterr().err
-    assert "DEPRECATED" in err and "[tmux]" in err
+    assert declared_socket(tmp_path) is None
 
 
 def test_a_declaration_still_beats_the_ambient_env(tmp_path, monkeypatch):

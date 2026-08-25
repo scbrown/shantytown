@@ -73,7 +73,7 @@ class QuipuEvents:
                  onto: str | None = None):
         # localhost, NOT an internal hostname: this repo is public, and a real
         # deployment's address is deployment config, never a default baked into
-        # source. ONE resolver shared with quipu.py (env.json, then $QUIPU_SERVER,
+        # source. ONE resolver shared with quipu.py ([env], then $QUIPU_SERVER,
         # then quipu's own default), so the two clients cannot end up pointed at
         # different servers from the same deployment.
         self.server = resolve_server(server, root).rstrip("/")

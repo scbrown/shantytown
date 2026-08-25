@@ -82,8 +82,8 @@ def _world(tmp_path, cards, socket="gt-ae5f35"):
         (crew / f"{name}.json").write_text(
             json.dumps({"role": "worker", "pane": pane} if pane else {"role": "worker"}))
     if socket is not None:
-        settings = tmp_path / "settings"; settings.mkdir()
-        (settings / "tmux-socket").write_text(socket)
+        (tmp_path / "shantytown.toml").write_text(
+            f'[tmux]\nsocket = "{socket}"\n')
     return tmp_path
 
 
@@ -253,8 +253,8 @@ def test_bare_attach_starts_a_DOWN_administrator(tmp_path, monkeypatch):
     crew = tmp_path / "crew"; crew.mkdir()
     (crew / "sattler.json").write_text(
         json.dumps({"role": "administrator", "pane": "shanty-sattler"}))
-    (tmp_path / "settings").mkdir()
-    (tmp_path / "settings" / "tmux-socket").write_text("gt-ae5f35")
+    (tmp_path / "shantytown.toml").write_text(
+        '[tmux]\nsocket = "gt-ae5f35"\n')
     rc, argv, launched = _run_launching(monkeypatch, _Args(tmp_path, agent=None),
                                         live=set())
     assert rc == cli.OK
@@ -268,7 +268,8 @@ def test_no_arg_defaults_to_the_administrator_not_SHANTY_AGENT(tmp_path, monkeyp
     crew = tmp_path / "crew"; crew.mkdir()
     (crew / "weaver.json").write_text(json.dumps({"role": "worker", "pane": "shanty-weaver"}))
     (crew / "sattler.json").write_text(json.dumps({"role": "administrator", "pane": "shanty-sattler"}))
-    (tmp_path / "settings").mkdir(); (tmp_path / "settings" / "tmux-socket").write_text("gt-ae5f35")
+    (tmp_path / "shantytown.toml").write_text(
+        '[tmux]\nsocket = "gt-ae5f35"\n')
     monkeypatch.setenv("SHANTY_AGENT", "weaver")
     rc, argv, _ = _run(monkeypatch, _Args(tmp_path, agent=None),
                        live={"shanty-weaver", "shanty-sattler"})

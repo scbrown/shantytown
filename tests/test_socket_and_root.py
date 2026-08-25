@@ -72,8 +72,7 @@ def test_the_cli_and_the_stop_hook_agree(monkeypatch, tmp_path):
 # --- the socket: declared by the store, never inferred from the ambient $TMUX -
 
 def test_the_store_declares_the_socket(tmp_path):
-    (tmp_path / "settings").mkdir()
-    (tmp_path / "settings" / "tmux-socket").write_text("gt-fleet\n")
+    (tmp_path / "shantytown.toml").write_text('[tmux]\nsocket = "gt-fleet"\n')
     assert declared_socket(tmp_path) == "gt-fleet"
 
 
@@ -81,8 +80,7 @@ def test_the_file_beats_the_environment(tmp_path, monkeypatch):
     """An env var is whatever the operator's shell happens to hold, and the whole
     defect is a command meaning different things in different panes."""
     monkeypatch.setenv("SHANTY_TMUX_SOCKET", "from-env")
-    (tmp_path / "settings").mkdir()
-    (tmp_path / "settings" / "tmux-socket").write_text("from-store")
+    (tmp_path / "shantytown.toml").write_text('[tmux]\nsocket = "from-store"\n')
     assert declared_socket(tmp_path) == "from-store"
 
 
@@ -134,8 +132,7 @@ def test_an_empty_registry_claims_nothing():
 
 
 def test_the_cli_builds_its_panes_on_the_declared_socket(tmp_path, monkeypatch):
-    (tmp_path / "settings").mkdir()
-    (tmp_path / "settings" / "tmux-socket").write_text("gt-fleet")
+    (tmp_path / "shantytown.toml").write_text('[tmux]\nsocket = "gt-fleet"\n')
 
     class _A:
         root = tmp_path

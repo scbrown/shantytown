@@ -9,14 +9,12 @@ workspaces. `shanty.toml` in a repo root is a file that program has every right
 to claim, and a config file two tools each believe they own is a config file that
 gets edited for the wrong reader. Full name, no ambiguity.
 
-WHY A SECOND CONFIG FILE, when deployment.py already reads env.json. They answer
-different questions and one of them is not env-shaped:
+WHY TOML. Deployment plumbing is env-shaped, but the rest is not:
 
-  env.json          WHERE this deployment's plumbing lives — a tracker path, a
+  [env]             WHERE this deployment's plumbing lives — a tracker path, a
                     guard script, a server URL. Flat string values, every one of
-                    which is also settable as an environment variable, because
-                    that is what a launcher can carry into a pane.
-  shantytown.toml   WHAT the operator wants running, and how much of it. A mode
+                    which is also settable as an environment variable.
+  other tables      WHAT the operator wants running, and how much of it. A mode
                     is a NAMED SET of crew plus a policy — nested, list-valued,
                     and edited by a human deciding how many tokens tonight costs.
                     That does not flatten into KEY=value without inventing a

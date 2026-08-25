@@ -408,8 +408,8 @@ It is `shantytown.toml`, never `shanty.toml` — `shanty` is a different program
 the same reason the binary here is `st`. An unknown key is **refused**, not ignored: a silently
 dropped key is how an operator comes to believe a policy is in force when it is not.
 
-**`<root>/env.json` and the environment — where the plumbing lives.** Flat values, read in that
-order, every one of them also settable as an env var:
+**`<root>/shantytown.toml` `[env]` and the environment — where the plumbing lives.** Flat values,
+read in that order, every one of them also settable as an env var:
 
 | variable | what it points at | default |
 |---|---|---|
