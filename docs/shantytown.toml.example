@@ -148,8 +148,8 @@ max_load_per_core = 4.0
 # settings/), an import source (hierarchy.*), or a locator that by definition
 # cannot live inside the deployment it points at (the pointer).
 #
-# PRECEDENCE: this table, then env.json (still read, DEPRECATED — it warns once,
-# on stderr, naming the keys to move), then the ambient environment.
+# PRECEDENCE: this table, then the ambient environment. The former env.json
+# compatibility reader was removed after its deprecation window.
 #
 # THE FILE STILL BEATS THE ENVIRONMENT. Where a value is authored moved; which
 # source wins did not — otherwise a stray shell export would silently override a
@@ -166,8 +166,8 @@ max_load_per_core = 4.0
 # SHANTY_ONTO_NS = "https://example.invalid/ontology#"
 
 # ---------------------------------------------------------------------------
-# [tmux] socket — the fleet's tmux socket, DECLARED. Was `settings/tmux-socket`
-# (still read, DEPRECATED).
+# [tmux] socket — the fleet's tmux socket, DECLARED. The former
+# `settings/tmux-socket` compatibility reader was removed after deprecation.
 #
 # Declared and never inferred from the ambient $TMUX: an env var is what an
 # operator's shell happens to hold, and a fleet whose panes are visible or not

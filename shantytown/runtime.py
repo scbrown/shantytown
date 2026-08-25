@@ -555,7 +555,7 @@ def bash_guard_command(root=None) -> str | None:
     start the OTHER orchestrator's machinery, aegis-if4d/bah2). Shantytown
     itself ships NO guard and hardcodes NO path: which commands are dangerous
     is a property of the DEPLOYMENT, not of the tool, so the value lives in
-    env.json (gitignored deployment config) or the ambient env — the same
+    [env] in shantytown.toml or the ambient env — the same
     source order as the carried env, and absent both the hook is simply not
     emitted. The guard contract is Claude Code's: exit 2 blocks, anything
     else allows — a guard that fails open is the deployment's job to write.
@@ -603,7 +603,7 @@ def stop_capture_command(root=None) -> str | None:
     deployment wires its canonical session-capture dispatcher here; the harness
     override layer it replaces retires with its surface). Shantytown ships NO
     capture hook and hardcodes NO path: what a deployment captures at session end
-    is its own business, so the value lives in env.json (gitignored deployment
+    is its own business, so the value lives in [env] in shantytown.toml
     config) or the ambient env — the same source order as SHANTY_BASH_GUARD — and
     absent both, nothing extra is emitted.
 
@@ -923,14 +923,14 @@ def _settings_env(role: str, root=None) -> dict:
     being a coin flip.
 
     Source order is `deployment_default`'s: `[env]` in shantytown.toml, then
-    env.json (deprecated), then the ambient environment. Absent all three, the key
+    the ambient environment. Absent both, the key
     is OMITTED and the agent falls back to the library default — never a
     placeholder written into a live settings file.
 
-    THROUGH THE SHARED RESOLVER, not a second reader of env.json. This function had
+    THROUGH THE SHARED RESOLVER, not a second config reader. This function had
     its own copy, and that copy is what made the config fold a half-migration: a
     deployment could move its keys into shantytown.toml, see every `st` command
-    agree, delete env.json — and silently stop carrying QUIPU_SERVER and
+    agree, delete the legacy file — and silently stop carrying QUIPU_SERVER and
     SHANTY_ONTO_NS into the agents it launched. By this docstring's own argument
     that is the worst possible place for it: a launched agent pointed at the
     default namespace gets "nobody exists" answered with a straight face.

@@ -237,7 +237,7 @@ def _my_context_k(reg: FilesRegistry, panes, me: str) -> float | None:
 
 def _plate_reader(root: Path):
     """A plate reader for the DEPLOYMENT'S declared backend (SHANTY_BACKEND in
-    env.json/env), not a hardcoded one.
+    shantytown.toml/env), not a hardcoded one.
 
     THE BUG THIS FIXES (aegis-tisp, here in the drain). A files-only reader on a
     beads-backed fleet reads EVERY agent's plate empty — the files tracker

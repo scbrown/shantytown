@@ -38,6 +38,12 @@ def _run(argv, tmp_path, monkeypatch, panes=None):
     just as attributes a test set by hand."""
     if panes is not None:
         monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: panes)
+    # Status-flag tests exercise pane classification, not the persistent
+    # untracked-work overlay. Keep that independent input explicitly empty.
+    from shantytown import untracked as untracked_mod
+    monkeypatch.setattr(
+        untracked_mod, "ledger_activity",
+        lambda *_a, **_k: (untracked_mod.ACTIVITY_CLEAR, None))
     # --backend files is EXPLICIT and load-bearing (dearing's ruling, qdal.2):
     # the inbox now defaults to BEADS on both the write and read sides, so a
     # test that relies on --root alone would shell out to `bd` against whatever

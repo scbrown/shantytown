@@ -28,7 +28,8 @@ TEMPLATE = {
 
 
 @pytest.fixture
-def root(tmp_path):
+def root(tmp_path, monkeypatch):
+    monkeypatch.delenv("HOMELAB_MCP_TOKEN", raising=False)
     d = tmp_path / "provision"; d.mkdir()
     (d / P.MCP_TEMPLATE).write_text(json.dumps(TEMPLATE))
     (d / P.CONSENT_TEMPLATE).write_text(json.dumps({"enabledMcpjsonServers": ["bobbin"]}))

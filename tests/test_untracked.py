@@ -302,8 +302,8 @@ def test_plate_reader_follows_the_deployment_backend(tmp_path, monkeypatch):
     every time and warns EVERY agent forever, while never once looking at the
     store the work is in. Wrong-by-construction is worse than absent."""
     monkeypatch.delenv("SHANTY_BACKEND", raising=False)
-    (tmp_path / "env.json").write_text(json.dumps(
-        {"SHANTY_BACKEND": "beads", "SHANTY_BEADS_REPO": "/some/store"}))
+    (tmp_path / "shantytown.toml").write_text(
+        '[env]\nSHANTY_BACKEND = "beads"\nSHANTY_BEADS_REPO = "/some/store"\n')
     read = plate_reader(tmp_path)
     assert "beads" in repr(read.__closure__[0].cell_contents.__module__)
 
@@ -312,14 +312,16 @@ def test_plate_reader_refuses_a_backend_it_cannot_wire(tmp_path, monkeypatch):
     """forgejo needs coordinates a hook has no way to supply. It RAISES, which
     check() reads as could-not-look and stays silent — it does not guess."""
     monkeypatch.delenv("SHANTY_BACKEND", raising=False)
-    (tmp_path / "env.json").write_text(json.dumps({"SHANTY_BACKEND": "forgejo"}))
+    (tmp_path / "shantytown.toml").write_text(
+        '[env]\nSHANTY_BACKEND = "forgejo"\n')
     with pytest.raises(RuntimeError):
         plate_reader(tmp_path)("weaver")
 
 
 def test_an_unwireable_backend_is_silent_not_a_warning(tmp_path, monkeypatch):
     monkeypatch.delenv("SHANTY_BACKEND", raising=False)
-    (tmp_path / "env.json").write_text(json.dumps({"SHANTY_BACKEND": "forgejo"}))
+    (tmp_path / "shantytown.toml").write_text(
+        '[env]\nSHANTY_BACKEND = "forgejo"\n')
     g = _gov(tmp_path, plate_reader(tmp_path))
     assert g.check("weaver").action == SILENT
 

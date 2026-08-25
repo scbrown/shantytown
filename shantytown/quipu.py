@@ -251,16 +251,16 @@ def resolve_server(server: str | None = None, root=None) -> str:
 
         explicit arg  ->  deployment_default  ->  DEFAULT_SERVER
 
-    (deployment_default is [env] in shantytown.toml, then env.json (deprecated),
-    then $QUIPU_SERVER — one resolver, so this cannot drift from the launcher's.)
+    (deployment_default is [env] in shantytown.toml, then $QUIPU_SERVER — one
+    resolver, so this cannot drift from the launcher's.)
 
-    Reading env.json is the point. Before this the address came from the ambient
+    Reading deployment config is the point. Before this the address came from the ambient
     environment or nowhere, so the deployed value survived only as long as some
     shell kept exporting it: a cron entry, a hook the harness re-exec'd outside
     the settings env, or a bare `st` from a non-crew shell all fell back to
     DEFAULT_SERVER. On a host where another service owns that port — see
     `QuipuNotQuipu` — "fell back" meant "silently queried the wrong daemon". The
-    deployment writes its address down ONCE, in the same env.json the settings
+    deployment writes its address down ONCE, in the same [env] table the settings
     emitter and the CLI already read, and every entry point inherits it.
     """
     from .deployment import deployment_default  # ONE reader (deployment.py)
@@ -275,8 +275,8 @@ def resolve_onto(onto: str | None = None, root=None) -> str:
 
     THIS USED TO BE A MODULE-LEVEL CONSTANT, read once at import from the ambient
     environment only — sitting a few lines above `resolve_server` and left behind
-    when that grew its env.json reader. So a deployment could write SHANTY_ONTO_NS
-    into the very same env.json the address now comes from and the clients would
+    when that grew its deployment reader. So a deployment could write SHANTY_ONTO_NS
+    into the very same config the address comes from and the clients would
     not see it, while the invocations least likely to have inherited the variable
     are the usual suspects: a cron entry, a hook the harness re-exec'd outside the
     settings env, a bare `st` from a non-crew shell.
@@ -450,8 +450,8 @@ class QuipuRegistry:
 
     def __init__(self, server: str | None = None, timeout: float = 5.0,
                  root=None, onto: str | None = None):
-        # ONE resolver, shared with QuipuEvents: explicit -> <root>/env.json ->
-        # $QUIPU_SERVER -> DEFAULT_SERVER. Reading env.json is the point — the
+        # ONE resolver, shared with QuipuEvents: explicit -> [env] in toml ->
+        # $QUIPU_SERVER -> DEFAULT_SERVER. Reading deployment config is the point — the
         # address survived only as long as some shell kept exporting it, so a cron
         # entry or a re-exec'd hook fell back to the stock port, which on this host
         # another service owns. "Fell back" meant "queried a stranger".

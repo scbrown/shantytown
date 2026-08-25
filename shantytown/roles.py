@@ -320,7 +320,7 @@ def _guard_verdict(a: Agent, guard, configured) -> tuple[str, str]:
         # this card did not get it" (the aegis-610jv defect). `configured` is
         # passed IN rather than looked up here, and that is a bug fix rather than
         # a style choice: this function looked it up itself with no root, so it
-        # read only the ambient environment and never the STORE'S env.json —
+        # read only the ambient environment and never the STORE'S shantytown.toml —
         # where a deployment actually records its guard. Measured on the live
         # store: the codex lead and both codex workers came back UNVERIFIED (a
         # shrug) when the true answer was BROKEN (guard configured, card has
@@ -372,7 +372,7 @@ def check(registry: Registry, emitted=None, live=None, catalog=None,
     `guard_configured` is the guard the DEPLOYMENT configures — what a card OUGHT
     to carry — and it decides whether an artifact with no guard is a finding or
     a non-event. Pass it whenever you pass `guard`: a caller that knows the store
-    root is the only thing that can read the store's env.json, and omitting it
+    root is the only thing that can read the store's shantytown.toml, and omitting it
     falls back to the ambient environment, which on the live store answered "no
     guard configured" for a host that configures one. That fallback is kept only
     so a test can drive this leg through the environment; it is not good enough

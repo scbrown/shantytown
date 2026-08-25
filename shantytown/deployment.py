@@ -1,6 +1,6 @@
 """deployment — where a DEPLOYMENT declares its own defaults, and the ONE reader.
 
-    <root>/env.json  (gitignored deployment config)   then   the ambient env
+    <root>/shantytown.toml [env]   then   the ambient env
 
 That order is the one the launch side already used for carried env,
 SHANTY_BASH_GUARD and SHANTY_STOP_CAPTURE, and the one the CLI already used for
@@ -24,9 +24,7 @@ deployment did not say", never as a value.
 """
 from __future__ import annotations
 
-import json
 import os
-import sys
 from pathlib import Path
 
 
@@ -141,8 +139,7 @@ def root_note(how: str) -> str:
 def deployment_default(root, key: str) -> str | None:
     """The deployment's declared value for `key`, or None if it never said.
 
-    PRECEDENCE: `[env]` in shantytown.toml, then env.json (DEPRECATED), then the
-    ambient environment.
+    PRECEDENCE: `[env]` in shantytown.toml, then the ambient environment.
 
     `root` is the .shanty root (None is allowed — an unrooted caller simply
     skips the file half and reads the env). A malformed or unreadable file of
@@ -150,56 +147,12 @@ def deployment_default(root, key: str) -> str | None:
     optional, and a hook that died because a file had a stray comma would take the
     fleet with it. (`load_or_default`, not `load`, for exactly that reason.)
 
-    THE FILE STILL BEATS THE ENV, unchanged. It would have been easy to call the
-    env an "override layer" and put it first while moving this table; that flips
-    the meaning of every deployment already relying on env.json to pin a value
-    against whatever a stray shell export happens to hold. Where a value is
-    AUTHORED moved; which source wins did not.
+    THE FILE STILL BEATS THE ENV. A deployment declaration must not change
+    meaning according to whatever a stray shell export happens to hold.
     """
     if root is not None:
         from .config import load_or_default
         cfg, _err = load_or_default(root)
         if cfg.env.get(key):
             return cfg.env[key]
-        legacy = _env_json(root)
-        if legacy.get(key):
-            _warn_env_json_once(root, sorted(legacy))
-            return str(legacy[key])
     return os.environ.get(key) or None
-
-
-def _env_json(root) -> dict:
-    """<root>/env.json as a dict, or {} for absent/unreadable/not-a-dict."""
-    try:
-        loaded = json.loads((Path(root) / "env.json").read_text())
-    except (OSError, ValueError):
-        return {}
-    return loaded if isinstance(loaded, dict) else {}
-
-
-_ENV_JSON_WARNED: set[str] = set()
-
-
-def _warn_env_json_once(root, keys: list[str]) -> None:
-    """Say env.json is deprecated — ONCE per process, on stderr (aegis-8calr).
-
-    STDERR, NEVER STDOUT: this resolver runs inside the Stop hook, whose stdout IS
-    the block protocol. A deprecation notice printed there would not be a notice,
-    it would be a malformed verdict.
-
-    ONCE, because the resolver is called per KEY: a deployment with five env.json
-    values would otherwise emit five identical lines every time any hook fired,
-    and a warning that appears five times per turn is one an operator filters out
-    — which is the same as not warning at all.
-
-    It names the keys, because the action this asks for is a transcription and the
-    operator should not have to go read the file to find out what to transcribe.
-    """
-    marker = str(root)
-    if marker in _ENV_JSON_WARNED:
-        return
-    _ENV_JSON_WARNED.add(marker)
-    print(f"  ⚠ {Path(root) / 'env.json'} is DEPRECATED — it is still read, and "
-          f"still wins over the environment. Move these into [env] in "
-          f"{Path(root) / 'shantytown.toml'} so exactly one file is hand-edited: "
-          f"{', '.join(keys)}", file=sys.stderr)

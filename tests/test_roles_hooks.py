@@ -41,6 +41,11 @@ def _emit(root: Path, *rolenames: str) -> None:
         (s / f"{r}.settings.json").write_text(json.dumps(settings_for_role(r, root=root)))
 
 
+def _deployment_env(root: Path, **env: str) -> None:
+    lines = ["[env]", *(f'{key} = "{value}"' for key, value in env.items())]
+    (root / "shantytown.toml").write_text("\n".join(lines) + "\n")
+
+
 def _reader(root: Path):
     # The reader is asked about the CARD, not the role name: which artifact
     # answers depends on the program the card runs (roles._hooks_verdict).
@@ -240,9 +245,9 @@ def test_metrics_capture_is_NOT_in_settings_but_carries_the_right_interpreter(tm
     assert not cmd.startswith("python "), "must not be a bare 'python' (not on PATH)"
 
 
-def test_env_json_bash_guard_is_emitted_for_every_role(tmp_path):
-    (tmp_path / "env.json").write_text(
-        '{"SHANTY_BASH_GUARD": "/usr/local/lib/guards/host-policy.sh"}')
+def test_toml_bash_guard_is_emitted_for_every_role(tmp_path):
+    _deployment_env(tmp_path,
+                    SHANTY_BASH_GUARD="/usr/local/lib/guards/host-policy.sh")
     for role in ("worker", "lead", "administrator"):
         s = runtime.claude_settings_for_role(role, root=tmp_path)
         bash = [h for h in s["hooks"]["PreToolUse"] if h.get("matcher") == "Bash"]
@@ -257,7 +262,7 @@ def test_env_json_bash_guard_is_emitted_for_every_role(tmp_path):
         assert any(h.get("matcher") != "Bash" for h in s["hooks"]["PreToolUse"])
 
 
-def test_ambient_env_supplies_the_guard_when_env_json_lacks_it(tmp_path, monkeypatch):
+def test_ambient_env_supplies_the_guard_when_toml_lacks_it(tmp_path, monkeypatch):
     monkeypatch.setenv("SHANTY_BASH_GUARD", "/usr/local/lib/guards/ambient.sh")
     s = runtime.claude_settings_for_role("worker", root=tmp_path)
     bash = [h for h in s["hooks"]["PreToolUse"] if h.get("matcher") == "Bash"]
@@ -277,9 +282,9 @@ def test_no_capture_hook_emitted_by_default(tmp_path):
     assert all("stop_event" in c for c in cmds)
 
 
-def test_env_json_capture_hook_is_appended_last_for_every_role(tmp_path):
-    (tmp_path / "env.json").write_text(
-        '{"SHANTY_STOP_CAPTURE": "/usr/local/lib/hooks/session-capture.sh"}')
+def test_toml_capture_hook_is_appended_last_for_every_role(tmp_path):
+    _deployment_env(tmp_path,
+                    SHANTY_STOP_CAPTURE="/usr/local/lib/hooks/session-capture.sh")
     # The administrator is ONE decision; fable-5 gives the lead a third
     # checkpoint/haul decision while workers keep send + haul.
     for role, own_count in (("worker", 2), ("lead", 3), ("administrator", 1)):
@@ -299,12 +304,11 @@ def test_ambient_env_supplies_the_capture_hook(tmp_path, monkeypatch):
     assert hooks[-1]["command"] == "/usr/local/lib/hooks/ambient-capture.sh"
 
 
-def test_env_json_capture_wins_over_ambient(tmp_path, monkeypatch):
-    (tmp_path / "env.json").write_text(
-        '{"SHANTY_STOP_CAPTURE": "/from/env.json"}')
+def test_toml_capture_wins_over_ambient(tmp_path, monkeypatch):
+    _deployment_env(tmp_path, SHANTY_STOP_CAPTURE="/from/toml")
     monkeypatch.setenv("SHANTY_STOP_CAPTURE", "/from/ambient")
     s = runtime.claude_settings_for_role("worker", root=tmp_path)
-    assert s["hooks"]["Stop"][0]["hooks"][-1]["command"] == "/from/env.json"
+    assert s["hooks"]["Stop"][0]["hooks"][-1]["command"] == "/from/toml"
 
 
 # --- the deployment MCP guard extension point (aegis-uy8e8) ------------------
@@ -324,13 +328,13 @@ def test_NO_matcher_covers_the_mcp_surface_without_deployment_config(tmp_path):
         assert matchers == ["Edit|Write|MultiEdit", "Bash"], f"{role}: {matchers}"
 
 
-def test_env_json_mcp_guard_is_emitted_for_every_role(tmp_path):
+def test_toml_mcp_guard_is_emitted_for_every_role(tmp_path):
     """THE aegis-uy8e8 GAP. Measured on the live deployment: every role emitted
     exactly ['Edit|Write|MultiEdit', 'Bash'], so nothing matched mcp__* and the
     whole MCP surface — including deploy-class actions like a service restart —
     ran with no policy hook at all, on every role."""
-    (tmp_path / "env.json").write_text(
-        '{"SHANTY_MCP_GUARD": "/usr/local/lib/guards/mcp-policy.sh"}')
+    _deployment_env(tmp_path,
+                    SHANTY_MCP_GUARD="/usr/local/lib/guards/mcp-policy.sh")
     for role in ("worker", "lead", "administrator"):
         s = runtime.claude_settings_for_role(role, root=tmp_path)
         mcp = [h for h in s["hooks"]["PreToolUse"] if h.get("matcher") == "mcp__.*"]
@@ -345,7 +349,7 @@ def test_the_mcp_matcher_actually_matches_mcp_tool_names(tmp_path):
     matchers looked precise, were permissions syntax, and fired ZERO times
     (aegis-ac5x/18e0) — a matcher nobody evaluated is the failure being avoided."""
     import re
-    (tmp_path / "env.json").write_text('{"SHANTY_MCP_GUARD": "/g.sh"}')
+    _deployment_env(tmp_path, SHANTY_MCP_GUARD="/g.sh")
     s = runtime.claude_settings_for_role("worker", root=tmp_path)
     pat = next(h["matcher"] for h in s["hooks"]["PreToolUse"]
                if h.get("matcher", "").startswith("mcp__"))
@@ -362,7 +366,7 @@ def test_the_bash_guard_and_the_mcp_guard_are_INDEPENDENT(tmp_path):
     may legitimately govern one surface and not the other — so a deployment that
     set only SHANTY_BASH_GUARD must not silently acquire an MCP hook pointing at
     a guard written to parse `tool_input.command`."""
-    (tmp_path / "env.json").write_text('{"SHANTY_BASH_GUARD": "/bash.sh"}')
+    _deployment_env(tmp_path, SHANTY_BASH_GUARD="/bash.sh")
     s = runtime.claude_settings_for_role("worker", root=tmp_path)
     assert [h.get("matcher") for h in s["hooks"]["PreToolUse"]] == \
         ["Edit|Write|MultiEdit", "Bash"]
@@ -372,7 +376,7 @@ def test_the_bash_guard_and_the_mcp_guard_are_INDEPENDENT(tmp_path):
     # on the GUARD COMMANDS rather than on matcher presence — which is the
     # sharper claim anyway: configuring the MCP guard must not put /mcp.sh, or
     # anything else, on the Bash surface.
-    (tmp_path / "env.json").write_text('{"SHANTY_MCP_GUARD": "/mcp.sh"}')
+    _deployment_env(tmp_path, SHANTY_MCP_GUARD="/mcp.sh")
     s = runtime.claude_settings_for_role("worker", root=tmp_path)
     assert [h.get("matcher") for h in s["hooks"]["PreToolUse"]] == \
         ["Edit|Write|MultiEdit", "Bash", "mcp__.*"]

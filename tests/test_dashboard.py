@@ -145,7 +145,8 @@ def _world(tmp_path, cards):
     crew = tmp_path / "crew"; crew.mkdir()
     for name, d in cards.items():
         (crew / f"{name}.json").write_text(json.dumps(d))
-    (tmp_path / "settings").mkdir(); (tmp_path / "settings" / "tmux-socket").write_text("gt-ae5f35")
+    (tmp_path / "shantytown.toml").write_text(
+        '[tmux]\nsocket = "gt-ae5f35"\n')
     return tmp_path
 
 
