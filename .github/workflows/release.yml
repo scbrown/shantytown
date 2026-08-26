@@ -22,7 +22,9 @@ permissions:
 
 jobs:
   release:
-    runs-on: ubuntu-latest
+    # Keep this aligned with the labels advertised by the fleet runner.  There
+    # is no GitHub-hosted ubuntu-latest runner on the self-hosted Forgejo lane.
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
         with:
