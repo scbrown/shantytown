@@ -23,7 +23,10 @@ permissions:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # The fleet runner advertises ubuntu-22.04 (plus deploy), not the GitHub
+    # hosted-runner alias ubuntu-latest.  A non-matching label leaves every job
+    # unassigned with task_id=0 until the next push cancels it.
+    runs-on: ubuntu-22.04
     strategy:
       # Never stop the other versions because one failed — "3.11 broke" and
       # "every version broke" are different diagnoses and the matrix is the
