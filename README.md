@@ -231,8 +231,9 @@ plus every script on one fleet. Full write-up in [`docs/vision.md`](docs/vision.
 - 🔀 **Stop events route up a tier.** worker → lead → administrator. A lead absorbs what it can and
   escalates what it can't; an unreachable lead does not swallow anything — the event RISES to the
   administrator with a reason, and is on disk before anyone reads it.
-- 🔌 **Pluggable trackers.** A tracker is two functions. Files today, beads tomorrow, yours next —
-  *same dispatch code*, proven by a swap test rather than by an interface.
+- 🔌 **Pluggable trackers.** A tracker is two functions. Files, beads, `br`, and Forgejo are
+  available today; another backend uses the *same dispatch code*, proven by swap tests rather
+  than by an interface alone.
 - 🤖 **Bring your own agent program.** Claude Code is *a* harness, not the shape of the world —
   `codex` ships too, and a crew can mix them: pick per card, per role, or fleet-wide. The tier is
   program-blind, so a codex worker's stop event reaches a Claude Code lead unchanged. What codex
