@@ -14,12 +14,12 @@ from shantytown.br import BrTracker, items, plate, rows
 from shantytown.tmux import NullPanes
 
 
-BR = shutil.which("br") or "<local-br-build>"
+BR = shutil.which("br")
 
 
 @pytest.fixture
 def br_store(tmp_path, monkeypatch):
-    if not Path(BR).is_file():
+    if BR is None or not Path(BR).is_file():
         pytest.skip("br binary is not installed")
     store = tmp_path / "store"
     store.mkdir()
