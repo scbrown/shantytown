@@ -242,6 +242,16 @@ plus every script on one fleet. Full write-up in [`docs/vision.md`](docs/vision.
 - 🧪 **`--dry-run` on every writing command**, from commit one.
 - 🔢 **Exit codes a script can branch on** — `0` did it · `1` refused · `2` couldn't tell. *Couldn't
   tell* is a first-class answer, never rounded up to success.
+- ⚰️ **A retired agent that is still alive gets two different verdicts, not one.** `st tend`
+  compares when the session was born against when the card was retired: born *before* the
+  decision is a `survivor` — it outlived the retirement without a respawn, which is not a fault.
+  Born at or after it means something started it *after* we decided to stop it, and that is the
+  alarm. When it cannot prove which, it raises the alarm rather than the reassuring one.
+- 📏 **`st inbox -d` refuses an oversized body instead of truncating it.** The cap is on **bytes**,
+  not characters, so prose with em dashes or arrows is longer than it looks; the refusal says so,
+  reports both numbers, and subtracts the signature it adds on your behalf. Silently delivering
+  the first N bytes of a message is the failure this prevents — the remaining sentence usually
+  still scans, so nobody can tell it was cut.
 
 ## 📮 Routing: there is nothing in the middle
 
@@ -480,7 +490,7 @@ error, it just stops new facts from joining the old ones.
 - **Ship no dashboard.** A dashboard reads the tracker, not the harness.
 - **Bring your own panes.** [herdr](https://github.com/ogulcancelik/herdr), your own tmux wrapper, or
   bare tmux.
-- **A check must be able to fail.** Anything that reports health must be shown returning red. 325
+- **A check must be able to fail.** Anything that reports health must be shown returning red. 2404
   tests, and the ones that matter most are the ones proving a check *can* say no.
 
 ## 📄 Licence
