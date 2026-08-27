@@ -9,9 +9,10 @@ the "quipu has not leaked into the core" guarantee.
 import pytest
 
 from shantytown import roles
-from shantytown.answer import PartialAnswer
+from shantytown.answer import Answer, PartialAnswer
 from shantytown.protocols import Agent, Registry
-from shantytown.quipu import ONTO, QuipuRegistry, QuipuUnreachable, derive_agents
+from shantytown.quipu import (DEFAULT_ONTO, ONTO, QuipuRegistry,
+                              QuipuUnreachable, derive_agents, resolve_onto)
 
 # A small hierarchy: hammond is the root (has reports, no lead) = administrator;
 # ian has both a lead and a report = lead; malcolm is a leaf = worker; mayor has
@@ -35,6 +36,28 @@ def _reg(rows):
     r = QuipuRegistry(server="http://test.invalid")
     r._query = lambda sparql: rows  # inject fixture rows, no HTTP
     return r
+
+
+def test_fallback_namespace_warns_and_names_the_remedy(monkeypatch, tmp_path):
+    monkeypatch.delenv("SHANTY_ONTO_NS", raising=False)
+    with pytest.warns(RuntimeWarning, match="documentation-only fallback"):
+        assert resolve_onto(root=tmp_path) == DEFAULT_ONTO
+
+
+def test_registry_write_uses_the_resolved_client_namespace(tmp_path):
+    namespace = "http://deployment.test/ontology/"
+    (tmp_path / "shantytown.toml").write_text(
+        f'[env]\nSHANTY_ONTO_NS = "{namespace}"\n')
+    reg = QuipuRegistry(server="http://test.invalid", root=tmp_path)
+    reg.all = lambda: Answer.complete_read(
+        [Agent(name="lead", role="administrator")], how="test registry")
+    seen = []
+    reg._knot = seen.append
+
+    reg.set(Agent(name="newbie", role="worker", reports_to="lead"))
+
+    assert seen and f"@prefix a: <{namespace}>" in seen[0]
+    assert DEFAULT_ONTO not in seen[0]
 
 
 def test_role_is_derived_from_structure_not_stored():
