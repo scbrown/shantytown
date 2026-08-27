@@ -859,13 +859,24 @@ class CodexHarness:
                     f"'Do you trust the contents of this directory?' dialog, "
                     f"which a dispatch can answer as 'No, quit'.")
 
-        source = _codex_credentials()
+        link = home / "auth.json"
+        # A role emission may itself run inside a Codex agent.  Its ambient
+        # CODEX_HOME is this managed role home, not the operator's login home.
+        # Treating that launch state as the source makes source == destination:
+        # unlink(), then symlink_to() produces auth.json -> auth.json and locks
+        # the whole role out on its next launch (aegis-c360e).
+        source = _codex_credentials(exclude=link)
         if source is None:
+            if link.is_file() and not link.is_symlink():
+                return notes + [
+                    f"no independent codex auth.json found — preserved the "
+                    f"existing credential file at {link} instead of replacing "
+                    f"it with a self-link. Log in under an operator CODEX_HOME "
+                    f"and re-run `st roles set` to restore shared refreshes."]
             return notes + [
                 f"no codex auth.json found — agents using {home} will launch "
                 f"UNAUTHENTICATED. Run `codex login` (or set CODEX_HOME to a "
                 f"logged-in home before emitting) and re-run `st roles set`."]
-        link = home / "auth.json"
         try:
             if link.is_symlink() and link.readlink() == source:
                 return notes
@@ -904,13 +915,21 @@ class CodexHarness:
         return HookSpec(blocking_stop=True)
 
 
-def _codex_credentials() -> Path | None:
+def _codex_credentials(*, exclude: Path | None = None) -> Path | None:
     """The auth.json of the operator's own codex home: $CODEX_HOME if set, else
-    ~/.codex (codex.py fact 1). None when there is no login to link."""
+    ~/.codex (codex.py fact 1).  A managed role home passed as ``exclude`` is
+    launch state, never an independent credential source; fall back to the
+    operator's default home instead.  None when there is no login to link."""
     import os
-    base = os.environ.get(codex_mod().HOME_VAR) or (Path.home() / ".codex")
-    p = Path(base) / "auth.json"
-    return p if p.is_file() else None
+    excluded = exclude.absolute() if exclude is not None else None
+    if configured := os.environ.get(codex_mod().HOME_VAR):
+        candidate = (Path(configured).expanduser() / "auth.json").absolute()
+        if candidate != excluded:
+            # An explicit independent home remains authoritative, including
+            # when it is missing; only the managed-home collision falls back.
+            return candidate if candidate.is_file() else None
+    candidate = (Path.home() / ".codex" / "auth.json").absolute()
+    return candidate if candidate != excluded and candidate.is_file() else None
 
 
 def codex_mod():
