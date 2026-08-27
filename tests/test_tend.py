@@ -753,7 +753,8 @@ def test_a_crashing_notify_sweep_does_not_kill_the_pass(tmp_path, monkeypatch, c
 
     rc = cli._tend_once(_A())          # must RETURN, not raise
     err = capsys.readouterr().err
-    assert err.count("CRASHED") == 3, "each sweep must fail alone and loudly"
+    for sweep in ("blocked-worker", "saturation-cycle", "idle-fleet"):
+        assert f"the {sweep} sweep CRASHED" in err
     assert "supervision continues" in err
     # The pass itself still ran and recorded its health signal.
     assert rc in (cli.OK, cli.CANNOT_TELL)
