@@ -8,6 +8,7 @@ import inspect
 
 from shantytown import dispatch
 from shantytown.beads import BeadsTracker
+from shantytown.br import BrTracker
 from shantytown.files import FilesTracker
 from shantytown.protocols import Tracker
 
@@ -15,6 +16,7 @@ from shantytown.protocols import Tracker
 def test_both_trackers_satisfy_the_protocol():
     assert isinstance(FilesTracker.__new__(FilesTracker), Tracker)
     assert isinstance(BeadsTracker(), Tracker)
+    assert isinstance(BrTracker(), Tracker)
 
 
 def test_dispatch_imports_no_tracker():
@@ -72,6 +74,6 @@ def test_tracker_interface_is_three_functions():
     a bug. The number is not the point — the point is that the number can only
     move on purpose.
     """
-    for impl in (FilesTracker, BeadsTracker):
+    for impl in (FilesTracker, BeadsTracker, BrTracker):
         public = {m for m in dir(impl) if not m.startswith("_")}
         assert public == {"get", "update", "create"}, f"{impl.__name__} exposes {public}"
