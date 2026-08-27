@@ -778,12 +778,18 @@ def build_parser() -> argparse.ArgumentParser:
                     help="must-survive: deliver to the recipient's INBOX (a bead "
                          "on the aegis store with --backend beads), then "
                          "best-effort live send. Default is ephemeral send-keys.")
-    ib.add_argument("--count", action="store_true",
-                    help="print ONLY the number of unread messages. A READ: it "
-                         "marks nothing read")
-    ib.add_argument("--read", action="store_true",
-                    help="ACK: mark my unread messages read. The explicit act — "
-                         "listing and counting never do this")
+    inbox_read_mode = ib.add_mutually_exclusive_group()
+    inbox_read_mode.add_argument(
+        "--count", action="store_true",
+        help="print ONLY the number of unread messages. A READ: it marks nothing read")
+    inbox_read_mode.add_argument(
+        "--read", action="store_true",
+        help="ACK: mark my unread messages read. The explicit act — listing and "
+             "counting never do this")
+    inbox_read_mode.add_argument(
+        "--read-id", action="append", default=[], metavar="ID",
+        help="ACK only this unread message ID (repeatable). Refuses the whole "
+             "request if any ID is not unread for the recipient")
     ib.add_argument("-n", "--dry-run", action="store_true")
 
     tk = sub.add_parser("task", help="create a work item")
@@ -2537,7 +2543,8 @@ def _cmd_inbox(a) -> int:
         st inbox <agent> <message...>   SEND (send-keys; -d persists first)
         st inbox [agent]                READ — list the unread. Marks nothing.
         st inbox --count [agent]        the machine-readable count (one integer)
-        st inbox --read [agent]         ACK — mark my unread messages read
+        st inbox --read [agent]         ACK — mark all my unread messages read
+        st inbox --read-id ID [agent]   ACK — mark only named unread IDs read
 
     Reading and acking are SEPARATE (inbox.py). `st inbox` shows you what is
     there and changes nothing; `--read` is the act. That split is the same one
@@ -2589,12 +2596,14 @@ def _cmd_inbox(a) -> int:
     # A send flag with nothing to send is a typo, not a request to read somebody's
     # inbox. Say so rather than quietly doing the other thing.
     if not a.message and (getattr(a, "durable", False) or a.dry_run) \
-            and not (getattr(a, "count", False) or getattr(a, "read", False)):
+            and not (getattr(a, "count", False) or getattr(a, "read", False)
+                     or getattr(a, "read_id", [])):
         print("  refused: nothing to send. `st inbox <agent> <message...>`.",
               file=sys.stderr)
         return REFUSED
     # READ MODES: they take no message, and the agent defaults to ME.
-    if getattr(a, "count", False) or getattr(a, "read", False) or not a.message:
+    if (getattr(a, "count", False) or getattr(a, "read", False)
+            or getattr(a, "read_id", []) or not a.message):
         import os
         me = a.agent or os.environ.get("SHANTY_AGENT")
         if not me:
@@ -2841,8 +2850,17 @@ def _inbox_read(a, me: str) -> int:
         print(len(unread))
         return OK
 
-    if getattr(a, "read", False):
-        marked = box.mark_read(me)
+    read_ids = getattr(a, "read_id", [])
+    if getattr(a, "read", False) or read_ids:
+        if read_ids:
+            unread_ids = {m.id for m in unread}
+            missing = sorted(set(read_ids) - unread_ids)
+            if missing:
+                print("  refused: message ID(s) are not unread for "
+                      f"{me}: {', '.join(missing)}. Nothing marked read.",
+                      file=sys.stderr)
+                return REFUSED
+        marked = box.mark_read(me, ids=read_ids or None)
         # PRINT WHAT IT CONSUMED (GitHub #14). --read is the ACK, and it is the
         # only thing that consumes a message. A count is not the message: the
         # bodies are gone from the unread set the instant this returns, so a
@@ -2863,7 +2881,8 @@ def _inbox_read(a, me: str) -> int:
         for m in unread:
             src = f" from {m.frm}" if m.frm else ""
             print(f"  {m.id}{src}  {m.body}")
-        print(f"\n  {len(unread)} unread. `st inbox --read` to ack them.")
+        print(f"\n  {len(unread)} unread. `st inbox --read` to ack all, or "
+              "`st inbox --read-id <id>` to ack selectively.")
     print()
     return OK
 

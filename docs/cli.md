@@ -18,7 +18,8 @@ st repool <item>              hand an item back to the pool: status -> open AND
                               assignee alone leaves it in_progress — off `bd ready`,
                               every haul, and every plate at once.
 st inbox <agent> <message>    put a message in an agent's inbox (send-keys; -d persists)
-st inbox [--count|--read]     read your own inbox
+st inbox [--count|--read|--read-id ID]
+                              read or acknowledge your own inbox
 st task <title>               create a work item
 st crew [--count]             who exists, what state, what role, WHO IS FREE
 st input <agent>              what's in their input box: EMPTY | TYPED | GHOST, with the
@@ -848,12 +849,18 @@ st inbox -d ian "HANDOFF: qdal.2"    durable: into ian's INBOX, then a live send
 st inbox                             read: what is unread, for me. Marks nothing.
 st inbox --count                     one integer, for a status bar. Marks nothing.
 st inbox --read                      ACK: mark my unread messages read
+st inbox --read-id aegis-abc12       ACK only one absorbed message (repeatable)
 ```
 
 When a durable message is successfully submitted to a live pane, `st` closes only
 that message's pointer after confirming the input is not stranded. The closed bead
 retains its content and history. If the recipient is down, the send fails, the input
 is stranded, or pointer closure fails, the pointer remains open for `st inbox`.
+
+For pointers that survive because delivery was offline or uncertain, acknowledgment
+can be selective: repeat `--read-id ID` for messages already absorbed while leaving
+an open question unread. The command preflights every ID and changes nothing if any
+named ID is not currently unread for that recipient.
 
 The default send is unchanged and is still one line of `tmux send-keys`. What is new is the **type**.
 
