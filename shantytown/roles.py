@@ -52,6 +52,7 @@ class Row:
     hooks: str = UNVERIFIED   # the second leg; see check(emitted=...)
     live: str = UNVERIFIED    # the third leg; see check(live=...)
     guard: str = UNVERIFIED   # the fourth leg; see check(guard=...)
+    pre_edit: str = UNVERIFIED  # edit-policy projection parity
     # WHICH SURVIVAL BAND THE USAGE GOVERNOR WILL RESOLVE for this card
     # (aegis-upo93). "" = not measured (no catalog was passed), never a value.
     band: str = ""
@@ -94,6 +95,8 @@ class Report:
             # as green).
             if r.guard == OK:
                 hooks += " guard: ok"
+            if r.pre_edit == OK:
+                hooks += " pre-edit: ok"
             # THE BAND THAT DECIDES WHETHER THIS CARD SURVIVES A THROTTLE
             # (aegis-upo93). Shown on every measured row, including the ordinary
             # ones, because the question a reader brings to this table under a
@@ -338,8 +341,23 @@ def _guard_verdict(a: Agent, guard, configured) -> tuple[str, str]:
 _ASK_AMBIENT = object()
 
 
+def _pre_edit_verdict(a: Agent, reader, expected) -> tuple[str, str]:
+    want = expected(a)
+    if not want:
+        return UNVERIFIED, ""
+    got = reader(a)
+    if got is None:
+        return CANNOT_TELL, "could not read the emitted settings for the pre-edit guard"
+    if got != want:
+        shown = got or "<absent>"
+        return BROKEN, ("pre-edit guard drift: emitted "
+                        f"{shown!r}, expected {want!r}")
+    return OK, ""
+
+
 def check(registry: Registry, emitted=None, live=None, catalog=None,
-          guard=None, guard_configured=_ASK_AMBIENT) -> Report:
+          guard=None, guard_configured=_ASK_AMBIENT,
+          pre_edit=None, pre_edit_expected=None) -> Report:
     """Verify the hierarchy. Never raises for a bad card — that is a verdict.
 
     `catalog` (traits.Catalog) is how a role gets to NOT BE IN THE TREE (GitHub
@@ -475,6 +493,13 @@ def check(registry: Registry, emitted=None, live=None, catalog=None,
             gv, note = _guard_verdict(a, guard, configured)
             rows[-1].guard = gv
             _fold(rows[-1], gv, note)
+
+        if pre_edit is None or pre_edit_expected is None:
+            rows[-1].pre_edit = UNVERIFIED
+        else:
+            pv, note = _pre_edit_verdict(a, pre_edit, pre_edit_expected)
+            rows[-1].pre_edit = pv
+            _fold(rows[-1], pv, note)
 
         # NOT A VERDICT, and deliberately not folded into one. A band is a
         # deployment's choice, never a fault — this leg reports, it does not judge.

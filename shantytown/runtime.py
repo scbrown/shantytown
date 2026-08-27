@@ -512,6 +512,12 @@ def _yupana_trace_cmd() -> dict:
 # crashed or stale yupana therefore contributes exactly nothing to stdout, so no
 # partial output can ever be read as a forged permission decision.
 _YUPANA_GUARD = 'out=$(yupana hook pre-edit) || exit 0; printf %s "$out"'
+EDIT_MATCHER = "Edit|Write|MultiEdit"
+
+
+def pre_edit_guard_command() -> str:
+    """The exact fail-open command every supported edit matcher must carry."""
+    return _YUPANA_GUARD
 
 
 def _guard_hook() -> dict:
@@ -541,7 +547,7 @@ def _guard_hook() -> dict:
     DENY is exit 0 + hookSpecificOutput{permissionDecision:"deny", ...}.
     """
     return {
-        "matcher": "Edit|Write|MultiEdit",
+        "matcher": EDIT_MATCHER,
         "hooks": [{"type": "command", "command": _YUPANA_GUARD, "timeout": 5}],
     }
 
@@ -994,6 +1000,19 @@ def emitted_bash_guard(root, role: str, harness_name: str | None = None) -> str 
     except OSError:
         return None
     return program.read_bash_guard(text)
+
+
+def emitted_pre_edit_guard(root, role: str,
+                           harness_name: str | None = None) -> str | None:
+    """Read the edit-policy guard back from the emitted role artifact."""
+    from . import harness as harness_mod
+    program = harness_mod.get(harness_name)
+    path = Path(root) / "settings" / program.settings_name(role)
+    try:
+        text = path.read_text()
+    except OSError:
+        return None
+    return program.read_pre_edit_guard(text)
 
 
 def stop_directions_in(path) -> set[str] | None:
