@@ -310,6 +310,34 @@ def test_inbox_count_defaults_to_me(tmp_path, monkeypatch, capsys):
     assert capsys.readouterr().out == "1\n"
 
 
+def test_inbox_read_id_acks_only_named_message(tmp_path, monkeypatch, capsys):
+    _card(tmp_path, "sattler", role="administrator")
+    box = FilesInbox(tmp_path / "inbox")
+    first = box.deliver("sattler", "absorbed")
+    second = box.deliver("sattler", "still needs an answer")
+
+    assert _run(["inbox", "--read-id", first.id, "sattler"], tmp_path,
+                monkeypatch, NullPanes()) == cli.OK
+    out = capsys.readouterr().out
+    assert first.id in out
+    assert "marked 1" in out
+    assert [m.id for m in box.unread("sattler")] == [second.id]
+
+
+def test_inbox_read_id_refuses_all_if_any_id_is_not_mine(
+        tmp_path, monkeypatch, capsys):
+    _card(tmp_path, "sattler", role="administrator")
+    box = FilesInbox(tmp_path / "inbox")
+    mine = box.deliver("sattler", "absorbed")
+    other = box.deliver("ellie", "not mine")
+
+    assert _run(["inbox", "--read-id", mine.id, "--read-id", other.id, "sattler"],
+                tmp_path, monkeypatch, NullPanes()) == cli.REFUSED
+    captured = capsys.readouterr()
+    assert "Nothing marked read" in captured.err
+    assert [m.id for m in box.unread("sattler")] == [mine.id]
+
+
 def test_a_durable_send_is_readable_by_the_recipient(tmp_path, monkeypatch, capsys):
     """The loop `st mail -d` never closed: it persisted something nothing read
     back. Send durably to a DOWN agent, then count their inbox."""
