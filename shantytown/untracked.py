@@ -399,6 +399,12 @@ def plate_reader(root: Path):
                            extra_repos=parse_extra_repos(
                                deployment_default(root, EXTRA_REPOS_KEY)))
         return lambda who: beads_plate(trk, who)
+    if backend == "br":
+        from .br import BrTracker, plate as br_plate
+        trk = BrTracker(repo=(deployment_default(root, "SHANTY_BR_REPO")
+                              or deployment_default(root, "SHANTY_BEADS_REPO")),
+                        timeout=BD_TIMEOUT_S)
+        return lambda who: br_plate(trk, who)
     if backend == "files":
         from .files import FilesTracker, plate as files_plate
         trk = FilesTracker(root / "items")

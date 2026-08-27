@@ -262,6 +262,11 @@ def _plate_reader(root: Path):
             # see an embedded store reports that agent idle at every stop.
             extra_repos=parse_extra_repos(deployment_default(root, EXTRA_REPOS_KEY)))
         return lambda who: beads_plate(tracker, who)
+    if (deployment_default(root, "SHANTY_BACKEND") or "files") == "br":
+        from .br import BrTracker, plate as br_plate
+        tracker = BrTracker(repo=(deployment_default(root, "SHANTY_BR_REPO")
+                                  or deployment_default(root, "SHANTY_BEADS_REPO")))
+        return lambda who: br_plate(tracker, who)
     return lambda who: files_plate(FilesTracker(root / "items"), who)
 
 
