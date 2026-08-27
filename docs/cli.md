@@ -769,7 +769,7 @@ Three ways to say it, in increasing strength:
 
 | | what it says | who honours it |
 |---|---|---|
-| `st stop <agent> --reason "…"` | *I stopped this one, now.* Recorded durably; **not** a retirement | `st crew` and the administrator's drain report it as deliberate. `st tend` still respawns it |
+| `st stop <agent> --reason "…"` | *I stopped this one, now.* Recorded durably; **not** a retirement | `st crew` and the administrator's drain report it as deliberate. The removed launch stamp keeps `st tend` from respawning it; `st new <agent>` brings it back |
 | `st tend --retire <agent>` | *…and do not bring it back.* Lives on the card | `st tend` never respawns it; `st start` skips it; the drain never lists it |
 | `[fleet] stood_down = true` | *the whole fleet is quiet by decision* | Rule Zero yields (rank 2), and the drain withholds every dispatch step |
 

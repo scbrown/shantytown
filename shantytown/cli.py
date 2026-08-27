@@ -752,9 +752,11 @@ def build_parser() -> argparse.ArgumentParser:
                     help="why, recorded with the stop (GitHub #29). A deliberate "
                          "stop is INTENT, not a fault: `st crew` and the "
                          "administrator's drain report it as such instead of "
-                         "demanding a re-dispatch. It does NOT retire the card — "
-                         "`st tend` still respawns it; use `st tend --retire` for "
-                         "\"and do not bring it back\".")
+                         "demanding a re-dispatch. It also removes the launch "
+                         "stamp, so `st tend` will NOT respawn it. Use `st new "
+                         "<agent>` to bring it back. `st tend --retire` is the "
+                         "stronger card-level state that also makes `st start` "
+                         "skip it.")
 
     ss = sub.add_parser("stats", help="what the crew actually did: files, "
                                       "skills, tokens, activity (local store)")

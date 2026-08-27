@@ -255,6 +255,24 @@ def test_a_STOPPED_agent_is_refused_because_st_stop_forgot_its_stamp(tmp_path, s
     assert rep.healthy
 
 
+def test_stop_help_promises_the_measured_no_respawn_contract(capsys):
+    """aegis-3rypo. The pre-action help must agree with stop/tend's live result.
+
+    A deliberate stop removes its launch stamp, so tend cannot respawn it. The
+    success line already said that; stale help promised the opposite and made an
+    operator choose a different risk profile than the command actually provides.
+    """
+    from shantytown import cli
+
+    with pytest.raises(SystemExit) as exc:
+        cli.build_parser().parse_args(["stop", "--help"])
+    assert exc.value.code == 0
+    help_text = " ".join(capsys.readouterr().out.split())
+    assert "will NOT respawn it" in help_text
+    assert "st new <agent>" in help_text
+    assert "still respawns it" not in help_text
+
+
 def test_a_FOREIGN_unstamped_card_still_gets_the_orchestrator_wording(tmp_path, settings):
     """The negative control for the test above (aegis-k9068 / aegis-2j2r).
 
