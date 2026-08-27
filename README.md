@@ -24,7 +24,7 @@
 *Create a work item. Tell an agent to go get it. That's the whole idea.*
 
 [![dispatch 3.4s](https://img.shields.io/badge/dispatch-3.4s-brightgreen)](#-measured-against-gas-town)
-[![26 commands](https://img.shields.io/badge/commands-26-blue)](#-the-whole-surface)
+[![27 commands](https://img.shields.io/badge/commands-27-blue)](#-the-whole-surface)
 [![tests](https://img.shields.io/badge/tests-2132%20passing-blue)](#-principles)
 [![python](https://img.shields.io/badge/python-3.11%2B-blue)](#-install)
 [![dependencies none](https://img.shields.io/badge/dependencies-none-blue)](#-install)
@@ -197,7 +197,7 @@ stop.* Here is what the gate measured.
 
 | | `gt sling` | `st go` | |
 |---|---:|---:|---|
-| Commands | ~110 | **26** | *a small, deliberate fraction of the surface, by measured use* |
+| Commands | ~110 | **27** | *a small, deliberate fraction of the surface, by measured use* |
 | dispatch (dry-run) | 51.54 s | **0.15 s** | **~344× faster** |
 | dispatch (real) | > 120 s ⏱️ | **3.40 s** | **≥35× faster** |
 | Dolt connections | 63 | **3** | **21× fewer** |
@@ -290,6 +290,8 @@ st task <title>                   create work, get an id back
 st inbox <agent> <message>         a message into a pane. send-keys, nothing more.
 st go <item> [agent]              dispatch. the one that matters.
 st repool <item>                  hand an item back: status -> open AND assignee cleared, verified
+st defer <item> <kind> --reason-file <path|->
+                                  park it with one blocker-kind label + durable reason, verified
 st anchor                          who am I, what's on my plate      ← the anchor
 st crew                           who exists, what state, what role
 st input <agent>                  what's in their input box: EMPTY | TYPED | GHOST (never submits)

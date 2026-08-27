@@ -79,7 +79,8 @@ def test_threshold_reached_NUDGES_THE_AGENT_not_the_coordinator(tmp_path):
     (pane, msg), = panes.sent
     assert pane == "p-weaver"                    # the AGENT's pane, not p-admin
     assert "bd close aegis-u140" in msg          # the exit, both ways...
-    assert "bd defer aegis-u140" in msg          # ...close if done, DEFER if blocked (kelly/vuh33)
+    assert "st defer aegis-u140" in msg          # ...close if done, structured DEFER if blocked
+    assert "bead|human|access|external|parked" in msg
 
 
 def test_still_frozen_after_the_nudge_ESCALATES_to_the_coordinator(tmp_path):

@@ -193,7 +193,7 @@ def test_the_surface_is_twenty():
     wrong.
 
     Each command still earns its slot."""
-    assert len(_actual_subcommands()) == 26, (
+    assert len(_actual_subcommands()) == 27, (
         "the command count changed. If that's intended, update the number here and "
         "the cli.py docstring together — and say why the surface grew in docs/cli.md."
     )
@@ -237,7 +237,8 @@ def test_the_prose_number_in_the_docstring_matches_the_parser():
     hid in the sentence ABOVE the list — the line a reader actually quotes. Now the
     word is checked too, so all three copies have to move together."""
     words = {20: "twenty", 21: "twenty-one", 22: "twenty-two", 23: "twenty-three",
-             24: "twenty-four", 25: "twenty-five", 26: "twenty-six"}
+             24: "twenty-four", 25: "twenty-five", 26: "twenty-six",
+             27: "twenty-seven"}
     n = len(_actual_subcommands())
     doc_first_line = (cli.__doc__ or "").splitlines()[0].lower()
     assert words[n] in doc_first_line, (

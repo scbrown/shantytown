@@ -19,7 +19,7 @@ from pathlib import Path
 
 from . import stores
 from .inbox import is_message, is_unworkable
-from .protocols import WorkItem
+from .protocols import BLOCKER_KIND_LABELS, WorkItem, blocker_kind
 
 
 # The deployment key naming stores BEYOND the primary. One name, declared once,
@@ -120,6 +120,7 @@ def _bd_failure(what: str, r) -> RuntimeError:
 
 
 class BeadsTracker:
+    _structured_defer = True
     # bd caps a title at 500 **UTF-8 BYTES**, though its error says "characters"
     # (aegis-2bjel, measured 2026-08-24 with an em dash in the title):
     #
@@ -243,6 +244,7 @@ class BeadsTracker:
             # bead with no priority arrives as None so a governed dispatch can
             # say "nobody stated how important this is" instead of guessing.
             priority=_priority(d),
+            blocker_kind=blocker_kind(d.get("labels")),
             # From the SAME `bd show --json` read — no extra round trip, so the
             # module's one-tracker-read budget is unchanged. Only `blocks`-type
             # deps count: a `relates-to` link is context, not a gate. Only
@@ -321,14 +323,22 @@ class BeadsTracker:
 
     def update(self, item_id: str, **fields) -> None:
         args = ["update", item_id]
+        selected = fields.pop("blocker_kind", None)
+        reason = fields.pop("defer_reason", None)
         for k, v in fields.items():
             if v is None:
                 continue
             args.append(f"--{k.replace('_', '-')}={v}")
+        if selected is not None:
+            args.append(f"--add-label={selected}")
+            args.extend(
+                f"--remove-label={old}"
+                for old in sorted(set(BLOCKER_KIND_LABELS.values()) - {selected}))
+        if reason is not None:
+            args.append(f"--append-notes={reason}")
         r = self._bd_for(item_id, *args)
         if r.returncode != 0:
             raise RuntimeError(f"bd update {item_id} failed: {r.stderr.strip()[:120]}")
-
 
 def _priority(d: dict) -> int | None:
     """bd's `priority` field, or None if it did not say.
