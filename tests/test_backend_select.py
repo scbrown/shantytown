@@ -11,6 +11,7 @@ from types import SimpleNamespace
 
 from shantytown import cli
 from shantytown.beads import BeadsTracker
+from shantytown.br import BrTracker
 from shantytown.files import FilesTracker
 
 
@@ -23,6 +24,13 @@ def test_backend_beads_builds_a_beads_tracker():
     a = SimpleNamespace(root=cli.Path("/tmp/x"), backend="beads", repo="/some/repo")
     t = cli._tracker(a)
     assert isinstance(t, BeadsTracker)
+    assert t.repo == "/some/repo"
+
+
+def test_backend_br_builds_a_br_tracker():
+    a = SimpleNamespace(root=cli.Path("/tmp/x"), backend="br", repo="/some/repo")
+    t = cli._tracker(a)
+    assert isinstance(t, BrTracker)
     assert t.repo == "/some/repo"
 
 
