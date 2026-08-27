@@ -750,6 +750,45 @@ def test_the_operators_codex_login_is_LINKED_into_the_home_we_wrote(tmp_path,
     assert not link.is_file() or link.read_text() == '{"token": "secret"}'
 
 
+def test_an_agents_CODEX_HOME_cannot_replace_auth_with_a_self_link(tmp_path,
+                                                                   monkeypatch):
+    """aegis-c360e: role emission can run inside a Codex agent, whose ambient
+    CODEX_HOME is the destination role home.  That is launch state, not the
+    operator credential source.  It must fall back to the operator's login and
+    can never turn auth.json into ``auth.json -> auth.json``."""
+    operator = tmp_path / "operator"
+    login = operator / ".codex" / "auth.json"
+    login.parent.mkdir(parents=True)
+    login.write_text('{"token": "operator"}')
+    monkeypatch.setenv("HOME", str(operator))
+
+    root = tmp_path / ".shanty"
+    [path] = cli._emit_role_settings(root, {"worker"}, harness_name="codex")
+    auth = path.parent / "auth.json"
+    auth.write_text('{"token": "role-copy"}')
+    monkeypatch.setenv("CODEX_HOME", str(path.parent))
+
+    assert CODEX.provision(str(path), root=root) == []
+    assert auth.is_symlink()
+    assert auth.readlink() == login
+    assert auth.readlink() != auth
+
+
+def test_no_independent_login_preserves_auth_instead_of_self_linking(tmp_path,
+                                                                     monkeypatch):
+    root = tmp_path / ".shanty"
+    [path] = cli._emit_role_settings(root, {"worker"}, harness_name="codex")
+    auth = path.parent / "auth.json"
+    auth.write_text('{"token": "role-copy"}')
+    monkeypatch.setenv("CODEX_HOME", str(path.parent))
+    monkeypatch.setenv("HOME", str(tmp_path / "operator-without-login"))
+
+    notes = CODEX.provision(str(path), root=root)
+    assert notes and "preserved" in notes[0] and "self-link" in notes[0]
+    assert auth.is_file() and not auth.is_symlink()
+    assert auth.read_text() == '{"token": "role-copy"}'
+
+
 def test_a_missing_login_is_SAID_not_silently_survived(tmp_path, monkeypatch):
     """The failure this exists to prevent is invisible at launch time, so the
     emitter has to be the one that says it."""
