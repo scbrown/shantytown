@@ -236,9 +236,9 @@ def _backend(a, default="files") -> str:
         return explicit
     declared = _deployment_default(a, "SHANTY_BACKEND")
     if declared:
-        if declared not in ("files", "beads", "forgejo"):
+        if declared not in ("files", "beads", "br", "forgejo"):
             raise SystemExit(f"  refused: SHANTY_BACKEND={declared!r} is not a "
-                             "backend (files|beads|forgejo). Fix [env] in "
+                             "backend (files|beads|br|forgejo). Fix [env] in "
                              "shantytown.toml (or the environment); a typo must "
                              "not silently mean files.")
         return declared
@@ -263,6 +263,13 @@ def _tracker(a, default="files"):
             # aegis-qmfa1: embedded-store work must be visible to the plate/haul.
             extra_repos=beads_mod.parse_extra_repos(
                 _deployment_default(a, beads_mod.EXTRA_REPOS_KEY)))
+    if b == "br":
+        from .br import BrTracker
+        return BrTracker(
+            repo=getattr(a, "repo", None)
+            or _deployment_default(a, "SHANTY_BR_REPO")
+            or _deployment_default(a, "SHANTY_BEADS_REPO")
+            or _default_bd_repo(a))
     if b == "forgejo":
         # --repo is owner/name here (the forge's coordinates), not a directory.
         from .forgejo import ForgejoTracker
@@ -300,7 +307,40 @@ def _plate(a):
     trk = _tracker(a)
     if _backend(a) == "beads":
         return lambda who: beads_mod.plate(trk, who)
+    if _backend(a) == "br":
+        from .br import plate as br_plate
+        return lambda who: br_plate(trk, who)
     return lambda who: files_plate(trk, who)
+
+
+def _tracker_items(trk):
+    """Backend reader paired with ``trk`` without widening Tracker."""
+    from .br import BrTracker, items as br_items
+    if isinstance(trk, BrTracker):
+        return br_items(trk)
+    if isinstance(trk, FilesTracker):
+        return files_items(trk)
+    return beads_mod.items(trk)
+
+
+def _tracker_rows(trk):
+    """Raw rows paired with ``trk`` for reference scans."""
+    from .br import BrTracker, rows as br_rows
+    if isinstance(trk, BrTracker):
+        return br_rows(trk)
+    if isinstance(trk, FilesTracker):
+        return [vars(item) for item in files_items(trk)]
+    return beads_mod.rows(trk)
+
+
+def _tracker_plate(trk, who):
+    """Plate reader paired with ``trk`` for non-CLI call sites."""
+    from .br import BrTracker, plate as br_plate
+    if isinstance(trk, BrTracker):
+        return br_plate(trk, who)
+    if isinstance(trk, FilesTracker):
+        return files_plate(trk, who)
+    return beads_mod.plate(trk, who)
 
 
 def _inbox(a, default="files"):
@@ -325,8 +365,11 @@ def _inbox(a, default="files"):
     # command that reports a different store than it wrote to is the exact lie
     # this repo exists to refuse, and it is worse than the missing default:
     # you would go looking in beads for a message that is not there.
-    if _backend(a, default) == "beads":
+    if _backend(a, default) in ("beads", "br"):
         trk = _tracker(a, default)
+        if _backend(a, default) == "br":
+            from .br import items as br_items
+            return TrackerInbox(trk, lambda: br_items(trk))
         return TrackerInbox(trk, lambda: beads_mod.items(trk))
     return FilesInbox(Path(a.root) / "inbox")
 
@@ -543,7 +586,7 @@ def build_parser() -> argparse.ArgumentParser:
                     help="the store. Unset: $SHANTY_ROOT, else a .shanty found by "
                          "walking up from here, else the box's deployment pointer "
                          "(~/.config/shantytown/root), else ./.shanty")
-    ap.add_argument("--backend", choices=["files", "beads", "forgejo"], default=None,
+    ap.add_argument("--backend", choices=["files", "beads", "br", "forgejo"], default=None,
                     help="tracker backend (identity is always files). #3. "
                          "Unset means the deployment's SHANTY_BACKEND "
                          "([env] in shantytown.toml, then env), else per-command "
@@ -552,8 +595,8 @@ def build_parser() -> argparse.ArgumentParser:
                          "belongs in the shared store (dearing, qdal.2). Pass "
                          "--backend files to force local.")
     ap.add_argument("--repo", default=None,
-                    help="bd -C <dir> when --backend beads (unset: deployment's "
-                         "SHANTY_BEADS_REPO, else the .beads walk-up)")
+                    help="store directory for --backend beads/br (unset: deployment's "
+                         "SHANTY_BEADS_REPO/SHANTY_BR_REPO, else the .beads walk-up)")
     ap.add_argument("--registry", choices=["files", "quipu", "toml"], default="files",
                     help="identity backend: files (generated cards, the default), "
                          "quipu (the graph), or toml ([crew.<name>] in "
@@ -3389,7 +3432,7 @@ def _unassigned_open(a):
     """
     try:
         trk = _tracker(a, "beads")
-        rows = beads_mod.items(trk)
+        rows = _tracker_items(trk)
     except Exception as e:            # noqa: BLE001 — unreachable/misconfigured store
         return None, None, str(e)[:90]
 
@@ -4993,8 +5036,7 @@ def _redispatch_after_cycle(a, agent_name: str, checkpoint_bead: str = "") -> No
     """
     try:
         tracker = _tracker(a)
-        item = beads_mod.plate(tracker, agent_name) if hasattr(
-            beads_mod, "plate") else None
+        item = _tracker_plate(tracker, agent_name)
     except Exception as e:  # noqa: BLE001 — a tracker fault must not fail the cycle
         print(f"  note: could not read {agent_name}'s plate to re-dispatch "
               f"({e}). It will pick its work up from `st anchor`.",
@@ -6784,9 +6826,7 @@ def _tend_retire(a) -> int:
     if want:
         try:
             tracker = _tracker(a)
-            rows = ([vars(item) for item in files_items(tracker)]
-                    if isinstance(tracker, FilesTracker)
-                    else beads_mod.rows(tracker))
+            rows = _tracker_rows(tracker)
             assigned = [
                 row for row in rows
                 if (row.get("assignee") or "").split("/")[-1] == name
