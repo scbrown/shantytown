@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 
 from . import stores
 from .attribution import attribute
-from .protocols import Panes, Registry, Tracker
+from .protocols import BLOCKER_KIND_LABELS, Panes, Registry, Tracker
 from .triage import Action, Decision, triage
 
 # Verify reads SCROLLBACK and polls briefly. Measured against a real Claude Code
@@ -353,6 +353,10 @@ class RepoolRefused(Exception):
     """
 
 
+class DeferRefused(Exception):
+    """A structured defer was invalid or unsupported; nothing was written."""
+
+
 @dataclass
 class Repool:
     """What a repool did (or would do). `noop` = already open and unassigned."""
@@ -361,6 +365,18 @@ class Repool:
     was_status: str = ""
     noop: bool = False
     track_attempts: int = 0   # 0 on --dry-run and on noop
+
+
+@dataclass
+class Deferred:
+    """What a structured defer did (or would do)."""
+    item_id: str
+    kind: str
+    label: str
+    reason: str
+    was_status: str = ""
+    noop: bool = False
+    track_attempts: int = 0
 
 
 @dataclass
@@ -749,6 +765,55 @@ class Dispatcher:
         r.track_attempts = self._track(item_id,
                                        {"status": "open", "assignee": ""})
         return r
+
+    def defer(self, item_id: str, kind: str, reason: str,
+              dry_run: bool = False) -> Deferred:
+        """Park an item with one explicit blocker kind and a durable reason.
+
+        Classification is supplied by the deferrer, never inferred from prose.
+        The tracker primitive must write status, the selected label, removal of
+        contradictory labels, and the reason together; read-back proves both
+        structured outcomes before this reports success.
+        """
+        label = BLOCKER_KIND_LABELS.get(kind)
+        if label is None:
+            raise DeferRefused(
+                f"unknown blocker kind {kind!r}; choose "
+                f"{', '.join(BLOCKER_KIND_LABELS)}")
+        reason = reason.strip()
+        if not reason:
+            raise DeferRefused(
+                "a defer reason is required — name the referent and the "
+                "condition that should be re-tested")
+        item = self.tracker.get(item_id)
+        if item.status == "closed":
+            raise DeferRefused(
+                f"{item_id} is closed — deferring it would resurrect terminal work")
+        if not getattr(self.tracker, "_structured_defer", False):
+            raise DeferRefused(
+                "this tracker backend cannot atomically record structured deferrals")
+        if item.status == "deferred" and item.blocker_kind == label:
+            return Deferred(item_id, kind, label, reason,
+                            was_status=item.status, noop=True)
+        result = Deferred(item_id, kind, label, reason, was_status=item.status)
+        if dry_run:
+            return result
+        missing = {}
+        for attempt in range(1, _TRACK_ATTEMPTS + 1):
+            if attempt > 1:
+                time.sleep(_TRACK_DELAY)
+            self.tracker.update(item_id, status="deferred",
+                                blocker_kind=label, defer_reason=reason)
+            current = self.tracker.get(item_id)
+            missing = {}
+            if current.status != "deferred":
+                missing["status"] = (current.status, "deferred")
+            if current.blocker_kind != label:
+                missing["blocker_kind"] = (current.blocker_kind, label)
+            if not missing:
+                result.track_attempts = attempt
+                return result
+        raise TrackerWriteLost(item_id, missing, _TRACK_ATTEMPTS)
 
     def verify(self, pane: str, item_id: str) -> bool:
         """Did the send land? Read the pane back and look for the item id.

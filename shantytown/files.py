@@ -11,7 +11,7 @@ from pathlib import Path
 
 from .answer import Answer
 from .inbox import is_message, is_unworkable
-from .protocols import Agent, WorkItem
+from .protocols import Agent, BLOCKER_KIND_LABELS, WorkItem, blocker_kind
 # The pane-naming policy lives with the tier that writes cards. Imported under a
 # clear name because this module is the zero-dependency floor and a bare
 # `pane_for` here would read as its own.
@@ -203,6 +203,8 @@ class FilesRegistry:
 class FilesTracker:
     """A work item is a json file. That's the whole tracker."""
 
+    _structured_defer = True
+
     def __init__(self, root: Path):
         # NO mkdir here. Constructing a tracker must not touch the disk.
         # `st anchor` wires one, and cli.md is explicit: "prime is a read. It
@@ -229,12 +231,23 @@ class FilesTracker:
             status=d.get("status", "open"),
             assignee=d.get("assignee"),
             priority=_priority(d),
+            blocker_kind=blocker_kind(d.get("labels")),
         )
 
     def update(self, item_id: str, **fields) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
         p = self._path(item_id)
         d = json.loads(p.read_text()) if p.is_file() else {}
+        selected = fields.pop("blocker_kind", None)
+        reason = fields.pop("defer_reason", None)
+        if selected is not None:
+            labels = [v for v in (d.get("labels") or [])
+                      if v not in set(BLOCKER_KIND_LABELS.values())]
+            labels.append(selected)
+            d["labels"] = labels
+        if reason is not None:
+            notes = (d.get("notes") or "").rstrip()
+            d["notes"] = f"{notes}\n{reason}".strip()
         d.update({k: v for k, v in fields.items() if v is not None})
         p.write_text(json.dumps(d, indent=2, sort_keys=True))
 

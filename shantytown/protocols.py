@@ -17,6 +17,24 @@ from typing import Iterator, Protocol, runtime_checkable
 from shantytown.answer import CouldNotLook
 
 
+BLOCKER_KIND_LABELS = {
+    "bead": "blocked:bead",
+    "human": "blocked:human",
+    "access": "blocked:access",
+    "external": "blocked:external",
+    "parked": "parked:by-design",
+}
+
+
+def blocker_kind(labels) -> str | None:
+    """The one structured defer kind, or None when absent/contradictory."""
+    known = set(BLOCKER_KIND_LABELS.values())
+    found = [str(v.get("name", "") if isinstance(v, dict) else v)
+             for v in (labels or [])]
+    selected = sorted(set(found) & known)
+    return selected[0] if len(selected) == 1 else None
+
+
 @dataclass(frozen=True)
 class Agent:
     """Identity. The truth lives in the registry, not in this object."""
@@ -172,6 +190,10 @@ class WorkItem:
                                   # than guessing a middle value for it, so
                                   # "nobody set one" stays visible instead of
                                   # silently becoming P2.
+    blocker_kind: str | None = None  # one structured defer label, or None.
+                                      # This is a DATA field, not a fourth tracker
+                                      # method: get/update/create stays the whole
+                                      # backend protocol.
     open_blockers: tuple = ()     # ids of `blocks`-type dependencies that are
                                   # NOT yet closed — the reason this item cannot
                                   # be advanced (internal-ref).

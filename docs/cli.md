@@ -17,6 +17,10 @@ st repool <item>              hand an item back to the pool: status -> open AND
                               assignee cleared, one verified write. Clearing the
                               assignee alone leaves it in_progress — off `bd ready`,
                               every haul, and every plate at once.
+st defer <item> <kind> --reason-file <path|->
+                              park work with exactly one structured blocker kind
+                              (`bead|human|access|external|parked`) and a durable
+                              reason naming its referent/re-test condition
 st inbox <agent> <message>    put a message in an agent's inbox (send-keys; -d persists)
 st inbox [--count|--read|--read-id ID]
                               read or acknowledge your own inbox
@@ -66,13 +70,15 @@ Codex input already includes its cached subset. This makes
 `cache_read / usage_in` a provider-independent prompt-cache hit rate. The fields
 are omitted—not zeroed—when every matching transcript is unknown.
 
-Twenty-six. `--dry-run` is on every command that writes, from commit one. The surface grew past the
+Twenty-seven. `--dry-run` is on every command that writes, from commit one. The surface grew past the
 original eight, each slot on a specific ask — not drift: **inbox**/**task** (the dispatch/tracker
 pair, owner-directed), **context** (the bobbin Context protocol), **doctor**
 (out-of-box detect/install, Stiwi's direct ask), **subscribe** (the quipu events adapter,
-routing governed workflows to the admin), and **repool** (the whole hand-back in one verified
+routing governed workflows to the admin), **repool** (the whole hand-back in one verified
 write — clearing an assignee alone leaves an item in_progress, which parks it outside `bd ready`,
-every haul, and every plate; a hand-back that drops work off the board was the measured defect). Each is named on purpose: this doc once
+every haul, and every plate; a hand-back that drops work off the board was the measured defect),
+and **defer** (the whole structured park: status, exactly one blocker-kind label, and a durable
+reason in one verified action). Each is named on purpose: this doc once
 said "eight" while the code had twelve, and a count nobody enforces is a comment — in the one repo
 whose whole pitch is the exact count, that was the bug.
 
@@ -80,6 +86,11 @@ The twenty-sixth is **dream**: the inspect/preview/manual-run surface for bounde
 background reflection. It is not hidden behind `tend` because scheduling is a
 write while status is a read, and an operator must be able to see the due time,
 rotation, and capacity refusal without running supervision.
+
+The twenty-seventh is **defer**: the tracker already knew how to hide work, but bare
+deferral did not require the deferrer to state whether the blocker was a bead, human,
+access capability, external event, or no blocker at all. `st defer` records that kind
+and the reason together and verifies the resulting state before reporting success.
 
 The binary is **`st`**, not `shanty`: `shanty` is Stiwi's own tmux command and ours would shadow it
 on PATH. This doc said `shanty` in all 29 of its examples long after the entry point was `st`, so

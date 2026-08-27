@@ -1003,7 +1003,9 @@ class StalledAlerter:
                 f"with no progress for {mins:.0f}m. An in_progress bead DAMS your "
                 f"haul until you resolve it. If it is DONE: `bd close {one}`. If "
                 f"it is blocked or gated (nobody should work it yet): put why on "
-                f"the bead, then `bd defer {one}` — that takes it OUT of the ready "
+                f"the bead, then `st defer {one} "
+                f"<bead|human|access|external|parked> --reason-file <file>` — "
+                f"that records the blocker kind and takes it OUT of the ready "
                 f"pool (clearing the assignee alone only re-pools it for the next "
                 f"idle agent). If you are mid-something this loop cannot see, "
                 f"ignore this — any activity clears it.")

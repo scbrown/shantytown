@@ -606,7 +606,9 @@ def haul_feed_message(nid: str, title: str, rest: int, headroom: str = "",
         f"more after this). If your context is deep, checkpoint + /clear FIRST — "
         f"the haul survives it. {authority}"
         f"Not this one? DONE -> `bd close {nid}`. BLOCKED/gated (nobody should "
-        f"work it yet) -> `bd defer {nid}`, which takes it OUT of the ready pool "
+        f"work it yet) -> record the referent + re-test condition in a file, then "
+        f"`st defer {nid} <bead|human|access|external|parked> --reason-file <file>`, "
+        f"which records the kind and takes it OUT of the ready pool "
         f"until you undo. Valid work but not yours -> `bd update {nid} -a \"\"` "
         f"hands it back for another agent. Note: a bare status change won't stop "
         f"the re-serve, and clearing the assignee only RE-POOLS it — a still-ready "
@@ -627,7 +629,9 @@ def haul_resume_message(nid: str, title: str) -> str:
         f"HAUL RESUME: {nid} ({t}) is still your active anchor. Continue it now "
         f"(`bd show {nid}`), execute the remaining work, verify it, and close it "
         f"when done so the haul can advance. If it is genuinely gated, record "
-        f"the evidence and defer it; if it is not yours, clear the assignee. "
+        f"the evidence, then use `st defer {nid} "
+        f"<bead|human|access|external|parked> --reason-file <file>`; if it is not "
+        f"yours, clear the assignee. "
         f"Do not stop merely because the previous model turn ended.")
 
 

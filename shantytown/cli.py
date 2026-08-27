@@ -1,6 +1,6 @@
-"""st — the CLI. Twenty-six commands, and the count is load-bearing: each earns its slot.
+"""st — the CLI. Twenty-seven commands, and the count is load-bearing: each earns its slot.
 
-    anchor [--short|--events|--harness] · go · repool · inbox [--count] · task
+    anchor [--short|--events|--harness] · go · repool · defer · inbox [--count] · task
     · crew [--count|--governor] · input [--show|--clear|--dismiss] · ask · answer
     · roles [--check|set|band|sync] · init · new · start [--mode]
     · stop · log · context · doctor [--install] · dream [--run]
@@ -69,6 +69,9 @@ grew well past the original ten, each slot on a specific ask — not drift:
               in_progress-and-unassigned — outside `bd ready`, every haul, and
               every plate at once. A hand-back that drops work off the board is
               the defect; the command is the whole gesture.
+  · defer   — park an item as ONE verified structured write: deferred status,
+              exactly one blocker-kind label, and the reason naming its
+              referent. Bare tracker deferral made classification optional.
   · init    — scaffold a NEW deployment by asking: the store, the crew cards (with
               generated panes), their hooks, and shantytown.toml. It writes through
               the EXISTING seams — the registry, tier.role_set, the same settings
@@ -118,7 +121,8 @@ from .tmux import PaneNotAgent
 from .dispatch import (Dispatcher, TriageRefused, SendUnverified,
                        DispatchedButUntracked, AlreadyAssigned, Blocked, Closed,
                        HasOpenBlocker,
-                       GovernorRefused, RepoolRefused, TrackerWriteLost)
+                       GovernorRefused, RepoolRefused, DeferRefused,
+                       BLOCKER_KIND_LABELS, TrackerWriteLost)
 from . import forgejo as forgejo_mod
 from . import governor as gov_mod
 from . import guard as guard_mod
@@ -612,6 +616,19 @@ def build_parser() -> argparse.ArgumentParser:
     rp.add_argument("item")
     rp.add_argument("-n", "--dry-run", action="store_true")
 
+    df = sub.add_parser(
+        "defer",
+        help="park an item with a required blocker kind and durable reason")
+    df.add_argument("item")
+    df.add_argument("kind", choices=tuple(BLOCKER_KIND_LABELS),
+                    help="bead|human|access|external are blockers; parked means "
+                         "deliberately set aside with no blocker")
+    reason = df.add_mutually_exclusive_group(required=True)
+    reason.add_argument("--reason", help="short reason; prefer --reason-file for prose")
+    reason.add_argument("--reason-file", type=Path,
+                        help="read the reason from a file, or - for stdin")
+    df.add_argument("-n", "--dry-run", action="store_true")
+
     cr = sub.add_parser("crew", help="who exists, what state, what role")
     cr.add_argument("--count", action="store_true",
                     help="print ONLY `busy/total` — the same verdict the table "
@@ -1023,6 +1040,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_go(a)
     if a.cmd == "repool":
         return _cmd_repool(a)
+    if a.cmd == "defer":
+        return _cmd_defer(a)
     if a.cmd == "crew":
         return _cmd_crew(a)
     if a.cmd == "roles":
@@ -3066,6 +3085,41 @@ def _cmd_repool(a) -> int:
     extra = f" ({r.track_attempts} attempts)" if r.track_attempts > 1 else ""
     print(f"  ✓ {a.item} repooled: {frm} -> open/unassigned, verified by "
           f"read-back{extra}. It is back on `bd ready` and feedable.")
+    return OK
+
+
+def _cmd_defer(a) -> int:
+    """Park work only when its blocker KIND and reason travel with the state."""
+    try:
+        if a.reason_file is not None:
+            reason = (sys.stdin.read() if str(a.reason_file) == "-"
+                      else a.reason_file.read_text())
+        else:
+            reason = a.reason or ""
+    except OSError as e:
+        print(f"  refused: could not read --reason-file: {e}", file=sys.stderr)
+        return REFUSED
+    d = _wire(a)
+    try:
+        r = d.defer(a.item, a.kind, reason, dry_run=a.dry_run)
+    except (DeferRefused, LookupError) as e:
+        print(f"  refused: {e}", file=sys.stderr)
+        return REFUSED
+    except TrackerWriteLost as e:
+        print(f"  ⚠ COULD NOT CONFIRM: {e}\n  Read the bead (`bd show {a.item}`) "
+              "before retrying — the status and label may already have landed.",
+              file=sys.stderr)
+        return CANNOT_TELL
+    if r.noop:
+        print(f"  {a.item} is already deferred as {r.label} — nothing to write.")
+        return OK
+    if a.dry_run:
+        print(f"  would defer {a.item}: {r.was_status} -> deferred, label "
+              f"{r.label}, reason recorded. 2 tracker reads, 0 writes.")
+        return OK
+    extra = f" ({r.track_attempts} attempts)" if r.track_attempts > 1 else ""
+    print(f"  ✓ {a.item} deferred as {r.label}; reason and exactly one blocker "
+          f"kind verified by read-back{extra}.")
     return OK
 
 
