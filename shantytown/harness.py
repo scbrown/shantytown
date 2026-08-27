@@ -186,6 +186,10 @@ class Harness(Protocol):
         committed by the checker built to catch it."""
         ...
 
+    def read_pre_edit_guard(self, text: str) -> "str | None":
+        """The edit-policy guard command, "" when absent, None when unreadable."""
+        ...
+
     # The ENVIRONMENT VARIABLE this program's settings ride on, or None for a
     # program that takes a flag instead.
     #
@@ -520,6 +524,27 @@ class ClaudeHarness:
             return None
         return ""
 
+    def read_pre_edit_guard(self, text: str) -> "str | None":
+        from .runtime import EDIT_MATCHER
+        try:
+            data = json.loads(text)
+            hooks = data.get("hooks")
+            if not isinstance(hooks, dict):
+                return None
+            groups = hooks.get("PreToolUse")
+            if not isinstance(groups, list):
+                return "" if ("Stop" in hooks or "SessionStart" in hooks) else None
+            for group in groups:
+                if group.get("matcher") != EDIT_MATCHER:
+                    continue
+                for hook in group["hooks"]:
+                    command = hook.get("command", "")
+                    if command:
+                        return command
+        except (ValueError, TypeError, KeyError, AttributeError):
+            return None
+        return ""
+
     def settings_in_cmdline(self, cmdline: str) -> "str | None":
         toks = cmdline.split()
         for i, t in enumerate(toks):
@@ -756,6 +781,12 @@ class CodexHarness:
         return best
     def read_bash_guard(self, text: str) -> "str | None":
         return codex_mod().bash_guard(text)
+
+    def read_pre_edit_guard(self, text: str) -> "str | None":
+        # Codex does not currently expose an edit-shaped matcher. Absence is a
+        # measured capability gap, not an unreadable artifact; the roles check
+        # leaves this leg unverified for Codex rather than calling it healthy.
+        return ""
 
     def settings_in_cmdline(self, cmdline: str) -> "str | None":
         # The env export IS the pointer, so this reads an assignment rather than

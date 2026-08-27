@@ -140,7 +140,8 @@ from . import selfcheck
 from .anchor import Unreachable, anchor as do_anchor
 from .runtime import (asks_a_question, auth_expired, bash_guard_command,
                       ClaudeRuntime, CapabilityError, SettingsError,
-                      emitted_bash_guard, emitted_stop_directions,
+                      emitted_bash_guard, emitted_pre_edit_guard,
+                      emitted_stop_directions, pre_edit_guard_command,
                       live_stop_directions, live_wiring, settings_for_role)
 from .tmux import Tmux, declared_socket
 from .workspace import (WorkspaceError, agent_worktrees, cleanup_worktree,
@@ -4285,7 +4286,17 @@ def _cmd_roles(a) -> int:
                           # silent unverified — measured on the live store.
                           # `or ""` distinguishes NOT CONFIGURED (ordinary) from
                           # COULD NOT TELL (None) — see roles.check.
-                          guard_configured=bash_guard_command(a.root) or "")
+                          guard_configured=bash_guard_command(a.root) or "",
+                          pre_edit=lambda card: emitted_pre_edit_guard(
+                              a.root, card.role,
+                              harness_mod.name_for(card, root=a.root)),
+                          # Claude Code is the measured edit-hook surface. Codex
+                          # has no equivalent matcher today, so it stays visibly
+                          # unverified instead of being pronounced healthy.
+                          pre_edit_expected=lambda card: (
+                              pre_edit_guard_command()
+                              if harness_mod.name_for(card, root=a.root) == "claude"
+                              else ""))
     print()
     print(rep.render())
     print()
