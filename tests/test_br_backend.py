@@ -19,7 +19,7 @@ BR = shutil.which("br")
 
 @pytest.fixture
 def br_store(tmp_path, monkeypatch):
-    if BR is None or not Path(BR).is_file():
+    if not BR or not Path(BR).is_file():
         pytest.skip("br binary is not installed")
     store = tmp_path / "store"
     store.mkdir()
