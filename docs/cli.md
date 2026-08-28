@@ -59,7 +59,7 @@ st cycle <agent> [--self]     clear an agent's context WITHOUT destroying its ru
                               your own cycle (an agent cannot stop itself), honoured
                               by `st tend`. --allow-loss to cycle over unsaved work.
 st worktree <repo> [agent]    provision an agent's isolated worktree off a SHARED project repo
-st push <repo> [agent]        push your branch to EVERY remote — pushing one forks a repo with two
+st push <repo> [agent]        push wt/<agent> to EVERY remote; refuses if invoked from another branch
 ```
 
 `st stats` keeps its row extensible through `key=value` fields. When at least

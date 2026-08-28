@@ -4895,6 +4895,36 @@ def _resolve_push_worktree(repo: str, agent: str) -> Path:
     return worktree_for(_resolve_repo(repo), agent)
 
 
+def _push_invocation_branch(dest: Path) -> tuple[Path, str] | None:
+    """Return the caller's worktree + branch when it belongs to ``dest``'s repo.
+
+    A linked worktree has its own git-dir but shares one git *common* directory.
+    Comparing the common directory is therefore the discriminating check: a
+    caller elsewhere in the filesystem must not affect the established
+    ``st push <repo> <agent>`` behavior, while a caller inside another worktree
+    of this exact repository is expressing a branch choice we must not ignore.
+    """
+    import subprocess
+
+    cwd = Path.cwd()
+
+    def common(path: Path) -> Path | None:
+        r = subprocess.run(
+            ["git", "-C", str(path), "rev-parse", "--path-format=absolute",
+             "--git-common-dir"], capture_output=True, text=True, timeout=5,
+        )
+        return Path(r.stdout.strip()).resolve() if r.returncode == 0 else None
+
+    cwd_common, dest_common = common(cwd), common(dest)
+    if dest_common is None or cwd_common != dest_common:
+        return None
+    branch = subprocess.run(
+        ["git", "-C", str(cwd), "symbolic-ref", "--quiet", "--short", "HEAD"],
+        capture_output=True, text=True, timeout=5,
+    )
+    return cwd, branch.stdout.strip() if branch.returncode == 0 else "(detached HEAD)"
+
+
 def _cmd_cycle(a) -> int:
     """cycle <agent> — clear context WITHOUT destroying the runtime (aegis-3laza).
 
@@ -5149,6 +5179,11 @@ def _cmd_push(a) -> int:
     REFUSES, AND NAMES WHICH REMOTE REFUSED — with two live peers, "push rejected"
     cannot be acted on, because "my branch is behind" and "the other remote moved"
     have different next steps.
+
+    FAILS CLOSED ON BRANCH AMBIGUITY (aegis-72png). If the command is invoked
+    from another worktree of this repository, that checked-out branch is an
+    intentional choice. Refuse when it differs from ``wt/<agent>`` rather than
+    silently publishing the canonical branch and deferred work parked on it.
     """
     agent = a.agent or os.environ.get("SHANTY_AGENT")
     if not agent:
@@ -5166,6 +5201,17 @@ def _cmd_push(a) -> int:
         return REFUSED
 
     branch = f"wt/{agent}"
+    invocation = _push_invocation_branch(Path(dest))
+    if invocation is not None and invocation[1] != branch:
+        caller_path, caller_branch = invocation
+        print(
+            f"  refused before push: checked-out branch '{caller_branch}' at "
+            f"{caller_path} differs from canonical '{branch}' at {dest}. "
+            "No remote was contacted. Run st push from the canonical worktree, "
+            "or use an explicit git push after reviewing the exact ref.",
+            file=sys.stderr,
+        )
+        return REFUSED
     outcomes = push_every_remote(dest, branch, a.branch)
     if not outcomes:
         print(f"  refused: {dest} has no remotes configured — nothing to push to.",
