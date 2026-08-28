@@ -314,7 +314,7 @@ st subscribe                      watch quipu entity events; route governed work
 st cycle <agent> [--self]         clear context WITHOUT destroying the runtime: checkpoint ->
                                   stop -> relaunch -> re-dispatch (/clear drops bypass; this keeps it)
 st worktree <repo> [agent]        provision an agent's isolated worktree off a SHARED project repo
-st push <repo> [agent]            push your branch to EVERY remote — pushing one forks a repo with two
+st push <repo> [agent]            push wt/<agent> to EVERY remote; refuses if invoked from another branch
 st stats [agent]                  files/skills plus provider tokens and cache dimensions
 ```
 
