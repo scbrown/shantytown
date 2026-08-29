@@ -148,6 +148,7 @@ from .files import (FilesRegistry, FilesTracker, plate as files_plate,
 from .launched import FilesLaunches, CURRENT, STALE, UNKNOWN
 from .stopped import FilesStops
 from .quipu import QuipuRegistry
+from . import graph_adoption
 from . import selfcheck
 from .anchor import Unreachable, anchor as do_anchor
 from . import handoff_text
@@ -643,6 +644,14 @@ def build_parser() -> argparse.ArgumentParser:
                          "the dispatch payload through the same triage gate as the "
                          "work, so the receiving agent starts from what the graph "
                          "already knows instead of re-deriving it")
+    go.add_argument("--no-graph-context", default="", metavar="REASON",
+                    help="dispatch with NO graph context, and say why (e.g. "
+                         "'nothing modelled for this yet'). One of this or "
+                         "--quipu-node is required: a dispatch that cites "
+                         "neither is refused. The reason is never validated — "
+                         "it is recorded, so the SHAPE of the exemptions is "
+                         "measurable. A requirement that blocks real work gets "
+                         "removed, so the escape hatch costs one flag.")
     note.add_argument("--note-file", type=Path, default=None,
                       help="read the note from a file (or - for stdin). Use this "
                            "for anything long or containing quotes/backticks — "
@@ -841,6 +850,22 @@ def build_parser() -> argparse.ArgumentParser:
                     help="list the files an agent touched (needs agent)")
     ss.add_argument("--since", type=float, default=24.0, metavar="HOURS",
                     help="window in hours (default 24)")
+    # NOT its own verb. The surface count is this repo's thesis and a new slot is
+    # earned by a CONSEQUENCE, not by a report: this reads a ledger and mutates
+    # nothing, which is exactly the case the `tend`/`input` arguments say belongs
+    # behind a flag on an existing read.
+    ss.add_argument("--graph", action="store_true",
+                    help="graph-context adoption instead of token/file numbers: "
+                         "what share of dispatches carried a quipu node, what "
+                         "share stated a reason for having none, and which "
+                         "agents have never cited one")
+    ss.add_argument("--include-dry-run", action="store_true",
+                    help="with --graph: count --dry-run previews too. Off by "
+                         "default — a preview handed work to nobody, and counting "
+                         "it inflates the denominator with dispatches that never "
+                         "happened")
+    ss.add_argument("--json", action="store_true",
+                    help="with --graph: machine-readable output")
 
     lg = sub.add_parser("log", help="what happened")
     lg.add_argument("agent", nargs="?")
@@ -1053,6 +1078,13 @@ def build_parser() -> argparse.ArgumentParser:
     # GUARD before printing "would", or the preview an operator reads to authorise
     # a cycle would be silent about the work it is about to strand.
     cy.add_argument("-n", "--dry-run", action="store_true")
+    cy.add_argument("--no-graph-context", default="", metavar="REASON",
+                    help="request the cycle with NO graph context, and say why. "
+                         "One of this or --quipu-node is required on a cycle "
+                         "carrying a checkpoint, for the same reason it is on "
+                         "`st go`: the resume dispatch is where the next "
+                         "session starts, and starting from nothing is the "
+                         "habit this requirement exists to break.")
 
     wt = sub.add_parser("worktree",
                         help="provision (or gc) an agent's isolated worktree off "
@@ -1152,6 +1184,8 @@ def main(argv: list[str] | None = None) -> int:
     if a.cmd == "log":
         return _cmd_log(a)
     if a.cmd == "stats":
+        if a.graph:
+            return _cmd_graph_adoption(a)
         from . import stats as stats_mod
         if a.files:
             if not a.agent:
@@ -2194,6 +2228,69 @@ def _cmd_log(a) -> int:
         print(f"  {a.agent} is not running — no session to read.")
         return OK
     print(panes.capture(session))
+    return OK
+
+
+def _cmd_graph_adoption(a) -> int:
+    """The denominator (aegis-rcyd.1).
+
+    Adoption arguments on this fleet have repeatedly been made from impressions
+    — "we don't use quipu enough" — with no number attached, and an impression
+    cannot tell a fixed habit from an unfixed one. This reads the ledger every
+    dispatch writes and reports what share carried a node, what share carried a
+    stated reason instead, and which agents have never cited one.
+
+    Exit 0 always: this is a report, not a gate. A gate on a habit measurement
+    would make the measurement the thing people work around.
+    """
+    hours = float(getattr(a, "since", 24.0) or 0)
+    cutoff = (time.time() - hours * 3600) if hours else 0.0
+    window = f" in the last {hours:g}h" if hours else ""
+    rows = graph_adoption.read_rows(a.root, cutoff)
+    s = graph_adoption.summarize(rows, include_dry_run=a.include_dry_run)
+    if a.json:
+        print(json.dumps({
+            "window_hours": hours,
+            "eligible": s.eligible, "with_nodes": s.with_nodes,
+            "exempt": s.exempt, "missing": s.missing, "verified": s.verified,
+            "unverifiable": s.unverifiable,
+            "coverage": s.coverage, "node_share": s.node_share,
+            "by_agent": s.by_agent,
+            "reasons": dict(s.reasons), "nodes": dict(s.nodes.most_common(20)),
+            "zero_node_agents": s.zero_node_agents,
+        }, indent=2, sort_keys=True))
+        return OK
+    if not s.eligible:
+        # NOT "100% coverage". An empty ledger means nothing has been dispatched
+        # since the requirement landed — or that the ledger is not being written,
+        # which is a different problem and must not render as a perfect score.
+        print(f"  no eligible dispatches recorded{window}. "
+              f"Ledger: {Path(a.root) / 'logs' / graph_adoption.LEDGER}")
+        return OK
+    pct = lambda v: "-" if v is None else f"{v * 100:.0f}%"  # noqa: E731
+    print(f"  {s.eligible} eligible dispatches{window}"
+          f"   (mode: {graph_adoption.mode(a.root)})")
+    print(f"  carrying a node:      {s.with_nodes:>4}  ({pct(s.node_share)})")
+    print(f"  stated no-context:    {s.exempt:>4}")
+    print(f"  coverage (either):    {s.with_nodes + s.exempt:>4}  ({pct(s.coverage)})")
+    if s.missing:
+        print(f"  NEITHER (advise-mode): {s.missing:>3}")
+    print(f"  node verified:        {s.verified:>4}"
+          + (f"   unverifiable: {s.unverifiable}" if s.unverifiable else ""))
+    if s.zero_node_agents:
+        # NAMED, not counted. "Zero-use distributions are explicit" is the
+        # acceptance criterion, and a count hides which agents to go and ask.
+        print(f"  never cited a node:   {', '.join(s.zero_node_agents)}")
+    if s.reasons:
+        print("  exemption reasons (a dominant one is a finding about the GRAPH):")
+        for reason, n in s.reasons.most_common(5):
+            print(f"    {n:>3}  {reason}")
+    if s.nodes:
+        print("  most-cited nodes:")
+        for node, n in s.nodes.most_common(5):
+            print(f"    {n:>3}  {node}")
+    print("  server-side denominator: quipu_http_client_requests_total{client=...} "
+          "in prometheus — this ledger counts DISPATCHES, not reads.")
     return OK
 
 
@@ -3286,6 +3383,48 @@ def _cmd_defer(a) -> int:
     return OK
 
 
+def _verification_registry(a):
+    """A quipu client used ONLY to check that a named node exists.
+
+    Deliberately separate from `_registry(a)`, which answers "who is the crew?"
+    and may be files- or toml-backed by choice. Node verification is a question
+    only the graph can answer, so it asks the graph regardless of which identity
+    backend the caller selected — and returns None rather than raising, because
+    a dispatch must never fail on the construction of a checker.
+    """
+    try:
+        return QuipuRegistry(root=getattr(a, "root", None))
+    except Exception:  # noqa: BLE001 — any failure here means "cannot check"
+        return None
+
+
+def _graph_context(a):
+    """Require (per mode), then best-effort verify. Returns (ctx, refusal|None).
+
+    In the default ADVISE mode a missing context warns and is RECORDED as
+    missing rather than refused, so the ledger measures the habit instead of
+    blocking the fleet's existing callers on the day this ships. A node that the
+    graph positively does not hold is refused in BOTH modes: that is a wrong
+    claim, not an absent one, and letting it through is how a dispatch comes to
+    cite something nobody can look up.
+    """
+    try:
+        ctx = graph_adoption.require(getattr(a, "quipu_node", []),
+                                     getattr(a, "no_graph_context", ""))
+    except graph_adoption.GraphContextMissing as e:
+        if graph_adoption.mode(getattr(a, "root", None)) == graph_adoption.REQUIRE:
+            return None, str(e)
+        print(f"  ⚠ no graph context — recorded as missing. Name one with "
+              f"--quipu-node, or say why with --no-graph-context '<reason>'.",
+              file=sys.stderr)
+        return graph_adoption.unstated(), None
+    try:
+        ctx = graph_adoption.verify(ctx, _verification_registry(a))
+    except graph_adoption.GraphNodeUnknown as e:
+        return None, str(e)
+    return ctx, None
+
+
 def _cmd_go(a) -> int:
     d = _wire(a)
     try:
@@ -3295,6 +3434,15 @@ def _cmd_go(a) -> int:
         # the caveat is the reason the caller used the flag, and sending the work
         # without it is the exact failure aegis-8013 is about.
         print(f"  refused: could not read --note-file: {e}", file=sys.stderr)
+        return REFUSED
+    # GRAPH CONTEXT IS REQUIRED (aegis-rcyd.1). Checked BEFORE triage and before
+    # anything is typed into a pane: a refusal here costs nothing, while a
+    # dispatch that reached an agent citing a node nobody can look up cannot be
+    # taken back. A graph that cannot be reached does NOT refuse — see
+    # graph_adoption for why absence and silence are different answers.
+    gctx, refusal = _graph_context(a)
+    if refusal:
+        print(f"  refused: {refusal}", file=sys.stderr)
         return REFUSED
     if a.dry_run:
         try:
@@ -3322,6 +3470,8 @@ def _cmd_go(a) -> int:
             print(f"  refused: {e}", file=sys.stderr)
             return REFUSED
         print(p.render()); print("\n  triage: " + decision.render())
+        print("  " + gctx.render())
+        graph_adoption.record(a.root, "go", a.agent, a.item, gctx, dry_run=True)
         if a.worktree:
             # Dry-run creates NOTHING (the pure-dry-run rule), so name what a real
             # run would provision without touching disk.
@@ -3475,8 +3625,15 @@ def _cmd_go(a) -> int:
     # returns — the same contract the anchor-side publish holds, and for the
     # same reason.
     plate_publish.publish_id(Path(a.root), a.agent, p.item_id)
+    # THE ADOPTION ROW, on the success path only (aegis-rcyd.1). A dispatch that
+    # was refused or could not be verified did not happen, and counting it would
+    # put the denominator out of step with the fleet's actual work. Fail-silent
+    # by construction: a measurement must never be able to break the thing it
+    # measures.
+    graph_adoption.record(a.root, "go", a.agent, a.item, gctx, session=p.pane)
     print(f"  {p.item_id} -> {p.agent}          in progress")
     print(f"  sent to pane {p.pane}")
+    print(f"  {gctx.render()}")
     if p.track_attempts > 1:
         # THE LINE THAT MAKES AN INTERMITTENT FAULT COUNTABLE (aegis-8xc5w).
         # go() now reads its tracker write back and re-writes on a verified loss,
@@ -5179,16 +5336,32 @@ def _cmd_cycle(a) -> int:
                       "the file's first line is recorded as the reason only.",
                       file=sys.stderr)
 
-        quipu_nodes = [n for n in getattr(a, "quipu_node", []) if n.strip()]
+        # GRAPH CONTEXT ON THE RESUME DISPATCH (aegis-rcyd.1). A cycle request is
+        # where the NEXT session's first minute is decided, so it carries the same
+        # requirement `st go` does: an exact existing node, or a stated reason.
+        # Checked before the request is written — a refusal here loses nothing,
+        # because the checkpoint has already been posted to the bead above and the
+        # agent stays up either way.
+        gctx, refusal = _graph_context(a)
+        if refusal:
+            print(f"  refused: {refusal}", file=sys.stderr)
+            print(f"  the checkpoint above is already posted; re-run this with "
+                  f"graph context and nothing is lost.", file=sys.stderr)
+            return REFUSED
+        quipu_nodes = list(gctx.nodes)
         cycle_mod.Requests(a.root).request(agent_name, a.reason.strip(),
                                            checkpoint_bead or posted_to,
                                            quipu_nodes)
+        graph_adoption.record(a.root, "cycle", agent_name,
+                              checkpoint_bead or posted_to or "-", gctx)
         print(f"  {agent_name}: cycle REQUESTED — checkpoint recorded.")
         if posted_to:
             print(f"  checkpoint file posted to {posted_to}.")
         if quipu_nodes:
             print(f"  graph context recorded: {', '.join(quipu_nodes)} "
                   f"— named in your resume dispatch.")
+        elif gctx.exemption:
+            print(f"  no graph context: {gctx.exemption} — recorded.")
         print(f"  `st tend` performs it. You stay up until it does, so keep "
               f"working; nothing is lost if it never fires.")
         print(f"  {handoff_text.refusal_note()}")

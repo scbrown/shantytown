@@ -51,6 +51,10 @@ st tend --target N            respawn only toward N LIVE agents (scale UP on los
 st attach [agent]             attach to a crew member — STARTING them if down (pane+socket resolved)
 st attach --no-start          attach only if already running; never create a session
 st stats [agent] [--files]    files/skills plus provider tokens and cache dimensions
+st stats --graph              graph-context adoption: what share of dispatches carried a
+                              quipu node, what share stated a reason for having none, and
+                              which agents have never cited one. A read over a ledger, so
+                              it is a flag here rather than a verb of its own.
 st dashboard [admin]          live, tier-scoped view: roster/state/work, self-refreshing
 st subscribe                  watch quipu entity events; route governed workflows to the admin
 st help <topic>               rationale pages: handoff/cycle, haul, inbox
@@ -62,6 +66,14 @@ st cycle <agent> [--self]     clear an agent's context WITHOUT destroying its ru
 st worktree <repo> [agent]    provision an agent's isolated worktree off a SHARED project repo
 st push <repo> [agent]        push wt/<agent> to EVERY remote; refuses if invoked from another branch
 ```
+
+`st go` and `st cycle` take `--quipu-node NAME` (repeatable) or
+`--no-graph-context REASON`, and every dispatch writes one row to
+`<root>/logs/graph-adoption.jsonl`. `SHANTY_GRAPH_CONTEXT=require` turns the
+default warning into a refusal; a node the graph positively does not hold is
+refused under either setting, while a graph that cannot be reached never
+refuses — absence and silence are different answers, and only one of them is
+the dispatcher's problem.
 
 `st stats` keeps its row extensible through `key=value` fields. When at least
 one local transcript has a usage snapshot, the row includes
