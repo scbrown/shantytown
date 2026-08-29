@@ -755,10 +755,15 @@ class CodexHarness:
             # Start is idempotent, then attach this TUI to its Unix socket. The
             # explicit --cd is load-bearing: a remote TUI otherwise inherits the
             # daemon's cwd even when the surrounding shell already changed dir.
-            daemon_start = (
+            start = (
                 f"{codex_mod().HOME_VAR}={home} codex remote-control start "
-                "--json >/dev/null && "
+                "--json >/dev/null"
             )
+            # On a cold 0.151.0 start the daemon can be fully spawned while the
+            # relay's first status read still returns "connection is errored".
+            # The same idempotent command immediately reports connected. Retry
+            # exactly once: a persistent error still refuses the TUI launch.
+            daemon_start = f"({start} || {start}) && "
             flags += f" --remote unix://{socket}"
             if card.workspace:
                 flags += f" --cd {shlex.quote(str(card.workspace))}"
