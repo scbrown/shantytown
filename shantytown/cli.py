@@ -155,7 +155,8 @@ from .runtime import (asks_a_question, auth_expired, bash_guard_command,
                       ClaudeRuntime, CapabilityError, SettingsError,
                       emitted_bash_guard, emitted_pre_edit_guard,
                       emitted_stop_directions, pre_edit_guard_command,
-                      live_stop_directions, live_wiring, settings_for_role)
+                      input_stranded, live_stop_directions, live_wiring,
+                      settings_for_role)
 from .tmux import Tmux, declared_socket
 from .workspace import (WorkspaceError, agent_worktrees, cleanup_worktree,
                         ensure_workspace, ensure_worktree, push_every_remote,
@@ -1605,6 +1606,8 @@ def _launch(a, card, panes, runtime, *, dry_run: bool = False) -> int:
     ledger_ok = _record_launch_unretirement(a, card)
     if _observe_live(runtime, panes, session, card):
         verified = _verify_live_hooks(a, card, runtime, panes, session)
+        if verified == OK:
+            _deliver_startup_inbox(a, card, panes, session)
         return verified if ledger_ok else CANNOT_TELL
     # Not observed live. Distinguish "waiting for a human" (a first-run consent
     # prompt) from "unknown" — both are could-not-tell (2), but they need
@@ -1619,6 +1622,71 @@ def _launch(a, card, panes, runtime, *, dry_run: bool = False) -> int:
           f"live in {session} within the timeout. It may still be coming up; "
           f"check `st log {card.name}`.", file=sys.stderr)
     return CANNOT_TELL
+
+
+def _deliver_startup_inbox(a, card, panes, session: str) -> None:
+    """Inject unread durable mail into a verified new session, then acknowledge it.
+
+    This is deliberately after process + hook verification.  A session existing is
+    not delivery, and a successful ``send`` is not delivery either: the terminal
+    may absorb or truncate the prompt.  The final marker is therefore the receipt.
+    Only the snapshot whose complete marker is visible is acknowledged; every
+    failure is loud and leaves the durable pointers open for ``st inbox``.
+
+    Best-effort by design.  Inbox trouble must not turn a healthy agent launch into
+    a failed launch, because the open pointers are precisely the recovery path.
+    """
+    try:
+        box = _inbox(a, default="beads")
+        unread = box.unread(card.name)
+    except Exception as e:  # noqa: BLE001 -- launch succeeded; durability survives
+        print(f"  ⚠ startup inbox unreadable for {card.name} "
+              f"({type(e).__name__}: {str(e)[:100]}); pointers remain open.",
+              file=sys.stderr)
+        return
+    if not unread:
+        return
+
+    ids = [m.id for m in unread]
+    marker = f"ST-STARTUP-INBOX-COMPLETE:{','.join(ids)}"
+    lines = ["[startup inbox] Durable messages received while you were offline:"]
+    for msg in unread:
+        lines.append(f"\n[{msg.id}]")
+        lines.extend((msg.body or "").splitlines() or [""])
+    lines += ["", marker]
+    prompt = "\n".join(lines)
+
+    try:
+        panes.send(session, attribute(prompt, "st startup"))
+        # Capture scrollback as well as the visible tail.  The end marker proves
+        # the complete block, not merely its prefix, reached the initial context.
+        time.sleep(0.35)
+        screen = panes.capture(session, history=200)
+    except Exception as e:  # noqa: BLE001 -- keep the pointers as the recovery
+        print(f"  ⚠ startup inbox delivery failed for {card.name} "
+              f"({type(e).__name__}: {str(e)[:100]}); {len(ids)} pointer(s) remain open.",
+              file=sys.stderr)
+        return
+    if marker not in screen or input_stranded(screen):
+        print(f"  ⚠ startup inbox delivery not verified for {card.name} "
+              f"(complete marker absent or input stranded); {len(ids)} pointer(s) "
+              f"remain open.", file=sys.stderr)
+        return
+
+    try:
+        marked = box.mark_read(card.name, ids=ids)
+    except Exception as e:  # noqa: BLE001 -- delivered, but preserve on close doubt
+        print(f"  ⚠ startup inbox reached {card.name}, but pointer close failed "
+              f"({type(e).__name__}: {str(e)[:100]}); inspect with `st inbox`.",
+              file=sys.stderr)
+        return
+    if {m.id for m in marked} != set(ids):
+        print(f"  ⚠ startup inbox reached {card.name}, but only "
+              f"{len(marked)}/{len(ids)} pointer(s) closed; inspect with `st inbox`.",
+              file=sys.stderr)
+        return
+    print(f"  startup inbox: delivered and closed {len(marked)} verified "
+          f"pointer(s) for {card.name}.")
 
 
 def _verify_live_hooks(a, card, runtime, panes, session: str) -> int:
