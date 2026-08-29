@@ -325,3 +325,39 @@ def test_control_the_unfixed_shape_would_still_refuse():
     with pytest.raises(ga.GraphContextMissing):
         ga.require(getattr(unfixed, "quipu_node", []),
                    getattr(unfixed, "no_graph_context", ""))
+
+
+# ── THE SCOPE TRAVELS WITH THE NUMBER (aegis-5pchx) ──────────────────────────
+# A haul self-advance never reaches the gate, so a green coverage figure means
+# "coordinator dispatch and explicit cycles complied", not "the fleet cites
+# graph context". A note that lives only on a bead is one the number outruns,
+# so it is asserted at every rendering — including --json, where over-reading
+# is likeliest because a machine consumer never sees the prose.
+
+def test_the_scope_note_is_printed_when_the_ledger_is_empty(tmp_path, capsys):
+    assert main(["--root", str(_root(tmp_path)), "stats", "--graph"]) == OK
+    out = capsys.readouterr().out
+    assert "self-advances" in out and "not counted" in out
+
+
+def test_the_scope_note_is_printed_beside_a_real_number(tmp_path, capsys):
+    root = _root(tmp_path)
+    (root / "logs").mkdir(exist_ok=True)
+    (root / "logs" / ga.LEDGER).write_text(
+        '{"agent": "a", "nodes": ["n"], "epoch": 99999999999, "event": "go",'
+        ' "exemption": "", "verification": "verified", "dry_run": false}\n')
+    assert main(["--root", str(root), "stats", "--graph"]) == OK
+    out = capsys.readouterr().out
+    assert "eligible dispatches" in out          # control: the number rendered
+    assert ga.SCOPE_NOTE in out                  # and the scope came with it
+
+
+def test_the_scope_note_is_in_the_json(tmp_path, capsys):
+    root = _root(tmp_path)
+    (root / "logs").mkdir(exist_ok=True)
+    (root / "logs" / ga.LEDGER).write_text(
+        '{"agent": "a", "nodes": ["n"], "epoch": 99999999999, "event": "go",'
+        ' "exemption": "", "verification": "verified", "dry_run": false}\n')
+    assert main(["--root", str(root), "stats", "--graph", "--json"]) == OK
+    payload = json.loads(capsys.readouterr().out)
+    assert "self-advances" in payload["scope"]

@@ -2296,6 +2296,7 @@ def _cmd_graph_adoption(a) -> int:
             "by_agent": s.by_agent,
             "reasons": dict(s.reasons), "nodes": dict(s.nodes.most_common(20)),
             "zero_node_agents": s.zero_node_agents,
+            "scope": graph_adoption.SCOPE_NOTE,
         }, indent=2, sort_keys=True))
         return OK
     if not s.eligible:
@@ -2304,10 +2305,17 @@ def _cmd_graph_adoption(a) -> int:
         # which is a different problem and must not render as a perfect score.
         print(f"  no eligible dispatches recorded{window}. "
               f"Ledger: {Path(a.root) / 'logs' / graph_adoption.LEDGER}")
+        print(f"  {graph_adoption.SCOPE_NOTE}")
         return OK
     pct = lambda v: "-" if v is None else f"{v * 100:.0f}%"  # noqa: E731
     print(f"  {s.eligible} eligible dispatches{window}"
           f"   (mode: {graph_adoption.mode(a.root)})")
+    # THE SCOPE TRAVELS WITH THE NUMBER (aegis-5pchx). A reader who sees only
+    # "coverage 100%" will take it to mean the fleet cites graph context for its
+    # work. It does not: a haul self-advance never reaches the gate, and it is
+    # how agents most often start. A scope note that lives only on a bead is a
+    # note the number outruns.
+    print(f"  {graph_adoption.SCOPE_NOTE}")
     print(f"  carrying a node:      {s.with_nodes:>4}  ({pct(s.node_share)})")
     print(f"  stated no-context:    {s.exempt:>4}")
     print(f"  coverage (either):    {s.with_nodes + s.exempt:>4}  ({pct(s.coverage)})")
