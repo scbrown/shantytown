@@ -164,3 +164,7 @@ def _no_ambient_agent(monkeypatch):
     test body runs after this fixture and wins.
     """
     monkeypatch.delenv("SHANTY_AGENT", raising=False)
+    # The pane marker is part of the same inherited launch environment.  Leaving
+    # it ambient makes an otherwise isolated test claim it is running in the
+    # developer's real pane, and identity verification then reaches real tmux.
+    monkeypatch.delenv("TMUX_PANE", raising=False)

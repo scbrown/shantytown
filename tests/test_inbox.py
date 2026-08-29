@@ -278,7 +278,7 @@ def _dry_send(argv, env, root):
     """
     import subprocess, sys, os
     e = dict(os.environ)
-    for k in ("SHANTY_AGENT", "SHANTY_ROOT"):
+    for k in ("SHANTY_AGENT", "SHANTY_ROOT", "TMUX_PANE"):
         e.pop(k, None)
     e.update(env)
     return subprocess.run(
@@ -300,6 +300,27 @@ def test_a_pane_message_names_its_sender(tmp_path):
     out = _dry_send(["inbox", "dearing", "hello", "--dry-run"],
                     {"SHANTY_AGENT": "sattler"}, _store_with_dearing(tmp_path))
     assert "[from sattler] hello" in out, out
+
+
+def test_a_stale_remote_control_pane_refuses_a_false_signature(tmp_path):
+    """4vnzp: a pre-fix shared daemon carried Franklin's whole environment.
+
+    TMUX_PANE was stale too, so it cannot corroborate SHANTY_AGENT.  A present
+    but unresolvable pane marker must fail closed before even a dry-run claims
+    Franklin spoke; falling back to the environment recreates the live defect.
+    """
+    import subprocess, sys, os
+    root = _store_with_dearing(tmp_path)
+    env = dict(os.environ)
+    env.update({"SHANTY_AGENT": "franklin", "SHANTY_ROOT": str(root),
+                "TMUX_PANE": "%stale-remote-control"})
+    got = subprocess.run(
+        [sys.executable, "-m", "shantytown.cli", "--root", str(root),
+         "inbox", "dearing", "hello", "--dry-run"],
+        capture_output=True, text=True, env=env)
+    assert got.returncode == 1
+    assert "nothing was sent" in got.stderr
+    assert "[from franklin]" not in got.stdout + got.stderr
 
 
 def test_an_unattributable_send_stays_BARE_rather_than_inventing_a_name(tmp_path):
