@@ -1,4 +1,4 @@
-"""st — the CLI. Twenty-seven commands, and the count is load-bearing: each earns its slot.
+"""st — the CLI. Twenty-eight commands, and the count is load-bearing: each earns its slot.
 
     anchor [--short|--events|--harness] · go · repool · defer · inbox [--count] · task
     · crew [--count|--governor] · input [--show|--clear|--dismiss] · ask · answer
@@ -6,7 +6,15 @@
     · stop · log · context · doctor [--install] · dream [--run]
     · tend [--install|--status|--reauth|--target] · attach [-r|--no-start]
     · dashboard [admin] · subscribe · cycle [--self|--allow-loss] · worktree [--gc]
-    · push [--branch] · stats
+    · push [--branch] · stats · help <topic>
+
+`help` earned the twenty-eighth slot in aegis-x6yoq. The recurring pane messages
+were essays because the WHY had nowhere else to live, so every reason anyone might
+need was re-pushed into every pane every few minutes — which is how the one
+safety-critical line in them got skipped. Cutting them to pointers only works if
+the pointer resolves, so the rationale needed a home that is READ ON DEMAND. A
+command that exists solely to be pointed at is a real cost; an instruction nobody
+finishes reading is a bigger one.
 
 Six of those flags are MACHINE-READABLE modes, added for an external status bar
 (anchor --short/--events/--harness, crew --count, crew --governor, inbox --count).
