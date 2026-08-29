@@ -67,6 +67,10 @@ INVENTORY: dict[tuple[str, str], tuple[str, str]] = {
     ("cli.py", "_inbox_durable"): (
         ATTRIBUTED_UPSTREAM,
         "the same `msg` _cmd_inbox attributed, handed in as a parameter."),
+    ("cli.py", "_deliver_startup_inbox"): (
+        ATTRIBUTED_HERE,
+        "offline durable messages injected by the verified launcher; sender is "
+        "`st startup`, not the operator who happened to start the session."),
     ("cli.py", "_dream_sweep"): (
         ATTRIBUTED_HERE,
         "scheduled dream assignment into the selected agent's pane; sender is "
