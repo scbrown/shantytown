@@ -396,6 +396,24 @@ def _me(a) -> str | None:
     return getattr(a, "me", None) or os.environ.get("SHANTY_AGENT")
 
 
+def _verified_sender(a, panes) -> tuple[str | None, bool]:
+    """Resolve a message sender without trusting a leaked daemon environment.
+
+    Codex Remote Control tool shells inherit both ``SHANTY_AGENT`` and
+    ``TMUX_PANE`` from the daemon.  Those are therefore one rail, not two.  A
+    missing pane marker preserves the ordinary non-tmux fallback; a present but
+    stale/unresolvable marker refuses attribution, exactly as the stop path does.
+    """
+    sender = _me(a)
+    if not sender:
+        return None, True
+    if not os.environ.get("TMUX_PANE"):
+        return sender, True
+    from .stop_event import _stop_identity
+    verified = _stop_identity(_registry(a), panes, sender)
+    return verified, verified is not None
+
+
 def _wire(a) -> Dispatcher:
     # sender=_me(a): `st go` signs the dispatch with whoever ran it (aegis-5vxmz).
     # One resolution, the same one `st inbox` attributes with — a coordinator must
@@ -2971,14 +2989,18 @@ def _cmd_inbox(a) -> int:
     # ATTRIBUTED text, so the refusal below has to be able to say how much of the
     # overrun is st's own signature — see _inbox_durable.
     typed = msg
-    msg = attribute(msg, _me(a))
+    panes = _panes(a)
+    sender, sender_ok = _verified_sender(a, panes)
+    if not sender_ok:
+        print("  refused: message sender identity could not be verified; "
+              "nothing was sent", file=sys.stderr)
+        return REFUSED
+    msg = attribute(msg, sender)
     try:
         agent = _registry(a).get(a.agent)
     except LookupError as e:
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED
-    panes = _panes(a)
-
     if getattr(a, "durable", False):
         return _inbox_durable(a, agent, msg, panes, typed=typed)
 
