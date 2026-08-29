@@ -728,6 +728,14 @@ class CodexHarness:
         # nothing. Claude Code's `--settings` has the same exposure and errors
         # loudly instead; this one had to be closed here.
         home = Path(settings_path).resolve().parent
+        root_env = f"SHANTY_ROOT={Path(root).resolve()} " if root else ""
+        st_roles = f"ST_ROLES={','.join(card.effective_roles())} "
+        st_domain = f"ST_ROLE_DOMAIN={card.domain} " if card.domain else ""
+        st_reports = f"ST_REPORTS_TO={card.reports_to} " if card.reports_to else ""
+        identity_env = (
+            f"{root_env}SHANTY_AGENT={card.name} BOBBIN_ROLE={card.role} "
+            f"BEADS_ACTOR={card.name} {st_roles}{st_domain}{st_reports}"
+        )
         # --dangerously-bypass-hook-trust IS A DEFAULT HERE, and it is the one
         # `dangerously-` flag in this repo that is not opt-in per card. The
         # reason it is different in kind: it does not widen what the MODEL may
@@ -750,13 +758,31 @@ class CodexHarness:
                     f"standalone installer under CODEX_HOME={home}; npm Codex cannot "
                     "start the Remote Control app-server daemon."
                 )
-            socket = home / "app-server-control" / "app-server-control.sock"
-            # Remote Control is a shared app-server daemon, not a per-TUI flag.
-            # Start is idempotent, then attach this TUI to its Unix socket. The
-            # explicit --cd is load-bearing: a remote TUI otherwise inherits the
-            # daemon's cwd even when the surrounding shell already changed dir.
+            # A role-shared daemon cannot carry a truthful card identity: tool
+            # shells and hooks inherit the app-server's environment, not the
+            # attached TUI's. Give each card its own daemon state/socket while
+            # linking the role-owned config, credentials and managed payload.
+            # The links keep one governed config and one login; only mutable
+            # app-server state is per card.
+            daemon_home = home.parent / "remote-control" / card.name
+            socket = daemon_home / "app-server-control" / "app-server-control.sock"
+            bootstrap = " && ".join((
+                f"mkdir -p {shlex.quote(str(daemon_home))}",
+                f"ln -sfn {shlex.quote(str(home / codex_mod().CONFIG_FILE))} "
+                f"{shlex.quote(str(daemon_home / codex_mod().CONFIG_FILE))}",
+                f"ln -sfn {shlex.quote(str(home / 'auth.json'))} "
+                f"{shlex.quote(str(daemon_home / 'auth.json'))}",
+                f"ln -sfn {shlex.quote(str(home / 'packages'))} "
+                f"{shlex.quote(str(daemon_home / 'packages'))}",
+            ))
+            # Start is idempotent for THIS card, then attach its TUI to its Unix
+            # socket. The per-card identity prefix is load-bearing: it is the
+            # environment inherited by tool shells and hooks. The explicit --cd
+            # remains load-bearing: a remote TUI otherwise inherits the daemon's
+            # cwd even when the surrounding shell already changed dir.
             start = (
-                f"{codex_mod().HOME_VAR}={home} codex remote-control start "
+                f"{bootstrap} && {identity_env}{codex_mod().HOME_VAR}={daemon_home} "
+                "codex remote-control start "
                 "--json >/dev/null"
             )
             # On a cold 0.151.0 start the daemon can be fully spawned while the
@@ -785,14 +811,8 @@ class CodexHarness:
         # BEADS_ACTOR so the tracker records WHO (GitHub #24), ST_ROLES carrying
         # the role set OPAQUELY (GitHub #37). None of that is Claude Code's; it
         # is how a shantytown agent knows who it is, whatever program it runs.
-        root_env = f"SHANTY_ROOT={Path(root).resolve()} " if root else ""
-        st_roles = f"ST_ROLES={','.join(card.effective_roles())} "
-        st_domain = f"ST_ROLE_DOMAIN={card.domain} " if card.domain else ""
-        st_reports = f"ST_REPORTS_TO={card.reports_to} " if card.reports_to else ""
         launch = (
-            f"{daemon_start}{root_env}{codex_mod().HOME_VAR}={home} SHANTY_AGENT={card.name} "
-            f"BOBBIN_ROLE={card.role} BEADS_ACTOR={card.name} "
-            f"{st_roles}{st_domain}{st_reports}codex {flags}"
+            f"{daemon_start}{identity_env}{codex_mod().HOME_VAR}={home} codex {flags}"
         )
         # MCP bearer values stay in the deployment's 0600 provision file. Codex
         # config names them through bearer_token_env_var; source the file into
@@ -869,12 +889,16 @@ class CodexHarness:
         # a flag — and returns the config file, not the directory, so a caller
         # comparing it against an emitted path is comparing like with like.
         var = codex_mod().HOME_VAR
+        found = None
         for tok in cmdline.split():
             if tok.startswith(f"{var}="):
                 home = tok.split("=", 1)[1]
                 if home:
-                    return str(Path(home) / codex_mod().CONFIG_FILE)
-        return None
+                    found = str(Path(home) / codex_mod().CONFIG_FILE)
+        # A Remote Control launch contains a daemon CODEX_HOME followed by the
+        # attached TUI's CODEX_HOME. The latter is the settings artifact whose
+        # wiring a live-process reader is answering about.
+        return found
 
     def carries_settings(self, launch: str, settings_path: str) -> bool:
         # Resolved on both sides: launch() absolutises the home (see there), so a
