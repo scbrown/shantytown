@@ -31,9 +31,11 @@ def _wire(monkeypatch, tmp_path, pct):
     policy = governor.Policy(source="stub", stub_pct=pct,
                              delegation_reserve_pct=10,
                              tiers=(governor.Tier(at=100, min_priority=0),))
+    verdict = types.SimpleNamespace(
+        signal_lost=False, by_window={"seven_day": pct}, pct=pct,
+        admits=lambda _item: "")
     gov = types.SimpleNamespace(policy=policy,
-                                evaluate=lambda persist=False: types.SimpleNamespace(
-                                    signal_lost=False, by_window={"seven_day": pct}, pct=pct))
+                                evaluate=lambda persist=False: verdict)
     cfg = types.SimpleNamespace(
         dream=dream.Policy(enabled=True, min_headroom_pct=20),
         governor=types.SimpleNamespace(by_harness={"codex": policy}))
@@ -50,6 +52,20 @@ def _wire(monkeypatch, tmp_path, pct):
                         lambda *args, **kwargs: ["arnold"])
     args = types.SimpleNamespace(root=str(tmp_path))
     return args, cfg, reg.cards, panes, tracker
+
+
+def test_sweep_ignores_ready_work_held_by_provider_governor(monkeypatch, tmp_path):
+    args, cfg, cards, panes, tracker = _wire(monkeypatch, tmp_path, pct=10)
+    monkeypatch.setattr("shantytown.feed_check._bd_ready", lambda cwd=None: [
+        {"id": "aegis-held", "title": "held", "priority": 2, "labels": []},
+    ])
+    _cfg, governors = cli._governors(args)
+    governors["codex"].evaluate().admits = lambda _item: "priority floor holds P2"
+
+    cycle, item_id, reason = cli._dream_sweep(args, cfg, cards, panes)
+
+    assert cycle is not None and (item_id, reason) == ("aegis-dream1", "created")
+    assert tracker.fields is not None
 
 
 def test_sweep_creates_lowest_priority_review_artifact_and_wakes_agent(monkeypatch, tmp_path):
