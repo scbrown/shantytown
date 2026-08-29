@@ -932,8 +932,9 @@ def _stop_identity(reg, panes, me_env: str) -> str | None:
     is therefore not attribution metadata: a leaked value can hand one card
     another card's work and stamp the resulting tracker write with the wrong
     actor.  In tmux, the registry's pane owner is an independent identity rail.
-    Outside tmux (or when tmux cannot resolve the pane), preserve the existing
-    environment fallback and say which weaker rail was used.
+    Outside tmux, preserve the existing environment fallback.  A present but
+    unresolvable pane marker is different: Remote Control daemons can retain a
+    stale ``TMUX_PANE``, so trusting the environment there recreates the leak.
     """
     pane_id = os.environ.get("TMUX_PANE")
     if not pane_id:
@@ -943,13 +944,13 @@ def _stop_identity(reg, panes, me_env: str) -> str | None:
         owners = [card.name for card in reg.all().exact()
                   if card.pane == session]
     except Exception as exc:
-        print(f"stop_event: could not resolve pane identity ({exc}); "
-              "falling back to $SHANTY_AGENT", file=sys.stderr)
-        return me_env
+        print(f"stop_event: REFUSED: could not resolve pane identity ({exc}); "
+              "served and claimed nothing", file=sys.stderr)
+        return None
     if not session or len(owners) != 1:
-        print("stop_event: current tmux pane has no unique registry owner; "
-              "falling back to $SHANTY_AGENT", file=sys.stderr)
-        return me_env
+        print("stop_event: REFUSED: current tmux pane has no unique registry "
+              "owner; served and claimed nothing", file=sys.stderr)
+        return None
     me_pane = owners[0]
     if me_pane != me_env:
         print(f"stop_event: REFUSED identity disagreement: "
