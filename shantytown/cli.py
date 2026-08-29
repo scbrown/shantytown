@@ -6244,11 +6244,20 @@ def _dream_sweep(a, cfg, agents, panes, *, force=False, dry_run=False):
 
     policy = cfg.dream
     state = dream_mod.State(a.root)
-    ready = feed_check._bd_ready(feed_check.bd_cwd(_registry(a)))
-    try:
-        active = feed_check.bd_in_progress(feed_check.bd_cwd(_registry(a)))
-    except Exception:
-        active = []
+    tracker = _tracker(a)
+    from .br import BrTracker, in_progress as br_in_progress, ready as br_ready
+    if isinstance(tracker, BrTracker):
+        ready = br_ready(tracker)
+        try:
+            active = br_in_progress(tracker)
+        except Exception:
+            active = []
+    else:
+        ready = feed_check._bd_ready(feed_check.bd_cwd(_registry(a)))
+        try:
+            active = feed_check.bd_in_progress(feed_check.bd_cwd(_registry(a)))
+        except Exception:
+            active = []
     free = feed_check.free_feedable_workers(_registry(a), panes, _runtime(a, panes),
                                             root=a.root)
     free = [name for name in free if name not in feed_check.hauls(ready, active)]
@@ -6288,9 +6297,9 @@ def _dream_sweep(a, cfg, agents, panes, *, force=False, dry_run=False):
         return None, "", reason
     if dry_run:
         return cycle, "", "dry-run"
-    item = _tracker(a).create(cycle.title, assignee=cycle.agent, priority=4,
-                              labels=cycle.labels,
-                              description=cycle.description)
+    item = tracker.create(cycle.title, assignee=cycle.agent, priority=4,
+                          labels=cycle.labels,
+                          description=cycle.description)
     # Observed create first, state second. A tracker exception leaves the prior
     # due time intact, so the next tend pass retries rather than losing a cycle.
     state.record(cycle, item.id)
