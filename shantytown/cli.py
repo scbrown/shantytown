@@ -637,6 +637,11 @@ def build_parser() -> argparse.ArgumentParser:
                            "so it cannot arrive after the worker has acted. "
                            "Flattened to one line (the transport submits on "
                            "newline).")
+    go.add_argument("--quipu-node", action="append", default=[], metavar="NAME",
+                    help="quipu node(s) relevant to this bead (repeatable). Rides "
+                         "the dispatch payload through the same triage gate as the "
+                         "work, so the receiving agent starts from what the graph "
+                         "already knows instead of re-deriving it")
     note.add_argument("--note-file", type=Path, default=None,
                       help="read the note from a file (or - for stdin). Use this "
                            "for anything long or containing quotes/backticks — "
@@ -3226,7 +3231,8 @@ def _cmd_go(a) -> int:
     if a.dry_run:
         try:
             decision = d.triage(a.item, a.agent, note)
-            p = d.go(a.item, a.agent, dry_run=True, note=note, reassign=a.reassign)
+            p = d.go(a.item, a.agent, dry_run=True, note=note, reassign=a.reassign,
+                     quipu_nodes=getattr(a, "quipu_node", []))
         except Closed as e:
             print(f"  refused: {e}", file=sys.stderr)
             return REFUSED
@@ -3311,7 +3317,8 @@ def _cmd_go(a) -> int:
         wtag += "]"
         note = f"{note} — {wtag}" if note else wtag
     try:
-        p = d.go(a.item, a.agent, note=note, reassign=a.reassign)
+        p = d.go(a.item, a.agent, note=note, reassign=a.reassign,
+                 quipu_nodes=getattr(a, "quipu_node", []))
     except Closed as e:
         # Closed is terminal (aegis-vuh33). Nothing written, nothing sent — serving
         # a closed bead reverts it to in_progress and re-does finished work. Reopen
