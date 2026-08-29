@@ -548,7 +548,7 @@ class IdleFleetAlerter:
         # once in two days (aegis-arma follow-up, measured).
         from . import feed_check
         self._bd_ready = bd_ready or (
-            lambda: feed_check._bd_ready(feed_check.bd_cwd(reg)))
+            lambda: feed_check._bd_ready(feed_check.bd_cwd(reg), root=root, reg=reg))
         self._bd_in_progress = bd_in_progress or feed_check.bd_in_progress
         # The worker's context depth off its live pane (the same footer read
         # saturation uses); injected for tests. None = unreadable = never over.
@@ -849,7 +849,7 @@ class StalledAlerter:
         self._push = push
         from . import feed_check
         self._bd_in_progress = bd_in_progress or (
-            lambda: feed_check.bd_in_progress(feed_check.bd_cwd(reg)))
+            lambda: feed_check.bd_in_progress(feed_check.bd_cwd(reg), root=root, reg=reg))
         env = os.environ.get("SHANTY_STALL_MIN")
         self._threshold_s = (threshold_min if threshold_min is not None
                              else float(env) if env else 15.0) * 60.0
