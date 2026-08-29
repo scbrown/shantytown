@@ -276,6 +276,7 @@ class CycleDriver:
 
     def __init__(self, root, reg, panes, *, push=push_to_own_pane, wiring=None,
                  refresh=None, log=None):
+        self._root = root          # aegis-mxgzh: the sweeps need it to resolve the br backend
         self.path = Path(root) / "notify" / "cycling.json"
         self._reg = reg
         self._panes = panes
@@ -436,6 +437,7 @@ class Notifier:
     """
 
     def __init__(self, root, reg, panes, *, wake=wake_recipient, log=None):
+        self._root = root          # aegis-mxgzh: the sweeps need it to resolve the br backend
         self.path = Path(root) / "notify" / "blocked.json"
         self._reg = reg
         self._panes = panes
@@ -533,6 +535,7 @@ class IdleFleetAlerter:
     def __init__(self, root, reg, panes, runtime, *, push=push_to_admin,
                  bd_ready=None, bd_in_progress=None, context_k=None,
                  handoff_k=None, log=None):
+        self._root = root          # aegis-mxgzh: the sweeps need it to resolve the br backend
         self.path = Path(root) / "notify" / "idle_fleet.json"
         # Kept for the launch-stamp ownership gate (aegis-2j2r): tend must
         # only feed agents st launched, same signal as the hard gate's.
@@ -729,7 +732,7 @@ class IdleFleetAlerter:
             else:
                 nid = feedable[0]
                 try:
-                    feed_check.bd_claim(cwd, nid)
+                    feed_check.bd_claim(cwd, nid, root=self._root, reg=self._reg)
                 except Exception:
                     pass                       # best-effort, same as the stop hook
                 repeats = sb.times_served(self._shanty_root, worker, nid,
@@ -842,6 +845,7 @@ class StalledAlerter:
     def __init__(self, root, reg, panes, runtime, *, push=push_to_admin,
                  bd_in_progress=None, threshold_min=None,
                  escalate_after_min=None, now=None, log=None):
+        self._root = root          # aegis-mxgzh: the sweeps need it to resolve the br backend
         self.path = Path(root) / "notify" / "stalled.json"
         self._reg = reg
         self._panes = panes
@@ -1119,6 +1123,7 @@ class BlockedStaleAlerter:
 
     def __init__(self, root, reg, panes, *, push=push_to_admin,
                  bd_blocked=None, bd_show=None, now=None, log=None):
+        self._root = root          # aegis-mxgzh: the sweeps need it to resolve the br backend
         self.path = Path(root) / "notify" / "blocked_stale.json"
         self._reg = reg
         self._panes = panes
@@ -1149,7 +1154,7 @@ class BlockedStaleAlerter:
                 rows = self._bd_blocked()
             else:
                 from .feed_check import bd_blocked
-                rows = bd_blocked(bd_cwd(self._reg))
+                rows = bd_blocked(bd_cwd(self._reg), root=self._root, reg=self._reg)
         except Exception as e:                      # FAIL OPEN
             self._log(f"blocked-stale: could not read the store ({e!r})")
             return []
@@ -1180,7 +1185,7 @@ class BlockedStaleAlerter:
             if isinstance(last, (int, float)) and (now - last) < BLOCKED_RENOTIFY_DAYS * 86400:
                 continue                            # already nudged this cadence
             try:
-                detail = self._bd_show(bid) if self._bd_show else bd_show(cwd, bid)
+                detail = self._bd_show(bid) if self._bd_show else bd_show(cwd, bid, root=self._root, reg=self._reg)
             except Exception as e:
                 self._log(f"blocked-stale: could not inspect {bid} ({e!r})")
                 continue
@@ -1261,6 +1266,7 @@ class BlockedMisstatusAlerter:
 
     def __init__(self, root, reg, panes, *, push=push_to_admin,
                  bd_blocked=None, bd_show=None, now=None, log=None):
+        self._root = root          # aegis-mxgzh: the sweeps need it to resolve the br backend
         self.path = Path(root) / "notify" / "blocked_misstatus.json"
         self._reg = reg
         self._panes = panes
@@ -1281,7 +1287,7 @@ class BlockedMisstatusAlerter:
         cwd = (bd_cwd(self._reg)
                if self._bd_blocked is None or self._bd_show is None else None)
         try:
-            rows = self._bd_blocked() if self._bd_blocked else bd_blocked(cwd)
+            rows = self._bd_blocked() if self._bd_blocked else bd_blocked(cwd, root=self._root, reg=self._reg)
         except Exception as e:
             self._log(f"blocked-misstatus: could not read blocked beads ({e!r})")
             return []
@@ -1301,7 +1307,7 @@ class BlockedMisstatusAlerter:
             if not bid or not is_blocked(row.get("status")):
                 continue
             try:
-                detail = self._bd_show(bid) if self._bd_show else bd_show(cwd, bid)
+                detail = self._bd_show(bid) if self._bd_show else bd_show(cwd, bid, root=self._root, reg=self._reg)
             except Exception as e:
                 self._log(f"blocked-misstatus: could not inspect {bid} ({e!r})")
                 continue

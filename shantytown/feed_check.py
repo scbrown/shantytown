@@ -714,7 +714,7 @@ def bd_in_progress(cwd: str | None, root=None, reg=None) -> list[dict]:
     return json.loads(r.stdout)
 
 
-def bd_blocked(cwd: str | None) -> list[dict]:
+def bd_blocked(cwd: str | None, root=None, reg=None) -> list[dict]:
     """`bd list --status blocked --json` — the population NOTHING else can see.
 
     A separate query on purpose: `bd ready` excludes blocked BY DEFINITION, so
@@ -724,6 +724,12 @@ def bd_blocked(cwd: str | None) -> list[dict]:
 
     Raises; callers fail open.
     """
+    # aegis-mxgzh remainder: route through the ONE resolver on a br deployment.
+    if root is not None:
+        tracker = _br_tracker(root, reg)
+        if tracker is not None:
+            from .br import blocked as br_blocked
+            return br_blocked(tracker)
     r = subprocess.run(["bd", "list", "--status", "blocked", "--json",
                         "--limit", "0"],
                        capture_output=True, text=True, timeout=20, cwd=cwd)
@@ -732,13 +738,19 @@ def bd_blocked(cwd: str | None) -> list[dict]:
     return json.loads(r.stdout)
 
 
-def bd_show(cwd: str | None, bead_id: str) -> dict:
+def bd_show(cwd: str | None, bead_id: str, root=None, reg=None) -> dict:
     """One full bead, including dependency rows. Raises; callers fail open.
 
     `bd list` carries only dependency_count, which cannot distinguish an open
     blocker from a closed one. The detail read is therefore not optional for a
     status-correction check: count alone was the original false classifier.
     """
+    # aegis-mxgzh remainder: route through the ONE resolver on a br deployment.
+    if root is not None:
+        tracker = _br_tracker(root, reg)
+        if tracker is not None:
+            from .br import show as br_show
+            return br_show(tracker, bead_id)
     r = subprocess.run(["bd", "show", bead_id, "--json"],
                        capture_output=True, text=True, timeout=20, cwd=cwd)
     if r.returncode != 0:
@@ -747,11 +759,20 @@ def bd_show(cwd: str | None, bead_id: str) -> dict:
     return value[0] if isinstance(value, list) else value
 
 
-def bd_claim(cwd: str | None, bead_id: str) -> None:
+def bd_claim(cwd: str | None, bead_id: str, root=None, reg=None) -> None:
     """Claim a bead in_progress — the dispatcher's write, shared by both
     advance triggers so the tracker shows the truth and the worker's next stop
     sees an active anchor. Raises; callers treat a failed claim as best-effort
     (the instruction tells the worker to read the bead either way)."""
+    # THE WRITE, and post-cutover it matters more than the reads beside it: a
+    # claim through retired `bd` resolves UP into the town store (aegis-qx43o)
+    # instead of failing usefully, so the tracker would disagree with the board
+    # about who holds what — silently.
+    if root is not None:
+        tracker = _br_tracker(root, reg)
+        if tracker is not None:
+            from .br import claim as br_claim
+            return br_claim(tracker, bead_id)
     r = subprocess.run(["bd", "update", bead_id, "--status", "in_progress",
                         "--json"],
                        capture_output=True, text=True, timeout=20, cwd=cwd)
