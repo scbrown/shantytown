@@ -7031,10 +7031,32 @@ def _tend_once(a, quiet: bool = False) -> int:
                 lambda: sorted(cycle_mod.Requests(a.root).pending().items())) or []:
             checkpoint = request.get("checkpoint", "")
             checkpoint_bead = request.get("checkpoint_bead", "")
-            rc_c = _sweep(f"cycle:{who}", lambda w=who, c=checkpoint, b=checkpoint_bead: _cmd_cycle(
+            # GRAPH CONTEXT ON A MECHANICALLY SERVED CYCLE (aegis-5pchx).
+            # This namespace is built from `tend`'s, whose parser never declared
+            # --quipu-node/--no-graph-context, so `_graph_context` would see
+            # nothing and — under SHANTY_GRAPH_CONTEXT=require — REFUSE. That is
+            # not a coverage gap, it is Rule Zero self-feeding breaking: tend
+            # deliberately leaves a refused request pending, so it would refuse
+            # on every pass, forever, for every agent.
+            #
+            # The gate was already applied when the AGENT asked for the cycle,
+            # and `Requests.request()` stored the nodes it was given. So carry
+            # those forward rather than exempting the path — that is also what
+            # the bead means by injecting the node into live resume context.
+            # Only when the stored set is empty (a record predating the field,
+            # or a request that stated a reason instead) does this fall back to
+            # an explicit machine exemption: re-asking here would put the
+            # question to a sweep loop, which cannot answer it.
+            req_nodes = list(request.get("quipu_nodes") or [])
+            rc_c = _sweep(f"cycle:{who}", lambda w=who, c=checkpoint, b=checkpoint_bead,
+                          n=req_nodes: _cmd_cycle(
                 argparse.Namespace(**{**vars(a), "cmd": "cycle", "agent": w,
                                       "reason": c, "self_": False,
                                       "checkpoint_bead": b,
+                                      "quipu_node": n,
+                                      "no_graph_context": "" if n else
+                                      "mechanical: tend serving a cycle the agent "
+                                      "already requested and gated",
                                       "allow_loss": False, "dry_run": False})))
             # The request is cleared by _cmd_cycle ONLY on a completed cycle, so a
             # refusal (dirty tree, no checkpoint) leaves it pending and the agent
