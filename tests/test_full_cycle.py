@@ -55,7 +55,11 @@ def test_full_crew_cycle_on_st_zero_gt(workspace, monkeypatch, capsys):
     live: set[str] = set()                     # nobody up yet
     panes = _CrewPanes(live)
     monkeypatch.setattr(cli, "Tmux", lambda *a, **k: panes)
-    monkeypatch.setattr(stop_event, "Tmux", lambda: panes)
+    monkeypatch.setattr(stop_event, "Tmux", lambda *a, **k: panes)
+    # This is explicitly the ZERO-tmux cycle. A developer shell may itself be
+    # inside tmux; leaking that pane id into the stop-hook identity guard asks the
+    # in-memory shim to resolve a real host pane and turns the test host-dependent.
+    monkeypatch.delenv("TMUX_PANE", raising=False)
     monkeypatch.setattr(cli, "_LIVE_ATTEMPTS", 1)
     monkeypatch.setattr(cli, "_LIVE_DELAY", 0)
 

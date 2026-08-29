@@ -41,6 +41,8 @@ st new <agent>                create an agent from a card
 st start [--mode lite|heavy]  BOOT the town by mode: the admin alone, or every card. idempotent
 st start <agent>...           bring up exactly these agents (already-up is a SUCCESS, not a refusal)
 st stop <agent> [--reason]    stop it, and RECORD that it was deliberate
+st window plan|drain|clear|release|abort <id>
+                              transactional fleet-maintenance ledger + relaunch lease
 st log [agent]                what happened
 st context <query>            what code should I be looking at? (bobbin)
 st doctor [--install]         what's installed, stale, missing (out-of-box)
@@ -83,7 +85,7 @@ Codex input already includes its cached subset. This makes
 `cache_read / usage_in` a provider-independent prompt-cache hit rate. The fields
 are omitted—not zeroed—when every matching transcript is unknown.
 
-Twenty-eight. `--dry-run` is on every command that writes, from commit one. The surface grew past the
+Twenty-nine. `--dry-run` is on every command that writes, from commit one. The surface grew past the
 original eight, each slot on a specific ask — not drift: **inbox**/**task** (the dispatch/tracker
 pair, owner-directed), **context** (the bobbin Context protocol), **doctor**
 (out-of-box detect/install, Stiwi's direct ask), **subscribe** (the quipu events adapter,
@@ -112,6 +114,14 @@ safety-critical sentence in them gets skipped. Cutting them to pointers only wor
 pointer resolves, so the WHY moved to a page that is read ON DEMAND rather than broadcast.
 A command whose only job is to be pointed at is a real cost against the count; an
 instruction nobody finishes reading is a bigger one.
+
+The twenty-ninth is **window**: one transaction for fleet maintenance. `plan`
+snapshots the live roster, input evidence, active anchors, deployed SHA and tend-timer
+state; `drain` acquires the relaunch lease and pauses supervision; `clear` refuses
+while any recorded pane or writer remains; `release` and `abort` restore only the
+recorded roster and timer state and verify the result. A second window ID cannot
+overwrite the first. Human GO/FIRE, rollback, scope-widening and destructive decisions
+remain outside the command.
 
 The binary is **`st`**, not `shanty`: `shanty` is Stiwi's own tmux command and ours would shadow it
 on PATH. This doc said `shanty` in all 29 of its examples long after the entry point was `st`, so
