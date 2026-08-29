@@ -362,3 +362,41 @@ def test_a_held_event_past_the_ceiling_becomes_deliverable(tmp_path):
                              pending=[old], busy_senders={"ellie"})
     assert len(inp.deliverable) == 1, \
         "past the ceiling _drain WILL deliver it, so rank 4 must block for it"
+
+
+def test_main_refuses_a_leaked_agent_identity_before_verdict(monkeypatch, tmp_path):
+    """The verdict path must share stop_event's independent pane-identity rail."""
+    from types import SimpleNamespace
+
+    cards = [SimpleNamespace(name="franklin", pane="shanty-franklin", role="worker"),
+             SimpleNamespace(name="gennaro", pane="shanty-gennaro", role="worker")]
+
+    class _All:
+        def exact(self):
+            return cards
+
+    class _Registry:
+        def all(self):
+            return _All()
+
+        def get(self, name):
+            return next(c for c in cards if c.name == name)
+
+    class _Panes:
+        def __init__(self, socket=None):
+            self.socket = socket
+
+        def session_name(self, _pane):
+            return "shanty-gennaro"
+
+    called = []
+    monkeypatch.setenv("SHANTY_AGENT", "franklin")
+    monkeypatch.setenv("TMUX_PANE", "%9")
+    monkeypatch.setattr(sp, "FilesRegistry", lambda _path: _Registry())
+    monkeypatch.setattr(sp, "Tmux", _Panes)
+    monkeypatch.setattr(se, "declared_socket", lambda _root: "fleet")
+    monkeypatch.setattr(sp, "run", lambda *_args: called.append("verdict") or 0)
+    monkeypatch.setattr(se, "main", lambda *_args: called.append("send") or 0)
+
+    assert sp.main(["--root", str(tmp_path)]) == 1
+    assert called == [], "a refused identity must neither persist nor render a verdict"
