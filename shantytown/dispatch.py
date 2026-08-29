@@ -389,6 +389,7 @@ class Plan:
     text: str = ""
     note: str = ""
     store: str = ""   # the `[st store: ...]` tag riding the payload (aegis-81zyb)
+    quipu_nodes: list = field(default_factory=list)  # graph context (aegis-x6yoq)
     sender: str = ""  # who the payload is signed as, "" = unsigned (aegis-5vxmz)
     unreadable_deps: int = 0   # dependency rows the tracker counted but could
                                # not resolve, so we cannot tell if they block
@@ -423,6 +424,11 @@ class Plan:
             # payload, so a store carried only in `text` would reach the agent and
             # not the person authorising the send.
             lines.append(f"  would: name store -> {self.store}")
+        if self.quipu_nodes:
+            # Shown for the same reason as the store line: render() prints the
+            # note but never the payload, so context carried only in `text`
+            # reaches the AGENT and not the person authorising the send.
+            lines.append(f"  would: carry graph context -> {', '.join(self.quipu_nodes)}")
         if self.note:
             # Show the note as it will actually be sent (flattened), not as it
             # was typed — a --dry-run that hides the transformation is not a
@@ -488,6 +494,7 @@ class Dispatcher:
         self.governor = governor
 
     def plan(self, item_id: str, agent_name: str, note: str | None = None,
+             quipu_nodes: list | None = None,
              reassign: bool = False) -> Plan:
         """Resolve only. No writes. This is what --dry-run shows.
 
@@ -596,6 +603,16 @@ class Dispatcher:
         tag = stores.hook_tag(self.tracker, agent.workspace) or ""
         if tag:
             text += f" — {tag}"
+        # GRAPH CONTEXT (aegis-x6yoq, Stiwi: "and when assigning work too").
+        # Named nodes ride the payload so the receiving agent starts from what the
+        # graph already knows instead of re-deriving it — query-first, mechanized
+        # at the moment work is handed over. Placed with the note, and for the same
+        # reason: it must pass the same triage gate, the same verify, and show in
+        # --dry-run. A hint that only appears on the real run is absent from the
+        # preview the operator uses to decide the dispatch is right.
+        nodes = [n.strip() for n in (quipu_nodes or []) if n and n.strip()]
+        if nodes:
+            text += f" — GRAPH: {', '.join(nodes)} (quipu_search these first)"
         flat = flatten_note(note) if note else ""
         if flat:
             # The note goes AFTER the id and title on purpose: verify() looks for
@@ -634,6 +651,7 @@ class Dispatcher:
             text=text,
             note=flat,
             store=tag,
+            quipu_nodes=nodes,
             sender=self.sender or "",
             # Carried, NEVER raised (aegis-kt7jr). We cannot know the dropped
             # rows' type, so refusing here would refuse work over what might be a
@@ -658,8 +676,10 @@ class Dispatcher:
         return triage(self.panes, p.pane, p.text)
 
     def go(self, item_id: str, agent_name: str, dry_run: bool = False,
-           note: str | None = None, reassign: bool = False) -> Plan:
-        p = self.plan(item_id, agent_name, note, reassign=reassign)
+           note: str | None = None, reassign: bool = False,
+           quipu_nodes: list | None = None) -> Plan:
+        p = self.plan(item_id, agent_name, note, quipu_nodes=quipu_nodes,
+                      reassign=reassign)
         if dry_run:
             return p
         # #1: consult triage BEFORE any write. A REFUSE/CLEAR/RESTART here means
