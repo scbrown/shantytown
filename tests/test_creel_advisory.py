@@ -46,15 +46,15 @@ def test_bad_record_is_explicitly_unavailable(tmp_path):
     assert line == "advisory unavailable: creel probe returned no controller record"
 
 
-def test_alerter_pushes_only_changed_records(tmp_path):
+def test_alerter_keeps_nonzero_recommendations_actionable(tmp_path):
     pushed = []
     alerter = advisory.Alerter(tmp_path, object(), object(),
         push=lambda reg, panes, message: pushed.append(message) or "admin")
     lines = {"codex": "governor recommends +2"}
 
     assert alerter.sweep(lines) == ["codex"]
-    assert alerter.sweep(lines) == []
-    assert pushed == ["governor setpoint [codex]: governor recommends +2"]
+    assert alerter.sweep(lines) == ["codex"]
+    assert pushed == ["governor setpoint [codex]: governor recommends +2"] * 2
 
 
 def test_unavailable_record_is_also_deduped(tmp_path):
@@ -65,3 +65,23 @@ def test_unavailable_record_is_also_deduped(tmp_path):
     assert alerter.sweep(lines) == ["codex"]
     assert alerter.sweep(lines) == []
     assert len(pushed) == 1
+
+
+def test_hold_dedup_keys_on_recommendation_not_changing_error_prose(tmp_path):
+    pushed = []
+    alerter = advisory.Alerter(tmp_path, object(), object(),
+        push=lambda reg, panes, message: pushed.append(message) or "admin")
+    first = {"codex": "governor recommends 0 — error -0.7 — hold"}
+    second = {"codex": "governor recommends 0 — error -0.8 — hold"}
+    assert alerter.sweep(first) == ["codex"]
+    assert alerter.sweep(second) == []
+    assert len(pushed) == 1
+
+
+def test_nonzero_recommendation_remains_actionable_each_pass(tmp_path):
+    pushed = []
+    alerter = advisory.Alerter(tmp_path, object(), object(),
+        push=lambda reg, panes, message: pushed.append(message) or "admin")
+    lines = {"codex": "governor recommends +2 — under trajectory"}
+    assert alerter.sweep(lines) == ["codex"]
+    assert alerter.sweep(lines) == ["codex"]
