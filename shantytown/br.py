@@ -119,3 +119,44 @@ def items(tracker: BrTracker) -> list[WorkItem]:
     return [WorkItem(id=x.get("id", ""), title=x.get("title", ""),
                      status=x.get("status", "open"), assignee=x.get("assignee"),
                      priority=_priority(x)) for x in source]
+
+def blocked(tracker: BrTracker) -> list[dict]:
+    """The blocked set — the population `ready` cannot see BY DEFINITION.
+
+    A separate read on purpose (same reasoning as the bd original): `ready`
+    excludes blocked items, so no filter over it can reach these.
+    """
+    r = tracker._bd("list", "--status", "blocked", "--json", "--limit", "0")
+    if r.returncode != 0:
+        raise RuntimeError(f"br list --status blocked failed: {r.stderr.strip()[:120]}")
+    payload = json.loads(r.stdout) if r.stdout.strip() else {}
+    return payload.get("issues", []) if isinstance(payload, dict) else payload
+
+
+def show(tracker: BrTracker, bead_id: str) -> dict:
+    """One full item including dependency rows.
+
+    `list` carries only a dependency COUNT, which cannot tell an open blocker
+    from a closed one — the detail read is what stops a count being used as a
+    status classifier.
+    """
+    r = tracker._bd("show", bead_id, "--json")
+    if r.returncode != 0:
+        raise RuntimeError(f"br show {bead_id} failed: {r.stderr.strip()[:120]}")
+    value = json.loads(r.stdout) if r.stdout.strip() else {}
+    if isinstance(value, dict) and "issues" in value:
+        value = value["issues"]
+    return value[0] if isinstance(value, list) and value else value
+
+
+def claim(tracker: BrTracker, bead_id: str) -> None:
+    """Mark an item in_progress — the dispatcher's WRITE.
+
+    This one is a write, and post-cutover that matters more than the reads
+    beside it: a claim that still went through retired `bd` would resolve UP
+    into the town store (aegis-qx43o) rather than failing usefully, so the
+    tracker would disagree with the board about who holds what.
+    """
+    r = tracker._bd("update", bead_id, "--status", "in_progress")
+    if r.returncode != 0:
+        raise RuntimeError(f"br update {bead_id} failed: {r.stderr.strip()[:120]}")
