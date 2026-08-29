@@ -23,6 +23,8 @@ compose -> read the routing back off the composed command line. That path
 crosses every place Claude Code used to be hardcoded.
 """
 from __future__ import annotations
+
+import os
 import json
 import tomllib
 from pathlib import Path
@@ -82,7 +84,8 @@ def test_codex_remote_control_is_explicit_and_attaches_to_managed_daemon(tmp_pat
         Agent(name="ellie", role="worker", workspace="/work with space"),
         str(cfg), root=root)
 
-    daemon_home = cfg.parent.parent / "remote-control" / "ellie"
+    daemon_home = Path(os.environ.get(
+        "XDG_RUNTIME_DIR", Path.home() / ".cache")) / "shantytown" / "codex" / "ellie"
     socket = daemon_home / "app-server-control" / "app-server-control.sock"
     assert f"SHANTY_AGENT=ellie" in launch
     assert f"BEADS_ACTOR=ellie" in launch
@@ -118,14 +121,15 @@ def test_codex_remote_control_daemon_identity_and_socket_are_per_card(tmp_path):
         for name in ("ellie", "ada")
     }
     for name, launch in launches.items():
-        daemon_home = cfg.parent.parent / "remote-control" / name
+        daemon_home = Path(os.environ.get(
+            "XDG_RUNTIME_DIR", Path.home() / ".cache")) / "shantytown" / "codex" / name
         assert f"SHANTY_AGENT={name}" in launch
         assert f"BEADS_ACTOR={name}" in launch
         assert f"CODEX_HOME={daemon_home} codex remote-control start" in launch
         assert f"--remote unix://{daemon_home}/app-server-control/app-server-control.sock" in launch
 
-    assert "remote-control/ada" not in launches["ellie"]
-    assert "remote-control/ellie" not in launches["ada"]
+    assert "/codex/ada" not in launches["ellie"]
+    assert "/codex/ellie" not in launches["ada"]
 
 
 def test_codex_remote_control_state_never_collides_with_an_agent_override(tmp_path):
@@ -144,11 +148,27 @@ def test_codex_remote_control_state_never_collides_with_an_agent_override(tmp_pa
     managed.write_text("")
 
     launch = CODEX.launch(Agent(name="ellie", role="worker"), str(cfg), root=root)
-    daemon_home = root / "settings" / "codex" / "remote-control" / "ellie"
+    daemon_home = Path(os.environ.get(
+        "XDG_RUNTIME_DIR", Path.home() / ".cache")) / "shantytown" / "codex" / "ellie"
 
     assert f"CODEX_HOME={daemon_home} codex remote-control start" in launch
     assert f"ln -sfn {cfg} {daemon_home / 'config.toml'}" in launch
     assert str(cfg.parent / "config.toml") != str(daemon_home / "config.toml")
+
+
+def test_codex_remote_control_refuses_a_socket_beyond_sun_len(tmp_path, monkeypatch):
+    root = tmp_path / ".shanty"
+    root.mkdir()
+    (root / "shantytown.toml").write_text(
+        '[env]\nSHANTY_REMOTE_CONTROL = "true"\n')
+    cfg = root / "settings" / "codex" / "worker" / "config.toml"
+    managed = cfg.parent / "packages" / "standalone" / "current" / "codex"
+    managed.parent.mkdir(parents=True)
+    managed.write_text("")
+    monkeypatch.setenv("XDG_RUNTIME_DIR", "/" + "x" * 100)
+
+    with pytest.raises(harness_mod.Unsupported, match="socket path is too long"):
+        CODEX.launch(Agent(name="ellie", role="worker"), str(cfg), root=root)
 
 
 def test_codex_remote_control_absence_does_not_add_a_binary_prerequisite(tmp_path):

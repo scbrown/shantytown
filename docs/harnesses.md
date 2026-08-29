@@ -128,7 +128,8 @@ codex --dangerously-bypass-hook-trust
 When `[env] SHANTY_REMOTE_CONTROL = "true"`, the Codex harness first starts the
 managed standalone app-server daemon idempotently, then attaches the TUI. Each card
 gets its own identity-bearing daemon and socket under
-`<root>/settings/codex/remote-control/<agent>/`; sharing one role daemon would make
+`$XDG_RUNTIME_DIR/shantytown/codex/<agent>/` (falling back to the user's cache
+directory); sharing one role daemon would make
 tool shells and hooks inherit whichever agent started it. The per-card daemon home
 links back to the governed config, login, and managed package payload; it is kept
 separate from the existing `codex/agent-<name>` override namespace. The harness also
