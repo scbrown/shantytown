@@ -55,3 +55,13 @@ def test_alerter_pushes_only_changed_records(tmp_path):
     assert alerter.sweep(lines) == ["codex"]
     assert alerter.sweep(lines) == []
     assert pushed == ["governor setpoint [codex]: governor recommends +2"]
+
+
+def test_unavailable_record_is_also_deduped(tmp_path):
+    pushed = []
+    alerter = advisory.Alerter(tmp_path, object(), object(),
+        push=lambda reg, panes, message: pushed.append(message) or "admin")
+    lines = {"codex": "advisory unavailable: creel probe not configured"}
+    assert alerter.sweep(lines) == ["codex"]
+    assert alerter.sweep(lines) == []
+    assert len(pushed) == 1
