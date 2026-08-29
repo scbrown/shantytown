@@ -534,3 +534,43 @@ def test_notify_threads_root_into_every_leg_it_calls():
             offenders.append(stripped)
     assert not offenders, ("notify legs not threaded with root:\n  "
                            + "\n  ".join(offenders))
+
+
+def test_the_stop_hook_haul_path_reaches_br(monkeypatch, tmp_path):
+    """THE FIFTH LEG (aegis-mxgzh) — the one that mattered most.
+
+    feed_check's five were migrated and stop_event's `_bd_json` was not. This is
+    the AGENT'S OWN stop path: the thing that hands a worker its next haul item.
+    While it spawned retired `bd` it raised into a fail-open, so agents stopped
+    idle holding ready, assigned work and read as indecisive rather than
+    unserved. Three of arnold's stops in one evening were this.
+    """
+    from shantytown import stop_event, feed_check
+
+    monkeypatch.setattr("subprocess.run",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            AssertionError("stop hook spawned retired bd")))
+
+    class _T:
+        def _bd(self, *args):
+            class R:
+                returncode = 0
+                stdout = '{"issues": [{"id": "aegis-1"}]}'
+                stderr = ""
+            return R()
+    monkeypatch.setattr(feed_check, "_br_tracker", lambda root, reg: _T())
+
+    rows = stop_event._bd_json(["ready", "--limit", "0"], None, root=tmp_path, reg=None)
+    assert rows == [{"id": "aegis-1"}], "the stop hook must read the haul through br"
+
+
+def test_stop_hook_threads_root_into_every_tracker_read():
+    """A leg wired but not threaded is inert — the failure mode that made this
+    bug survive three separate fixes."""
+    import inspect, re
+    from shantytown import stop_event
+    offenders = [l.strip() for l in inspect.getsource(stop_event).splitlines()
+                 if "_bd_json(" in l and "def _bd_json" not in l
+                 and not l.strip().startswith("#")
+                 and "root=root" not in l]
+    assert not offenders, "stop_event legs not threaded:\n  " + "\n  ".join(offenders)
