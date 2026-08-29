@@ -101,6 +101,27 @@ def test_codex_remote_control_is_explicit_and_attaches_to_managed_daemon(tmp_pat
     assert CODEX.settings_in_cmdline(launch) == str(cfg)
 
 
+def test_codex_remote_control_bootstraps_a_first_launch_before_stop(tmp_path):
+    """i27n4: stop cannot resolve an absent or empty per-card CODEX_HOME."""
+    root = tmp_path / ".shanty"
+    root.mkdir()
+    (root / "shantytown.toml").write_text(
+        '[env]\nSHANTY_REMOTE_CONTROL = "true"\n')
+    cfg = root / "settings" / "codex" / "worker" / "config.toml"
+    managed = cfg.parent / "packages" / "standalone" / "current" / "codex"
+    managed.parent.mkdir(parents=True)
+    managed.write_text("")
+
+    launch = CODEX.launch(Agent(name="franklin", role="worker"), str(cfg), root=root)
+    daemon_home = Path(os.environ.get(
+        "XDG_RUNTIME_DIR", Path.home() / ".cache")) / "shantytown" / "codex" / "franklin"
+
+    bootstrap = f"mkdir -p {daemon_home}"
+    stop = f"CODEX_HOME={daemon_home} codex remote-control stop"
+    assert launch.index(bootstrap) < launch.index(stop)
+    assert launch.count(bootstrap) == 1
+
+
 def test_codex_remote_control_daemon_identity_and_socket_are_per_card(tmp_path):
     """is5rv: hooks and tool shells inherit the daemon, not the attached TUI.
 
