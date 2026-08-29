@@ -126,8 +126,12 @@ codex --dangerously-bypass-hook-trust
 ```
 
 When `[env] SHANTY_REMOTE_CONTROL = "true"`, the Codex harness first starts the
-managed standalone app-server daemon idempotently, then attaches the TUI with
-`--remote unix://<CODEX_HOME>/app-server-control/app-server-control.sock`. It also
+managed standalone app-server daemon idempotently, then attaches the TUI. Each card
+gets its own identity-bearing daemon and socket under
+`<root>/settings/codex/remote-control/<agent>/`; sharing one role daemon would make
+tool shells and hooks inherit whichever agent started it. The per-card daemon home
+links back to the governed config, login, and managed package payload; it is kept
+separate from the existing `codex/agent-<name>` override namespace. The harness also
 passes `--cd <workspace>`: a remote TUI inherits the daemon's directory otherwise,
 regardless of the shell's preceding `cd`. Codex requires the official standalone
 install at `<CODEX_HOME>/packages/standalone/current/codex`; an npm-only install can
