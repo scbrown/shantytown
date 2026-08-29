@@ -221,7 +221,9 @@ def test_FAILS_OPEN_when_bd_is_unreachable(monkeypatch, capsys):
     # THE critical invariant: a bd hiccup must never trap the coordinator.
     _wire_main(monkeypatch, free=["weaver"], bd_raises=True)
     assert feed_check.main(["--root", "/x"]) == 0
-    assert capsys.readouterr().out == "", "bd error -> ALLOW the stop, never block"
+    out = capsys.readouterr()
+    assert out.out == "", "bd error -> ALLOW the stop, never block"
+    assert "feed-path read FAILED" in out.err and "ALLOWING" in out.err
 
 
 def test_FAILS_OPEN_when_the_registry_setup_raises(monkeypatch, capsys):
@@ -229,7 +231,9 @@ def test_FAILS_OPEN_when_the_registry_setup_raises(monkeypatch, capsys):
         raise OSError("no store")
     monkeypatch.setattr("shantytown.files.FilesRegistry", boom)
     assert feed_check.main(["--root", "/x"]) == 0
-    assert capsys.readouterr().out == "", "any error -> allow"
+    out = capsys.readouterr()
+    assert out.out == "", "any error -> allow"
+    assert "feed-path read FAILED" in out.err and "ALLOWING" in out.err
 
 
 def test_self_terminates_when_free_hits_zero(monkeypatch, capsys):

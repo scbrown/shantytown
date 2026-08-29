@@ -523,12 +523,17 @@ def queue_state(root, reg, tracker=None) -> tuple[list[dict], list[dict]]:
             ready_beads = br_ready(tracker)
             try:
                 return ready_beads, br_in_progress(tracker)
-            except Exception:
+            except Exception as exc:
+                print(f"Rule Zero: active-work read FAILED ({exc!r}) — "
+                      "continuing with ready work only; haul filtering is degraded",
+                      file=sys.stderr)
                 return ready_beads, []
     ready_beads = _bd_ready(bd_cwd(reg))
     try:
         return ready_beads, bd_in_progress(bd_cwd(reg))
-    except Exception:      # noqa: BLE001 — active work only narrows free workers
+    except Exception as exc:      # noqa: BLE001 — active work only narrows free workers
+        print(f"Rule Zero: active-work read FAILED ({exc!r}) — continuing with "
+              "ready work only; haul filtering is degraded", file=sys.stderr)
         return ready_beads, []
 
 
@@ -565,9 +570,12 @@ def main(argv: list[str] | None = None) -> int:
         # reason. This is the only path that prints anything.
         print(json.dumps({"decision": "block", "reason": _reason(free, ready)}))
         return 0
-    except Exception:
+    except Exception as exc:
         # FAIL OPEN. Any error — registry, tmux, bd, parse — allows the stop.
-        # Never trap the coordinator on a broken check.
+        # Never trap the coordinator on a broken check, and never make a dead
+        # feed indistinguishable from a healthy empty queue.
+        print(f"Rule Zero: feed-path read FAILED ({exc!r}) — ALLOWING this stop "
+              "because the gate cannot prove work is dispatchable", file=sys.stderr)
         return 0
 
 
