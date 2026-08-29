@@ -357,7 +357,7 @@ def test_haul_feed_message_still_carries_the_core_advance_instruction():
     # the release line is ADDITIVE — it must not have displaced the advance itself
     msg = feed_check.haul_feed_message("aegis-9z9z", "t", 0)
     assert "aegis-9z9z" in msg
-    assert "close it when done" in msg
+    assert "close to advance" in msg
     assert "0 more" in msg
 
 

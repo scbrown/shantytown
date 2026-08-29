@@ -182,16 +182,31 @@ class Requests:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         write_json_atomic(self.path, data)
 
-    def request(self, agent: str, checkpoint: str, checkpoint_bead: str = "") -> None:
+    def request(self, agent: str, checkpoint: str, checkpoint_bead: str = "",
+                quipu_nodes: list | None = None) -> None:
         data = self._load()
-        data[agent] = {"checkpoint": checkpoint, "checkpoint_bead": checkpoint_bead}
+        data[agent] = {"checkpoint": checkpoint,
+                       "checkpoint_bead": checkpoint_bead,
+                       # aegis-x6yoq: graph references carried across the cycle, so
+                       # the fresh session queries quipu instead of re-deriving the
+                       # context it just shed. Always a list, never absent, so the
+                       # resume path never has to branch on presence.
+                       "quipu_nodes": list(quipu_nodes or [])}
         self._save(data)
 
     def pending(self) -> dict:
         # Old string entries remain readable after the record upgrade.
-        return {agent: (value if isinstance(value, dict) else
-                        {"checkpoint": str(value), "checkpoint_bead": ""})
-                for agent, value in self._load().items()}
+        def norm(value):
+            # Records predating the quipu_nodes field, and the even older bare
+            # strings, must both keep reading. A handoff record is the LAST thing
+            # that may break on an upgrade: it is read exactly when an agent has
+            # already shed the context needed to reconstruct it.
+            d = (value if isinstance(value, dict)
+                 else {"checkpoint": str(value), "checkpoint_bead": ""})
+            d.setdefault("checkpoint_bead", "")
+            d.setdefault("quipu_nodes", [])
+            return d
+        return {agent: norm(value) for agent, value in self._load().items()}
 
     def clear(self, agent: str) -> None:
         """Drop a request. Called AFTER the cycle is performed, never before — a
