@@ -28,6 +28,7 @@ class Recorder(QuipuRegistry):
 
     def __init__(self, agents):
         self._agents = list(agents)
+        self.onto = ONTO
         self.knots: list[str] = []
         self.retracts: list[tuple[str, str, str]] = []
 
@@ -113,6 +114,7 @@ class Raw(QuipuRegistry):
         self._body = body
         self.server = "http://graph.test"
         self.timeout = 5
+        self.onto = ONTO
 
 
 def _patch_http(monkeypatch, reg):

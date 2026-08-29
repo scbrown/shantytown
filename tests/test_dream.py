@@ -5,8 +5,10 @@ import json
 from shantytown import dream
 
 
-def _candidate(agent="arnold", harness="codex", headroom=80):
-    return {"agent": agent, "harness": harness, "headroom": headroom}
+def _candidate(agent="arnold", harness="codex", headroom=80,
+               ordinary_dispatchable=False):
+    return {"agent": agent, "harness": harness, "headroom": headroom,
+            "ordinary_dispatchable": ordinary_dispatchable}
 
 
 def test_default_is_off_and_signal_absence_is_not_spare_capacity():
@@ -16,11 +18,19 @@ def test_default_is_off_and_signal_absence_is_not_spare_capacity():
     assert plan is None and "measured spare capacity" in why
 
 
-def test_normal_work_always_preempts_dreaming():
-    plan, why = dream.plan(dream.Policy(enabled=True), {},
-                           [{"id": "aegis-real", "labels": ["bug"]}],
-                           [_candidate()], now=100)
-    assert plan is None and why == "normal work is ready"
+def test_periodic_quota_queues_behind_dispatchable_normal_work():
+    cycle, why = dream.plan(dream.Policy(enabled=True), {},
+                            [{"id": "aegis-real", "labels": ["bug"]}],
+                            [_candidate(ordinary_dispatchable=True)], now=100)
+    assert cycle is not None and why == ""
+
+
+def test_ready_but_undispatchable_work_does_not_suppress_dreaming():
+    cycle, why = dream.plan(
+        dream.Policy(enabled=True), {},
+        [{"id": "aegis-held", "labels": ["bug"]}],
+        [_candidate(ordinary_dispatchable=False)], now=100)
+    assert cycle is not None and why == ""
 
 
 def test_one_existing_dream_bounds_the_queue():
@@ -35,6 +45,12 @@ def test_interval_and_headroom_are_hard_gates():
     assert dream.plan(policy, {"last_at": 50}, [], [_candidate(headroom=90)],
                       now=100)[0] is None
     assert dream.plan(policy, {}, [], [_candidate(headroom=24)], now=4000)[0] is None
+
+
+def test_dispatchability_evidence_is_not_required_for_periodic_quota():
+    candidate = {"agent": "arnold", "harness": "codex", "headroom": 80}
+    cycle, why = dream.plan(dream.Policy(enabled=True), {}, [], [candidate], now=100)
+    assert cycle is not None and why == ""
 
 
 def test_rotation_alternates_mode_and_domain_and_picks_most_headroom():
@@ -63,4 +79,3 @@ def test_state_advances_only_when_caller_records_observed_create(tmp_path):
     state.record(cycle, "aegis-made", now=123)
     assert json.loads(state.path.read_text())["last_item"] == "aegis-made"
     assert state.read()["last_at"] == 123
-

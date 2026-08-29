@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import pytest
 
+from shantytown.harness import Unsupported
 from shantytown.protocols import Agent
 from shantytown.runtime import (
     ClaudeRuntime, StoplessRuntime, CapabilityError, SettingsError, require_capability,
@@ -103,18 +104,38 @@ def test_compose_omits_SHANTY_ROOT_when_the_runtime_has_no_root():
     assert "SHANTY_ROOT" not in launch
 
 
-def test_compose_enables_remote_control_BY_DEFAULT():
+def test_compose_enables_remote_control_BY_DEFAULT(monkeypatch):
     """Remote Control is on for every agent, named after the agent (Stiwi
     2026-07-19). A fleet you cannot reach is a fleet you cannot run: a crew
     session sat unreachable for a day with an unsubmitted prompt in its input
     line and no way to drive it from outside. Default, not opt-in — the agent you
     forgot to enable it on is exactly the one you will need to reach."""
+    monkeypatch.delenv("SHANTY_REMOTE_CONTROL", raising=False)
     rt = ClaudeRuntime(NullPanes(), _ok_settings)
     for name in ("ellie", "weaver"):
         launch = rt.compose(Agent(name=name, role="worker"))
         assert f"--remote-control {name}" in launch, (
             f"{name} would launch unreachable"
         )
+
+
+def test_remote_control_is_a_deployment_decision(tmp_path):
+    (tmp_path / "shantytown.toml").write_text(
+        '[env]\nSHANTY_REMOTE_CONTROL = "false"\n')
+    rt = ClaudeRuntime(NullPanes(), _ok_settings, root=tmp_path)
+    assert "--remote-control" not in rt.compose(Agent(name="ellie", role="worker"))
+
+    (tmp_path / "shantytown.toml").write_text(
+        '[env]\nSHANTY_REMOTE_CONTROL = "true"\n')
+    assert "--remote-control ellie" in rt.compose(Agent(name="ellie", role="worker"))
+
+
+def test_invalid_remote_control_posture_refuses_launch(tmp_path):
+    (tmp_path / "shantytown.toml").write_text(
+        '[env]\nSHANTY_REMOTE_CONTROL = "sometimes"\n')
+    rt = ClaudeRuntime(NullPanes(), _ok_settings, root=tmp_path)
+    with pytest.raises(Unsupported, match="external-relay posture"):
+        rt.compose(Agent(name="ellie", role="worker"))
 
 
 # --- the capability gate, BOTH outcomes (the positive control matters) ------

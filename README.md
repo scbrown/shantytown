@@ -24,7 +24,7 @@
 *Create a work item. Tell an agent to go get it. That's the whole idea.*
 
 [![dispatch 3.4s](https://img.shields.io/badge/dispatch-3.4s-brightgreen)](#-measured-against-gas-town)
-[![27 commands](https://img.shields.io/badge/commands-27-blue)](#-the-whole-surface)
+[![28 commands](https://img.shields.io/badge/commands-28-blue)](#-the-whole-surface)
 [![tests](https://img.shields.io/badge/tests-2132%20passing-blue)](#-principles)
 [![python](https://img.shields.io/badge/python-3.11%2B-blue)](#-install)
 [![dependencies none](https://img.shields.io/badge/dependencies-none-blue)](#-install)
@@ -197,7 +197,7 @@ stop.* Here is what the gate measured.
 
 | | `gt sling` | `st go` | |
 |---|---:|---:|---|
-| Commands | ~110 | **27** | *a small, deliberate fraction of the surface, by measured use* |
+| Commands | ~110 | **28** | *a small, deliberate fraction of the surface, by measured use* |
 | dispatch (dry-run) | 51.54 s | **0.15 s** | **~344× faster** |
 | dispatch (real) | > 120 s ⏱️ | **3.40 s** | **≥35× faster** |
 | Dolt connections | 63 | **3** | **21× fewer** |
@@ -231,8 +231,9 @@ plus every script on one fleet. Full write-up in [`docs/vision.md`](docs/vision.
 - 🔀 **Stop events route up a tier.** worker → lead → administrator. A lead absorbs what it can and
   escalates what it can't; an unreachable lead does not swallow anything — the event RISES to the
   administrator with a reason, and is on disk before anyone reads it.
-- 🔌 **Pluggable trackers.** A tracker is two functions. Files today, beads tomorrow, yours next —
-  *same dispatch code*, proven by a swap test rather than by an interface.
+- 🔌 **Pluggable trackers.** A tracker is two functions. Files, beads, `br`, and Forgejo are
+  available today; another backend uses the *same dispatch code*, proven by swap tests rather
+  than by an interface alone.
 - 🤖 **Bring your own agent program.** Claude Code is *a* harness, not the shape of the world —
   `codex` ships too, and a crew can mix them: pick per card, per role, or fleet-wide. The tier is
   program-blind, so a codex worker's stop event reaches a Claude Code lead unchanged. What codex
@@ -310,10 +311,11 @@ st tend                           supervise the crew: respawn what DIED, never w
 st attach [agent]                 attach to a crew member — STARTING them if down (socket + pane resolved)
 st dashboard [admin]              live, tier-scoped view: roster/state/work, self-refreshing
 st subscribe                      watch quipu entity events; route governed workflows to the admin
+st help <topic>                   rationale pages: handoff/cycle, haul, inbox
 st cycle <agent> [--self]         clear context WITHOUT destroying the runtime: checkpoint ->
                                   stop -> relaunch -> re-dispatch (/clear drops bypass; this keeps it)
 st worktree <repo> [agent]        provision an agent's isolated worktree off a SHARED project repo
-st push <repo> [agent]            push your branch to EVERY remote — pushing one forks a repo with two
+st push <repo> [agent]            push wt/<agent> to EVERY remote; refuses if invoked from another branch
 st stats [agent]                  files/skills plus provider tokens and cache dimensions
 ```
 
@@ -435,6 +437,7 @@ read in that order, every one of them also settable as an env var:
 | `SHANTY_TMUX_SOCKET` | the named tmux server your agents live on. **A `socket` declared under `[tmux]` in `<root>/shantytown.toml` wins over this** — a socket declared in the store is read from there, not from your shell's ambient env, so the answer cannot change with which pane you ran `st` from. | bare tmux |
 | `SHANTY_BASH_GUARD` | a command emitted as a PreToolUse Bash hook in every role's settings — the deployment's host-policy guard (e.g. blocking another orchestrator's start verbs on a shared host). Claude Code contract: exit 2 blocks, else allows. Unset = no hook emitted; shantytown ships no guard and hardcodes no path. | — |
 | `SHANTY_MCP_GUARD` | a command emitted as a PreToolUse hook on matcher `mcp__.*` in every role's settings — the deployment's policy guard for the MCP tool surface, which is otherwise entirely ungoverned (hook matchers match TOOL NAMES, and no edit/Bash matcher covers `mcp__*`). Matchers cannot see arguments, so the guard filters itself. Separate from `SHANTY_BASH_GUARD` because the payload shapes differ — a command string vs a tool name plus an arbitrary argument object. Claude Code contract: exit 2 blocks, else allows. Unset = no hook emitted; shantytown ships no guard and hardcodes no path. | — |
+| `SHANTY_REMOTE_CONTROL` | whether Claude-harness sessions launch with `--remote-control <agent>` and register through Anthropic's relay for access from claude.ai or the Claude app. Accepts `true`/`false` (and common boolean spellings); an invalid value refuses launch rather than guessing the off-host exposure posture. Codex cards are unchanged: Codex Remote Control is a separate app-server daemon, not a per-session Claude.ai flag. | `true` (compatibility with the original default-on launcher) |
 | `SHANTY_STOP_CAPTURE` | a command appended LAST to every role's Stop hook list — the deployment's session-end knowledge-capture hook. Runs after the role's own stop machinery (send/drain/haul/feed-gate) settles. Solicitation etiquette (block-once, markers) is the command's own responsibility. Unset = nothing appended; shantytown ships no capture hook and hardcodes no path. | — |
 | `SHANTY_HIERARCHY_FILE` | the hierarchy file `st roles sync` falls back to when the graph cannot be read (`.ttl`\|`.yaml`\|`.json` describing `CrewMember` + `reports_to`). Unset = look for `hierarchy.*` beside the crew root; if that is absent too, `sync` REFUSES rather than projecting an empty crew. Only the ontology-first *default* falls back — an explicit `--from quipu` that cannot reach the graph refuses instead of silently substituting this file. | `<root>/hierarchy.*` if present |
 | `SHANTY_SHARED_CHECKOUT_OK` | set to `1` to allow ONE deliberate `git commit`/`rebase`/`merge` in a SHARED project checkout, past the guard `st worktree` installs there. Read by the hook, not by `st` — it is the maintenance escape hatch, not a mode. Everyday work belongs in `st worktree <repo>`, where index and HEAD are per-agent; the guard exists because a shared checkout's index is shared, so one session's commit can carry another's staged files and its reset can drop the other's commit, with git reporting success to both. Note the guard fires at COMMIT only — `git reset` has no hook and is not guarded, so this is a seatbelt, not a cage. | unset (guard active) |

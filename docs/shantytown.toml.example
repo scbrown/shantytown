@@ -164,6 +164,7 @@ max_load_per_core = 4.0
 # SHANTY_BACKEND = "beads"              # files | beads | forgejo
 # SHANTY_BEADS_REPO = "/path/to/repo"   # where the plates live
 # SHANTY_ONTO_NS = "https://example.invalid/ontology#"
+# SHANTY_REMOTE_CONTROL = "true"         # Claude harness only; exposes local sessions through Anthropic's relay
 
 # ---------------------------------------------------------------------------
 # [tmux] socket — the fleet's tmux socket, DECLARED. The former

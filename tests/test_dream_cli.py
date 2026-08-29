@@ -31,9 +31,11 @@ def _wire(monkeypatch, tmp_path, pct):
     policy = governor.Policy(source="stub", stub_pct=pct,
                              delegation_reserve_pct=10,
                              tiers=(governor.Tier(at=100, min_priority=0),))
+    verdict = types.SimpleNamespace(
+        signal_lost=False, by_window={"seven_day": pct}, pct=pct,
+        admits=lambda _item: "")
     gov = types.SimpleNamespace(policy=policy,
-                                evaluate=lambda persist=False: types.SimpleNamespace(
-                                    signal_lost=False, by_window={"seven_day": pct}, pct=pct))
+                                evaluate=lambda persist=False: verdict)
     cfg = types.SimpleNamespace(
         dream=dream.Policy(enabled=True, min_headroom_pct=20),
         governor=types.SimpleNamespace(by_harness={"codex": policy}))
@@ -50,6 +52,48 @@ def _wire(monkeypatch, tmp_path, pct):
                         lambda *args, **kwargs: ["arnold"])
     args = types.SimpleNamespace(root=str(tmp_path))
     return args, cfg, reg.cards, panes, tracker
+
+
+def test_sweep_queues_periodic_quota_behind_ready_work(monkeypatch, tmp_path):
+    args, cfg, cards, panes, tracker = _wire(monkeypatch, tmp_path, pct=10)
+    monkeypatch.setattr("shantytown.feed_check._bd_ready", lambda cwd=None: [
+        {"id": "aegis-held", "title": "held", "priority": 2, "labels": []},
+    ])
+    _cfg, governors = cli._governors(args)
+    governors["codex"].evaluate().admits = lambda _item: "priority floor holds P2"
+
+    cycle, item_id, reason = cli._dream_sweep(args, cfg, cards, panes)
+
+    assert cycle is not None and (item_id, reason) == ("aegis-dream1", "created")
+    assert tracker.fields is not None
+
+
+def test_busy_provider_gets_queued_dream_without_interrupting_pane(monkeypatch, tmp_path):
+    args, cfg, cards, panes, tracker = _wire(monkeypatch, tmp_path, pct=10)
+    monkeypatch.setattr("shantytown.feed_check.free_feedable_workers",
+                        lambda *args, **kwargs: [])
+
+    cycle, item_id, reason = cli._dream_sweep(args, cfg, cards, panes)
+
+    assert cycle is not None and (item_id, reason) == ("aegis-dream1", "created")
+    assert tracker.fields[1]["assignee"] == "arnold"
+    assert panes.sent == []
+
+
+def test_sweep_reads_ready_and_active_work_from_br(monkeypatch, tmp_path):
+    args, cfg, cards, panes, _tracker = _wire(monkeypatch, tmp_path, pct=10)
+    from shantytown.br import BrTracker
+    tracker = BrTracker(repo=str(tmp_path))
+    monkeypatch.setattr(cli, "_tracker", lambda a: tracker)
+    monkeypatch.setattr("shantytown.feed_check.queue_state",
+                        lambda root, reg, tracker=None: ([], []))
+    monkeypatch.setattr("shantytown.feed_check._bd_ready",
+                        lambda cwd=None: (_ for _ in ()).throw(AssertionError("bd called")))
+
+    cycle, item_id, reason = cli._dream_sweep(args, cfg, cards, panes,
+                                              dry_run=True)
+
+    assert cycle is not None and (item_id, reason) == ("", "dry-run")
 
 
 def test_sweep_creates_lowest_priority_review_artifact_and_wakes_agent(monkeypatch, tmp_path):

@@ -99,6 +99,37 @@ def test_push_lands_on_BOTH_remotes(two_remotes, capsys):
     assert "origin" in out and "forge" in out, f"remotes not both reported: {out!r}"
 
 
+def test_checked_out_noncanonical_branch_REFUSES_before_contacting_remotes(
+        two_remotes, monkeypatch, capsys):
+    """aegis-72png: a dedicated branch must not publish parked canonical work.
+
+    This is the measured production shape: the canonical wt/agent branch holds
+    a deliberately deferred commit, while the caller stands in a second
+    worktree on an unrelated fix branch. Both remote refs staying unchanged is
+    the proof that the mismatch is discovered before any push or partial push.
+    """
+    repo, wt, origin, forge = two_remotes
+    _commit(wt, "held-back")
+    before_origin, before_forge = _sha(origin, "main"), _sha(forge, "main")
+
+    dedicated = repo.parent / "dedicated"
+    _git(repo, "worktree", "add", "-q", "-b", "fix/unrelated", str(dedicated),
+         "main")
+    _git(dedicated, "config", "user.email", "t@example.invalid")
+    _git(dedicated, "config", "user.name", "t")
+    _commit(dedicated, "unrelated-fix")
+    monkeypatch.chdir(dedicated)
+
+    assert main(["push", str(repo), "ellie"]) == REFUSED
+    err = capsys.readouterr().err
+    assert "refused before push" in err
+    assert "fix/unrelated" in err and "wt/ellie" in err
+    assert str(dedicated) in err and str(wt) in err
+    assert "No remote was contacted" in err
+    assert _sha(origin, "main") == before_origin
+    assert _sha(forge, "main") == before_forge
+
+
 def test_a_repo_with_ONE_remote_still_works(tmp_path, capsys):
     """The falsifier for 'push both': a single-remote repo must not refuse or
     invent a second push. Without this, 'push every remote' could mean 'require

@@ -262,14 +262,14 @@ def test_the_queue_is_yours_line_carries_the_headroom():
     so it now carries a number."""
     hr = sb.headroom(ARMED, sb.Spend(hours=1.0, items=1, risk=0))
     msg = haul_feed_message("aegis-1", "t", 2, headroom=hr)
-    assert "this queue is yours to work, within the session budget" in msg
+    assert "Yours to work —" in msg
     assert "2.0h" in msg and "3 item(s)" in msg
 
 
 def test_an_unarmed_deployment_gets_the_ORIGINAL_sentence():
     """A caveat with no number behind it is noise to learn to skip."""
     msg = haul_feed_message("aegis-1", "t", 2, headroom="")
-    assert "this queue is yours." in msg
+    assert "Yours to work." in msg
     assert "session budget" not in msg
 
 
@@ -278,9 +278,9 @@ def test_a_re_serve_is_visibly_a_re_serve():
     actually just the re-serve rule and carries no intent at all."""
     plain = haul_feed_message("aegis-1", "t", 2)
     again = haul_feed_message("aegis-1", "t", 2, repeats=2)
-    assert "SAME BEAD" not in plain
-    assert "SAME BEAD" in again and "twice" in again
-    assert "NOT a decision that you should keep at it" in again
+    assert "SAME bead" not in plain
+    assert "SAME bead" in again and "twice" in again
+    assert "not a verdict" in again
 
 
 def test_times_served_counts_only_this_agents_repeats_in_this_stretch(tmp_path):
