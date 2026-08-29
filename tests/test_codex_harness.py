@@ -125,6 +125,7 @@ def test_codex_remote_control_daemon_identity_and_socket_are_per_card(tmp_path):
             "XDG_RUNTIME_DIR", Path.home() / ".cache")) / "shantytown" / "codex" / name
         assert f"SHANTY_AGENT={name}" in launch
         assert f"BEADS_ACTOR={name}" in launch
+        assert "env -u TMUX_PANE" in launch
         assert f"CODEX_HOME={daemon_home} codex remote-control start" in launch
         assert f"--remote unix://{daemon_home}/app-server-control/app-server-control.sock" in launch
 

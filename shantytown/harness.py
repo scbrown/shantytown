@@ -793,7 +793,13 @@ class CodexHarness:
             # remains load-bearing: a remote TUI otherwise inherits the daemon's
             # cwd even when the surrounding shell already changed dir.
             start = (
-                f"{bootstrap} && {identity_env}{codex_mod().HOME_VAR}={daemon_home} "
+                # TMUX_PANE is inherited from the shell that starts the daemon,
+                # then outlives that pane across Remote Control tool shells.  It
+                # is the same environment rail as SHANTY_AGENT, not independent
+                # corroboration.  Remove it from the daemon only; the attached
+                # TUI below still inherits its real pane marker from tmux.
+                f"{bootstrap} && env -u TMUX_PANE {identity_env}"
+                f"{codex_mod().HOME_VAR}={daemon_home} "
                 "codex remote-control start "
                 "--json >/dev/null"
             )
