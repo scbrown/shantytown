@@ -427,16 +427,20 @@ def _drain_payload(root, me: str, kw) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
-    me = os.environ.get("SHANTY_AGENT")
-    if not me:
+    me_env = os.environ.get("SHANTY_AGENT")
+    if not me_env:
         print("stop_policy: $SHANTY_AGENT is unset — cannot resolve identity",
               file=sys.stderr)
         return 1
     root = stop_event._root(argv)
+    reg = FilesRegistry(root / "crew")
+    panes = Tmux(socket=stop_event.declared_socket(root))
+    me = stop_event._stop_identity(reg, panes, me_env)
+    if me is None:
+        return 1
     # RANK 0, before any verdict: route and persist MY OWN stop event upward.
     # Survival, not a decision — a verdict must not be able to lose the event.
     try:
-        reg = FilesRegistry(root / "crew")
         if reg.get(me).role != "administrator":
             stop_event.main(["send", "--root", str(root)])
     except Exception as e:  # noqa: BLE001 — reported, never swallowed
