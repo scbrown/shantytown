@@ -6247,6 +6247,7 @@ def _dream_sweep(a, cfg, agents, panes, *, force=False, dry_run=False):
     free = [name for name in free if name not in feed_check.hauls(ready, active)]
     cards = {card.name: card for card in agents}
     candidates = []
+    ordinary_ready = feed_check.dispatchable(set(free), ready)
     cfg_now, governors = _governors(a)
     verdicts = {name: governor.evaluate(persist=False)
                 for name, governor in governors.items()}
@@ -6269,8 +6270,11 @@ def _dream_sweep(a, cfg, agents, panes, *, force=False, dry_run=False):
         # threshold is looser.  Spare means above BOTH lines, never either.
         if headroom < governor.policy.delegation_reserve_pct:
             continue
+        admitted, _held = feed_check.throttle(
+            ordinary_ready, ready, getattr(verdict, "admits", None))
         candidates.append({"agent": name, "harness": harness,
-                           "headroom": headroom})
+                           "headroom": headroom,
+                           "ordinary_dispatchable": bool(admitted)})
     cycle, reason = dream_mod.plan(policy, state.read(), ready, candidates,
                                    force=force)
     if cycle is None:

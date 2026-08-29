@@ -77,15 +77,23 @@ def plan(policy: Policy, state: dict, ready: list[dict], candidates: list[dict],
     if (not force and isinstance(last, (int, float))
             and now < float(last) + policy.interval_minutes * 60):
         return None, "not due"
-    if any(not is_dream(item) for item in ready):
-        return None, "normal work is ready"
     if any(is_dream(item) for item in ready):
         return None, "a dream cycle is already queued"
-    eligible = [c for c in candidates
-                if c.get("headroom") is not None
-                and float(c["headroom"]) >= policy.min_headroom_pct]
-    if not eligible:
+    capacity_eligible = [c for c in candidates
+                         if c.get("headroom") is not None
+                         and float(c["headroom"]) >= policy.min_headroom_pct]
+    if not capacity_eligible:
         return None, "no idle subscription has measured spare capacity"
+    # Foreground work preempts DREAM only when this particular idle provider
+    # could actually accept it.  The fleet's board is intentionally never
+    # empty; assigned, decision-gated, dependency-blocked, and governor-held
+    # work is not a runnable queue for this provider.  Missing dispatchability
+    # evidence fails closed: callers must positively show that the candidate
+    # has no ordinary work it can take.
+    eligible = [c for c in capacity_eligible
+                if c.get("ordinary_dispatchable") is False]
+    if not eligible:
+        return None, "normal work is dispatchable to every idle provider"
     chosen = max(eligible, key=lambda c: (float(c["headroom"]), c["agent"]))
     domains = policy.domains or Policy.domains
     previous_domain = state.get("last_domain")

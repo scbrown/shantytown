@@ -15,7 +15,7 @@ domains = ["ontology", "infra", "codebases", "fleet-config"]
 `st tend` schedules a cycle only when all of these are true:
 
 1. The interval is due.
-2. No ordinary ready work exists.
+2. At least one idle provider has no ordinary ready work it can actually accept.
 3. No prior dream task remains ready.
 4. An idle, feedable agent has a healthy provider reading.
 5. That provider has at least `min_headroom_pct` remaining and is outside its
@@ -35,10 +35,18 @@ Both modes are read-mostly. Their generated bead explicitly forbids applying
 infrastructure, code, configuration, or ontology changes during the cycle.
 Normal triage turns a reviewed artifact into ordinary work later.
 
+"Can actually accept" reuses the foreground dispatch rules: work assigned to
+another agent, decision-gated work, dependency-blocked work, and work held below
+that provider's current governor floor do not suppress DREAM. Ordinary work that
+does clear those gates still preempts reflection for that provider. This keeps a
+perpetually non-empty board from making the scheduler inert without turning
+DREAM into a competing priority queue.
+
 `st dream` shows the policy, last cycle, next due time, and domain rotation.
 `st dream --run -n` previews the next eligible cycle without writing. `--run`
 ignores the interval and enabled bit for an operator-requested cycle, but it does
-not bypass queue emptiness, signal health, headroom, or reserve protection.
+not bypass foreground dispatchability, signal health, headroom, or reserve
+protection.
 
 Schedule state lives at `<root>/dream-state.json`. It advances only after the
 tracker returns the created bead ID. A failed creation therefore remains due and
