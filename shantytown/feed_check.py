@@ -253,7 +253,7 @@ def bd_cwd(reg) -> str | None:
     return None
 
 
-def _bd_ready(cwd: str | None = None) -> list[dict]:
+def _bd_ready(cwd: str | None = None, root=None, reg=None) -> list[dict]:
     """`bd ready --json` -> the ready (unblocked, open) beads, or raise.
 
     `cwd` is where bd resolves its store from (see bd_cwd). None falls back to
@@ -265,6 +265,17 @@ def _bd_ready(cwd: str | None = None) -> list[dict]:
 # WHOLE queue — Rule Zero asks "is there dispatchable work", the plate asks
 # "what do I hold" — so a silently short list is a wrong answer, not a small
 # one. The upstream bug is bd's; this is the consumer refusing to inherit it.
+    # POST-CUTOVER (aegis-mxgzh): on a br deployment this must NOT spawn `bd`.
+    # `bd` is retired at the binary and exits 3, so this raised for every caller
+    # that had not been migrated — and the ones that had not are the HAUL FEED
+    # legs, because notify injects this function itself as a default argument.
+    # Fixing queue_state alone therefore repaired the alert path and left the
+    # feed dead: alerts fired, nothing was ever fed.
+    if root is not None:
+        tracker = _br_tracker(root, reg)
+        if tracker is not None:
+            from .br import ready as br_ready
+            return br_ready(tracker)
     r = subprocess.run(["bd", "ready", "--json", "--limit", "0"], capture_output=True, text=True,
                        timeout=20, cwd=cwd)
     if r.returncode != 0:
@@ -507,16 +518,29 @@ def gate_inputs(root, reg, panes, runtime, me: str | None = None, admits=None):
     return free, ok, held
 
 
+def _br_tracker(root, reg):
+    """The deployment's BrTracker, or None if this deployment is not on br.
+
+    ONE resolver, used by queue_state AND by the two legacy read helpers. It is
+    factored out because those helpers are INJECTED as callables elsewhere
+    (notify's CycleDriver/feed constructors take `feed_check._bd_ready` as a
+    default argument), so a backend fix that lived only in queue_state repaired
+    the Rule Zero alert path and left the haul feed still spawning `bd`
+    (aegis-mxgzh). Two readers of the same store must not resolve it two ways.
+    """
+    from .deployment import deployment_default
+    if deployment_default(root, "SHANTY_BACKEND") != "br":
+        return None
+    from .br import BrTracker
+    return BrTracker(repo=(deployment_default(root, "SHANTY_BR_REPO")
+                           or deployment_default(root, "SHANTY_BEADS_REPO")
+                           or bd_cwd(reg)))
+
+
 def queue_state(root, reg, tracker=None) -> tuple[list[dict], list[dict]]:
     """Ready and active work from the deployment's selected tracker backend."""
     if tracker is None:
-        from .deployment import deployment_default
-        if deployment_default(root, "SHANTY_BACKEND") == "br":
-            from .br import BrTracker
-            tracker = BrTracker(
-                repo=(deployment_default(root, "SHANTY_BR_REPO")
-                      or deployment_default(root, "SHANTY_BEADS_REPO")
-                      or bd_cwd(reg)))
+        tracker = _br_tracker(root, reg)
     if tracker is not None:
         from .br import BrTracker, in_progress as br_in_progress, ready as br_ready
         if isinstance(tracker, BrTracker):
@@ -673,9 +697,15 @@ def haul_handoff_message(context_k: float, line_k: float) -> str:
     return handoff_text.haul_handoff(context_k, line_k)
 
 
-def bd_in_progress(cwd: str | None) -> list[dict]:
+def bd_in_progress(cwd: str | None, root=None, reg=None) -> list[dict]:
     """`bd list --status in_progress --json` — the active-anchor set. Raises;
     callers fail open."""
+    # See _bd_ready: same reason, same fix (aegis-mxgzh).
+    if root is not None:
+        tracker = _br_tracker(root, reg)
+        if tracker is not None:
+            from .br import in_progress as br_in_progress
+            return br_in_progress(tracker)
     r = subprocess.run(["bd", "list", "--status", "in_progress", "--json",
                         "--limit", "0"],
                        capture_output=True, text=True, timeout=20, cwd=cwd)
