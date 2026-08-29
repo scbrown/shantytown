@@ -798,7 +798,7 @@ class CodexHarness:
                 # is the same environment rail as SHANTY_AGENT, not independent
                 # corroboration.  Remove it from the daemon only; the attached
                 # TUI below still inherits its real pane marker from tmux.
-                f"{bootstrap} && env -u TMUX_PANE {identity_env}"
+                f"env -u TMUX_PANE {identity_env}"
                 f"{codex_mod().HOME_VAR}={daemon_home} "
                 "codex remote-control start "
                 "--json >/dev/null"
@@ -811,7 +811,11 @@ class CodexHarness:
             # relay's first status read still returns "connection is errored".
             # The same idempotent command immediately reports connected. Retry
             # exactly once: a persistent error still refuses the TUI launch.
-            daemon_start = f"{stop} && ({start} || {start}) && "
+            # Bootstrap BEFORE stop.  A card that has never run Codex has no
+            # per-card home yet; asking Codex to resolve that empty CODEX_HOME
+            # makes stop refuse, and the shell's && then prevents start (and
+            # the old start-owned bootstrap) from ever running.
+            daemon_start = f"{bootstrap} && {stop} && ({start} || {start}) && "
             flags += f" --remote unix://{socket}"
             if card.workspace:
                 flags += f" --cd {shlex.quote(str(card.workspace))}"
