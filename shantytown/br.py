@@ -73,6 +73,24 @@ def rows(tracker: BrTracker) -> list[dict]:
     return out
 
 
+def ready(tracker: BrTracker) -> list[dict]:
+    """The complete br ready set, preserving dependency filtering."""
+    r = tracker._bd("ready", "--json", "--limit", "0")
+    if r.returncode != 0:
+        raise RuntimeError(f"br ready failed: {r.stderr.strip()[:120]}")
+    payload = json.loads(r.stdout) if r.stdout.strip() else []
+    return payload.get("issues", []) if isinstance(payload, dict) else payload
+
+
+def in_progress(tracker: BrTracker) -> list[dict]:
+    """The complete active-anchor set from br."""
+    r = tracker._bd("list", "--status", "in_progress", "--json", "--limit", "0")
+    if r.returncode != 0:
+        raise RuntimeError(f"br list failed: {r.stderr.strip()[:120]}")
+    payload = json.loads(r.stdout) if r.stdout.strip() else {}
+    return payload.get("issues", []) if isinstance(payload, dict) else payload
+
+
 def plate(tracker: BrTracker, agent: str) -> WorkItem | None:
     mine = [
         row for row in rows(tracker)

@@ -68,6 +68,22 @@ def test_sweep_ignores_ready_work_held_by_provider_governor(monkeypatch, tmp_pat
     assert tracker.fields is not None
 
 
+def test_sweep_reads_ready_and_active_work_from_br(monkeypatch, tmp_path):
+    args, cfg, cards, panes, _tracker = _wire(monkeypatch, tmp_path, pct=10)
+    from shantytown.br import BrTracker
+    tracker = BrTracker(repo=str(tmp_path))
+    monkeypatch.setattr(cli, "_tracker", lambda a: tracker)
+    monkeypatch.setattr("shantytown.br.ready", lambda trk: [])
+    monkeypatch.setattr("shantytown.br.in_progress", lambda trk: [])
+    monkeypatch.setattr("shantytown.feed_check._bd_ready",
+                        lambda cwd=None: (_ for _ in ()).throw(AssertionError("bd called")))
+
+    cycle, item_id, reason = cli._dream_sweep(args, cfg, cards, panes,
+                                              dry_run=True)
+
+    assert cycle is not None and (item_id, reason) == ("", "dry-run")
+
+
 def test_sweep_creates_lowest_priority_review_artifact_and_wakes_agent(monkeypatch, tmp_path):
     args, cfg, cards, panes, tracker = _wire(monkeypatch, tmp_path, pct=10)
     cycle, item_id, reason = cli._dream_sweep(args, cfg, cards, panes)
