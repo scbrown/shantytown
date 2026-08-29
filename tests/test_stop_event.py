@@ -184,7 +184,7 @@ def test_main_refuses_when_env_identity_disagrees_with_pane_owner(
     monkeypatch.setenv("TMUX_PANE", "%42")
     panes = _Panes(set())
     panes.session_name = lambda _pane: "p-ellie"
-    monkeypatch.setattr(stop_event, "Tmux", lambda: panes)
+    monkeypatch.setattr(stop_event, "Tmux", lambda **_: panes)
 
     assert stop_event.main(["haul", "--root", str(tmp_path)]) == 1
     captured = capsys.readouterr()
@@ -200,11 +200,32 @@ def test_main_accepts_matching_env_and_pane_identity(tmp_path, monkeypatch):
     monkeypatch.setenv("TMUX_PANE", "%42")
     panes = _Panes({"p-maldoon"})
     panes.session_name = lambda _pane: "p-ellie"
-    monkeypatch.setattr(stop_event, "Tmux", lambda: panes)
+    monkeypatch.setattr(stop_event, "Tmux", lambda **_: panes)
 
     assert stop_event.main(["send", "--root", str(tmp_path)]) == 0
     got = FilesEvents(tmp_path / "events").drain("maldoon")
     assert [event.frm for event in got] == ["ellie"]
+
+
+def test_main_resolves_identity_on_the_fleets_declared_tmux_socket(
+        tmp_path, monkeypatch):
+    _reg(tmp_path)
+    (tmp_path / "shantytown.toml").write_text(
+        '[tmux]\nsocket = "fleet-socket"\n')
+    monkeypatch.setenv("SHANTY_AGENT", "ellie")
+    monkeypatch.setenv("TMUX_PANE", "%42")
+    panes = _Panes({"p-maldoon"})
+    panes.session_name = lambda _pane: "p-ellie"
+    seen = []
+
+    def tmux_factory(**kwargs):
+        seen.append(kwargs.get("socket"))
+        return panes
+
+    monkeypatch.setattr(stop_event, "Tmux", tmux_factory)
+
+    assert stop_event.main(["send", "--root", str(tmp_path)]) == 0
+    assert seen == ["fleet-socket"]
 
 
 # --- aegis-w9z1: a stop is a TURN boundary, so the drain checks the pane -------
@@ -388,7 +409,7 @@ def test_main_send_end_to_end(tmp_path, monkeypatch):
     the pane-liveness backend is faked."""
     _reg(tmp_path)
     monkeypatch.setenv("SHANTY_AGENT", "ellie")
-    monkeypatch.setattr(stop_event, "Tmux", lambda: _Panes({"p-maldoon"}))
+    monkeypatch.setattr(stop_event, "Tmux", lambda **_: _Panes({"p-maldoon"}))
     rc = stop_event.main(["send", "--root", str(tmp_path)])
     assert rc == 0
     got = FilesEvents(tmp_path / "events").drain("maldoon")
