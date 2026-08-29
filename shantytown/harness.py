@@ -622,6 +622,30 @@ class CodexHarness:
 
     name = "codex"
 
+    @staticmethod
+    def _remote_control(root=None) -> bool:
+        """Whether this deployment explicitly exposes Codex off-host.
+
+        Claude's absent-value default stays on for compatibility with its 2026-07-19
+        decision. Codex Remote Control arrived later and needs a managed standalone
+        app-server, so absence cannot safely opt every Codex deployment into a new
+        binary prerequisite. An explicit SHANTY_REMOTE_CONTROL=true covers both
+        harnesses; false covers both; absence remains Claude-only.
+        """
+        from .deployment import deployment_default
+        raw = deployment_default(root, "SHANTY_REMOTE_CONTROL")
+        if raw is None:
+            return False
+        value = raw.strip().lower()
+        if value in ("true", "1", "yes", "on"):
+            return True
+        if value in ("false", "0", "no", "off"):
+            return False
+        raise Unsupported(
+            f"SHANTY_REMOTE_CONTROL={raw!r} is not true or false; refusing to "
+            "guess an external-relay posture. Fix [env] in shantytown.toml."
+        )
+
     # MEASURED off a live codex pane on this host, 2026-08-06, with
     # `tmux capture-pane -p` — not read from source and not guessed. This is the
     # gap the module docstring above names ("there is no codex on this host to
@@ -716,6 +740,28 @@ class CodexHarness:
         # present, wired, and inert, which is the failure this repo keeps
         # naming. An agent whose stop events vanish is the aegis-nipg incident.
         flags = "--dangerously-bypass-hook-trust"
+        daemon_start = ""
+        if self._remote_control(root):
+            managed = home / "packages" / "standalone" / "current" / "codex"
+            if not managed.is_file():
+                raise Unsupported(
+                    f"Codex Remote Control is enabled, but the managed standalone "
+                    f"install is missing at {managed}. Install it with OpenAI's "
+                    f"standalone installer under CODEX_HOME={home}; npm Codex cannot "
+                    "start the Remote Control app-server daemon."
+                )
+            socket = home / "app-server-control" / "app-server-control.sock"
+            # Remote Control is a shared app-server daemon, not a per-TUI flag.
+            # Start is idempotent, then attach this TUI to its Unix socket. The
+            # explicit --cd is load-bearing: a remote TUI otherwise inherits the
+            # daemon's cwd even when the surrounding shell already changed dir.
+            daemon_start = (
+                f"{codex_mod().HOME_VAR}={home} codex remote-control start "
+                "--json >/dev/null && "
+            )
+            flags += f" --remote unix://{socket}"
+            if card.workspace:
+                flags += f" --cd {shlex.quote(str(card.workspace))}"
         # The codex spelling of the per-card permission opt-in. Same rule as
         # Claude Code's --dangerously-skip-permissions: one agent's decision on
         # one card, never a default anybody inherits (the pilot, aegis-qdal.5).
@@ -739,7 +785,7 @@ class CodexHarness:
         st_domain = f"ST_ROLE_DOMAIN={card.domain} " if card.domain else ""
         st_reports = f"ST_REPORTS_TO={card.reports_to} " if card.reports_to else ""
         launch = (
-            f"{root_env}{codex_mod().HOME_VAR}={home} SHANTY_AGENT={card.name} "
+            f"{daemon_start}{root_env}{codex_mod().HOME_VAR}={home} SHANTY_AGENT={card.name} "
             f"BOBBIN_ROLE={card.role} BEADS_ACTOR={card.name} "
             f"{st_roles}{st_domain}{st_reports}codex {flags}"
         )
