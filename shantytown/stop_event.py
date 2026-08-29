@@ -584,7 +584,7 @@ def _item_snapshot(e: StopEvent) -> tuple[str | None, str | None]:
 
 def _item_note(e: StopEvent, age: str,
                current: tuple[str | None, str | None] | None = None) -> str:
-    """Render the immutable stop snapshot and, when known, tracker state now.
+    """Render tracker state now, with the immutable stop snapshot as history.
 
     The pane verdict and current tracker read happen at drain time.  The event's
     item fields happened at stop time.  Keeping that boundary in the text avoids
@@ -598,15 +598,18 @@ def _item_note(e: StopEvent, age: str,
     else:
         snapshot = f"no open item (as of stop {age})"
 
-    if current is None or current == _item_snapshot(e):
+    if current is None:
         return snapshot
     item, status = current
     if status == "?":
-        return snapshot + " · tracker now: unreadable"
+        return "tracker now: unreadable · " + snapshot
     if item:
-        return (snapshot + f" · tracker now: held {item} "
-                f"({status or 'status ?'}; changed since stop)")
-    return snapshot + " · tracker now: no open item (changed since stop)"
+        live = f"tracker now: held {item} ({status or 'status ?'})"
+    else:
+        live = "tracker now: no open item"
+    if current == _item_snapshot(e):
+        return live
+    return live + " · at stop: " + snapshot
 
 
 def _compose_governance(events: list[StopEvent], now: float) -> str:

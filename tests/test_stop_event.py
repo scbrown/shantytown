@@ -330,8 +330,9 @@ def test_stop_snapshot_open_but_tracker_now_empty_names_both_moments(
                       _Panes({"p-ellie"}, {"p-ellie": IDLE_SCREEN}), _ready,
                       plate=lambda _name: None)
     reason = json.loads(capsys.readouterr().out)["reason"]
-    assert "held it-7 (open) (as of stop" in reason
-    assert "tracker now: no open item (changed since stop)" in reason
+    assert "tracker now: no open item" in reason
+    assert "at stop: held it-7 (open) (as of stop" in reason
+    assert "tracker now: held it-7" not in reason
 
 
 def test_stop_snapshot_empty_but_tracker_now_in_progress_names_both_moments(
@@ -346,8 +347,8 @@ def test_stop_snapshot_empty_but_tracker_now_in_progress_names_both_moments(
                       _Panes({"p-ellie"}, {"p-ellie": IDLE_SCREEN}), _ready,
                       plate=lambda _name: current)
     reason = json.loads(capsys.readouterr().out)["reason"]
-    assert "no open item (as of stop" in reason
-    assert "tracker now: held it-9 (in_progress; changed since stop)" in reason
+    assert "tracker now: held it-9 (in_progress)" in reason
+    assert "at stop: no open item (as of stop" in reason
 
 
 def test_an_unstamped_event_says_age_unknown_never_just_now(tmp_path, capsys):
