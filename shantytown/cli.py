@@ -116,6 +116,7 @@ from . import beads as beads_mod
 from . import cycle as cycle_mod
 from . import dream as dream_mod
 from . import bootstrap as boot_mod
+from . import creel_advisory as creel_advisory_mod
 from . import config
 from . import harness as harness_mod
 from . import launchable
@@ -4494,7 +4495,7 @@ def _crew_governor(a) -> int:
     extended a hysteresis hold, merely LOOKING at the bar would ratchet fleet
     policy. `st tend` remains the one writer of the engaged tier.
     """
-    def _render(multi) -> str:
+    def _render(multi, *, running: int = 0) -> str:
         """Render one provider with the same two-window contract in every fleet.
 
         The mixed-fleet branch used to call ``Verdict.render()``, whose human
@@ -4539,8 +4540,12 @@ def _crew_governor(a) -> int:
         cap = ("" if verdict.max_agents is None
                else f"CAP[{verdict.max_agents} agents]")
         detail = " ".join(x for x in (cap, burn, pace, label) if x)
-        return (f"ok {_pct(gov_mod.FIVE_HOUR)} "
-                f"{_pct(gov_mod.SEVEN_DAY)} {detail}").rstrip()
+        usage = (f"ok {_pct(gov_mod.FIVE_HOUR)} "
+                 f"{_pct(gov_mod.SEVEN_DAY)} {detail}").rstrip()
+        advisory = creel_advisory_mod.controller_line(
+            readings, running=running, cap=verdict.max_agents,
+            probe=getattr(cfg, "env", {}).get(creel_advisory_mod.PROBE_ENV))
+        return f"{usage} | {advisory}"
 
     # Mixed fleets cannot be represented by the legacy one-line value without
     # lying by omission.  Keep that exact line for old configs; emit one named
@@ -4552,8 +4557,14 @@ def _crew_governor(a) -> int:
             cards = _registry(a).all().exact()
         except Exception:
             cards = []
+        panes = _panes(a) if cards else None
+        live_by_harness = {}
+        for card in cards:
+            if card.pane and panes is not None and panes.exists(card.pane):
+                harness = harness_mod.name_for(card, root=a.root)
+                live_by_harness[harness] = live_by_harness.get(harness, 0) + 1
         for name, multi in sorted(governors.items()):
-            print(f"{name} {_render(multi)}")
+            print(f"{name} {_render(multi, running=live_by_harness.get(name, 0))}")
         for harness in sorted({harness_mod.name_for(card, root=a.root) for card in cards}
                               - {"base"} - set(cfg.governor.by_harness)):
             if gov_mod.unconfigured(cfg.governor, harness):
@@ -4599,7 +4610,13 @@ def _crew_governor(a) -> int:
     # when `restrictions` is empty and every other field says "wide open". A cap
     # that silently holds a fleet at 6 while the bar reads unrestricted is the
     # aegis-yc864 shape: a display disagreeing with enforcement.
-    print(_render(gov))
+    try:
+        cards = _registry(a).all().exact()
+        panes = _panes(a)
+        running = sum(bool(card.pane and panes.exists(card.pane)) for card in cards)
+    except Exception:
+        running = 0
+    print(_render(gov, running=running))
     return OK
 
 
@@ -6698,6 +6715,22 @@ def _tend_once(a, quiet: bool = False) -> int:
     cfg, governors = _governors(a)
     verdicts = {name: gov.evaluate(persist=not a.dry_run)
                 for name, gov in governors.items()}
+    setpoint_advisories = {}
+    for name, gov in sorted(governors.items()):
+        try:
+            readings = gov.reader.read_all()
+        except Exception:
+            readings = {}
+        provider_cards = [card for card in agents
+                          if (name == "base" or
+                              harness_mod.name_for(card, root=a.root) == name)]
+        running = sum(bool(card.pane and panes.exists(card.pane))
+                      for card in provider_cards)
+        line = creel_advisory_mod.controller_line(
+            readings, running=running, cap=verdicts[name].max_agents,
+            probe=cfg.env.get(creel_advisory_mod.PROBE_ENV))
+        setpoint_advisories[name] = line
+        print(f"  governor setpoint [{name}]: {line}", file=sys.stderr)
     # Preserve the byte-for-byte single-governor path.  A mixed fleet has no
     # meaningful global verdict: every decision below resolves from the card.
     verdict = verdicts.get("base") if not cfg.governor.by_harness else None
@@ -6864,6 +6897,11 @@ def _tend_once(a, quiet: bool = False) -> int:
         if idle:
             print(f"  ⚠ alerted the coordinator — {len(idle)} newly-idle feedable "
                   f"worker(s) with work ready: {', '.join(idle)}", file=sys.stderr)
+        advised = _sweep("governor-setpoint", lambda: creel_advisory_mod.Alerter(
+            Path(a.root), _registry(a), panes).sweep(setpoint_advisories))
+        if advised:
+            print(f"  ⚠ pushed changed governor setpoint advisory to the "
+                  f"coordinator: {', '.join(advised)}", file=sys.stderr)
         # SLEEP/DREAM (aegis-2o5n2): only after the normal idle-work sweep has
         # had first claim. The planner independently requires zero normal ready
         # work, so ordering and predicate both encode "lowest priority".

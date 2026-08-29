@@ -19,6 +19,8 @@ import shantytown.governor as gov_mod
 
 def _run(monkeypatch, capsys, governor):
     monkeypatch.setattr(cli, "_governor", lambda a: governor)
+    monkeypatch.setattr(cli.creel_advisory_mod, "controller_line",
+                        lambda *a, **k: "governor recommends +2")
     rc = cli._crew_governor(types.SimpleNamespace(root="/nonexistent"))
     return rc, capsys.readouterr().out.strip()
 
@@ -76,7 +78,7 @@ def test_both_windows_no_tier(monkeypatch, capsys):
              _verdict())
     rc, out = _run(monkeypatch, capsys, g)
     assert rc == cli.OK
-    assert out == "ok 45/50/- 24/45/-"
+    assert out == "ok 45/50/- 24/45/- | governor recommends +2"
 
 
 def test_engaged_tier_is_named(monkeypatch, capsys):
@@ -125,14 +127,14 @@ def test_absent_window_is_a_question_mark_not_zero(monkeypatch, capsys):
     as maximum headroom — the most expensive direction for this wrong answer."""
     g = _Gov({gov_mod.FIVE_HOUR: _reading(45)}, _verdict())   # no seven_day
     _, out = _run(monkeypatch, capsys, g)
-    assert out == "ok 45/50/- ?/?/?"
+    assert out == "ok 45/50/- ?/?/? | governor recommends +2"
 
 
 def test_not_ok_reading_is_a_question_mark(monkeypatch, capsys):
     g = _Gov({gov_mod.FIVE_HOUR: _reading(45),
               gov_mod.SEVEN_DAY: _reading(None, ok=False)}, _verdict())
     _, out = _run(monkeypatch, capsys, g)
-    assert out == "ok 45/50/- ?/?/?"
+    assert out == "ok 45/50/- ?/?/? | governor recommends +2"
 
 
 @pytest.mark.parametrize("case", ["lost", "off"])
@@ -157,7 +159,7 @@ def test_next_threshold_shows_the_window_asymmetry(monkeypatch, capsys):
     g = _Gov({gov_mod.FIVE_HOUR: _reading(44), gov_mod.SEVEN_DAY: _reading(44)},
              _verdict())
     _, out = _run(monkeypatch, capsys, g)
-    assert out == "ok 44/50/- 44/45/-"
+    assert out == "ok 44/50/- 44/45/- | governor recommends +2"
 
 
 def test_above_every_tier_renders_a_dash_not_a_number(monkeypatch, capsys):
@@ -184,6 +186,8 @@ def test_mixed_fleet_renders_both_windows_not_legacy_primary(monkeypatch, capsys
     }))
     monkeypatch.setattr(cli, "_registry",
                         lambda a: types.SimpleNamespace(all=lambda: []))
+    monkeypatch.setattr(cli.creel_advisory_mod, "controller_line",
+                        lambda *a, **k: "governor recommends +2")
 
     rc = cli._crew_governor(types.SimpleNamespace(root="/nonexistent"))
     lines = capsys.readouterr().out.strip().splitlines()
@@ -191,4 +195,4 @@ def test_mixed_fleet_renders_both_windows_not_legacy_primary(monkeypatch, capsys
     assert rc == cli.OK
     assert lines[0].startswith("base ok 4/50/- 93/-/- ")
     assert "FULL STOP" in lines[0]
-    assert lines[1] == "codex ok ?/?/? 3/45/-"
+    assert lines[1] == "codex ok ?/?/? 3/45/- | governor recommends +2"
