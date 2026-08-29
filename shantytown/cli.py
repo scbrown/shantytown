@@ -142,6 +142,7 @@ from .stopped import FilesStops
 from .quipu import QuipuRegistry
 from . import selfcheck
 from .anchor import Unreachable, anchor as do_anchor
+from . import handoff_text
 from .runtime import (asks_a_question, auth_expired, bash_guard_command,
                       ClaudeRuntime, CapabilityError, SettingsError,
                       emitted_bash_guard, emitted_pre_edit_guard,
@@ -986,6 +987,12 @@ def build_parser() -> argparse.ArgumentParser:
     sb.add_argument("--server", default=None,
                     help="quipu server (default $QUIPU_SERVER)")
 
+    hp = sub.add_parser("help",
+                        help="rationale pages for the recurring instructions "
+                             "(handoff/cycle, haul, inbox)")
+    hp.add_argument("topic", nargs="?", default="",
+                    help="handoff | cycle | haul | inbox; omit to list")
+
     cy = sub.add_parser("cycle",
                         help="clear an agent's context WITHOUT destroying its "
                              "runtime: checkpoint -> stop -> relaunch -> "
@@ -999,6 +1006,26 @@ def build_parser() -> argparse.ArgumentParser:
                          "destroys")
     cy.add_argument("--checkpoint-bead", default="",
                     help="durable checkpoint bead id; required for administrators and read back before a self-cycle request")
+    # --checkpoint-file is Stiwi's "an st command that does the needful"
+    # (aegis-x6yoq). Before it, a handoff was TWO hand-composed commands — a
+    # `bd comment ... --file` and then an `st cycle --self -r '...'` repeating the
+    # gist — and that composition is exactly where agents fumbled: they wrote the
+    # notes, then had to invent a one-line summary under context pressure, having
+    # just been told their judgement is degrading. Now the file IS the checkpoint:
+    # it is posted to the bead and its first line becomes the reason.
+    cy.add_argument("--checkpoint-file", default="",
+                    help="a file holding your checkpoint notes. Posted as a "
+                         "comment on the checkpoint/anchor bead, and its first "
+                         "line becomes the reason. Use INSTEAD of -r: one "
+                         "command, no hand-composed summary")
+    # Stiwi, same directive: "would be nice to specify a quipu node(s) for the
+    # handoff cycle". The point is that the resuming session starts from the graph
+    # rather than re-deriving context it just shed — query-first, mechanized at the
+    # exact moment context is dropped.
+    cy.add_argument("--quipu-node", action="append", default=[], metavar="NAME",
+                    help="quipu node relevant to the in-flight work (repeatable). "
+                         "Recorded on the request and named in the resume dispatch "
+                         "so the fresh session queries the graph before re-deriving")
     cy.add_argument("--self", dest="self_", action="store_true",
                     help="REQUEST your own cycle. An agent cannot cycle itself "
                          "in-process (the stop kills the session doing the "
@@ -1140,6 +1167,19 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_dashboard(a)
     if a.cmd == "subscribe":
         return _cmd_subscribe(a)
+    if a.cmd == "help":
+        from . import help_topics
+        page = help_topics.render(a.topic) if a.topic else None
+        if page:
+            print(page)
+            return OK
+        if a.topic:
+            print(f"  no such topic: {a.topic!r}", file=sys.stderr)
+            print(help_topics.index(), file=sys.stderr)
+            return REFUSED
+        print(help_topics.index())
+        return OK
+
     if a.cmd == "cycle":
         return _cmd_cycle(a)
     if a.cmd == "worktree":
@@ -2834,9 +2874,8 @@ def _inbox_durable(a, agent, msg: str, panes, typed: str | None = None) -> int:
             typed_size = size(typed)
             extra = (f" ({len(typed)} characters, but the cap counts bytes)"
                      if unit == "bytes" and typed_size != len(typed) else "")
-            print(f"    {overhead} of those {unit} are the {sig!r} signature st "
-                  f"adds for you, so YOUR text has a budget of "
-                  f"{e.budget - overhead} {unit}; you typed {typed_size}{extra}.",
+            print(f"    minus the {sig!r} signature st adds: your budget is "
+                  f"{e.budget - overhead} {unit}, you typed {typed_size}{extra}.",
                   file=sys.stderr)
         return REFUSED
     except beads_mod.BeadsValidationError as e:
@@ -3732,10 +3771,10 @@ def _cmd_crew(a) -> int:
               f"context, re-derive settled")
         print(f"    decisions, and miss constraints stated long ago. `st go` "
               f"REFUSES them (the depth is in the")
-        print(f"    work cell). Remedy: the agent CHECKPOINTS its state to its "
-              f"bead, THEN /clears (or hands off to")
-        print(f"    a fresh session), THEN takes the task — do NOT auto-clear, it "
-              f"loses whatever was not saved. The")
+        print(f"    work cell). Remedy: the agent {handoff_text.coordinator_tag()}, "
+              f"THEN takes the task — do NOT")
+        print(f"    auto-cycle, it loses whatever was not saved, and do NOT tell it "
+              f"to /clear (that drops bypass). The")
         print(f"    saturated agent is the LEAST able to notice it must cycle, so "
               f"this is the coordinator's to drive.")
     # The bead this state was built for (aegis-arma). An operator re-login rotates
@@ -4925,6 +4964,25 @@ def _push_invocation_branch(dest: Path) -> tuple[Path, str] | None:
     return cwd, branch.stdout.strip() if branch.returncode == 0 else "(detached HEAD)"
 
 
+def _cycle_anchor_bead(a, agent: str) -> str:
+    """The bead a --checkpoint-file lands on when none was named.
+
+    The agent's active plate item: what it is mid-task on is, by construction,
+    where a reader will look for its checkpoint. Best-effort — a checkpoint with
+    nowhere obvious to go must not block the cycle, it just degrades to the reason
+    line, and the caller says so out loud.
+    """
+    try:
+        plate = _tracker_plate(_tracker(a), agent)
+    except Exception:
+        return ""
+    for item in (plate or []):
+        iid = getattr(item, "id", None) or (item.get("id") if isinstance(item, dict) else None)
+        if iid:
+            return str(iid)
+    return ""
+
+
 def _cmd_cycle(a) -> int:
     """cycle <agent> — clear context WITHOUT destroying the runtime (aegis-3laza).
 
@@ -4955,11 +5013,34 @@ def _cmd_cycle(a) -> int:
     # in-process would die halfway through — after the stop, before the relaunch,
     # which is the one outcome worse than not cycling at all.
     if getattr(a, "self_", False):
+        # --checkpoint-file: the file IS the checkpoint (aegis-x6yoq). Read it
+        # FIRST, so a bad path refuses before anything is recorded, and so the
+        # reason is derived rather than hand-composed under context pressure.
+        ckpt_file = getattr(a, "checkpoint_file", "").strip()
+        ckpt_body = ""
+        if ckpt_file:
+            try:
+                ckpt_body = Path(ckpt_file).read_text().strip()
+            except OSError as e:
+                print(f"  refused: --checkpoint-file {ckpt_file!r} could not be read ({e}). "
+                      f"Nothing was recorded; your context is untouched.", file=sys.stderr)
+                return REFUSED
+            if not ckpt_body:
+                print(f"  refused: --checkpoint-file {ckpt_file!r} is empty. The checkpoint is "
+                      f"the one thing a cycle destroys — write it first.", file=sys.stderr)
+                return REFUSED
+            if not a.reason.strip():
+                # First non-blank line, shorn of markdown heading marks. The whole
+                # file goes on the bead; the reason is only the pointer to it.
+                first = next((ln.strip().lstrip("#").strip()
+                              for ln in ckpt_body.splitlines() if ln.strip()), "")
+                a.reason = first[:300]
         if not a.reason.strip():
             print("  refused: --self needs your checkpoint. You are the only one "
                   "who can write it, and it is the only thing the cycle destroys. "
-                  "`st cycle --self -r '<what you are mid-task on, decisions "
-                  "already made, the exact next step>'`", file=sys.stderr)
+                  "`st cycle --self --checkpoint-file <notes>` (or -r '<what you "
+                  "are mid-task on, decisions already made, the exact next step>')",
+                  file=sys.stderr)
             return REFUSED
         if a.dry_run:
             print(f"  would: request a cycle for {agent_name}")
@@ -4982,10 +5063,52 @@ def _cmd_cycle(a) -> int:
                 print(f"  refused: checkpoint bead {checkpoint_bead!r} could not be read ({e})",
                       file=sys.stderr)
                 return REFUSED
-        cycle_mod.Requests(a.root).request(agent_name, a.reason.strip(), checkpoint_bead)
+        # Post the checkpoint file to the bead BEFORE recording the request, so a
+        # failed comment cannot leave a request pointing at a checkpoint that was
+        # never written down. Best-effort by design: if the tracker is unreachable
+        # the cycle must still be requestable — an agent at 600k that cannot hand
+        # off because Dolt is flapping is strictly worse off than one whose notes
+        # live only in the request record.
+        posted_to = ""
+        if ckpt_body:
+            target = checkpoint_bead or _cycle_anchor_bead(a, agent_name)
+            if target:
+                try:
+                    # Beads-specific by construction: appending a checkpoint
+                    # comment is not part of the three-verb tracker contract
+                    # (test_swap pins it), so this reaches the beads helper
+                    # directly and other backends degrade below rather than
+                    # pretend. See beads.append_comment.
+                    if _backend(a, "files") not in ("beads", "br"):
+                        raise RuntimeError(
+                            f"backend {_backend(a, 'files')!r} cannot append a "
+                            f"comment; checkpoint kept as the reason line")
+                    trk = _tracker(a)
+                    beads_mod.append_comment(getattr(trk, "repo", None), target, ckpt_body)
+                    posted_to = target
+                except Exception as e:
+                    print(f"  ⚠ checkpoint file NOT posted to {target} ({e}). "
+                          f"Cycle still requested; the reason line carries the gist, "
+                          f"but re-post the file when the tracker is reachable.",
+                          file=sys.stderr)
+            else:
+                print("  ⚠ no checkpoint bead and no active anchor to post to — "
+                      "the file's first line is recorded as the reason only.",
+                      file=sys.stderr)
+
+        quipu_nodes = [n for n in getattr(a, "quipu_node", []) if n.strip()]
+        cycle_mod.Requests(a.root).request(agent_name, a.reason.strip(),
+                                           checkpoint_bead or posted_to,
+                                           quipu_nodes)
         print(f"  {agent_name}: cycle REQUESTED — checkpoint recorded.")
+        if posted_to:
+            print(f"  checkpoint file posted to {posted_to}.")
+        if quipu_nodes:
+            print(f"  graph context recorded: {', '.join(quipu_nodes)} "
+                  f"— named in your resume dispatch.")
         print(f"  `st tend` performs it. You stay up until it does, so keep "
               f"working; nothing is lost if it never fires.")
+        print(f"  {handoff_text.refusal_note()}")
         return OK
 
     try:
