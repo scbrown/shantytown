@@ -803,11 +803,15 @@ class CodexHarness:
                 "codex remote-control start "
                 "--json >/dev/null"
             )
+            stop = (
+                f"{codex_mod().HOME_VAR}={daemon_home} "
+                "codex remote-control stop --json >/dev/null"
+            )
             # On a cold 0.151.0 start the daemon can be fully spawned while the
             # relay's first status read still returns "connection is errored".
             # The same idempotent command immediately reports connected. Retry
             # exactly once: a persistent error still refuses the TUI launch.
-            daemon_start = f"({start} || {start}) && "
+            daemon_start = f"{stop} && ({start} || {start}) && "
             flags += f" --remote unix://{socket}"
             if card.workspace:
                 flags += f" --cd {shlex.quote(str(card.workspace))}"
