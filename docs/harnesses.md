@@ -125,6 +125,18 @@ SHANTY_AGENT=dearing BOBBIN_ROLE=worker BEADS_ACTOR=dearing ST_ROLES=worker \
 codex --dangerously-bypass-hook-trust
 ```
 
+When `[env] SHANTY_REMOTE_CONTROL = "true"`, the Codex harness first starts the
+managed standalone app-server daemon idempotently, then attaches the TUI with
+`--remote unix://<CODEX_HOME>/app-server-control/app-server-control.sock`. It also
+passes `--cd <workspace>`: a remote TUI inherits the daemon's directory otherwise,
+regardless of the shell's preceding `cd`. Codex requires the official standalone
+install at `<CODEX_HOME>/packages/standalone/current/codex`; an npm-only install can
+run the TUI but cannot start Remote Control, so `st` refuses that configured launch.
+
+Unlike Claude's compatibility default, an absent `SHANTY_REMOTE_CONTROL` does not
+opt Codex into this new binary prerequisite. Set the deployment value explicitly to
+enable or disable both harnesses.
+
 `--dangerously-bypass-hook-trust` is a **default** here, and it is the only `dangerously-` flag in
 this repo that is not opt-in per card. It does not widen what the model may do — that is
 `--dangerously-bypass-approvals-and-sandbox`, which stays per card via `dangerous: true`. It says
