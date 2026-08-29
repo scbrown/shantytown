@@ -244,8 +244,13 @@ def _hauling_world(tmp_path, monkeypatch, in_progress=None, context_k=None,
                         lambda *a, **k: ["billy"])
     monkeypatch.setattr("shantytown.feed_check.bd_cwd", lambda reg: None)
     if claims is not None:
+        # **kw, not a fixed arity: bd_claim gained root/reg when the dispatcher's
+        # WRITE was routed to br (aegis-mxgzh). A fixed-arity double raises
+        # TypeError into the caller's best-effort except, so the claim silently
+        # does not happen and the double records nothing — which is exactly how
+        # this test failed when the signature moved.
         monkeypatch.setattr("shantytown.feed_check.bd_claim",
-                            lambda cwd, nid: claims.append(nid))
+                            lambda cwd, nid, **kw: claims.append(nid))
     if ready is None:
         ready = [{"id": "aegis-9", "title": "queued work",
                   "assignee": "beads_aegis/crew/billy"}]

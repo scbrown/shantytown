@@ -475,3 +475,62 @@ def test_notify_injects_the_root_so_its_legs_can_reach_br():
         for line in src.splitlines():
             if leg in line:
                 assert "root=root" in line, f"notify leg does not pass root: {line.strip()}"
+
+
+def test_every_feed_check_leg_reaches_br_not_bd(monkeypatch, tmp_path):
+    """aegis-mxgzh remainder: ready/in_progress were fixed and FOUR legs were not.
+
+    Enumerated rather than fixed one-at-a-time, because that is how this bug kept
+    coming back: arnold migrated queue_state, I migrated ready/in_progress, and
+    the tend journal then found blocked/show/claim still spawning retired `bd` and
+    failing loud every pass. This asserts the whole surface at once.
+    """
+    from shantytown import feed_check
+    import shantytown.br as br
+
+    monkeypatch.setattr(feed_check.subprocess, "run",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            AssertionError("spawned retired bd on a br deployment")))
+
+    class _T:
+        pass
+    monkeypatch.setattr(feed_check, "_br_tracker", lambda root, reg: _T())
+    monkeypatch.setattr(br, "ready", lambda t: [{"id": "r"}])
+    monkeypatch.setattr(br, "in_progress", lambda t: [{"id": "a"}])
+    monkeypatch.setattr(br, "blocked", lambda t: [{"id": "b"}])
+    monkeypatch.setattr(br, "show", lambda t, i: {"id": i})
+    claimed = []
+    monkeypatch.setattr(br, "claim", lambda t, i: claimed.append(i))
+
+    R = dict(root=tmp_path, reg=None)
+    assert feed_check._bd_ready(None, **R) == [{"id": "r"}]
+    assert feed_check.bd_in_progress(None, **R) == [{"id": "a"}]
+    assert feed_check.bd_blocked(None, **R) == [{"id": "b"}]
+    assert feed_check.bd_show(None, "aegis-1", **R) == {"id": "aegis-1"}
+    feed_check.bd_claim(None, "aegis-1", **R)
+    assert claimed == ["aegis-1"], "the dispatcher's WRITE must reach br, not bd"
+
+
+def test_notify_threads_root_into_every_leg_it_calls():
+    """A leg wired but not THREADED is inert — the whole reason this recurred.
+
+    notify calls the module-level helpers directly on its production branch (the
+    `self._bd_*` attributes are the TEST injection seam). If such a call omits
+    root, the helper cannot resolve the backend and silently falls back to the
+    retired binary — wired, deployed, and doing nothing.
+    """
+    import inspect, re
+    from shantytown import notify
+
+    legs = re.compile(r"\b(?:feed_check\.)?(bd_claim|bd_blocked|bd_show|_bd_ready|bd_in_progress)\(")
+    offenders = []
+    for line in inspect.getsource(notify).splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#") or stripped.startswith("def ") or "self._bd" in stripped:
+            continue                      # comment, definition, or the injection seam
+        # `root=root` inside __init__ and `root=self._root` inside a sweep are
+        # both correct threadings — the difference is only which scope holds it.
+        if legs.search(stripped) and not re.search(r"root=(root|self\._root)\b", stripped):
+            offenders.append(stripped)
+    assert not offenders, ("notify legs not threaded with root:\n  "
+                           + "\n  ".join(offenders))
