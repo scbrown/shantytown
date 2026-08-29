@@ -82,11 +82,73 @@ def test_codex_remote_control_is_explicit_and_attaches_to_managed_daemon(tmp_pat
         Agent(name="ellie", role="worker", workspace="/work with space"),
         str(cfg), root=root)
 
-    socket = cfg.parent / "app-server-control" / "app-server-control.sock"
-    assert f"CODEX_HOME={cfg.parent} codex remote-control start --json" in launch
+    daemon_home = cfg.parent.parent / "remote-control" / "ellie"
+    socket = daemon_home / "app-server-control" / "app-server-control.sock"
+    assert f"SHANTY_AGENT=ellie" in launch
+    assert f"BEADS_ACTOR=ellie" in launch
+    assert f"CODEX_HOME={daemon_home} codex remote-control start --json" in launch
     assert launch.count("codex remote-control start --json") == 2
     assert f"--remote unix://{socket}" in launch
     assert "--cd '/work with space'" in launch
+    assert f"ln -sfn {cfg} {daemon_home / 'config.toml'}" in launch
+    assert f"ln -sfn {cfg.parent / 'auth.json'} {daemon_home / 'auth.json'}" in launch
+    assert f"ln -sfn {cfg.parent / 'packages'} {daemon_home / 'packages'}" in launch
+    # The daemon home precedes the TUI home; readers must report the TUI's role
+    # settings rather than mistaking daemon state for a second config artifact.
+    assert CODEX.settings_in_cmdline(launch) == str(cfg)
+
+
+def test_codex_remote_control_daemon_identity_and_socket_are_per_card(tmp_path):
+    """is5rv: hooks and tool shells inherit the daemon, not the attached TUI.
+
+    Two cards sharing one role config must therefore never share the daemon
+    whose SHANTY_AGENT drives haul selection and whose BEADS_ACTOR stamps claims.
+    """
+    root = tmp_path / ".shanty"
+    root.mkdir()
+    (root / "shantytown.toml").write_text(
+        '[env]\nSHANTY_REMOTE_CONTROL = "true"\n')
+    cfg = root / "settings" / "codex" / "worker" / "config.toml"
+    managed = cfg.parent / "packages" / "standalone" / "current" / "codex"
+    managed.parent.mkdir(parents=True)
+    managed.write_text("")
+
+    launches = {
+        name: CODEX.launch(Agent(name=name, role="worker"), str(cfg), root=root)
+        for name in ("ellie", "ada")
+    }
+    for name, launch in launches.items():
+        daemon_home = cfg.parent.parent / "remote-control" / name
+        assert f"SHANTY_AGENT={name}" in launch
+        assert f"BEADS_ACTOR={name}" in launch
+        assert f"CODEX_HOME={daemon_home} codex remote-control start" in launch
+        assert f"--remote unix://{daemon_home}/app-server-control/app-server-control.sock" in launch
+
+    assert "remote-control/ada" not in launches["ellie"]
+    assert "remote-control/ellie" not in launches["ada"]
+
+
+def test_codex_remote_control_state_never_collides_with_an_agent_override(tmp_path):
+    """The existing codex/agent-<name> directory is governed configuration.
+
+    Per-card daemon state needs a separate namespace; otherwise bootstrap would
+    replace an override's config.toml with a self-referential link.
+    """
+    root = tmp_path / ".shanty"
+    root.mkdir()
+    (root / "shantytown.toml").write_text(
+        '[env]\nSHANTY_REMOTE_CONTROL = "true"\n')
+    cfg = root / "settings" / "codex" / "agent-ellie" / "config.toml"
+    managed = cfg.parent / "packages" / "standalone" / "current" / "codex"
+    managed.parent.mkdir(parents=True)
+    managed.write_text("")
+
+    launch = CODEX.launch(Agent(name="ellie", role="worker"), str(cfg), root=root)
+    daemon_home = root / "settings" / "codex" / "remote-control" / "ellie"
+
+    assert f"CODEX_HOME={daemon_home} codex remote-control start" in launch
+    assert f"ln -sfn {cfg} {daemon_home / 'config.toml'}" in launch
+    assert str(cfg.parent / "config.toml") != str(daemon_home / "config.toml")
 
 
 def test_codex_remote_control_absence_does_not_add_a_binary_prerequisite(tmp_path):
