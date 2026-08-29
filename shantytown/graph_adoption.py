@@ -58,6 +58,18 @@ MISSING = "missing"            # neither named nor excused, and the mode allowed
 # fleet's own advise-then-enforce ladder, and it is also the only order in which
 # the enforcement gets to be justified by evidence rather than by intent.
 ADVISE, REQUIRE = "advise", "require"
+
+# WHAT THE COVERAGE NUMBER ACTUALLY COVERS (aegis-5pchx). Measured 2026-08-29: a
+# real post-flip haul serve wrote no row here, because `stop_event._haul` is a
+# SELF-advance — it blocks a worker's own stop with its next assigned bead and
+# never calls a dispatch verb, so no gate is consulted. That is good for safety
+# (the dominant path cannot be refused by REQUIRE) and a trap for reading: a
+# green 100% means coordinator dispatch and explicit cycles complied, NOT that
+# the fleet cites graph context for its work. Printed beside every rendering of
+# the number, including --json, because a scope note kept anywhere else is one
+# the number travels without.
+SCOPE_NOTE = ("scope: coordinator dispatch + explicit cycles; natural haul "
+              "serves are self-advances and are not counted")
 MODE_ENV = "SHANTY_GRAPH_CONTEXT"
 
 
