@@ -210,11 +210,14 @@ def test_st_crew_governor_prints_BOTH_restrictions(monkeypatch, capsys):
               SEVEN_DAY: Reading(pct=79, source="stub")},
              _verdict(SEVEN_50, SEVEN_70, SEVEN_80_SUPPORT))
     monkeypatch.setattr(cli, "_governor", lambda a: g)
+    monkeypatch.setattr(cli.creel_advisory_mod, "controller_line",
+                        lambda *a, **k: "governor recommends +2")
     rc = cli._crew_governor(types.SimpleNamespace(root="/nonexistent"))
     out = capsys.readouterr().out.strip()
     assert rc == cli.OK
     assert out == ("ok 3/50/- 79/80/- dispatch only P0 and above "
-                   "[seven_day >= 70%]; only support crew runs [seven_day >= 80%]")
+                   "[seven_day >= 70%]; only support crew runs [seven_day >= 80%] "
+                   "| governor recommends +2")
     # THE PARSE CONTRACT IS UNCHANGED: a status bar takes three fields and treats
     # the remainder as free text. `; ` inside the label must not break that.
     status, five, seven, label = out.split(" ", 3)
