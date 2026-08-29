@@ -24,7 +24,7 @@
 *Create a work item. Tell an agent to go get it. That's the whole idea.*
 
 [![dispatch 3.4s](https://img.shields.io/badge/dispatch-3.4s-brightgreen)](#-measured-against-gas-town)
-[![28 commands](https://img.shields.io/badge/commands-28-blue)](#-the-whole-surface)
+[![29 commands](https://img.shields.io/badge/commands-29-blue)](#-the-whole-surface)
 [![tests](https://img.shields.io/badge/tests-2132%20passing-blue)](#-principles)
 [![python](https://img.shields.io/badge/python-3.11%2B-blue)](#-install)
 [![dependencies none](https://img.shields.io/badge/dependencies-none-blue)](#-install)
@@ -197,7 +197,7 @@ stop.* Here is what the gate measured.
 
 | | `gt sling` | `st go` | |
 |---|---:|---:|---|
-| Commands | ~110 | **28** | *a small, deliberate fraction of the surface, by measured use* |
+| Commands | ~110 | **29** | *a small, deliberate fraction of the surface, by measured use* |
 | dispatch (dry-run) | 51.54 s | **0.15 s** | **~344× faster** |
 | dispatch (real) | > 120 s ⏱️ | **3.40 s** | **≥35× faster** |
 | Dolt connections | 63 | **3** | **21× fewer** |
@@ -303,6 +303,9 @@ st init                           scaffold a NEW deployment: asks, then writes s
 st new <agent>                    create an agent from a card
 st start [--mode lite|heavy]      BOOT the town: the admin alone, or every card. idempotent.
 st stop <agent>                   stop it
+st window plan <id>               snapshot + acquire one maintenance transaction
+st window drain|clear|release|abort <id>
+                                  drain and restore exactly that snapshot
 st log [agent]                    what happened
 st context <query>                what code should I be looking at?
 st doctor [--install]             what's installed, what's stale, what's missing

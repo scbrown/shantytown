@@ -1,4 +1,4 @@
-"""st — the CLI. Twenty-eight commands, and the count is load-bearing: each earns its slot.
+"""st — the CLI. Twenty-nine commands, and the count is load-bearing: each earns its slot.
 
     anchor [--short|--events|--harness] · go · repool · defer · inbox [--count] · task
     · crew [--count|--governor] · input [--show|--clear|--dismiss] · ask · answer
@@ -6,7 +6,7 @@
     · stop · log · context · doctor [--install] · dream [--run]
     · tend [--install|--status|--reauth|--target] · attach [-r|--no-start]
     · dashboard [admin] · subscribe · cycle [--self|--allow-loss] · worktree [--gc]
-    · push [--branch] · stats · help <topic>
+    · push [--branch] · window {plan|drain|clear|release|abort} · stats · help <topic>
 
 `help` earned the twenty-eighth slot in aegis-x6yoq. The recurring pane messages
 were essays because the WHY had nowhere else to live, so every reason anyone might
@@ -150,6 +150,7 @@ from .launched import FilesLaunches, CURRENT, STALE, UNKNOWN
 from .stopped import FilesStops
 from .quipu import QuipuRegistry
 from . import graph_adoption
+from . import window as window_mod
 from . import selfcheck
 from .anchor import Unreachable, anchor as do_anchor
 from . import handoff_text
@@ -488,6 +489,14 @@ def _dispatch_gate(a):
     Evaluated once per invocation and closed over, so a dispatch pays at most one
     metric read — not one per plan()/triage()/go() call on the same Dispatcher.
     """
+    try:
+        maintenance = window_mod.active(Path(a.root))
+    except window_mod.WindowUnreadable as exc:
+        return lambda item, agent=None: f"maintenance-window state unreadable — {exc}"
+    if maintenance is not None:
+        return lambda item, agent=None: (
+            f"maintenance window {maintenance['id']!r} is {maintenance['state']} — "
+            "dispatch/feed held until release or abort")
     cfg, governors = _governors(a)
     stood_down = bool(getattr(getattr(cfg, "fleet", None), "stood_down", False))
     if not governors and not stood_down:
@@ -842,6 +851,25 @@ def build_parser() -> argparse.ArgumentParser:
                          "<agent>` to bring it back. `st tend --retire` is the "
                          "stronger card-level state that also makes `st start` "
                          "skip it.")
+
+    wn = sub.add_parser(
+        "window", help="transactional fleet-maintenance drain / clear / restore ledger")
+    wn_sub = wn.add_subparsers(dest="window_action", required=True)
+    wn_plan = wn_sub.add_parser("plan", help="snapshot the fleet and acquire one window ID")
+    wn_plan.add_argument("id")
+    wn_plan.add_argument("--target-version", default=None, metavar="SHA",
+                         help="refuse before drain when this version is already installed")
+    wn_plan.add_argument("-n", "--dry-run", action="store_true",
+                         help="print the manifest without acquiring the window ID")
+    for action, help_text in (
+        ("drain", "activate the relaunch lease and pause supervision"),
+        ("clear", "fail closed unless every recorded worker/writer is gone"),
+        ("release", "restore the exact snapshot after CLEAR"),
+        ("abort", "roll back to the exact snapshot before CLEAR")):
+        p = wn_sub.add_parser(action, help=help_text)
+        p.add_argument("id")
+        p.add_argument("-n", "--dry-run", action="store_true",
+                       help="verify and describe the transition; change nothing")
 
     ss = sub.add_parser("stats", help="what the crew actually did: files, "
                                       "skills, tokens, activity (local store)")
@@ -1200,6 +1228,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_init(a)
     if a.cmd == "start":
         return _cmd_start(a)
+    if a.cmd == "window":
+        return _cmd_window(a)
     if a.cmd == "tend":
         return _cmd_tend(a)
     if a.cmd == "dream":
@@ -1535,6 +1565,8 @@ def _cmd_new(a) -> int:
     The boot command that wants "make it so, whatever is currently up" is
     `st start`; the difference is written up in bootstrap.py.
     """
+    if (rc := _window_launch_gate(a)) is not None:
+        return rc
     panes = _panes(a)
     try:
         card = _registry(a).get(a.agent)
@@ -1545,7 +1577,8 @@ def _cmd_new(a) -> int:
     return _launch(a, card, panes, runtime, dry_run=a.dry_run)
 
 
-def _launch(a, card, panes, runtime, *, dry_run: bool = False) -> int:
+def _launch(a, card, panes, runtime, *, dry_run: bool = False,
+            window_restore: bool = False) -> int:
     """LAUNCH ONE AGENT. The whole seam: refuse-first, then workspace, then kit,
     then session, then verify. Returns 0 (up + hooks verified) / 1 (refused) /
     2 (launched but not verified).
@@ -1560,6 +1593,8 @@ def _launch(a, card, panes, runtime, *, dry_run: bool = False) -> int:
     guard, the equipped-or-not-created refusal and the hooks verification are each
     load-bearing, and a second launcher would have to re-earn all four.
     """
+    if not window_restore and (rc := _window_launch_gate(a)) is not None:
+        return rc
     session = _session_for(card)
     # PRE-FLIGHT: compose refuses capability/settings/unknown-harness BEFORE we
     # touch tmux. UnknownHarness is a REFUSAL by design (harness.py) but was not in
@@ -2054,6 +2089,8 @@ def _cmd_start(a) -> int:
       2  the pass ran and some agent is NOT known to be up (refused mid-flight,
          or launched-but-unverified). A boot you cannot script on is not a boot.
     """
+    if (rc := _window_launch_gate(a)) is not None:
+        return rc
     panes = _panes(a)
     try:
         agents = _registry(a).all().exact()
@@ -6065,6 +6102,159 @@ def _systemctl_user_enabled(unit: str) -> bool:
     return False
 
 
+def _window_launch_gate(a) -> int | None:
+    """Refuse every relaunch seam while a maintenance lease exists."""
+    try:
+        lease = window_mod.active(Path(a.root))
+    except window_mod.WindowUnreadable as exc:
+        print(f"  could not tell: {exc}; relaunch held fail-closed", file=sys.stderr)
+        return CANNOT_TELL
+    if lease is None:
+        return None
+    print(f"  refused: maintenance window {lease['id']!r} is {lease['state']} — "
+          "relaunch held until `st window release` or `abort`", file=sys.stderr)
+    return REFUSED
+
+
+def _window_systemctl(action: str, unit: str) -> None:
+    import subprocess
+    r = subprocess.run(["systemctl", "--user", action, unit],
+                       capture_output=True, text=True, timeout=30)
+    if r.returncode:
+        detail = (r.stderr or r.stdout).strip().splitlines()
+        raise window_mod.WindowUnreadable(
+            f"systemctl --user {action} {unit} failed: "
+            f"{detail[0] if detail else f'exit {r.returncode}'}")
+
+
+def _cmd_window(a) -> int:
+    """One journalled maintenance transaction; every consequence is read back."""
+    from . import deployed_sha
+    from . import input_box
+
+    root = Path(a.root)
+    panes = _panes(a)
+    action = a.window_action
+    try:
+        if action == "plan":
+            agents = _registry(a).all().exact()
+            roster = []
+            for card in agents:
+                live = bool(card.pane and panes.exists(card.pane))
+                verdict, detail = "DOWN", ""
+                if live:
+                    try:
+                        screen = panes.capture(card.pane)
+                        awaiting = asks_a_question(_runtime(a, panes), screen)
+                        rep = input_box.show(panes, card.pane, awaiting=awaiting)
+                        verdict, detail = rep.verdict, rep.detail
+                    except Exception as exc:  # unknown is evidence, never empty
+                        verdict, detail = "UNKNOWN", f"{type(exc).__name__}: {exc}"
+                roster.append({"agent": card.name, "pane": card.pane or "",
+                               "live": live, "input": verdict, "input_detail": detail})
+            anchors = []
+            for row in _tracker_rows(_tracker(a)):
+                status = str(row.get("status", "")).lower()
+                if status == "in_progress":
+                    anchors.append({k: row.get(k) for k in ("id", "title", "assignee")})
+            timer = {"unit": sup_mod.TIMER,
+                     "active": _systemctl_user_active(sup_mod.TIMER),
+                     "enabled": _systemctl_user_enabled(sup_mod.TIMER)}
+            manifest = window_mod.plan(
+                root, a.id, roster=roster, anchors=anchors,
+                deployed_sha=deployed_sha(), target_version=a.target_version,
+                timer=timer, actor=_me(a) or "", persist=not a.dry_run)
+            print(json.dumps(manifest, indent=2, sort_keys=True))
+            if a.dry_run:
+                print("  --dry-run: window ID not acquired")
+            return OK
+
+        if action == "drain":
+            current = window_mod.WindowStore(root).require(a.id)
+            if a.dry_run:
+                print(f"  would drain {a.id}: pause {current['timer']['unit']} and "
+                      f"notify {sum(bool(r.get('live')) for r in current['roster'])} "
+                      "recorded live agent(s); lease already prevents relaunch")
+                return OK
+            def pause():
+                if current.get("timer", {}).get("active"):
+                    _window_systemctl("stop", sup_mod.TIMER)
+                    if _systemctl_user_active(sup_mod.TIMER):
+                        raise window_mod.WindowUnreadable("tend timer still active after stop")
+            manifest = window_mod.drain(root, a.id, pause_timer=pause)
+            inbox = _inbox(a, default="beads")
+            for row in manifest["roster"]:
+                if row.get("live"):
+                    inbox.deliver(
+                        row["agent"],
+                        f"MAINTENANCE WINDOW {a.id}: checkpoint, clear typed input, "
+                        f"report, then `st stop {row['agent']} --reason 'window {a.id}'`. "
+                        "Relaunch is leased until release/abort.",
+                        frm=_me(a) or "st window")
+            print(f"  draining {a.id}: relaunch lease active; "
+                  f"{sum(bool(r.get('live')) for r in manifest['roster'])} live agent(s) notified")
+            return OK
+
+        if action == "clear":
+            def observe(manifest):
+                blockers = []
+                for row in manifest["roster"]:
+                    pane = row.get("pane")
+                    if pane and panes.exists(pane):
+                        try:
+                            screen = panes.capture(pane)
+                            rep = input_box.show(
+                                panes, pane,
+                                awaiting=asks_a_question(_runtime(a, panes), screen))
+                            suffix = f" input={rep.verdict}"
+                        except Exception as exc:
+                            suffix = f" input=UNKNOWN({type(exc).__name__})"
+                        blockers.append(f"{row['agent']} pane={pane}{suffix}")
+                for unit in (sup_mod.TIMER, sup_mod.SERVICE):
+                    if _systemctl_user_active(unit):
+                        blockers.append(f"writer unit={unit} active")
+                return blockers
+            window_mod.clear(root, a.id, observe=observe, persist=not a.dry_run)
+            prefix = "would be " if a.dry_run else ""
+            print(f"  {prefix}CLEAR {a.id}: no recorded pane or supervisor writer remains live")
+            return OK
+
+        if a.dry_run:
+            current = window_mod.WindowStore(root).require(a.id)
+            if action == "release" and current["state"] != "clear":
+                raise window_mod.WindowRefused(
+                    "release requires a successful CLEAR; use abort to roll back earlier")
+            names = [r["agent"] for r in current["roster"] if r.get("live")]
+            print(f"  would {action} {a.id}: restore "
+                  f"{', '.join(names) if names else 'no agents'}; tend timer "
+                  f"{'active' if current.get('timer', {}).get('active') else 'inactive'}")
+            return OK
+
+        def start_agent(name):
+            card = _registry(a).get(name)
+            rc = _launch(a, card, panes, _runtime(a, panes), dry_run=False,
+                         window_restore=True)
+            if rc != OK:
+                raise window_mod.WindowUnreadable(f"restore launch {name} returned {rc}")
+        current = window_mod.restore(
+            root, a.id, start_agent=start_agent,
+            is_live=lambda name: bool((card := _registry(a).get(name)).pane
+                                      and panes.exists(card.pane)),
+            timer_active=lambda: _systemctl_user_active(sup_mod.TIMER),
+            resume_timer=lambda: _window_systemctl("start", sup_mod.TIMER),
+            require_clear=(action == "release"))
+        print(f"  {action} {a.id}: restored "
+              f"{sum(bool(r.get('live')) for r in current['roster'])} agent(s) "
+              "and the recorded tend-timer state by read-back")
+        return OK
+    except window_mod.WindowRefused as exc:
+        print(f"  refused: {exc}", file=sys.stderr)
+        return REFUSED
+    except (window_mod.WindowUnreadable, OSError, LookupError) as exc:
+        print(f"  could not tell: {exc}", file=sys.stderr)
+        return CANNOT_TELL
+
+
 def _run_cmd(argv) -> None:
     import subprocess
     subprocess.run(argv, capture_output=True, text=True, timeout=60)
@@ -6699,6 +6889,8 @@ def _code_fingerprint(pkg=None) -> str | None:
 
 
 def _tend_once(a, quiet: bool = False) -> int:
+    if (rc := _window_launch_gate(a)) is not None:
+        return rc
     panes = _panes(a)
     try:
         agents = _registry(a).all().exact()
