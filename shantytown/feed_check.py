@@ -45,6 +45,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from .answer import Answer
 from .inbox import is_decision, is_message
 from . import handoff_text
 
@@ -272,10 +273,7 @@ def _bd_ready(cwd: str | None = None, root=None, reg=None) -> list[dict]:
     # Fixing queue_state alone therefore repaired the alert path and left the
     # feed dead: alerts fired, nothing was ever fed.
     if root is not None:
-        tracker = _br_tracker(root, reg)
-        if tracker is not None:
-            from .br import ready as br_ready
-            return br_ready(tracker)
+        return backend_adapter(root, reg, cwd=cwd).ready().exact()
     r = subprocess.run(["bd", "ready", "--json", "--limit", "0"], capture_output=True, text=True,
                        timeout=20, cwd=cwd)
     if r.returncode != 0:
@@ -537,6 +535,77 @@ def _br_tracker(root, reg):
                            or bd_cwd(reg)))
 
 
+class TrackerAdapter:
+    """One backend surface for every feed-related tracker leg.
+
+    The public ``bd_*`` helpers remain as compatibility seams for injected test
+    doubles and older callers, but none of them decides the backend anymore.
+    """
+    def __init__(self, root, reg, cwd=None):
+        self.root, self.reg = root, reg
+        self.tracker = _br_tracker(root, reg) if root is not None else None
+        self.kind = "br" if self.tracker is not None else "bd"
+        self.cwd = (cwd if cwd is not None else
+                    (bd_cwd(reg) if self.tracker is None and reg is not None else None))
+
+    def _legacy(self, *args):
+        r = subprocess.run(list(args), capture_output=True, text=True,
+                           timeout=20, cwd=self.cwd)
+        if r.returncode != 0:
+            raise RuntimeError(f"{' '.join(args[:2])} failed: {r.stderr.strip()}")
+        return json.loads(r.stdout) if r.stdout.strip() else None
+
+    def ready(self) -> Answer[list[dict]]:
+        if self.tracker is not None:
+            from .br import ready
+            value = ready(self.tracker)
+        else:
+            value = self._legacy("bd", "ready", "--json", "--limit", "0")
+        return Answer.complete_read(value, how=f"{self.kind} ready --limit 0")
+
+    def active(self) -> Answer[list[dict]]:
+        if self.tracker is not None:
+            from .br import in_progress
+            value = in_progress(self.tracker)
+        else:
+            value = self._legacy("bd", "list", "--status", "in_progress",
+                                 "--json", "--limit", "0")
+        return Answer.complete_read(value, how=f"{self.kind} list in_progress --limit 0")
+
+    def blocked(self) -> Answer[list[dict]]:
+        if self.tracker is not None:
+            from .br import blocked
+            value = blocked(self.tracker)
+        else:
+            value = self._legacy("bd", "list", "--status", "blocked",
+                                 "--json", "--limit", "0")
+        return Answer.complete_read(value, how=f"{self.kind} list blocked --limit 0")
+
+    def show(self, item: str) -> Answer[dict]:
+        if self.tracker is not None:
+            from .br import show
+            value = show(self.tracker, item)
+        else:
+            value = self._legacy("bd", "show", item, "--json")
+            value = value[0] if isinstance(value, list) else value
+        return Answer.complete_read(value, how=f"{self.kind} show {item}")
+
+    def claim(self, item: str) -> None:
+        if self.tracker is not None:
+            from .br import claim
+            return claim(self.tracker, item)
+        self._legacy("bd", "update", item, "--status", "in_progress", "--json")
+
+
+def backend_adapter(root, reg, cwd=None) -> TrackerAdapter:
+    return TrackerAdapter(root, reg, cwd=cwd)
+
+
+def backend_kind(root, reg) -> str:
+    """The selected tracker backend, for audit rows produced by its consumers."""
+    return backend_adapter(root, reg).kind
+
+
 def queue_state(root, reg, tracker=None) -> tuple[list[dict], list[dict]]:
     """Ready and active work from the deployment's selected tracker backend."""
     if tracker is None:
@@ -702,10 +771,7 @@ def bd_in_progress(cwd: str | None, root=None, reg=None) -> list[dict]:
     callers fail open."""
     # See _bd_ready: same reason, same fix (aegis-mxgzh).
     if root is not None:
-        tracker = _br_tracker(root, reg)
-        if tracker is not None:
-            from .br import in_progress as br_in_progress
-            return br_in_progress(tracker)
+        return backend_adapter(root, reg, cwd=cwd).active().exact()
     r = subprocess.run(["bd", "list", "--status", "in_progress", "--json",
                         "--limit", "0"],
                        capture_output=True, text=True, timeout=20, cwd=cwd)
@@ -726,10 +792,7 @@ def bd_blocked(cwd: str | None, root=None, reg=None) -> list[dict]:
     """
     # aegis-mxgzh remainder: route through the ONE resolver on a br deployment.
     if root is not None:
-        tracker = _br_tracker(root, reg)
-        if tracker is not None:
-            from .br import blocked as br_blocked
-            return br_blocked(tracker)
+        return backend_adapter(root, reg, cwd=cwd).blocked().exact()
     r = subprocess.run(["bd", "list", "--status", "blocked", "--json",
                         "--limit", "0"],
                        capture_output=True, text=True, timeout=20, cwd=cwd)
@@ -747,10 +810,7 @@ def bd_show(cwd: str | None, bead_id: str, root=None, reg=None) -> dict:
     """
     # aegis-mxgzh remainder: route through the ONE resolver on a br deployment.
     if root is not None:
-        tracker = _br_tracker(root, reg)
-        if tracker is not None:
-            from .br import show as br_show
-            return br_show(tracker, bead_id)
+        return backend_adapter(root, reg, cwd=cwd).show(bead_id).exact()
     r = subprocess.run(["bd", "show", bead_id, "--json"],
                        capture_output=True, text=True, timeout=20, cwd=cwd)
     if r.returncode != 0:
@@ -769,10 +829,7 @@ def bd_claim(cwd: str | None, bead_id: str, root=None, reg=None) -> None:
     # instead of failing usefully, so the tracker would disagree with the board
     # about who holds what — silently.
     if root is not None:
-        tracker = _br_tracker(root, reg)
-        if tracker is not None:
-            from .br import claim as br_claim
-            return br_claim(tracker, bead_id)
+        return backend_adapter(root, reg, cwd=cwd).claim(bead_id)
     r = subprocess.run(["bd", "update", bead_id, "--status", "in_progress",
                         "--json"],
                        capture_output=True, text=True, timeout=20, cwd=cwd)

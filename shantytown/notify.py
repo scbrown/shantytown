@@ -534,7 +534,7 @@ class IdleFleetAlerter:
 
     def __init__(self, root, reg, panes, runtime, *, push=push_to_admin,
                  bd_ready=None, bd_in_progress=None, context_k=None,
-                 handoff_k=None, log=None):
+                 handoff_k=None, log=None, audit=None, input_preflight=None):
         self._root = root          # aegis-mxgzh: the sweeps need it to resolve the br backend
         self.path = Path(root) / "notify" / "idle_fleet.json"
         # Kept for the launch-stamp ownership gate (aegis-2j2r): tend must
@@ -552,13 +552,28 @@ class IdleFleetAlerter:
         from . import feed_check
         self._bd_ready = bd_ready or (
             lambda: feed_check._bd_ready(feed_check.bd_cwd(reg), root=root, reg=reg))
-        self._bd_in_progress = bd_in_progress or feed_check.bd_in_progress
+        self._bd_in_progress = bd_in_progress or (
+            lambda cwd: feed_check.bd_in_progress(cwd, root=root, reg=reg))
         # The worker's context depth off its live pane (the same footer read
         # saturation uses); injected for tests. None = unreadable = never over.
         self._context_k = context_k or self._pane_context_k
         from .stop_event import HAUL_HANDOFF_K
         self._handoff_k = handoff_k if handoff_k is not None else HAUL_HANDOFF_K
         self._log = log or (lambda msg: None)
+        from .feed_audit import FeedAudit
+        self._audit = audit or FeedAudit(Path(root))
+        self._input_preflight = input_preflight or self._pane_input_preflight
+
+    def _pane_input_preflight(self, worker: str):
+        """Return the evidence-bearing input verdict immediately before a feed."""
+        from . import input_box
+        from .runtime import asks_a_question
+        card = self._reg.get(worker)
+        screen = self._panes.capture(card.pane, attrs=True)
+        plain = triage_mod.strip_attrs(screen)
+        awaiting = (False if self._runtime is None
+                    else bool(asks_a_question(self._runtime, plain)))
+        return input_box.show(self._panes, card.pane, awaiting=awaiting)
 
     def _load(self) -> list:
         try:
@@ -600,6 +615,8 @@ class IdleFleetAlerter:
         Returns the newly-idle names alerted/nudged this pass. Fully fail-open."""
         from . import feed_check
         from .stop_event import _stood_down
+        window_id = self._audit.begin()
+        backend = feed_check.backend_kind(self._root, self._reg)
         if _stood_down(self._shanty_root):
             self._log("idle-fleet: fleet stood down — correctly not alerting")
             return []
@@ -614,7 +631,13 @@ class IdleFleetAlerter:
         try:
             cwd = feed_check.bd_cwd(self._reg)
             active = self._bd_in_progress(cwd)
-        except Exception:      # noqa: BLE001
+            self._audit.record(window_id, leg="anchor", backend=backend,
+                               attempted=True, acted_on=True,
+                               reason=f"read {len(active)} active item(s)")
+        except Exception as exc:      # noqa: BLE001
+            self._audit.record(window_id, leg="anchor", backend=backend,
+                               attempted=True, refused=True,
+                               reason=f"{type(exc).__name__}: {exc}")
             active = []
         resumable = feed_check.idle_resumable_codex(
             self._reg, self._panes, self._runtime, active,
@@ -635,7 +658,15 @@ class IdleFleetAlerter:
         # so it retries next pass), never a block.
         try:
             ready_beads = self._bd_ready()
-        except Exception:
+            self._audit.record(window_id, leg="feed", backend=backend,
+                               attempted=True, acted_on=True,
+                               reason=f"read {len(ready_beads)} ready item(s)")
+        except Exception as exc:
+            self._audit.record(window_id, leg="feed", backend=backend,
+                               attempted=True, refused=True,
+                               reason=f"{type(exc).__name__}: {exc}")
+            self._log(f"haul: feed backend read FAILED ({exc!r}) — fail-open; "
+                      "no worker fed this pass")
             return []
         # in_progress counts as a haul (aegis-ap4gm) — same reason as the
         # feed_check gate: an item the worker already started is its next work,
@@ -727,14 +758,54 @@ class IdleFleetAlerter:
             if limits.active and spend.signal_lost:
                 self._log(sb.signal_lost_note(limits, spend, worker))
 
+            delivery_item = ""
             if (ck := self._context_k(worker)) is not None and ck >= self._handoff_k:
                 message = feed_check.haul_handoff_message(ck, self._handoff_k)
             else:
                 nid = feedable[0]
+                delivery_item = nid
+                self._audit.record(window_id, leg="candidate", backend=backend,
+                                   worker=worker, item=nid, eligible=True,
+                                   reason="idle worker owns ready non-anchor item")
+                if self._audit.acted_on(window_id, worker, nid):
+                    self._audit.record(window_id, leg="replay", backend=backend,
+                                       worker=worker, item=nid, eligible=True,
+                                       refused=True,
+                                       reason="delivery already acted_on in this window")
+                    continue
+                try:
+                    preflight = self._input_preflight(worker)
+                    verdict = preflight.verdict
+                except Exception as exc:  # noqa: BLE001 — unknown fails closed
+                    verdict = "UNKNOWN"
+                    preflight = None
+                    detail = f"{type(exc).__name__}: {exc}"
+                else:
+                    detail = preflight.detail
+                from . import input_box
+                if verdict not in (input_box.EMPTY, input_box.GHOST):
+                    self._audit.record(window_id, leg="input", backend=backend,
+                                       worker=worker, item=nid, eligible=True,
+                                       attempted=True, refused=True,
+                                       reason=f"{verdict}: {detail}".rstrip())
+                    self._log(f"haul: {worker} input preflight is {verdict} — "
+                              "NOT fed; inspect with `st input " + worker +
+                              " --show` and act explicitly")
+                    continue
+                self._audit.record(window_id, leg="input", backend=backend,
+                                   worker=worker, item=nid, eligible=True,
+                                   attempted=True, acted_on=True,
+                                   reason=f"{verdict} is an empty buffer")
+                self._audit.record(window_id, leg="claim", backend=backend,
+                                   worker=worker, item=nid, eligible=True,
+                                   attempted=True, reason="claim attempted")
                 try:
                     feed_check.bd_claim(cwd, nid, root=self._root, reg=self._reg)
-                except Exception:
-                    pass                       # best-effort, same as the stop hook
+                except Exception as exc:
+                    self._audit.record(window_id, leg="claim", backend=backend,
+                                       worker=worker, item=nid, eligible=True,
+                                       attempted=True, refused=True,
+                                       reason=f"best-effort claim failed: {type(exc).__name__}: {exc}")
                 repeats = sb.times_served(self._shanty_root, worker, nid,
                                           spend.started)
                 sb.record_item(self._shanty_root, worker, spend.session, nid)
@@ -743,11 +814,21 @@ class IdleFleetAlerter:
                     headroom=sb.headroom(limits, spend), repeats=repeats)
             target = push_to_own_pane(self._reg, self._panes, worker, message)
             if target is None:
+                self._audit.record(window_id, leg="delivery", backend=backend,
+                                   worker=worker, item=delivery_item,
+                                   eligible=True, attempted=True, refused=True,
+                                   reason="pane unreachable")
                 self._log(f"haul: {worker} is idle with {len(beads)} assigned "
                           f"ready bead(s) but its pane was unreachable — NOT "
                           f"fed, will retry")
                 continue
             nudged.append(worker)
+            self._audit.record(
+                window_id, leg="delivery", backend=backend, worker=worker,
+                item=delivery_item, eligible=bool(delivery_item), attempted=True,
+                acted_on=True,
+                reason=("natural tend feed delivered" if delivery_item
+                        else "handoff instruction delivered; no item fed"))
             self._log(f"haul: fed {worker} its next bead ({feedable[0]}; "
                       f"{len(feedable) - 1} more queued) — coordinator "
                       f"deliberately not pinged")
