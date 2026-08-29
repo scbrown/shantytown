@@ -68,6 +68,46 @@ def test_the_launch_points_at_the_config_by_CODEX_HOME_not_a_flag():
     assert CODEX.settings_in_cmdline(launch) == p
 
 
+def test_codex_remote_control_is_explicit_and_attaches_to_managed_daemon(tmp_path):
+    root = tmp_path / ".shanty"
+    root.mkdir()
+    (root / "shantytown.toml").write_text(
+        '[env]\nSHANTY_REMOTE_CONTROL = "true"\n')
+    cfg = root / "settings" / "codex" / "worker" / "config.toml"
+    managed = cfg.parent / "packages" / "standalone" / "current" / "codex"
+    managed.parent.mkdir(parents=True)
+    managed.write_text("")
+
+    launch = CODEX.launch(
+        Agent(name="ellie", role="worker", workspace="/work with space"),
+        str(cfg), root=root)
+
+    socket = cfg.parent / "app-server-control" / "app-server-control.sock"
+    assert f"CODEX_HOME={cfg.parent} codex remote-control start --json" in launch
+    assert launch.count("codex remote-control start --json") == 2
+    assert f"--remote unix://{socket}" in launch
+    assert "--cd '/work with space'" in launch
+
+
+def test_codex_remote_control_absence_does_not_add_a_binary_prerequisite(tmp_path):
+    root = tmp_path / ".shanty"
+    root.mkdir()
+    launch = CODEX.launch(Agent(name="ellie", role="worker"),
+                          str(root / "settings/codex/worker/config.toml"), root=root)
+    assert "remote-control" not in launch
+    assert "--remote" not in launch
+
+
+def test_codex_remote_control_refuses_when_standalone_payload_is_missing(tmp_path):
+    root = tmp_path / ".shanty"
+    root.mkdir()
+    (root / "shantytown.toml").write_text(
+        '[env]\nSHANTY_REMOTE_CONTROL = "true"\n')
+    with pytest.raises(harness_mod.Unsupported, match="managed standalone install is missing"):
+        CODEX.launch(Agent(name="ellie", role="worker"),
+                     str(root / "settings/codex/worker/config.toml"), root=root)
+
+
 def test_the_launch_carries_the_same_identity_env_as_claude():
     """SHANTY_AGENT/BOBBIN_ROLE/BEADS_ACTOR/ST_ROLES are not Claude Code's — they
     are how a shantytown agent knows who it is, and dropping one on a second
