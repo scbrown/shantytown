@@ -61,7 +61,7 @@ from .stopped import FilesStops
 from . import handoff_text
 from .tier import LeadStatus, is_governance, route_stop
 from .triage import running_shells, context_tokens_k, CYCLE_THRESHOLD_K
-from .tmux import Tmux
+from .tmux import Tmux, declared_socket
 
 
 # An active Codex anchor needs a continuation prompt, but that same prompt is
@@ -902,7 +902,7 @@ def main(argv: list[str] | None = None) -> int:
     root = _root(argv)
     reg = FilesRegistry(root / "crew")
     events = FilesEvents(root / "events")
-    panes = Tmux()
+    panes = Tmux(socket=declared_socket(root))
     me = _stop_identity(reg, panes, me_env)
     if me is None:
         return 1
