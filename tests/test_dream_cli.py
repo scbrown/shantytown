@@ -73,8 +73,8 @@ def test_sweep_reads_ready_and_active_work_from_br(monkeypatch, tmp_path):
     from shantytown.br import BrTracker
     tracker = BrTracker(repo=str(tmp_path))
     monkeypatch.setattr(cli, "_tracker", lambda a: tracker)
-    monkeypatch.setattr("shantytown.br.ready", lambda trk: [])
-    monkeypatch.setattr("shantytown.br.in_progress", lambda trk: [])
+    monkeypatch.setattr("shantytown.feed_check.queue_state",
+                        lambda root, reg, tracker=None: ([], []))
     monkeypatch.setattr("shantytown.feed_check._bd_ready",
                         lambda cwd=None: (_ for _ in ()).throw(AssertionError("bd called")))
 

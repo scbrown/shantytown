@@ -6245,19 +6245,7 @@ def _dream_sweep(a, cfg, agents, panes, *, force=False, dry_run=False):
     policy = cfg.dream
     state = dream_mod.State(a.root)
     tracker = _tracker(a)
-    from .br import BrTracker, in_progress as br_in_progress, ready as br_ready
-    if isinstance(tracker, BrTracker):
-        ready = br_ready(tracker)
-        try:
-            active = br_in_progress(tracker)
-        except Exception:
-            active = []
-    else:
-        ready = feed_check._bd_ready(feed_check.bd_cwd(_registry(a)))
-        try:
-            active = feed_check.bd_in_progress(feed_check.bd_cwd(_registry(a)))
-        except Exception:
-            active = []
+    ready, active = feed_check.queue_state(a.root, _registry(a), tracker)
     free = feed_check.free_feedable_workers(_registry(a), panes, _runtime(a, panes),
                                             root=a.root)
     free = [name for name in free if name not in feed_check.hauls(ready, active)]
