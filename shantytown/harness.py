@@ -60,6 +60,7 @@ an unrecognised one.
 from __future__ import annotations
 from dataclasses import dataclass
 import json
+import os
 import shlex
 from pathlib import Path
 from typing import Protocol, runtime_checkable, TYPE_CHECKING
@@ -764,8 +765,19 @@ class CodexHarness:
             # linking the role-owned config, credentials and managed payload.
             # The links keep one governed config and one login; only mutable
             # app-server state is per card.
-            daemon_home = home.parent / "remote-control" / card.name
+            runtime_base = Path(os.environ.get(
+                "XDG_RUNTIME_DIR", Path.home() / ".cache"))
+            daemon_home = runtime_base / "shantytown" / "codex" / card.name
             socket = daemon_home / "app-server-control" / "app-server-control.sock"
+            # Unix-domain sockets have a small platform path ceiling (108 bytes
+            # on Linux, including the terminator). Codex otherwise spawns a
+            # daemon that can never become ready and reports only SUN_LEN.
+            if len(os.fsencode(socket)) >= 108:
+                raise Unsupported(
+                    f"Codex Remote Control socket path is too long ({len(os.fsencode(socket))} "
+                    f"bytes, maximum 107): {socket}. Set XDG_RUNTIME_DIR to a "
+                    "short private directory."
+                )
             bootstrap = " && ".join((
                 f"mkdir -p {shlex.quote(str(daemon_home))}",
                 f"ln -sfn {shlex.quote(str(home / codex_mod().CONFIG_FILE))} "
