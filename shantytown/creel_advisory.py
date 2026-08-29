@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -36,8 +37,31 @@ class Alerter:
             previous = json.loads(self.path.read_text())
         except (OSError, ValueError):
             previous = {}
-        changed = [name for name, line in sorted(lines.items())
-                   if previous.get(name) != line]
+        def recommendation(line: str) -> int | None:
+            match = re.search(r"\bgovernor recommends ([+-]?\d+)\b", line)
+            return int(match.group(1)) if match else None
+
+        def key(line: str) -> str:
+            delta = recommendation(line)
+            if delta is not None:
+                return f"delta:{delta}"
+            if line.startswith("advisory unavailable:"):
+                return "unavailable"
+            return f"record:{line}"
+
+        def previous_key(name: str) -> str | None:
+            old = previous.get(name)
+            if not isinstance(old, str):
+                return None
+            # Migrate the original line-valued ledger without re-alerting a
+            # hold merely because its storage representation changed.
+            return old if old.startswith(("delta:", "record:")) or old == "unavailable" else key(old)
+
+        changed = []
+        for name, line in sorted(lines.items()):
+            delta = recommendation(line)
+            if delta not in (None, 0) or previous_key(name) != key(line):
+                changed.append(name)
         sent = []
         for name in changed:
             if self.push(self.reg, self.panes,
@@ -46,7 +70,7 @@ class Alerter:
         if sent:
             from .files import write_json_atomic
             updated = dict(previous)
-            updated.update({name: lines[name] for name in sent})
+            updated.update({name: key(lines[name]) for name in sent})
             self.path.parent.mkdir(parents=True, exist_ok=True)
             write_json_atomic(self.path, updated)
         return sent
