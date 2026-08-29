@@ -6251,13 +6251,14 @@ def _dream_sweep(a, cfg, agents, panes, *, force=False, dry_run=False):
     free = [name for name in free if name not in feed_check.hauls(ready, active)]
     cards = {card.name: card for card in agents}
     candidates = []
-    ordinary_ready = feed_check.dispatchable(set(free), ready)
     cfg_now, governors = _governors(a)
     verdicts = {name: governor.evaluate(persist=False)
                 for name, governor in governors.items()}
-    for name in free:
-        card = cards.get(name)
-        if card is None:
+    for name, card in cards.items():
+        # A periodic DREAM may queue behind foreground work, but only on a live
+        # worker subscription. Leads/admins are coordination capacity, and a
+        # missing pane cannot consume the queued artifact.
+        if card.role != "worker" or not card.pane or not panes.exists(card.pane):
             continue
         harness, governor, unconfigured = _governor_for(
             cfg_now, governors, card, a.root)
@@ -6274,11 +6275,9 @@ def _dream_sweep(a, cfg, agents, panes, *, force=False, dry_run=False):
         # threshold is looser.  Spare means above BOTH lines, never either.
         if headroom < governor.policy.delegation_reserve_pct:
             continue
-        admitted, _held = feed_check.throttle(
-            ordinary_ready, ready, getattr(verdict, "admits", None))
         candidates.append({"agent": name, "harness": harness,
                            "headroom": headroom,
-                           "ordinary_dispatchable": bool(admitted)})
+                           "idle": name in free})
     cycle, reason = dream_mod.plan(policy, state.read(), ready, candidates,
                                    force=force)
     if cycle is None:
@@ -6292,7 +6291,8 @@ def _dream_sweep(a, cfg, agents, panes, *, force=False, dry_run=False):
     # due time intact, so the next tend pass retries rather than losing a cycle.
     state.record(cycle, item.id)
     card = cards.get(cycle.agent)
-    if card is not None and card.pane and panes.exists(card.pane):
+    if (cycle.agent in free and card is not None and card.pane
+            and panes.exists(card.pane)):
         panes.send(card.pane, attribute(
             f"Work is on your hook: {item.id} — {cycle.title} — scheduled DREAM "
             f"cycle; read the bead and execute one bounded pass.", "st dream"))

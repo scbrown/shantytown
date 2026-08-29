@@ -54,7 +54,7 @@ def _wire(monkeypatch, tmp_path, pct):
     return args, cfg, reg.cards, panes, tracker
 
 
-def test_sweep_ignores_ready_work_held_by_provider_governor(monkeypatch, tmp_path):
+def test_sweep_queues_periodic_quota_behind_ready_work(monkeypatch, tmp_path):
     args, cfg, cards, panes, tracker = _wire(monkeypatch, tmp_path, pct=10)
     monkeypatch.setattr("shantytown.feed_check._bd_ready", lambda cwd=None: [
         {"id": "aegis-held", "title": "held", "priority": 2, "labels": []},
@@ -66,6 +66,18 @@ def test_sweep_ignores_ready_work_held_by_provider_governor(monkeypatch, tmp_pat
 
     assert cycle is not None and (item_id, reason) == ("aegis-dream1", "created")
     assert tracker.fields is not None
+
+
+def test_busy_provider_gets_queued_dream_without_interrupting_pane(monkeypatch, tmp_path):
+    args, cfg, cards, panes, tracker = _wire(monkeypatch, tmp_path, pct=10)
+    monkeypatch.setattr("shantytown.feed_check.free_feedable_workers",
+                        lambda *args, **kwargs: [])
+
+    cycle, item_id, reason = cli._dream_sweep(args, cfg, cards, panes)
+
+    assert cycle is not None and (item_id, reason) == ("aegis-dream1", "created")
+    assert tracker.fields[1]["assignee"] == "arnold"
+    assert panes.sent == []
 
 
 def test_sweep_reads_ready_and_active_work_from_br(monkeypatch, tmp_path):
