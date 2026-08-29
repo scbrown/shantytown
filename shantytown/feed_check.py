@@ -480,7 +480,7 @@ def gate_inputs(root, reg, panes, runtime, me: str | None = None, admits=None):
     # bd_cwd, not the ambient cwd, even though the hook usually fires in the
     # admin's workspace: "usually" is how the tend caller silently never
     # fired (see bd_cwd). None still falls back to ambient — fail-open.
-    ready_beads = _bd_ready(bd_cwd(reg))
+    ready_beads, active = queue_state(root, reg)
     # HAULING WORKERS ARE NOT THE COORDINATOR'S TO FEED (aegis-wjgt
     # groundwork): an idle worker whose queue is already assigned self-feeds
     # — holding the coordinator's stop hostage over one is the exact inverse
@@ -495,10 +495,6 @@ def gate_inputs(root, reg, panes, runtime, me: str | None = None, admits=None):
     # and the coordinator was asked to feed work it already owned. Fail open to
     # the old, narrower answer: this widens a queue, so a bd hiccup must degrade
     # to today's behaviour, never wedge the gate the whole crew loop hangs on.
-    try:
-        active = bd_in_progress(bd_cwd(reg))
-    except Exception:      # noqa: BLE001 — see fail-open above
-        active = []
     free = [w for w in free if w not in hauls(ready_beads, active)]
     if not free:
         return [], [], []
@@ -509,6 +505,31 @@ def gate_inputs(root, reg, panes, runtime, me: str | None = None, admits=None):
     ok, held = throttle(dispatchable(set(free), ready_beads), ready_beads,
                         admits if admits is not None else governor_admits(root))
     return free, ok, held
+
+
+def queue_state(root, reg, tracker=None) -> tuple[list[dict], list[dict]]:
+    """Ready and active work from the deployment's selected tracker backend."""
+    if tracker is None:
+        from .deployment import deployment_default
+        if deployment_default(root, "SHANTY_BACKEND") == "br":
+            from .br import BrTracker
+            tracker = BrTracker(
+                repo=(deployment_default(root, "SHANTY_BR_REPO")
+                      or deployment_default(root, "SHANTY_BEADS_REPO")
+                      or bd_cwd(reg)))
+    if tracker is not None:
+        from .br import BrTracker, in_progress as br_in_progress, ready as br_ready
+        if isinstance(tracker, BrTracker):
+            ready_beads = br_ready(tracker)
+            try:
+                return ready_beads, br_in_progress(tracker)
+            except Exception:
+                return ready_beads, []
+    ready_beads = _bd_ready(bd_cwd(reg))
+    try:
+        return ready_beads, bd_in_progress(bd_cwd(reg))
+    except Exception:      # noqa: BLE001 — active work only narrows free workers
+        return ready_beads, []
 
 
 def main(argv: list[str] | None = None) -> int:
