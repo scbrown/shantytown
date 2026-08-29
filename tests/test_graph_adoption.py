@@ -276,3 +276,52 @@ def test_a_malformed_ledger_line_is_skipped_not_fatal(tmp_path):
     (root / "logs" / ga.LEDGER).write_text(
         '{"agent": "a", "nodes": ["n"], "epoch": 0}\nnot json at all\n')
     assert len(ga.read_rows(root)) == 1
+
+
+# ── MECHANICAL DISPATCH PATHS MUST NOT REFUSE UNDER `require` (aegis-5pchx) ──
+# tend serves a pending cycle by building a cycle namespace out of TEND's, and
+# tend's parser never declared the graph-context flags. Before the fix that made
+# `_graph_context` see nothing and refuse under require — and because tend
+# deliberately leaves a refused request pending, it would have refused on every
+# pass, forever, for every agent. That is Rule Zero self-feeding breaking, which
+# is worse than the coverage gap the require mode exists to close.
+
+def _mechanical_cycle_namespace(req_nodes):
+    """The namespace shape cli.py builds when tend serves a cycle request."""
+    import argparse
+    tend = argparse.Namespace(cmd="tend", root=".", agent=None)
+    n = list(req_nodes or [])
+    return argparse.Namespace(**{**vars(tend), "cmd": "cycle", "agent": "someone",
+        "reason": "", "self_": False, "checkpoint_bead": "", "quipu_node": n,
+        "no_graph_context": "" if n else
+            "mechanical: tend serving a cycle the agent already requested and gated",
+        "allow_loss": False, "dry_run": False})
+
+
+def test_mechanically_served_cycle_carries_the_requesters_nodes():
+    a = _mechanical_cycle_namespace(["dolt-server.service"])
+    ctx = ga.require(a.quipu_node, a.no_graph_context)
+    assert list(ctx.nodes) == ["dolt-server.service"]
+    assert not ctx.exemption
+
+
+def test_mechanically_served_cycle_without_stored_nodes_states_a_machine_reason():
+    a = _mechanical_cycle_namespace([])
+    ctx = ga.require(a.quipu_node, a.no_graph_context)
+    assert not ctx.nodes
+    # Silence is not an exemption anywhere in this system; the machine says why.
+    assert "mechanical" in ctx.exemption
+
+
+def test_control_the_unfixed_shape_would_still_refuse():
+    """Without this the two tests above pass even if the gate stopped working."""
+    import argparse
+    import pytest
+    tend = argparse.Namespace(cmd="tend", root=".", agent=None)
+    unfixed = argparse.Namespace(**{**vars(tend), "cmd": "cycle", "agent": "x",
+                                    "reason": "", "self_": False,
+                                    "checkpoint_bead": "", "allow_loss": False,
+                                    "dry_run": False})
+    with pytest.raises(ga.GraphContextMissing):
+        ga.require(getattr(unfixed, "quipu_node", []),
+                   getattr(unfixed, "no_graph_context", ""))
