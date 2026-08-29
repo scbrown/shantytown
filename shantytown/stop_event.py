@@ -972,10 +972,17 @@ def _stood_down(root) -> bool:
     enrichment off — the failure mode #29 is about, one layer down.
     """
     from . import config
+    from . import window
     try:
+        if window.active(root) is not None:
+            return True
         cfg, _err = config.load_or_default(root)
         return bool(cfg.fleet.stood_down)
-    except Exception:      # noqa: BLE001 — the drain must deliver regardless
+    except window.WindowUnreadable:
+        # An unreadable maintenance lease fails CLOSED. Resuming feed because the
+        # ledger is malformed can relaunch into the exact window it was guarding.
+        return True
+    except Exception:      # noqa: BLE001 — config stand-down remains fail-open
         return False
 
 
