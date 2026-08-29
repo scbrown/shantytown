@@ -53,6 +53,7 @@ st attach --no-start          attach only if already running; never create a ses
 st stats [agent] [--files]    files/skills plus provider tokens and cache dimensions
 st dashboard [admin]          live, tier-scoped view: roster/state/work, self-refreshing
 st subscribe                  watch quipu entity events; route governed workflows to the admin
+st help <topic>               rationale pages: handoff/cycle, haul, inbox
 st cycle <agent> [--self]     clear an agent's context WITHOUT destroying its runtime:
                               checkpoint -> stop -> relaunch -> re-dispatch. `/clear`
                               drops bypass into MANUAL; this keeps it. --self REQUESTS
@@ -70,7 +71,7 @@ Codex input already includes its cached subset. This makes
 `cache_read / usage_in` a provider-independent prompt-cache hit rate. The fields
 are omitted—not zeroed—when every matching transcript is unknown.
 
-Twenty-seven. `--dry-run` is on every command that writes, from commit one. The surface grew past the
+Twenty-eight. `--dry-run` is on every command that writes, from commit one. The surface grew past the
 original eight, each slot on a specific ask — not drift: **inbox**/**task** (the dispatch/tracker
 pair, owner-directed), **context** (the bobbin Context protocol), **doctor**
 (out-of-box detect/install, Stiwi's direct ask), **subscribe** (the quipu events adapter,
@@ -91,6 +92,14 @@ The twenty-seventh is **defer**: the tracker already knew how to hide work, but 
 deferral did not require the deferrer to state whether the blocker was a bead, human,
 access capability, external event, or no blocker at all. `st defer` records that kind
 and the reason together and verifies the resulting state before reporting success.
+
+The twenty-eighth is **help**: the rationale pages for the instructions st pushes into
+panes on a timer. It exists because those messages had grown into essays — every reason
+anyone might need, re-pushed every few minutes, which is exactly how the one
+safety-critical sentence in them gets skipped. Cutting them to pointers only works if the
+pointer resolves, so the WHY moved to a page that is read ON DEMAND rather than broadcast.
+A command whose only job is to be pointed at is a real cost against the count; an
+instruction nobody finishes reading is a bigger one.
 
 The binary is **`st`**, not `shanty`: `shanty` is Stiwi's own tmux command and ours would shadow it
 on PATH. This doc said `shanty` in all 29 of its examples long after the entry point was `st`, so
