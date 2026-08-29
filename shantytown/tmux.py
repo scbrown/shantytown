@@ -250,6 +250,22 @@ class Tmux:
             return False
         return any(pane in line.split() for line in r.stdout.splitlines())
 
+    def session_name(self, pane: str) -> str | None:
+        """Resolve a tmux pane id (for example ``$TMUX_PANE``) to its session.
+
+        Session names are the pane identifiers stored on crew cards.  Keeping
+        this lookup on the tmux adapter lets callers compare process location
+        with registry ownership without parsing tmux output themselves.
+        """
+        r = subprocess.run(
+            self._cmd("display-message", "-t", pane, "-p", "#{session_name}"),
+            capture_output=True, text=True,
+        )
+        if r.returncode != 0:
+            return None
+        name = r.stdout.strip()
+        return name or None
+
     def cmdline(self, pane: str) -> str | None:
         """The launch command line of the AGENT PROCESS running in `pane`.
 
