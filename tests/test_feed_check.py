@@ -434,3 +434,44 @@ def test_the_whole_fleet_retired_yields_ZERO_free_not_a_full_roster(tmp_path):
     panes = _Panes({f"shanty-{n}": IDLE for n in names},
                    {f"shanty-{n}": f"claude --settings {settings}" for n in names})
     assert feed_check.free_feedable_workers(_Reg(cards), panes, _Runtime()) == []
+
+
+def test_the_haul_feed_legs_read_through_br_not_bd(monkeypatch, tmp_path):
+    """aegis-mxgzh: the regression that made alerts fire while nothing was fed.
+
+    `bd` is retired post-cutover and exits 3, so any leg that still spawns it
+    raises. queue_state was migrated to br; `_bd_ready`/`bd_in_progress` were
+    NOT — and notify injects those two FUNCTIONS as default arguments, so the
+    Rule Zero alert path recovered while the haul feed stayed dead. The split is
+    invisible to a test that only exercises queue_state, which is why this one
+    asserts on the helpers themselves.
+    """
+    from shantytown import feed_check
+
+    calls = []
+    monkeypatch.setattr(feed_check.subprocess, "run",
+                        lambda *a, **k: calls.append(a) or (_ for _ in ()).throw(
+                            AssertionError("spawned bd on a br deployment")))
+
+    class _Tracker:  # stands in for BrTracker
+        pass
+    monkeypatch.setattr(feed_check, "_br_tracker", lambda root, reg: _Tracker())
+    import shantytown.br as br
+    monkeypatch.setattr(br, "ready", lambda t: [{"id": "aegis-1"}])
+    monkeypatch.setattr(br, "in_progress", lambda t: [{"id": "aegis-2"}])
+
+    assert feed_check._bd_ready(None, root=tmp_path, reg=None) == [{"id": "aegis-1"}]
+    assert feed_check.bd_in_progress(None, root=tmp_path, reg=None) == [{"id": "aegis-2"}]
+    assert not calls, "a br deployment must never shell out to the retired bd"
+
+
+def test_notify_injects_the_root_so_its_legs_can_reach_br():
+    """The fix is only live if notify PASSES root — the helpers cannot resolve
+    the backend without it, and a silent fallback to bd is the whole bug."""
+    import inspect
+    from shantytown import notify
+    src = inspect.getsource(notify)
+    for leg in ("_bd_ready(feed_check.bd_cwd(reg)", "bd_in_progress(feed_check.bd_cwd(reg)"):
+        for line in src.splitlines():
+            if leg in line:
+                assert "root=root" in line, f"notify leg does not pass root: {line.strip()}"
