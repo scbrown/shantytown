@@ -6922,7 +6922,11 @@ def _tend_once(a, quiet: bool = False) -> int:
             readings, running=running, cap=verdicts[name].max_agents,
             probe=cfg.env.get(creel_advisory_mod.PROBE_ENV))
         setpoint_advisories[name] = line
-        print(f"  governor setpoint [{name}]: {line}", file=sys.stderr)
+        # Unavailability is pushed once through the deduped alerter below.  A
+        # permanent warning on every tend heartbeat trains the admin to ignore
+        # this channel and therefore un-builds the advisory when it returns.
+        if not line.startswith("advisory unavailable:"):
+            print(f"  governor setpoint [{name}]: {line}", file=sys.stderr)
     # Preserve the byte-for-byte single-governor path.  A mixed fleet has no
     # meaningful global verdict: every decision below resolves from the card.
     verdict = verdicts.get("base") if not cfg.governor.by_harness else None
