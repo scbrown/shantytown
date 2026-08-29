@@ -94,10 +94,12 @@ def test_refusal_names_the_signature_and_the_senders_own_budget(tmp_path, capsys
     assert rc == REFUSED
     err = capsys.readouterr().err
     # everything it always said
-    assert "carries at most 493" in err and "thin pointer channel" in err
+    # The rationale moved to `st help inbox` (aegis-x6yoq): the refusal fires on
+    # every over-cap send, and the sender already knows what an inbox is.
+    assert "cap 493" in err and "st help inbox" in err
     # and the part that makes it actionable
     assert "'[from arnold] '" in err
-    assert "budget of 479" in err and "you typed 491" in err
+    assert "budget is 479" in err and "you typed 491" in err
 
 
 def test_the_named_budget_is_one_that_actually_fits(tmp_path, capsys, monkeypatch):
@@ -134,7 +136,7 @@ def test_an_unattributed_send_gets_no_extra_line(tmp_path, capsys, monkeypatch):
 
     assert rc == REFUSED
     err = capsys.readouterr().err
-    assert "carries at most 493" in err, "it still refuses, and still says why"
+    assert "cap 493" in err, "it still refuses, and still says why"
     assert "signature st adds for you" not in err
 
 
