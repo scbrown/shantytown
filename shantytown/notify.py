@@ -224,17 +224,17 @@ def _cycle_message() -> str:
     # journaling, and a verification that the stop hooks are live on the new
     # process. The agent keeps working until tend picks the request up — nothing is
     # lost if it never fires.
-    return (
-        "⚠ st tend: you are PAST THE 400k CYCLE THRESHOLD. CYCLE NOW, and in this "
-        "order: (1) CHECKPOINT — write your current state to your active bead "
-        "(what you are mid-task on, decisions already made, the exact next step) "
-        "with `bd comment <id> --file <notes>`; (2) THEN run `st cycle --self -r "
-        "'<that same checkpoint, one line>'`. Do NOT run /clear — it drops you out "
-        "of bypass into MANUAL and you come back undispatchable. `st cycle` stops "
-        "and relaunches you instead, which KEEPS bypass, your MCP kit, your skills "
-        "and your hooks, and re-dispatches your plate item automatically. Keep "
-        "working until it fires. (auto-prompt from st tend, once per saturation "
-        "episode.)")
+    #
+    # SHORTENED and moved to handoff_text (aegis-x6yoq). This was ~110 words and
+    # fires on a timer; Stiwi's ask was to cut the recurring pane essays. The
+    # rationale above is preserved HERE, in the code, and for agents it now lives
+    # in `st help handoff` — written once and read on demand, rather than
+    # re-pushed into every pane every few minutes. A message that long is skimmed,
+    # which is how the one safety-critical sentence in it gets skipped.
+    from . import handoff_text
+    from .triage import CYCLE_THRESHOLD_K
+    return handoff_text.cycle_now(None, None).replace(
+        "past the cycle line", f"past the {int(CYCLE_THRESHOLD_K)}k cycle line")
 
 
 def push_to_own_pane(reg, panes, agent: str, message: str) -> str | None:
@@ -405,7 +405,7 @@ class CycleDriver:
                 continue
             ledger[agent] = "saturated"
             prompted.append(agent)
-            self._log(f"cycle: prompted {agent} to checkpoint + /clear")
+            self._log(f"cycle: prompted {agent} to checkpoint + st cycle --self")
 
         self._save(ledger)
         return prompted
