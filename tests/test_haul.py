@@ -44,7 +44,11 @@ SATURATED_PANE = ("❯ \n"
 
 def _bd(monkeypatch, ready=None, in_progress=None, fail=False, claims=None):
     """Stub the two bd reads + the claim write the advance makes."""
-    def fake(args, cwd):
+    # **kw, not fixed arity: _bd_json gained root/reg when the stop-hook haul
+    # path was routed to br (aegis-mxgzh). A fixed-arity double raises
+    # TypeError into the caller's fail-open, so the haul silently produces
+    # no block and the assertion fails on None rather than on the behaviour.
+    def fake(args, cwd, **kw):
         if fail:
             raise RuntimeError("bd unreachable")
         if args[0] == "ready":
@@ -216,7 +220,11 @@ def test_a_failed_claim_still_feeds(monkeypatch, capsys):
     """The claim is best-effort: the instruction tells the agent to read the
     bead either way, and a feed that dies on a tracker hiccup would stall the
     haul over bookkeeping."""
-    def fake(args, cwd):
+    # **kw, not fixed arity: _bd_json gained root/reg when the stop-hook haul
+    # path was routed to br (aegis-mxgzh). A fixed-arity double raises
+    # TypeError into the caller's fail-open, so the haul silently produces
+    # no block and the assertion fails on None rather than on the behaviour.
+    def fake(args, cwd, **kw):
         if args[0] == "ready":
             return [{"id": "aegis-2", "assignee": "billy"}]
         if args[0] == "list":
