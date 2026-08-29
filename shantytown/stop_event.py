@@ -894,8 +894,8 @@ def main(argv: list[str] | None = None) -> int:
         print("usage: python -m shantytown.stop_event send|drain|haul [--root DIR]",
               file=sys.stderr)
         return 2
-    me = os.environ.get("SHANTY_AGENT")
-    if not me:
+    me_env = os.environ.get("SHANTY_AGENT")
+    if not me_env:
         print("stop_event: $SHANTY_AGENT is unset — cannot resolve identity",
               file=sys.stderr)
         return 1
@@ -903,6 +903,9 @@ def main(argv: list[str] | None = None) -> int:
     reg = FilesRegistry(root / "crew")
     events = FilesEvents(root / "events")
     panes = Tmux()
+    me = _stop_identity(reg, panes, me_env)
+    if me is None:
+        return 1
     if mode == "send":
         return _send(reg, events, panes, me, root)
     if mode == "haul":
@@ -920,6 +923,40 @@ def main(argv: list[str] | None = None) -> int:
                   runtime.awaiting_answer, plate=plate, rank=rank,
                   stood_down=_stood_down(root),
                   stopped=FilesStops(root / "stopped").at)
+
+
+def _stop_identity(reg, panes, me_env: str) -> str | None:
+    """Refuse when the launch environment disagrees with physical pane ownership.
+
+    Stop hooks select hauls and claim what they select.  ``SHANTY_AGENT`` alone
+    is therefore not attribution metadata: a leaked value can hand one card
+    another card's work and stamp the resulting tracker write with the wrong
+    actor.  In tmux, the registry's pane owner is an independent identity rail.
+    Outside tmux (or when tmux cannot resolve the pane), preserve the existing
+    environment fallback and say which weaker rail was used.
+    """
+    pane_id = os.environ.get("TMUX_PANE")
+    if not pane_id:
+        return me_env
+    try:
+        session = panes.session_name(pane_id)
+        owners = [card.name for card in reg.all().exact()
+                  if card.pane == session]
+    except Exception as exc:
+        print(f"stop_event: could not resolve pane identity ({exc}); "
+              "falling back to $SHANTY_AGENT", file=sys.stderr)
+        return me_env
+    if not session or len(owners) != 1:
+        print("stop_event: current tmux pane has no unique registry owner; "
+              "falling back to $SHANTY_AGENT", file=sys.stderr)
+        return me_env
+    me_pane = owners[0]
+    if me_pane != me_env:
+        print(f"stop_event: REFUSED identity disagreement: "
+              f"$SHANTY_AGENT={me_env}, pane owner={me_pane}; "
+              "served and claimed nothing", file=sys.stderr)
+        return None
+    return me_env
 
 
 def _stood_down(root) -> bool:

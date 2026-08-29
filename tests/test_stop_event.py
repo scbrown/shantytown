@@ -67,6 +67,7 @@ class _Panes:
         if self._cmdlines is not None:
             return self._cmdlines.get(pane)
         return DRAIN_CMDLINE if pane in self._up else None
+    def session_name(self, pane): return None
 
 
 # The two screens the drain-time verdict has to tell apart. Both are real shapes:
@@ -173,6 +174,37 @@ def test_main_refuses_without_identity(tmp_path, monkeypatch):
 def test_main_rejects_a_bad_mode(tmp_path, monkeypatch):
     monkeypatch.setenv("SHANTY_AGENT", "ellie")
     assert stop_event.main(["frobnicate", "--root", str(tmp_path)]) == 2
+
+
+def test_main_refuses_when_env_identity_disagrees_with_pane_owner(
+        tmp_path, monkeypatch, capsys):
+    """is5rv: disagreement must serve and claim nothing, not pick a rail."""
+    _reg(tmp_path)
+    monkeypatch.setenv("SHANTY_AGENT", "maldoon")
+    monkeypatch.setenv("TMUX_PANE", "%42")
+    panes = _Panes(set())
+    panes.session_name = lambda _pane: "p-ellie"
+    monkeypatch.setattr(stop_event, "Tmux", lambda: panes)
+
+    assert stop_event.main(["haul", "--root", str(tmp_path)]) == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "SHANTY_AGENT=maldoon" in captured.err
+    assert "pane owner=ellie" in captured.err
+    assert "served and claimed nothing" in captured.err
+
+
+def test_main_accepts_matching_env_and_pane_identity(tmp_path, monkeypatch):
+    _reg(tmp_path)
+    monkeypatch.setenv("SHANTY_AGENT", "ellie")
+    monkeypatch.setenv("TMUX_PANE", "%42")
+    panes = _Panes({"p-maldoon"})
+    panes.session_name = lambda _pane: "p-ellie"
+    monkeypatch.setattr(stop_event, "Tmux", lambda: panes)
+
+    assert stop_event.main(["send", "--root", str(tmp_path)]) == 0
+    got = FilesEvents(tmp_path / "events").drain("maldoon")
+    assert [event.frm for event in got] == ["ellie"]
 
 
 # --- aegis-w9z1: a stop is a TURN boundary, so the drain checks the pane -------
