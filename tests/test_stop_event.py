@@ -228,6 +228,22 @@ def test_main_resolves_identity_on_the_fleets_declared_tmux_socket(
     assert seen == ["fleet-socket"]
 
 
+def test_main_refuses_a_present_but_stale_remote_control_pane(
+        tmp_path, monkeypatch, capsys):
+    _reg(tmp_path)
+    monkeypatch.setenv("SHANTY_AGENT", "maldoon")
+    monkeypatch.setenv("TMUX_PANE", "%stale")
+    panes = _Panes(set())
+    panes.session_name = lambda _pane: None
+    monkeypatch.setattr(stop_event, "Tmux", lambda **_: panes)
+
+    assert stop_event.main(["haul", "--root", str(tmp_path)]) == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "REFUSED" in captured.err
+    assert "served and claimed nothing" in captured.err
+
+
 # --- aegis-w9z1: a stop is a TURN boundary, so the drain checks the pane -------
 
 def _pending(root: Path, to: str) -> list:
@@ -409,6 +425,7 @@ def test_main_send_end_to_end(tmp_path, monkeypatch):
     the pane-liveness backend is faked."""
     _reg(tmp_path)
     monkeypatch.setenv("SHANTY_AGENT", "ellie")
+    monkeypatch.delenv("TMUX_PANE", raising=False)
     monkeypatch.setattr(stop_event, "Tmux", lambda **_: _Panes({"p-maldoon"}))
     rc = stop_event.main(["send", "--root", str(tmp_path)])
     assert rc == 0
