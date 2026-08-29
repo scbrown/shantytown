@@ -131,7 +131,8 @@ def test_over_limit_REFUSES_even_related_work():
     assert "overlap" not in d.inputs and "ratio" not in d.inputs, "relatedness/% gone"
     assert d.inputs["context_k"] == 737.6
     assert d.inputs["cycle_threshold_k"] == 400.0
-    assert "checkpoint" in d.inputs["remedy"] and "THEN /clear" in d.inputs["remedy"]
+    assert "checkpoint" in d.inputs["remedy"] and "st cycle --self" in d.inputs["remedy"]
+    assert "/clear" not in d.inputs["remedy"].replace("Do NOT /clear", "")
 
 
 def test_every_decision_is_inspectable():

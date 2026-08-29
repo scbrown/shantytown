@@ -46,6 +46,7 @@ import sys
 from pathlib import Path
 
 from .inbox import is_decision, is_message
+from . import handoff_text
 
 
 def _root(argv: list[str]) -> Path:
@@ -588,31 +589,24 @@ def haul_feed_message(nid: str, title: str, rest: int, headroom: str = "",
     means nothing at all. Saying so where it happens is the whole fix.
     """
     t = (title or "")[:80]
-    again = (f"⚠ THIS IS THE SAME BEAD YOU WERE ALREADY SERVED "
-             f"{'twice' if repeats > 1 else 'once'} this stretch. That is the "
-             f"re-serve rule, NOT a decision that you should keep at it — an "
-             f"assigned, open, ready bead comes back until you release it. If "
-             f"you already judged it done, blocked, or not yours, act on that "
-             f"judgement below rather than re-reading it. " if repeats else "")
-    # No budget declared -> the sentence stays exactly as it was. A deployment
-    # that has not armed the ceiling must not be told about headroom it has none
-    # of; a caveat with no number behind it is just noise to learn to skip.
-    authority = (f"The coordinator was not pinged: this queue is yours to work, "
-                 f"within the session budget — {headroom}. " if headroom else
-                 f"The coordinator was not pinged: this queue is yours. ")
+    # A repeat must READ as a repeat — being handed the same bead back looks like
+    # an instruction to persist, when it only means you have not released it. One
+    # line; the rule itself is in `st help haul`.
+    again = (f"(SAME bead, served {'twice' if repeats > 1 else 'once'} already — "
+             f"that is the re-serve rule, not a verdict. Release it below.) "
+             if repeats else "")
+    # No budget declared -> say nothing about headroom. A caveat with no number
+    # behind it is noise to learn to skip.
+    authority = f"Yours to work — {headroom}. " if headroom else "Yours to work. "
     return (
-        f"HAUL: next on your haul: {nid} ({t}). {again}Read it (`bd show {nid}`) "
-        f"and execute; close it when done and the haul advances itself ({rest} "
-        f"more after this). If your context is deep, checkpoint + /clear FIRST — "
-        f"the haul survives it. {authority}"
-        f"Not this one? DONE -> `bd close {nid}`. BLOCKED/gated (nobody should "
-        f"work it yet) -> record the referent + re-test condition in a file, then "
-        f"`st defer {nid} <bead|human|access|external|parked> --reason-file <file>`, "
-        f"which records the kind and takes it OUT of the ready pool "
-        f"until you undo. Valid work but not yours -> `bd update {nid} -a \"\"` "
-        f"hands it back for another agent. Note: a bare status change won't stop "
-        f"the re-serve, and clearing the assignee only RE-POOLS it — a still-ready "
-        f"bead is grabbed by the next idle agent — so defer or close to truly park.")
+        f"HAUL: {nid} ({t}) — `bd show {nid}`, execute, close to advance "
+        f"({rest} more). {again}{authority}"
+        f"{handoff_text.deep_context_hint()}\n"
+        f"Not this one? done -> `bd close {nid}` · gated -> `st defer {nid} "
+        f"<bead|human|access|external|parked> --reason-file <f>` · not yours -> "
+        f"`bd update {nid} -a \"\"`. "
+        f"(A bare status change does NOT stop the re-serve, and clearing the "
+        f"assignee only re-pools it.) Options: `st help haul`.")
 
 
 def haul_resume_message(nid: str, title: str) -> str:
@@ -636,12 +630,18 @@ def haul_resume_message(nid: str, title: str) -> str:
 
 
 def haul_handoff_message(context_k: float, line_k: float) -> str:
-    """Past the handoff line: shed context first; the haul resumes itself."""
-    return (
-        f"HAUL HANDOFF: you are at {int(context_k)}k — past the {int(line_k)}k "
-        f"handoff line (60% of the window). Do NOT start the next item. (1) "
-        f"CHECKPOINT anything unwritten to the bead trail now; (2) run /clear. "
-        f"Your haul resumes automatically on the fresh context.")
+    """Past the handoff line: shed context first; the haul resumes itself.
+
+    THIS IS THE STRING THAT TAUGHT THE WRONG PRIMITIVE (aegis-x6yoq). It used to
+    end "(2) run /clear", and it is the only context-high remedy a BUSY agent can
+    ever see: the CycleDriver fires at 400k on IDLE agents, while this one fires
+    at 600k mid-haul. So a hauling agent got `/clear` — which drops bypass and
+    returns it undispatchable — and never saw the correct instruction that
+    notify._cycle_message had been giving idle agents all along.
+
+    Wording now comes from handoff_text so the two paths cannot drift again.
+    """
+    return handoff_text.haul_handoff(context_k, line_k)
 
 
 def bd_in_progress(cwd: str | None) -> list[dict]:

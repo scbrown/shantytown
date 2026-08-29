@@ -74,7 +74,7 @@ def test_anchor_closed_and_queue_ready_feeds_the_next_bead(monkeypatch, capsys):
     assert rc == 0
     assert block["decision"] == "block"
     assert "aegis-2" in block["reason"] and "HAUL" in block["reason"]
-    assert "coordinator was not pinged" in block["reason"]
+    assert "Yours to work" in block["reason"]
     assert claims == ["aegis-2"], "the fed bead is claimed in_progress"
 
 
@@ -364,9 +364,9 @@ def test_a_repeat_of_the_same_bead_is_FLAGGED_when_it_is_re_served(tmp_path,
     """Bead item 4: the signal that was over-read twice."""
     root = _armed_root(tmp_path, spend_hours=0.5)
     _rc, first = _haul_at(monkeypatch, capsys, root, ready=READY)
-    assert "SAME BEAD" not in first["reason"]
+    assert "SAME bead" not in first["reason"]
     _rc, again = _haul_at(monkeypatch, capsys, root, ready=READY)
-    assert "SAME BEAD" in again["reason"]
+    assert "SAME bead" in again["reason"]
 
 
 def test_an_UNARMED_deployment_behaves_exactly_as_before(tmp_path, monkeypatch,
@@ -375,7 +375,7 @@ def test_an_UNARMED_deployment_behaves_exactly_as_before(tmp_path, monkeypatch,
     untouched, including its message text."""
     claims = []
     _rc, block = _haul_at(monkeypatch, capsys, tmp_path, ready=READY, claims=claims)
-    assert "aegis-2" in block["reason"] and "this queue is yours." in block["reason"]
+    assert "aegis-2" in block["reason"] and "Yours to work." in block["reason"]
     assert "session budget" not in block["reason"]
     assert claims == ["aegis-2"]
 
