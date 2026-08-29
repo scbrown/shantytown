@@ -287,6 +287,49 @@ if [ "${1:-}" = "--selftest" ]; then
       if echo "refs/heads/host $(git rev-parse host) refs/heads/host $Z" | SCRUB_PATTERNS_FILE="$cf" bash "$SELF" origin "$r/pub.git" >/dev/null 2>&1; then
         echo "FAIL a hostname in source was allowed — the scope leaked into the host rule"; exit 1
       else echo "ok   hostname in source is still refused"; fi
+
+      # 4. WHOSE LEAK IS IT? Both outcomes, because the whole point of the
+      #    attribution is to tell them apart — and a banner that always prints is
+      #    worse than none, since it would excuse a real leak.
+      git remote add internal "$r/forge.git" 2>/dev/null || true
+      git init -q --bare "$r/forge.git"
+      git checkout -q main 2>/dev/null || git checkout -q -B main origin/main
+      git checkout -q -b shared; mkdir -p pkg
+      echo '# talks to other-host.invalid' > pkg/shared.py
+      git add pkg/shared.py; git commit -qm "somebody else's leak"
+      shared_sha=$(git rev-parse --short shared)
+      git push -q internal shared:main; git fetch -q internal 2>/dev/null
+      # A LATER commit of the pusher's own, clean, riding the same range.
+      echo 'nothing to see' > pkg/mine.py
+      git add pkg/mine.py; git commit -qm "my clean change"
+      out=$(echo "refs/heads/shared $(git rev-parse shared) refs/heads/shared $Z" \
+            | SCRUB_PATTERNS_FILE="$cf" bash "$SELF" origin "$r/pub.git" 2>&1); rc=$?
+      if [ "$rc" -eq 0 ]; then
+        echo "FAIL a leak already on another remote was ALLOWED — the guard must still refuse"; exit 1
+      elif printf '%s' "$out" | grep -q 'NOT YOUR CHANGE' \
+           && printf '%s' "$out" | grep -q "$shared_sha" \
+           && printf '%s' "$out" | grep -q "already on 'internal'"; then
+        echo "ok   a pre-existing leak refuses AND is named as somebody else's"
+      else
+        echo "FAIL pre-existing leak was refused without saying so or without naming the commit"; exit 1
+      fi
+
+      # ...and the control: the pusher's OWN leak must NOT get that excuse.
+      git checkout -q main 2>/dev/null || git checkout -q -B main origin/main
+      git checkout -q -b mine; mkdir -p pkg
+      echo '# talks to my-host.invalid' > pkg/mine2.py
+      git add pkg/mine2.py; git commit -qm "my own leak"
+      out=$(echo "refs/heads/mine $(git rev-parse mine) refs/heads/mine $Z" \
+            | SCRUB_PATTERNS_FILE="$cf" bash "$SELF" origin "$r/pub.git" 2>&1); rc=$?
+      if [ "$rc" -eq 0 ]; then
+        echo "FAIL the pusher's own leak was allowed"; exit 1
+      elif printf '%s' "$out" | grep -q 'NOT YOUR CHANGE'; then
+        echo "FAIL the pusher's own leak was excused as pre-existing"; exit 1
+      elif printf '%s' "$out" | grep -q 'yours: this push adds it'; then
+        echo "ok   the pusher's own leak is named as theirs"
+      else
+        echo "FAIL own leak refused without attributing the commit"; exit 1
+      fi
     ) || fail=1
     rm -rf "$r"
   fi
@@ -320,12 +363,42 @@ GUARD_EXCLUDE=(
 )
 
 REMOTE_URL="${2:-}"
+PUSH_REMOTE="${1:-}"
 if printf '%s' "$REMOTE_URL" | grep -qE "$INTERNAL_HOST_RE"; then
   exit 0   # internal forge — internal names belong there
 fi
 
+# ── IS THIS COMMIT ALREADY ON ANOTHER REMOTE? ───────────────────────────────
+# The question the refusal could not answer, and it is the difference between
+# "you leaked something" and "you are standing behind somebody else's leak".
+#
+# On a repo with an internal forge and a public mirror, the public remote can sit
+# far behind: the push range then contains dozens of commits the pusher never
+# wrote, and a refusal naming a line from one of them reads as the pusher's own
+# fault. Measured: a leak from 2026-08-27 blocked the public mirror for two days
+# while every agent who pushed was told their push "would add" it.
+#
+# Authorship cannot answer this — a fleet of agents commits under one identity —
+# but REACHABILITY can, and it is the honest test anyway: a commit already on the
+# internal forge is shared history that this push did not introduce and that the
+# pusher cannot amend away.
+already_elsewhere() {
+  local c=$1 r tip
+  for r in $(git remote 2>/dev/null); do
+    [ "$r" = "$PUSH_REMOTE" ] && continue
+    for tip in $(git for-each-ref --format='%(objectname)' "refs/remotes/$r/" 2>/dev/null); do
+      if git merge-base --is-ancestor "$c" "$tip" 2>/dev/null; then
+        printf '%s' "$r"; return 0
+      fi
+    done
+  done
+  return 1
+}
+
 # stdin: <local ref> <local sha> <remote ref> <remote sha>
 violations=0
+offenders=""       # one line per offending commit: "<sha> <subject>\t<remote|>"
+offenders_mine=0   # how many of them this push actually introduces
 while read -r _lref lsha _rref rsha; do
   [ "$lsha" = "0000000000000000000000000000000000000000" ] && continue
   if [ "$rsha" = "0000000000000000000000000000000000000000" ]; then
@@ -359,6 +432,15 @@ while read -r _lref lsha _rref rsha; do
       [ -n "$tf" ] && ticketlines+=$(printf '%s\n' "$tf" | tr '\n' '\0' \
         | xargs -0 git show --format= "$c" -- 2>/dev/null | grep -E '^\+' || true)$'\n'
       rawmsgs+=$(git log -1 --format=%B "$c" 2>/dev/null)$'\n'
+      # ATTRIBUTION, per commit: which commit carries the leak, and is it one
+      # this push introduces? Same matcher as the aggregate below, so the two can
+      # never disagree about what counts as a hit.
+      if git show --format= "$c" -- . "${GUARD_EXCLUDE[@]}" 2>/dev/null | grep -E '^\+' | grep -qE "$PATTERNS" \
+         || git log -1 --format=%B "$c" 2>/dev/null | grep -qE "$PATTERNS"; then
+        where=$(already_elsewhere "$c" || true)
+        [ -z "$where" ] && offenders_mine=$((offenders_mine + 1))
+        offenders+="$(git log -1 --format='%h %s' "$c" 2>/dev/null)"$'\t'"$where"$'\n'
+      fi
     done
   else
     # Branch update. PER-COMMIT, not the net diff of the range (aegis-gsbs1).
@@ -394,6 +476,15 @@ while read -r _lref lsha _rref rsha; do
       [ -n "$tf" ] && ticketlines+=$(printf '%s\n' "$tf" | tr '\n' '\0' \
         | xargs -0 git show --format= "$c" -- 2>/dev/null | grep -E '^\+' || true)$'\n'
       rawmsgs+=$(git log -1 --format=%B "$c" 2>/dev/null)$'\n'
+      # ATTRIBUTION, per commit: which commit carries the leak, and is it one
+      # this push introduces? Same matcher as the aggregate below, so the two can
+      # never disagree about what counts as a hit.
+      if git show --format= "$c" -- . "${GUARD_EXCLUDE[@]}" 2>/dev/null | grep -E '^\+' | grep -qE "$PATTERNS" \
+         || git log -1 --format=%B "$c" 2>/dev/null | grep -qE "$PATTERNS"; then
+        where=$(already_elsewhere "$c" || true)
+        [ -z "$where" ] && offenders_mine=$((offenders_mine + 1))
+        offenders+="$(git log -1 --format='%h %s' "$c" 2>/dev/null)"$'\t'"$where"$'\n'
+      fi
     done
   fi
   # ADDED lines only (+ prefix), so pre-existing occurrences never trip it.
@@ -452,8 +543,42 @@ while read -r _lref lsha _rref rsha; do
     echo "  remote: $REMOTE_URL" >&2
     [ -n "$added" ]   && { echo "  internal names in the diff:" >&2; printf '%s\n' "$added" | head -10 | sed 's/^/    /' >&2; }
     [ -n "$msgs" ]    && { echo "  internal names in commit messages:" >&2; printf '%s\n' "$msgs" | head -10 | sed 's/^/    /' >&2; }
+    if [ -n "$offenders" ]; then
+      echo "  offending commit(s):" >&2
+      printf '%s' "$offenders" | while IFS=$'\t' read -r desc where; do
+        [ -z "$desc" ] && continue
+        if [ -n "$where" ]; then
+          echo "    $desc   [already on '$where' — NOT introduced by this push]" >&2
+        else
+          echo "    $desc   [yours: this push adds it]" >&2
+        fi
+      done
+    fi
   fi
 done
+
+if [ "$violations" -ne 0 ] && [ -n "$offenders" ] && [ "$offenders_mine" -eq 0 ]; then
+  # EVERY offending commit is already on another remote. Say so first and plainly:
+  # the pusher has leaked nothing, cannot amend shared history, and the one move
+  # that would "work" here — --no-verify — is the only move that actually
+  # publishes the identifier.
+  cat >&2 <<'EOM'
+
+  PRE-EXISTING BLOCK — NOT YOUR CHANGE. Every commit above is already on another
+  remote, so this push introduces none of them; it is blocked by history that
+  predates it, and the mirror will stay blocked for everyone until that history
+  is dealt with.
+
+  Do NOT reach for --no-verify. It is the one action that would actually put the
+  identifier into public history, and the refusal you are reading is not about
+  anything you did.
+
+  What to do: your work is already on the internal forge, so nothing is lost.
+  The remedy is a rewrite of the named commit, which is a decision about shared
+  history — file it and get authority rather than improvising it under a push.
+EOM
+  exit 1
+fi
 
 if [ "$violations" -ne 0 ]; then
   cat >&2 <<'EOM'
