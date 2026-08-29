@@ -87,6 +87,34 @@ def test_the_secret_is_injected_not_left_as_a_placeholder(root, ws):
     assert "${" not in (ws / ".mcp.json").read_text()
 
 
+def test_codex_projects_each_bearer_from_its_own_template_env_var():
+    """Two authenticated MCPs need not share one credential.
+
+    The rendered Claude kit contains secret VALUES, but Codex must recover the
+    placeholder NAMES from the template so its config points at the right
+    long-lived daemon environment without writing either value into TOML.
+    """
+    rendered = {
+        "homelab": {"type": "http", "url": "http://homelab.invalid/mcp",
+                    "headers": {"Authorization": "Bearer homelab-value"}},
+        "agent": {"type": "http", "url": "http://agent.invalid/mcp",
+                  "headers": {"Authorization": "Bearer agent-value"}},
+    }
+    template = {
+        "homelab": {"headers": {
+            "Authorization": "Bearer ${HOMELAB_MCP_TOKEN}"}},
+        "agent": {"headers": {
+            "Authorization": "Bearer ${AGENT_MCP_TOKEN}"}},
+    }
+
+    projected = P._codex_servers(rendered, template)
+
+    assert projected["homelab"]["bearer_token_env_var"] == "HOMELAB_MCP_TOKEN"
+    assert projected["agent"]["bearer_token_env_var"] == "AGENT_MCP_TOKEN"
+    assert "http_headers" not in projected["homelab"]
+    assert "http_headers" not in projected["agent"]
+
+
 def test_the_rendered_file_is_not_world_readable(root, ws):
     P.provision(_card(ws), root)
     assert oct((ws / ".mcp.json").stat().st_mode)[-3:] == "600", \

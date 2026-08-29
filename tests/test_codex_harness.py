@@ -84,6 +84,7 @@ def test_codex_remote_control_is_explicit_and_attaches_to_managed_daemon(tmp_pat
 
     socket = cfg.parent / "app-server-control" / "app-server-control.sock"
     assert f"CODEX_HOME={cfg.parent} codex remote-control start --json" in launch
+    assert launch.count("codex remote-control start --json") == 2
     assert f"--remote unix://{socket}" in launch
     assert "--cd '/work with space'" in launch
 
