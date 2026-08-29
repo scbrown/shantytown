@@ -882,6 +882,15 @@ can be selective: repeat `--read-id ID` for messages already absorbed while leav
 an open question unread. The command preflights every ID and changes nothing if any
 named ID is not currently unread for that recipient.
 
+`st new` (including the shared relaunch path used by start, attach, and cycle) now
+drains that offline case without turning startup into an acknowledgment. After the
+runtime and its hooks are verified, the launcher snapshots the recipient's unread
+messages and injects one marked startup-context block. It closes exactly those IDs
+only when a scrollback read-back contains the block's complete end marker and the
+input is not stranded. A failed send, missing/truncated marker, unreadable inbox, or
+aborted startup leaves every pointer open. Plain list and `--count` remain pure reads;
+age is never treated as evidence of delivery.
+
 The default send is unchanged and is still one line of `tmux send-keys`. What is new is the **type**.
 
 The old `mail -d` persisted a message as an ordinary tracker item assigned to the recipient, and then

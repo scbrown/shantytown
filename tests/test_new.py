@@ -13,6 +13,7 @@ import pytest
 
 from shantytown import cli
 from shantytown import harness as harness_mod
+from shantytown.inbox import FilesInbox
 from shantytown.tmux import NullPanes
 
 
@@ -97,6 +98,43 @@ def test_new_starts_and_verifies_live(tmp_path, monkeypatch, capsys):
     _, text = panes.sent[-1]
     assert "SHANTY_AGENT=ellie" in text and "--settings" in text
     assert panes.exists("crew-ellie")
+
+
+def test_startup_inbox_closes_exactly_the_messages_verified_in_context(
+        tmp_path, monkeypatch, capsys):
+    root = _world(tmp_path)
+    box = FilesInbox(root / "inbox")
+    mine = box.deliver("ellie", "first offline message", frm="arnold")
+    other = box.deliver("franklin", "not for ellie", frm="sattler")
+    panes = NullPanes(screen=READY, live=set())
+    monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: panes)
+
+    assert cli._cmd_new(_Args(root=root)) == cli.OK
+
+    startup = panes.sent[-1][1]
+    assert mine.id in startup and mine.body in startup
+    assert other.id not in startup and other.body not in startup
+    assert box.unread("ellie") == []
+    assert [m.id for m in box.unread("franklin")] == [other.id]
+    assert "delivered and closed 1 verified pointer" in capsys.readouterr().out
+
+
+def test_startup_inbox_keeps_every_pointer_when_complete_context_is_not_observed(
+        tmp_path, monkeypatch, capsys):
+    root = _world(tmp_path)
+    box = FilesInbox(root / "inbox")
+    first = box.deliver("ellie", "first offline message")
+    second = box.deliver("ellie", "second offline message")
+    # The ready banner proves launch liveness, while drops=True models the startup
+    # prompt being swallowed/truncated before its final receipt marker appears.
+    panes = NullPanes(screen=READY, drops=True, live=set())
+    monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: panes)
+
+    assert cli._cmd_new(_Args(root=root)) == cli.OK
+
+    assert {m.id for m in box.unread("ellie")} == {first.id, second.id}
+    err = capsys.readouterr().err
+    assert "delivery not verified" in err and "2 pointer(s) remain open" in err
 
 
 def test_sanctioned_new_clears_retired_with_transition_provenance(
