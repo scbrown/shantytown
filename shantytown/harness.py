@@ -310,6 +310,29 @@ class ClaudeHarness:
     # starts covering it with no other change.
     stranded_markers = ()
 
+    @staticmethod
+    def _remote_control(root=None) -> bool:
+        """The deployment's explicit Remote Control posture.
+
+        Absent stays ``True`` for compatibility with Stiwi's 2026-07-19
+        default-on decision.  A deployment can now record either posture under
+        ``[env] SHANTY_REMOTE_CONTROL``; malformed values refuse the launch
+        instead of silently exposing a session off-host or silently making it
+        unreachable.
+        """
+        from .deployment import deployment_default
+        raw = deployment_default(root, "SHANTY_REMOTE_CONTROL")
+        if raw is None:
+            return True
+        value = raw.strip().lower()
+        if value in ("true", "1", "yes", "on"):
+            return True
+        if value in ("false", "0", "no", "off"):
+            return False
+        raise Unsupported(
+            "SHANTY_REMOTE_CONTROL must be true or false; refusing to guess "
+            f"the external-relay posture from {raw!r}")
+
     def launch(self, card: Agent, settings_path: str, root=None) -> str:
         # --no-chrome: crew agents do not use the Chrome integration, and WITHOUT
         # this a first-run claude stops at a "Claude in Chrome extension detected"
@@ -331,7 +354,9 @@ class ClaudeHarness:
         # failure 84z1 was filed to repair. `--chrome` is one agent's decision on
         # one card, never a default anybody inherits.
         chrome = "--chrome" if card.chrome else "--no-chrome"
-        flags = f"{chrome} --remote-control {card.name}"
+        flags = chrome
+        if self._remote_control(root):
+            flags += f" --remote-control {card.name}"
         # --dangerously-skip-permissions is OPT-IN per agent (card.dangerous), never
         # global — a crew worker that must act without prompts sets it on its own
         # card; nobody else inherits it (the pilot, aegis-qdal.5).
