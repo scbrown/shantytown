@@ -54,6 +54,25 @@ def test_a_board_of_all_dark_assigned_beads_is_not_dispatchable():
     assert feed_check.dispatchable({"weaver"}, ready) == []
 
 
+def test_queue_state_uses_br_without_spawning_retired_bd(monkeypatch, tmp_path):
+    from shantytown.br import BrTracker
+
+    tracker = BrTracker(repo=str(tmp_path))
+    monkeypatch.setattr("shantytown.br.ready",
+                        lambda trk: [{"id": "aegis-ready"}])
+    monkeypatch.setattr("shantytown.br.in_progress",
+                        lambda trk: [{"id": "aegis-active"}])
+    monkeypatch.setattr(feed_check, "_bd_ready",
+                        lambda cwd=None: (_ for _ in ()).throw(AssertionError("bd called")))
+    monkeypatch.setattr(feed_check, "bd_in_progress",
+                        lambda cwd=None: (_ for _ in ()).throw(AssertionError("bd called")))
+
+    ready, active = feed_check.queue_state(tmp_path, _Reg([]), tracker)
+
+    assert ready == [{"id": "aegis-ready"}]
+    assert active == [{"id": "aegis-active"}]
+
+
 # --- free = feedable: dark workers excluded, unreadable excluded ------------
 
 class _Runtime:
