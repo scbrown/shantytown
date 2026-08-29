@@ -78,7 +78,8 @@ def test_st_go_REFUSES_a_saturated_pane():
     # NO "% of limit" and NO relatedness — 400k is a cycle point, not the ceiling,
     # and the rule is unconditional (Stiwi's correction).
     assert "ratio" not in d.inputs and "overlap" not in d.inputs
-    assert "checkpoint" in d.inputs["remedy"] and "THEN /clear" in d.inputs["remedy"]
+    assert "checkpoint" in d.inputs["remedy"] and "st cycle --self" in d.inputs["remedy"]
+    assert "/clear" not in d.inputs["remedy"].replace("Do NOT /clear", "")
 
 
 def test_a_healthy_pane_still_nudges():
@@ -138,7 +139,7 @@ def test_the_drain_message_tells_the_destination_not_to_pile_on(tmp_path):
                                         deferred=0)
     assert "CYCLE THRESHOLD" in reason
     assert "687k" in reason and "%" not in reason   # raw depth, no "% of limit"
-    assert "do NOT hand it the next item" in reason and "CHECKPOINTS" in reason
+    assert "do NOT hand it the next item" in reason and "checkpoints" in reason
 
 
 def test_a_clean_stop_says_nothing_about_saturation(tmp_path):

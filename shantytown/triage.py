@@ -568,12 +568,16 @@ def triage(panes, target: str, new_work: str) -> Decision:
     if tokens is not None and tokens >= CYCLE_THRESHOLD_K:
         return Decision(
             Action.CLEAR,
-            "past the 400k cycle threshold — checkpoint, then clear",
+            "past the 400k cycle threshold — checkpoint, then cycle",
             {"pane": target, "context_k": tokens, "shells": shells,
              "cycle_threshold_k": CYCLE_THRESHOLD_K,
-             "remedy": "checkpoint state to the bead, THEN /clear (or hand off to "
-                       "a fresh session), THEN take the task. Do NOT auto-clear — "
-                       "it loses work that was not saved. Unconditional on "
+             # aegis-x6yoq: names `st cycle --self`, never /clear. /clear drops
+             # bypass and returns the agent undispatchable, so prescribing it here
+             # made the remedy need its own remedy.
+             "remedy": "checkpoint to the bead, THEN `st cycle --self "
+                       "--checkpoint-file <notes>`, THEN take the task. Do NOT "
+                       "/clear and do NOT auto-cycle — an unsaved checkpoint is "
+                       "the one thing a cycle destroys. Unconditional on "
                        "relatedness: past 400k, cycle before more work."})
 
     return Decision(Action.NUDGE, "healthy",

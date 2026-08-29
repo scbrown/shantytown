@@ -54,6 +54,25 @@ def test_a_board_of_all_dark_assigned_beads_is_not_dispatchable():
     assert feed_check.dispatchable({"weaver"}, ready) == []
 
 
+def test_queue_state_uses_br_without_spawning_retired_bd(monkeypatch, tmp_path):
+    from shantytown.br import BrTracker
+
+    tracker = BrTracker(repo=str(tmp_path))
+    monkeypatch.setattr("shantytown.br.ready",
+                        lambda trk: [{"id": "aegis-ready"}])
+    monkeypatch.setattr("shantytown.br.in_progress",
+                        lambda trk: [{"id": "aegis-active"}])
+    monkeypatch.setattr(feed_check, "_bd_ready",
+                        lambda cwd=None: (_ for _ in ()).throw(AssertionError("bd called")))
+    monkeypatch.setattr(feed_check, "bd_in_progress",
+                        lambda cwd=None: (_ for _ in ()).throw(AssertionError("bd called")))
+
+    ready, active = feed_check.queue_state(tmp_path, _Reg([]), tracker)
+
+    assert ready == [{"id": "aegis-ready"}]
+    assert active == [{"id": "aegis-active"}]
+
+
 # --- free = feedable: dark workers excluded, unreadable excluded ------------
 
 class _Runtime:
@@ -202,7 +221,9 @@ def test_FAILS_OPEN_when_bd_is_unreachable(monkeypatch, capsys):
     # THE critical invariant: a bd hiccup must never trap the coordinator.
     _wire_main(monkeypatch, free=["weaver"], bd_raises=True)
     assert feed_check.main(["--root", "/x"]) == 0
-    assert capsys.readouterr().out == "", "bd error -> ALLOW the stop, never block"
+    out = capsys.readouterr()
+    assert out.out == "", "bd error -> ALLOW the stop, never block"
+    assert "feed-path read FAILED" in out.err and "ALLOWING" in out.err
 
 
 def test_FAILS_OPEN_when_the_registry_setup_raises(monkeypatch, capsys):
@@ -210,7 +231,9 @@ def test_FAILS_OPEN_when_the_registry_setup_raises(monkeypatch, capsys):
         raise OSError("no store")
     monkeypatch.setattr("shantytown.files.FilesRegistry", boom)
     assert feed_check.main(["--root", "/x"]) == 0
-    assert capsys.readouterr().out == "", "any error -> allow"
+    out = capsys.readouterr()
+    assert out.out == "", "any error -> allow"
+    assert "feed-path read FAILED" in out.err and "ALLOWING" in out.err
 
 
 def test_self_terminates_when_free_hits_zero(monkeypatch, capsys):
@@ -357,7 +380,7 @@ def test_haul_feed_message_still_carries_the_core_advance_instruction():
     # the release line is ADDITIVE — it must not have displaced the advance itself
     msg = feed_check.haul_feed_message("aegis-9z9z", "t", 0)
     assert "aegis-9z9z" in msg
-    assert "close it when done" in msg
+    assert "close to advance" in msg
     assert "0 more" in msg
 
 
@@ -411,3 +434,143 @@ def test_the_whole_fleet_retired_yields_ZERO_free_not_a_full_roster(tmp_path):
     panes = _Panes({f"shanty-{n}": IDLE for n in names},
                    {f"shanty-{n}": f"claude --settings {settings}" for n in names})
     assert feed_check.free_feedable_workers(_Reg(cards), panes, _Runtime()) == []
+
+
+def test_the_haul_feed_legs_read_through_br_not_bd(monkeypatch, tmp_path):
+    """aegis-mxgzh: the regression that made alerts fire while nothing was fed.
+
+    `bd` is retired post-cutover and exits 3, so any leg that still spawns it
+    raises. queue_state was migrated to br; `_bd_ready`/`bd_in_progress` were
+    NOT — and notify injects those two FUNCTIONS as default arguments, so the
+    Rule Zero alert path recovered while the haul feed stayed dead. The split is
+    invisible to a test that only exercises queue_state, which is why this one
+    asserts on the helpers themselves.
+    """
+    from shantytown import feed_check
+
+    calls = []
+    monkeypatch.setattr(feed_check.subprocess, "run",
+                        lambda *a, **k: calls.append(a) or (_ for _ in ()).throw(
+                            AssertionError("spawned bd on a br deployment")))
+
+    class _Tracker:  # stands in for BrTracker
+        pass
+    monkeypatch.setattr(feed_check, "_br_tracker", lambda root, reg: _Tracker())
+    import shantytown.br as br
+    monkeypatch.setattr(br, "ready", lambda t: [{"id": "aegis-1"}])
+    monkeypatch.setattr(br, "in_progress", lambda t: [{"id": "aegis-2"}])
+
+    assert feed_check._bd_ready(None, root=tmp_path, reg=None) == [{"id": "aegis-1"}]
+    assert feed_check.bd_in_progress(None, root=tmp_path, reg=None) == [{"id": "aegis-2"}]
+    assert not calls, "a br deployment must never shell out to the retired bd"
+
+
+def test_notify_injects_the_root_so_its_legs_can_reach_br():
+    """The fix is only live if notify PASSES root — the helpers cannot resolve
+    the backend without it, and a silent fallback to bd is the whole bug."""
+    import inspect
+    from shantytown import notify
+    src = inspect.getsource(notify)
+    for leg in ("_bd_ready(feed_check.bd_cwd(reg)", "bd_in_progress(feed_check.bd_cwd(reg)"):
+        for line in src.splitlines():
+            if leg in line:
+                assert "root=root" in line, f"notify leg does not pass root: {line.strip()}"
+
+
+def test_every_feed_check_leg_reaches_br_not_bd(monkeypatch, tmp_path):
+    """aegis-mxgzh remainder: ready/in_progress were fixed and FOUR legs were not.
+
+    Enumerated rather than fixed one-at-a-time, because that is how this bug kept
+    coming back: arnold migrated queue_state, I migrated ready/in_progress, and
+    the tend journal then found blocked/show/claim still spawning retired `bd` and
+    failing loud every pass. This asserts the whole surface at once.
+    """
+    from shantytown import feed_check
+    import shantytown.br as br
+
+    monkeypatch.setattr(feed_check.subprocess, "run",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            AssertionError("spawned retired bd on a br deployment")))
+
+    class _T:
+        pass
+    monkeypatch.setattr(feed_check, "_br_tracker", lambda root, reg: _T())
+    monkeypatch.setattr(br, "ready", lambda t: [{"id": "r"}])
+    monkeypatch.setattr(br, "in_progress", lambda t: [{"id": "a"}])
+    monkeypatch.setattr(br, "blocked", lambda t: [{"id": "b"}])
+    monkeypatch.setattr(br, "show", lambda t, i: {"id": i})
+    claimed = []
+    monkeypatch.setattr(br, "claim", lambda t, i: claimed.append(i))
+
+    R = dict(root=tmp_path, reg=None)
+    assert feed_check._bd_ready(None, **R) == [{"id": "r"}]
+    assert feed_check.bd_in_progress(None, **R) == [{"id": "a"}]
+    assert feed_check.bd_blocked(None, **R) == [{"id": "b"}]
+    assert feed_check.bd_show(None, "aegis-1", **R) == {"id": "aegis-1"}
+    feed_check.bd_claim(None, "aegis-1", **R)
+    assert claimed == ["aegis-1"], "the dispatcher's WRITE must reach br, not bd"
+
+
+def test_notify_threads_root_into_every_leg_it_calls():
+    """A leg wired but not THREADED is inert — the whole reason this recurred.
+
+    notify calls the module-level helpers directly on its production branch (the
+    `self._bd_*` attributes are the TEST injection seam). If such a call omits
+    root, the helper cannot resolve the backend and silently falls back to the
+    retired binary — wired, deployed, and doing nothing.
+    """
+    import inspect, re
+    from shantytown import notify
+
+    legs = re.compile(r"\b(?:feed_check\.)?(bd_claim|bd_blocked|bd_show|_bd_ready|bd_in_progress)\(")
+    offenders = []
+    for line in inspect.getsource(notify).splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#") or stripped.startswith("def ") or "self._bd" in stripped:
+            continue                      # comment, definition, or the injection seam
+        # `root=root` inside __init__ and `root=self._root` inside a sweep are
+        # both correct threadings — the difference is only which scope holds it.
+        if legs.search(stripped) and not re.search(r"root=(root|self\._root)\b", stripped):
+            offenders.append(stripped)
+    assert not offenders, ("notify legs not threaded with root:\n  "
+                           + "\n  ".join(offenders))
+
+
+def test_the_stop_hook_haul_path_reaches_br(monkeypatch, tmp_path):
+    """THE FIFTH LEG (aegis-mxgzh) — the one that mattered most.
+
+    feed_check's five were migrated and stop_event's `_bd_json` was not. This is
+    the AGENT'S OWN stop path: the thing that hands a worker its next haul item.
+    While it spawned retired `bd` it raised into a fail-open, so agents stopped
+    idle holding ready, assigned work and read as indecisive rather than
+    unserved. Three of arnold's stops in one evening were this.
+    """
+    from shantytown import stop_event, feed_check
+
+    monkeypatch.setattr("subprocess.run",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            AssertionError("stop hook spawned retired bd")))
+
+    class _T:
+        def _bd(self, *args):
+            class R:
+                returncode = 0
+                stdout = '{"issues": [{"id": "aegis-1"}]}'
+                stderr = ""
+            return R()
+    monkeypatch.setattr(feed_check, "_br_tracker", lambda root, reg: _T())
+
+    rows = stop_event._bd_json(["ready", "--limit", "0"], None, root=tmp_path, reg=None)
+    assert rows == [{"id": "aegis-1"}], "the stop hook must read the haul through br"
+
+
+def test_stop_hook_threads_root_into_every_tracker_read():
+    """A leg wired but not threaded is inert — the failure mode that made this
+    bug survive three separate fixes."""
+    import inspect, re
+    from shantytown import stop_event
+    offenders = [l.strip() for l in inspect.getsource(stop_event).splitlines()
+                 if "_bd_json(" in l and "def _bd_json" not in l
+                 and not l.strip().startswith("#")
+                 and "root=root" not in l]
+    assert not offenders, "stop_event legs not threaded:\n  " + "\n  ".join(offenders)

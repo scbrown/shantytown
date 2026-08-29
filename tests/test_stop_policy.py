@@ -234,7 +234,7 @@ def test_a_hard_failure_in_gathering_allows_the_stop(tmp_path, capsys):
     assert "ALLOWING" in out.err or "could not read my own card" in out.err
 
 
-def test_a_broken_gate_does_not_block(tmp_path, monkeypatch):
+def test_a_broken_gate_does_not_block_and_alarms(tmp_path, monkeypatch, capsys):
     """Rule Zero unreachable (bd down, tmux down) must not trap the coordinator."""
     from shantytown import feed_check as feed_mod
 
@@ -259,6 +259,7 @@ def test_a_broken_gate_does_not_block(tmp_path, monkeypatch):
                     runtime=object(), events=_Events())
     assert inp.free_feedable == [] and inp.dispatchable == 0
     assert not sp.decide(inp).block
+    assert "Rule Zero feed-path read FAILED" in capsys.readouterr().err
 
 
 # --- non-administrators ------------------------------------------------------

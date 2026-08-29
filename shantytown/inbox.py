@@ -379,16 +379,20 @@ class TrackerInbox:
             # this whole check exists to avoid repeating one level down.
             note = ""
             if unit == "bytes" and typed_size != len(body):
-                note = (f" NOTE: your text is {len(body)} characters but "
-                        f"{typed_size} BYTES — it contains non-ASCII (em dashes, "
-                        f"arrows, ✓), and the cap is on bytes. Trimming to "
-                        f"{budget} characters will not be enough.")
+                note = (f" NOTE: {len(body)} chars but {typed_size} BYTES "
+                        f"(non-ASCII) — the cap counts bytes, so trimming to "
+                        f"{budget} chars is not enough.")
+            # SHORTENED (aegis-x6yoq). Stiwi: "can we shorten this ticket in file
+            # warning text its hilariously long and fires all the time." It fires on
+            # every over-cap durable send, and the sender already knows what an inbox
+            # is — what they need is the number and the way out, not the design
+            # rationale. That moved to `st help inbox`. The byte-vs-character NOTE
+            # stays: it is the non-obvious half, and without it a sender trims to the
+            # character count and is refused a second time.
             raise MessageTooLong(
-                f"durable message is {typed_size} {unit}; this inbox carries at most "
-                f"{budget} {unit} (it maps to a tracker item titled {PREFIX!r}, capped "
-                f"at {cap} {unit}). The inbox is a thin pointer channel, not a document "
-                f"store: put the substance in a bead and send a pointer "
-                f"(e.g. `st inbox {to} 'see <bead-id>'`), or `bd comment <id> --file`."
+                f"too long: {typed_size} {unit}, cap {budget}. Put it in a bead and "
+                f"send the pointer: `st inbox {to} 'see <bead-id>'` "
+                f"(`bd comment <id> --file` for the body). `st help inbox`."
                 f"{note}",
                 budget=budget,
                 unit=unit,

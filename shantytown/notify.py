@@ -224,17 +224,17 @@ def _cycle_message() -> str:
     # journaling, and a verification that the stop hooks are live on the new
     # process. The agent keeps working until tend picks the request up — nothing is
     # lost if it never fires.
-    return (
-        "⚠ st tend: you are PAST THE 400k CYCLE THRESHOLD. CYCLE NOW, and in this "
-        "order: (1) CHECKPOINT — write your current state to your active bead "
-        "(what you are mid-task on, decisions already made, the exact next step) "
-        "with `bd comment <id> --file <notes>`; (2) THEN run `st cycle --self -r "
-        "'<that same checkpoint, one line>'`. Do NOT run /clear — it drops you out "
-        "of bypass into MANUAL and you come back undispatchable. `st cycle` stops "
-        "and relaunches you instead, which KEEPS bypass, your MCP kit, your skills "
-        "and your hooks, and re-dispatches your plate item automatically. Keep "
-        "working until it fires. (auto-prompt from st tend, once per saturation "
-        "episode.)")
+    #
+    # SHORTENED and moved to handoff_text (aegis-x6yoq). This was ~110 words and
+    # fires on a timer; Stiwi's ask was to cut the recurring pane essays. The
+    # rationale above is preserved HERE, in the code, and for agents it now lives
+    # in `st help handoff` — written once and read on demand, rather than
+    # re-pushed into every pane every few minutes. A message that long is skimmed,
+    # which is how the one safety-critical sentence in it gets skipped.
+    from . import handoff_text
+    from .triage import CYCLE_THRESHOLD_K
+    return handoff_text.cycle_now(None, None).replace(
+        "past the cycle line", f"past the {int(CYCLE_THRESHOLD_K)}k cycle line")
 
 
 def push_to_own_pane(reg, panes, agent: str, message: str) -> str | None:
@@ -276,6 +276,7 @@ class CycleDriver:
 
     def __init__(self, root, reg, panes, *, push=push_to_own_pane, wiring=None,
                  refresh=None, log=None):
+        self._root = root          # aegis-mxgzh: the sweeps need it to resolve the br backend
         self.path = Path(root) / "notify" / "cycling.json"
         self._reg = reg
         self._panes = panes
@@ -405,7 +406,7 @@ class CycleDriver:
                 continue
             ledger[agent] = "saturated"
             prompted.append(agent)
-            self._log(f"cycle: prompted {agent} to checkpoint + /clear")
+            self._log(f"cycle: prompted {agent} to checkpoint + st cycle --self")
 
         self._save(ledger)
         return prompted
@@ -436,6 +437,7 @@ class Notifier:
     """
 
     def __init__(self, root, reg, panes, *, wake=wake_recipient, log=None):
+        self._root = root          # aegis-mxgzh: the sweeps need it to resolve the br backend
         self.path = Path(root) / "notify" / "blocked.json"
         self._reg = reg
         self._panes = panes
@@ -533,6 +535,7 @@ class IdleFleetAlerter:
     def __init__(self, root, reg, panes, runtime, *, push=push_to_admin,
                  bd_ready=None, bd_in_progress=None, context_k=None,
                  handoff_k=None, log=None):
+        self._root = root          # aegis-mxgzh: the sweeps need it to resolve the br backend
         self.path = Path(root) / "notify" / "idle_fleet.json"
         # Kept for the launch-stamp ownership gate (aegis-2j2r): tend must
         # only feed agents st launched, same signal as the hard gate's.
@@ -548,7 +551,7 @@ class IdleFleetAlerter:
         # once in two days (aegis-arma follow-up, measured).
         from . import feed_check
         self._bd_ready = bd_ready or (
-            lambda: feed_check._bd_ready(feed_check.bd_cwd(reg)))
+            lambda: feed_check._bd_ready(feed_check.bd_cwd(reg), root=root, reg=reg))
         self._bd_in_progress = bd_in_progress or feed_check.bd_in_progress
         # The worker's context depth off its live pane (the same footer read
         # saturation uses); injected for tests. None = unreadable = never over.
@@ -729,7 +732,7 @@ class IdleFleetAlerter:
             else:
                 nid = feedable[0]
                 try:
-                    feed_check.bd_claim(cwd, nid)
+                    feed_check.bd_claim(cwd, nid, root=self._root, reg=self._reg)
                 except Exception:
                     pass                       # best-effort, same as the stop hook
                 repeats = sb.times_served(self._shanty_root, worker, nid,
@@ -842,6 +845,7 @@ class StalledAlerter:
     def __init__(self, root, reg, panes, runtime, *, push=push_to_admin,
                  bd_in_progress=None, threshold_min=None,
                  escalate_after_min=None, now=None, log=None):
+        self._root = root          # aegis-mxgzh: the sweeps need it to resolve the br backend
         self.path = Path(root) / "notify" / "stalled.json"
         self._reg = reg
         self._panes = panes
@@ -849,7 +853,7 @@ class StalledAlerter:
         self._push = push
         from . import feed_check
         self._bd_in_progress = bd_in_progress or (
-            lambda: feed_check.bd_in_progress(feed_check.bd_cwd(reg)))
+            lambda: feed_check.bd_in_progress(feed_check.bd_cwd(reg), root=root, reg=reg))
         env = os.environ.get("SHANTY_STALL_MIN")
         self._threshold_s = (threshold_min if threshold_min is not None
                              else float(env) if env else 15.0) * 60.0
@@ -1119,6 +1123,7 @@ class BlockedStaleAlerter:
 
     def __init__(self, root, reg, panes, *, push=push_to_admin,
                  bd_blocked=None, bd_show=None, now=None, log=None):
+        self._root = root          # aegis-mxgzh: the sweeps need it to resolve the br backend
         self.path = Path(root) / "notify" / "blocked_stale.json"
         self._reg = reg
         self._panes = panes
@@ -1149,7 +1154,7 @@ class BlockedStaleAlerter:
                 rows = self._bd_blocked()
             else:
                 from .feed_check import bd_blocked
-                rows = bd_blocked(bd_cwd(self._reg))
+                rows = bd_blocked(bd_cwd(self._reg), root=self._root, reg=self._reg)
         except Exception as e:                      # FAIL OPEN
             self._log(f"blocked-stale: could not read the store ({e!r})")
             return []
@@ -1180,7 +1185,7 @@ class BlockedStaleAlerter:
             if isinstance(last, (int, float)) and (now - last) < BLOCKED_RENOTIFY_DAYS * 86400:
                 continue                            # already nudged this cadence
             try:
-                detail = self._bd_show(bid) if self._bd_show else bd_show(cwd, bid)
+                detail = self._bd_show(bid) if self._bd_show else bd_show(cwd, bid, root=self._root, reg=self._reg)
             except Exception as e:
                 self._log(f"blocked-stale: could not inspect {bid} ({e!r})")
                 continue
@@ -1261,6 +1266,7 @@ class BlockedMisstatusAlerter:
 
     def __init__(self, root, reg, panes, *, push=push_to_admin,
                  bd_blocked=None, bd_show=None, now=None, log=None):
+        self._root = root          # aegis-mxgzh: the sweeps need it to resolve the br backend
         self.path = Path(root) / "notify" / "blocked_misstatus.json"
         self._reg = reg
         self._panes = panes
@@ -1281,7 +1287,7 @@ class BlockedMisstatusAlerter:
         cwd = (bd_cwd(self._reg)
                if self._bd_blocked is None or self._bd_show is None else None)
         try:
-            rows = self._bd_blocked() if self._bd_blocked else bd_blocked(cwd)
+            rows = self._bd_blocked() if self._bd_blocked else bd_blocked(cwd, root=self._root, reg=self._reg)
         except Exception as e:
             self._log(f"blocked-misstatus: could not read blocked beads ({e!r})")
             return []
@@ -1301,7 +1307,7 @@ class BlockedMisstatusAlerter:
             if not bid or not is_blocked(row.get("status")):
                 continue
             try:
-                detail = self._bd_show(bid) if self._bd_show else bd_show(cwd, bid)
+                detail = self._bd_show(bid) if self._bd_show else bd_show(cwd, bid, root=self._root, reg=self._reg)
             except Exception as e:
                 self._log(f"blocked-misstatus: could not inspect {bid} ({e!r})")
                 continue

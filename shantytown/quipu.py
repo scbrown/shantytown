@@ -22,6 +22,7 @@ import json
 import os
 import urllib.error
 import urllib.request
+import warnings
 from dataclasses import replace
 
 # Shared ancestor for every "I could not look" (see shantytown/answer.py).
@@ -301,7 +302,18 @@ def resolve_onto(onto: str | None = None, root=None) -> str:
     itself a way to stop joining the facts you were pointed at.
     """
     from .deployment import deployment_default   # local: keeps this client's imports flat
-    return onto or deployment_default(root, "SHANTY_ONTO_NS") or DEFAULT_ONTO
+    resolved = onto or deployment_default(root, "SHANTY_ONTO_NS")
+    if resolved:
+        return resolved
+    warnings.warn(
+        "SHANTY_ONTO_NS is unset; using the documentation-only fallback "
+        f"namespace <{DEFAULT_ONTO}>. Reads can look empty and writes will create "
+        "disconnected identities. Pass an explicit namespace or configure "
+        "SHANTY_ONTO_NS under [env].",
+        RuntimeWarning,
+        stacklevel=2,
+    )
+    return DEFAULT_ONTO
 
 
 def _body_shape(body) -> str:
@@ -705,7 +717,7 @@ class QuipuRegistry:
                 )
             triples.append(
                 f"a:{agent.name} a:{REPORTS_PRED} a:{agent.reports_to} .")
-        turtle = (f"@prefix a: <{ONTO}> .\n"
+        turtle = (f"@prefix a: <{self.onto}> .\n"
                   '@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n'
                   + "\n".join(triples) + "\n")
         self._knot(turtle)
@@ -716,9 +728,9 @@ class QuipuRegistry:
         req = urllib.request.Request(
             self.server + "/retract",
             data=json.dumps({
-                "entity": ONTO + subject,
-                "predicate": ONTO + predicate,
-                "value": ONTO + obj,
+                "entity": self.onto + subject,
+                "predicate": self.onto + predicate,
+                "value": self.onto + obj,
             }).encode(),
             headers=request_headers(),
         )

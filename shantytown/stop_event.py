@@ -58,6 +58,7 @@ from .policy import NullRanker, PolicyRanker
 from .protocols import RankUnavailable
 from .runtime import ClaudeRuntime, live_wiring
 from .stopped import FilesStops
+from . import handoff_text
 from .tier import LeadStatus, is_governance, route_stop
 from .triage import running_shells, context_tokens_k, CYCLE_THRESHOLD_K
 from .tmux import Tmux
@@ -329,9 +330,30 @@ def _send(reg: FilesRegistry, events: FilesEvents, panes, me: str,
 HAUL_HANDOFF_K = 600.0
 
 
-def _bd_json(args: list[str], cwd: str | None) -> list[dict]:
-    """One bd read, JSON out, or raise — the caller's fail-open catches it."""
+def _bd_json(args: list[str], cwd: str | None, root=None, reg=None) -> list[dict]:
+    """One tracker read, JSON out, or raise — the caller's fail-open catches it.
+
+    THE FIFTH LEG (aegis-mxgzh). feed_check's five were migrated to br and this
+    one was not, which mattered more than any of them: this is the AGENT'S OWN
+    STOP path — the thing that hands a worker its next haul item. While it
+    spawned retired `bd` it raised into a fail-open, so agents stopped idle
+    holding ready, assigned work and read as indecisive. arnold did it three
+    times tonight and I messaged him about the beads rather than the mechanism.
+
+    Line 483's write is the sharper half: a claim through retired bd resolves UP
+    into the town store (aegis-qx43o) instead of failing, so the board and the
+    tracker disagree silently about who holds what.
+    """
     import subprocess
+    if root is not None:
+        from .feed_check import _br_tracker
+        tracker = _br_tracker(root, reg)
+        if tracker is not None:
+            r = tracker._bd(*args, "--json")
+            if r.returncode != 0:
+                raise RuntimeError(f"br {' '.join(args)} failed: {r.stderr.strip()[:120]}")
+            payload = json.loads(r.stdout) if r.stdout.strip() else []
+            return payload.get("issues", []) if isinstance(payload, dict) else payload
     r = subprocess.run(["bd", *args, "--json"], capture_output=True, text=True,
                        timeout=20, cwd=cwd)
     if r.returncode != 0:
@@ -404,7 +426,7 @@ def _haul(reg: FilesRegistry, panes, me: str, root: Path) -> int:
         cwd = bd_cwd(reg)
         # An active anchor = mid-work turn boundary. bd list is filtered
         # client-side (same reason as feed_check: assignee formats vary).
-        active = _assigned_to(me, _bd_json(["list", "--status", "in_progress", "--limit", "0"], cwd))
+        active = _assigned_to(me, _bd_json(["list", "--status", "in_progress", "--limit", "0"], cwd, root=root, reg=reg))
         resume = active[0] if (active and
                                harness_name == "codex") else None
         if active and resume is None:
@@ -424,7 +446,7 @@ def _haul(reg: FilesRegistry, panes, me: str, root: Path) -> int:
             return 0
         mine = []
         if resume is None:
-            mine = _assigned_to(me, _bd_json(["ready", "--limit", "0"], cwd))
+            mine = _assigned_to(me, _bd_json(["ready", "--limit", "0"], cwd, root=root, reg=reg))
             if not mine:
                 return 0
 
@@ -458,6 +480,7 @@ def _haul(reg: FilesRegistry, panes, me: str, root: Path) -> int:
         # remaining headroom on work that deserves a fresh session. None
         # (footer unreadable) is NOT over the line — unknown never blocks.
         from .feed_check import haul_feed_message, haul_handoff_message
+        from . import handoff_text
         ck = _my_context_k(reg, panes, me)
         if ck is not None and ck >= HAUL_HANDOFF_K:
             print(json.dumps({"decision": "block",
@@ -478,7 +501,7 @@ def _haul(reg: FilesRegistry, panes, me: str, root: Path) -> int:
         # still feeds — the agent claims by hand per the instruction. The
         # message is feed_check's — ONE voice for both advance triggers.
         try:
-            _bd_json(["update", nid, "--status", "in_progress"], cwd)
+            _bd_json(["update", nid, "--status", "in_progress"], cwd, root=root, reg=reg)
         except Exception:
             pass
         print(json.dumps({"decision": "block",
@@ -667,9 +690,13 @@ def _compose_reason(events: list[StopEvent], verdicts: dict, now: float,
         # was mid-turn (no footer) — not reported, so not asserted. Raw depth, no
         # "% of limit" — 400k is a cycle point, not the ceiling.
         if e.context_k is not None and e.context_k >= CYCLE_THRESHOLD_K:
+            # Coordinator-facing, and it must name the SAME verb as the
+            # agent-facing texts. A coordinator who reads "/clears" here tells an
+            # agent to /clear — which is how the wrong primitive survived every
+            # previous fix to the agent half (aegis-x6yoq).
             tag += (f" — PAST THE 400k CYCLE THRESHOLD at {int(e.context_k)}k: do "
-                    f"NOT hand it the next item until it CHECKPOINTS state to its "
-                    f"bead, THEN /clears")
+                    f"NOT hand it the next item until it "
+                    f"{handoff_text.coordinator_tag()}")
         more = f" ({counts[name]} events)" if counts[name] > 1 else ""
         # BLOCKED ON A QUESTION (aegis-qxc2). The bare verdict `waiting` is already
         # better than the `?` it replaces, but a coordinator reading this line is

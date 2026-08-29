@@ -46,6 +46,7 @@ import sys
 from pathlib import Path
 
 from .inbox import is_decision, is_message
+from . import handoff_text
 
 
 def _root(argv: list[str]) -> Path:
@@ -252,7 +253,7 @@ def bd_cwd(reg) -> str | None:
     return None
 
 
-def _bd_ready(cwd: str | None = None) -> list[dict]:
+def _bd_ready(cwd: str | None = None, root=None, reg=None) -> list[dict]:
     """`bd ready --json` -> the ready (unblocked, open) beads, or raise.
 
     `cwd` is where bd resolves its store from (see bd_cwd). None falls back to
@@ -264,6 +265,17 @@ def _bd_ready(cwd: str | None = None) -> list[dict]:
 # WHOLE queue — Rule Zero asks "is there dispatchable work", the plate asks
 # "what do I hold" — so a silently short list is a wrong answer, not a small
 # one. The upstream bug is bd's; this is the consumer refusing to inherit it.
+    # POST-CUTOVER (aegis-mxgzh): on a br deployment this must NOT spawn `bd`.
+    # `bd` is retired at the binary and exits 3, so this raised for every caller
+    # that had not been migrated — and the ones that had not are the HAUL FEED
+    # legs, because notify injects this function itself as a default argument.
+    # Fixing queue_state alone therefore repaired the alert path and left the
+    # feed dead: alerts fired, nothing was ever fed.
+    if root is not None:
+        tracker = _br_tracker(root, reg)
+        if tracker is not None:
+            from .br import ready as br_ready
+            return br_ready(tracker)
     r = subprocess.run(["bd", "ready", "--json", "--limit", "0"], capture_output=True, text=True,
                        timeout=20, cwd=cwd)
     if r.returncode != 0:
@@ -479,7 +491,7 @@ def gate_inputs(root, reg, panes, runtime, me: str | None = None, admits=None):
     # bd_cwd, not the ambient cwd, even though the hook usually fires in the
     # admin's workspace: "usually" is how the tend caller silently never
     # fired (see bd_cwd). None still falls back to ambient — fail-open.
-    ready_beads = _bd_ready(bd_cwd(reg))
+    ready_beads, active = queue_state(root, reg)
     # HAULING WORKERS ARE NOT THE COORDINATOR'S TO FEED (aegis-wjgt
     # groundwork): an idle worker whose queue is already assigned self-feeds
     # — holding the coordinator's stop hostage over one is the exact inverse
@@ -494,10 +506,6 @@ def gate_inputs(root, reg, panes, runtime, me: str | None = None, admits=None):
     # and the coordinator was asked to feed work it already owned. Fail open to
     # the old, narrower answer: this widens a queue, so a bd hiccup must degrade
     # to today's behaviour, never wedge the gate the whole crew loop hangs on.
-    try:
-        active = bd_in_progress(bd_cwd(reg))
-    except Exception:      # noqa: BLE001 — see fail-open above
-        active = []
     free = [w for w in free if w not in hauls(ready_beads, active)]
     if not free:
         return [], [], []
@@ -508,6 +516,49 @@ def gate_inputs(root, reg, panes, runtime, me: str | None = None, admits=None):
     ok, held = throttle(dispatchable(set(free), ready_beads), ready_beads,
                         admits if admits is not None else governor_admits(root))
     return free, ok, held
+
+
+def _br_tracker(root, reg):
+    """The deployment's BrTracker, or None if this deployment is not on br.
+
+    ONE resolver, used by queue_state AND by the two legacy read helpers. It is
+    factored out because those helpers are INJECTED as callables elsewhere
+    (notify's CycleDriver/feed constructors take `feed_check._bd_ready` as a
+    default argument), so a backend fix that lived only in queue_state repaired
+    the Rule Zero alert path and left the haul feed still spawning `bd`
+    (aegis-mxgzh). Two readers of the same store must not resolve it two ways.
+    """
+    from .deployment import deployment_default
+    if deployment_default(root, "SHANTY_BACKEND") != "br":
+        return None
+    from .br import BrTracker
+    return BrTracker(repo=(deployment_default(root, "SHANTY_BR_REPO")
+                           or deployment_default(root, "SHANTY_BEADS_REPO")
+                           or bd_cwd(reg)))
+
+
+def queue_state(root, reg, tracker=None) -> tuple[list[dict], list[dict]]:
+    """Ready and active work from the deployment's selected tracker backend."""
+    if tracker is None:
+        tracker = _br_tracker(root, reg)
+    if tracker is not None:
+        from .br import BrTracker, in_progress as br_in_progress, ready as br_ready
+        if isinstance(tracker, BrTracker):
+            ready_beads = br_ready(tracker)
+            try:
+                return ready_beads, br_in_progress(tracker)
+            except Exception as exc:
+                print(f"Rule Zero: active-work read FAILED ({exc!r}) — "
+                      "continuing with ready work only; haul filtering is degraded",
+                      file=sys.stderr)
+                return ready_beads, []
+    ready_beads = _bd_ready(bd_cwd(reg))
+    try:
+        return ready_beads, bd_in_progress(bd_cwd(reg))
+    except Exception as exc:      # noqa: BLE001 — active work only narrows free workers
+        print(f"Rule Zero: active-work read FAILED ({exc!r}) — continuing with "
+              "ready work only; haul filtering is degraded", file=sys.stderr)
+        return ready_beads, []
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -543,9 +594,12 @@ def main(argv: list[str] | None = None) -> int:
         # reason. This is the only path that prints anything.
         print(json.dumps({"decision": "block", "reason": _reason(free, ready)}))
         return 0
-    except Exception:
+    except Exception as exc:
         # FAIL OPEN. Any error — registry, tmux, bd, parse — allows the stop.
-        # Never trap the coordinator on a broken check.
+        # Never trap the coordinator on a broken check, and never make a dead
+        # feed indistinguishable from a healthy empty queue.
+        print(f"Rule Zero: feed-path read FAILED ({exc!r}) — ALLOWING this stop "
+              "because the gate cannot prove work is dispatchable", file=sys.stderr)
         return 0
 
 
@@ -588,31 +642,24 @@ def haul_feed_message(nid: str, title: str, rest: int, headroom: str = "",
     means nothing at all. Saying so where it happens is the whole fix.
     """
     t = (title or "")[:80]
-    again = (f"⚠ THIS IS THE SAME BEAD YOU WERE ALREADY SERVED "
-             f"{'twice' if repeats > 1 else 'once'} this stretch. That is the "
-             f"re-serve rule, NOT a decision that you should keep at it — an "
-             f"assigned, open, ready bead comes back until you release it. If "
-             f"you already judged it done, blocked, or not yours, act on that "
-             f"judgement below rather than re-reading it. " if repeats else "")
-    # No budget declared -> the sentence stays exactly as it was. A deployment
-    # that has not armed the ceiling must not be told about headroom it has none
-    # of; a caveat with no number behind it is just noise to learn to skip.
-    authority = (f"The coordinator was not pinged: this queue is yours to work, "
-                 f"within the session budget — {headroom}. " if headroom else
-                 f"The coordinator was not pinged: this queue is yours. ")
+    # A repeat must READ as a repeat — being handed the same bead back looks like
+    # an instruction to persist, when it only means you have not released it. One
+    # line; the rule itself is in `st help haul`.
+    again = (f"(SAME bead, served {'twice' if repeats > 1 else 'once'} already — "
+             f"that is the re-serve rule, not a verdict. Release it below.) "
+             if repeats else "")
+    # No budget declared -> say nothing about headroom. A caveat with no number
+    # behind it is noise to learn to skip.
+    authority = f"Yours to work — {headroom}. " if headroom else "Yours to work. "
     return (
-        f"HAUL: next on your haul: {nid} ({t}). {again}Read it (`bd show {nid}`) "
-        f"and execute; close it when done and the haul advances itself ({rest} "
-        f"more after this). If your context is deep, checkpoint + /clear FIRST — "
-        f"the haul survives it. {authority}"
-        f"Not this one? DONE -> `bd close {nid}`. BLOCKED/gated (nobody should "
-        f"work it yet) -> record the referent + re-test condition in a file, then "
-        f"`st defer {nid} <bead|human|access|external|parked> --reason-file <file>`, "
-        f"which records the kind and takes it OUT of the ready pool "
-        f"until you undo. Valid work but not yours -> `bd update {nid} -a \"\"` "
-        f"hands it back for another agent. Note: a bare status change won't stop "
-        f"the re-serve, and clearing the assignee only RE-POOLS it — a still-ready "
-        f"bead is grabbed by the next idle agent — so defer or close to truly park.")
+        f"HAUL: {nid} ({t}) — `bd show {nid}`, execute, close to advance "
+        f"({rest} more). {again}{authority}"
+        f"{handoff_text.deep_context_hint()}\n"
+        f"Not this one? done -> `bd close {nid}` · gated -> `st defer {nid} "
+        f"<bead|human|access|external|parked> --reason-file <f>` · not yours -> "
+        f"`bd update {nid} -a \"\"`. "
+        f"(A bare status change does NOT stop the re-serve, and clearing the "
+        f"assignee only re-pools it.) Options: `st help haul`.")
 
 
 def haul_resume_message(nid: str, title: str) -> str:
@@ -636,17 +683,29 @@ def haul_resume_message(nid: str, title: str) -> str:
 
 
 def haul_handoff_message(context_k: float, line_k: float) -> str:
-    """Past the handoff line: shed context first; the haul resumes itself."""
-    return (
-        f"HAUL HANDOFF: you are at {int(context_k)}k — past the {int(line_k)}k "
-        f"handoff line (60% of the window). Do NOT start the next item. (1) "
-        f"CHECKPOINT anything unwritten to the bead trail now; (2) run /clear. "
-        f"Your haul resumes automatically on the fresh context.")
+    """Past the handoff line: shed context first; the haul resumes itself.
+
+    THIS IS THE STRING THAT TAUGHT THE WRONG PRIMITIVE (aegis-x6yoq). It used to
+    end "(2) run /clear", and it is the only context-high remedy a BUSY agent can
+    ever see: the CycleDriver fires at 400k on IDLE agents, while this one fires
+    at 600k mid-haul. So a hauling agent got `/clear` — which drops bypass and
+    returns it undispatchable — and never saw the correct instruction that
+    notify._cycle_message had been giving idle agents all along.
+
+    Wording now comes from handoff_text so the two paths cannot drift again.
+    """
+    return handoff_text.haul_handoff(context_k, line_k)
 
 
-def bd_in_progress(cwd: str | None) -> list[dict]:
+def bd_in_progress(cwd: str | None, root=None, reg=None) -> list[dict]:
     """`bd list --status in_progress --json` — the active-anchor set. Raises;
     callers fail open."""
+    # See _bd_ready: same reason, same fix (aegis-mxgzh).
+    if root is not None:
+        tracker = _br_tracker(root, reg)
+        if tracker is not None:
+            from .br import in_progress as br_in_progress
+            return br_in_progress(tracker)
     r = subprocess.run(["bd", "list", "--status", "in_progress", "--json",
                         "--limit", "0"],
                        capture_output=True, text=True, timeout=20, cwd=cwd)
@@ -655,7 +714,7 @@ def bd_in_progress(cwd: str | None) -> list[dict]:
     return json.loads(r.stdout)
 
 
-def bd_blocked(cwd: str | None) -> list[dict]:
+def bd_blocked(cwd: str | None, root=None, reg=None) -> list[dict]:
     """`bd list --status blocked --json` — the population NOTHING else can see.
 
     A separate query on purpose: `bd ready` excludes blocked BY DEFINITION, so
@@ -665,6 +724,12 @@ def bd_blocked(cwd: str | None) -> list[dict]:
 
     Raises; callers fail open.
     """
+    # aegis-mxgzh remainder: route through the ONE resolver on a br deployment.
+    if root is not None:
+        tracker = _br_tracker(root, reg)
+        if tracker is not None:
+            from .br import blocked as br_blocked
+            return br_blocked(tracker)
     r = subprocess.run(["bd", "list", "--status", "blocked", "--json",
                         "--limit", "0"],
                        capture_output=True, text=True, timeout=20, cwd=cwd)
@@ -673,13 +738,19 @@ def bd_blocked(cwd: str | None) -> list[dict]:
     return json.loads(r.stdout)
 
 
-def bd_show(cwd: str | None, bead_id: str) -> dict:
+def bd_show(cwd: str | None, bead_id: str, root=None, reg=None) -> dict:
     """One full bead, including dependency rows. Raises; callers fail open.
 
     `bd list` carries only dependency_count, which cannot distinguish an open
     blocker from a closed one. The detail read is therefore not optional for a
     status-correction check: count alone was the original false classifier.
     """
+    # aegis-mxgzh remainder: route through the ONE resolver on a br deployment.
+    if root is not None:
+        tracker = _br_tracker(root, reg)
+        if tracker is not None:
+            from .br import show as br_show
+            return br_show(tracker, bead_id)
     r = subprocess.run(["bd", "show", bead_id, "--json"],
                        capture_output=True, text=True, timeout=20, cwd=cwd)
     if r.returncode != 0:
@@ -688,11 +759,20 @@ def bd_show(cwd: str | None, bead_id: str) -> dict:
     return value[0] if isinstance(value, list) else value
 
 
-def bd_claim(cwd: str | None, bead_id: str) -> None:
+def bd_claim(cwd: str | None, bead_id: str, root=None, reg=None) -> None:
     """Claim a bead in_progress — the dispatcher's write, shared by both
     advance triggers so the tracker shows the truth and the worker's next stop
     sees an active anchor. Raises; callers treat a failed claim as best-effort
     (the instruction tells the worker to read the bead either way)."""
+    # THE WRITE, and post-cutover it matters more than the reads beside it: a
+    # claim through retired `bd` resolves UP into the town store (aegis-qx43o)
+    # instead of failing usefully, so the tracker would disagree with the board
+    # about who holds what — silently.
+    if root is not None:
+        tracker = _br_tracker(root, reg)
+        if tracker is not None:
+            from .br import claim as br_claim
+            return br_claim(tracker, bead_id)
     r = subprocess.run(["bd", "update", bead_id, "--status", "in_progress",
                         "--json"],
                        capture_output=True, text=True, timeout=20, cwd=cwd)

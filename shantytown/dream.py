@@ -77,16 +77,19 @@ def plan(policy: Policy, state: dict, ready: list[dict], candidates: list[dict],
     if (not force and isinstance(last, (int, float))
             and now < float(last) + policy.interval_minutes * 60):
         return None, "not due"
-    if any(not is_dream(item) for item in ready):
-        return None, "normal work is ready"
     if any(is_dream(item) for item in ready):
         return None, "a dream cycle is already queued"
-    eligible = [c for c in candidates
-                if c.get("headroom") is not None
-                and float(c["headroom"]) >= policy.min_headroom_pct]
-    if not eligible:
+    capacity_eligible = [c for c in candidates
+                         if c.get("headroom") is not None
+                         and float(c["headroom"]) >= policy.min_headroom_pct]
+    if not capacity_eligible:
         return None, "no idle subscription has measured spare capacity"
-    chosen = max(eligible, key=lambda c: (float(c["headroom"]), c["agent"]))
+    # DREAM is a periodic quota, not an idle-board detector.  Queue one bounded
+    # P4 artifact behind a provider's foreground haul; assignment does not
+    # interrupt active work, and the existing-DREAM gate above bounds the queue
+    # globally.  Capacity and delegation reserve remain hard gates.
+    chosen = max(capacity_eligible,
+                 key=lambda c: (float(c["headroom"]), c["agent"]))
     domains = policy.domains or Policy.domains
     previous_domain = state.get("last_domain")
     try:

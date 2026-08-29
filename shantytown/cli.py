@@ -1,4 +1,4 @@
-"""st — the CLI. Twenty-seven commands, and the count is load-bearing: each earns its slot.
+"""st — the CLI. Twenty-eight commands, and the count is load-bearing: each earns its slot.
 
     anchor [--short|--events|--harness] · go · repool · defer · inbox [--count] · task
     · crew [--count|--governor] · input [--show|--clear|--dismiss] · ask · answer
@@ -6,7 +6,15 @@
     · stop · log · context · doctor [--install] · dream [--run]
     · tend [--install|--status|--reauth|--target] · attach [-r|--no-start]
     · dashboard [admin] · subscribe · cycle [--self|--allow-loss] · worktree [--gc]
-    · push [--branch] · stats
+    · push [--branch] · stats · help <topic>
+
+`help` earned the twenty-eighth slot in aegis-x6yoq. The recurring pane messages
+were essays because the WHY had nowhere else to live, so every reason anyone might
+need was re-pushed into every pane every few minutes — which is how the one
+safety-critical line in them got skipped. Cutting them to pointers only works if
+the pointer resolves, so the rationale needed a home that is READ ON DEMAND. A
+command that exists solely to be pointed at is a real cost; an instruction nobody
+finishes reading is a bigger one.
 
 Six of those flags are MACHINE-READABLE modes, added for an external status bar
 (anchor --short/--events/--harness, crew --count, crew --governor, inbox --count).
@@ -142,6 +150,7 @@ from .stopped import FilesStops
 from .quipu import QuipuRegistry
 from . import selfcheck
 from .anchor import Unreachable, anchor as do_anchor
+from . import handoff_text
 from .runtime import (asks_a_question, auth_expired, bash_guard_command,
                       ClaudeRuntime, CapabilityError, SettingsError,
                       emitted_bash_guard, emitted_pre_edit_guard,
@@ -628,6 +637,11 @@ def build_parser() -> argparse.ArgumentParser:
                            "so it cannot arrive after the worker has acted. "
                            "Flattened to one line (the transport submits on "
                            "newline).")
+    go.add_argument("--quipu-node", action="append", default=[], metavar="NAME",
+                    help="quipu node(s) relevant to this bead (repeatable). Rides "
+                         "the dispatch payload through the same triage gate as the "
+                         "work, so the receiving agent starts from what the graph "
+                         "already knows instead of re-deriving it")
     note.add_argument("--note-file", type=Path, default=None,
                       help="read the note from a file (or - for stdin). Use this "
                            "for anything long or containing quotes/backticks — "
@@ -986,6 +1000,12 @@ def build_parser() -> argparse.ArgumentParser:
     sb.add_argument("--server", default=None,
                     help="quipu server (default $QUIPU_SERVER)")
 
+    hp = sub.add_parser("help",
+                        help="rationale pages for the recurring instructions "
+                             "(handoff/cycle, haul, inbox)")
+    hp.add_argument("topic", nargs="?", default="",
+                    help="handoff | cycle | haul | inbox; omit to list")
+
     cy = sub.add_parser("cycle",
                         help="clear an agent's context WITHOUT destroying its "
                              "runtime: checkpoint -> stop -> relaunch -> "
@@ -999,6 +1019,26 @@ def build_parser() -> argparse.ArgumentParser:
                          "destroys")
     cy.add_argument("--checkpoint-bead", default="",
                     help="durable checkpoint bead id; required for administrators and read back before a self-cycle request")
+    # --checkpoint-file is Stiwi's "an st command that does the needful"
+    # (aegis-x6yoq). Before it, a handoff was TWO hand-composed commands — a
+    # `bd comment ... --file` and then an `st cycle --self -r '...'` repeating the
+    # gist — and that composition is exactly where agents fumbled: they wrote the
+    # notes, then had to invent a one-line summary under context pressure, having
+    # just been told their judgement is degrading. Now the file IS the checkpoint:
+    # it is posted to the bead and its first line becomes the reason.
+    cy.add_argument("--checkpoint-file", default="",
+                    help="a file holding your checkpoint notes. Posted as a "
+                         "comment on the checkpoint/anchor bead, and its first "
+                         "line becomes the reason. Use INSTEAD of -r: one "
+                         "command, no hand-composed summary")
+    # Stiwi, same directive: "would be nice to specify a quipu node(s) for the
+    # handoff cycle". The point is that the resuming session starts from the graph
+    # rather than re-deriving context it just shed — query-first, mechanized at the
+    # exact moment context is dropped.
+    cy.add_argument("--quipu-node", action="append", default=[], metavar="NAME",
+                    help="quipu node relevant to the in-flight work (repeatable). "
+                         "Recorded on the request and named in the resume dispatch "
+                         "so the fresh session queries the graph before re-deriving")
     cy.add_argument("--self", dest="self_", action="store_true",
                     help="REQUEST your own cycle. An agent cannot cycle itself "
                          "in-process (the stop kills the session doing the "
@@ -1140,6 +1180,19 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_dashboard(a)
     if a.cmd == "subscribe":
         return _cmd_subscribe(a)
+    if a.cmd == "help":
+        from . import help_topics
+        page = help_topics.render(a.topic) if a.topic else None
+        if page:
+            print(page)
+            return OK
+        if a.topic:
+            print(f"  no such topic: {a.topic!r}", file=sys.stderr)
+            print(help_topics.index(), file=sys.stderr)
+            return REFUSED
+        print(help_topics.index())
+        return OK
+
     if a.cmd == "cycle":
         return _cmd_cycle(a)
     if a.cmd == "worktree":
@@ -2834,9 +2887,8 @@ def _inbox_durable(a, agent, msg: str, panes, typed: str | None = None) -> int:
             typed_size = size(typed)
             extra = (f" ({len(typed)} characters, but the cap counts bytes)"
                      if unit == "bytes" and typed_size != len(typed) else "")
-            print(f"    {overhead} of those {unit} are the {sig!r} signature st "
-                  f"adds for you, so YOUR text has a budget of "
-                  f"{e.budget - overhead} {unit}; you typed {typed_size}{extra}.",
+            print(f"    minus the {sig!r} signature st adds: your budget is "
+                  f"{e.budget - overhead} {unit}, you typed {typed_size}{extra}.",
                   file=sys.stderr)
         return REFUSED
     except beads_mod.BeadsValidationError as e:
@@ -3179,7 +3231,8 @@ def _cmd_go(a) -> int:
     if a.dry_run:
         try:
             decision = d.triage(a.item, a.agent, note)
-            p = d.go(a.item, a.agent, dry_run=True, note=note, reassign=a.reassign)
+            p = d.go(a.item, a.agent, dry_run=True, note=note, reassign=a.reassign,
+                     quipu_nodes=getattr(a, "quipu_node", []))
         except Closed as e:
             print(f"  refused: {e}", file=sys.stderr)
             return REFUSED
@@ -3264,7 +3317,8 @@ def _cmd_go(a) -> int:
         wtag += "]"
         note = f"{note} — {wtag}" if note else wtag
     try:
-        p = d.go(a.item, a.agent, note=note, reassign=a.reassign)
+        p = d.go(a.item, a.agent, note=note, reassign=a.reassign,
+                 quipu_nodes=getattr(a, "quipu_node", []))
     except Closed as e:
         # Closed is terminal (aegis-vuh33). Nothing written, nothing sent — serving
         # a closed bead reverts it to in_progress and re-does finished work. Reopen
@@ -3732,10 +3786,10 @@ def _cmd_crew(a) -> int:
               f"context, re-derive settled")
         print(f"    decisions, and miss constraints stated long ago. `st go` "
               f"REFUSES them (the depth is in the")
-        print(f"    work cell). Remedy: the agent CHECKPOINTS its state to its "
-              f"bead, THEN /clears (or hands off to")
-        print(f"    a fresh session), THEN takes the task — do NOT auto-clear, it "
-              f"loses whatever was not saved. The")
+        print(f"    work cell). Remedy: the agent {handoff_text.coordinator_tag()}, "
+              f"THEN takes the task — do NOT")
+        print(f"    auto-cycle, it loses whatever was not saved, and do NOT tell it "
+              f"to /clear (that drops bypass). The")
         print(f"    saturated agent is the LEAST able to notice it must cycle, so "
               f"this is the coordinator's to drive.")
     # The bead this state was built for (aegis-arma). An operator re-login rotates
@@ -4895,6 +4949,55 @@ def _resolve_push_worktree(repo: str, agent: str) -> Path:
     return worktree_for(_resolve_repo(repo), agent)
 
 
+def _push_invocation_branch(dest: Path) -> tuple[Path, str] | None:
+    """Return the caller's worktree + branch when it belongs to ``dest``'s repo.
+
+    A linked worktree has its own git-dir but shares one git *common* directory.
+    Comparing the common directory is therefore the discriminating check: a
+    caller elsewhere in the filesystem must not affect the established
+    ``st push <repo> <agent>`` behavior, while a caller inside another worktree
+    of this exact repository is expressing a branch choice we must not ignore.
+    """
+    import subprocess
+
+    cwd = Path.cwd()
+
+    def common(path: Path) -> Path | None:
+        r = subprocess.run(
+            ["git", "-C", str(path), "rev-parse", "--path-format=absolute",
+             "--git-common-dir"], capture_output=True, text=True, timeout=5,
+        )
+        return Path(r.stdout.strip()).resolve() if r.returncode == 0 else None
+
+    cwd_common, dest_common = common(cwd), common(dest)
+    if dest_common is None or cwd_common != dest_common:
+        return None
+    branch = subprocess.run(
+        ["git", "-C", str(cwd), "symbolic-ref", "--quiet", "--short", "HEAD"],
+        capture_output=True, text=True, timeout=5,
+    )
+    return cwd, branch.stdout.strip() if branch.returncode == 0 else "(detached HEAD)"
+
+
+def _cycle_anchor_bead(a, agent: str) -> str:
+    """The bead a --checkpoint-file lands on when none was named.
+
+    The agent's active plate item: what it is mid-task on is, by construction,
+    where a reader will look for its checkpoint. Best-effort — a checkpoint with
+    nowhere obvious to go must not block the cycle, it just degrades to the reason
+    line, and the caller says so out loud.
+    """
+    try:
+        plate = _tracker_plate(_tracker(a), agent)
+    except Exception:
+        return ""
+    for item in (plate or []):
+        iid = getattr(item, "id", None) or (item.get("id") if isinstance(item, dict) else None)
+        if iid:
+            return str(iid)
+    return ""
+
+
 def _cmd_cycle(a) -> int:
     """cycle <agent> — clear context WITHOUT destroying the runtime (aegis-3laza).
 
@@ -4925,11 +5028,34 @@ def _cmd_cycle(a) -> int:
     # in-process would die halfway through — after the stop, before the relaunch,
     # which is the one outcome worse than not cycling at all.
     if getattr(a, "self_", False):
+        # --checkpoint-file: the file IS the checkpoint (aegis-x6yoq). Read it
+        # FIRST, so a bad path refuses before anything is recorded, and so the
+        # reason is derived rather than hand-composed under context pressure.
+        ckpt_file = getattr(a, "checkpoint_file", "").strip()
+        ckpt_body = ""
+        if ckpt_file:
+            try:
+                ckpt_body = Path(ckpt_file).read_text().strip()
+            except OSError as e:
+                print(f"  refused: --checkpoint-file {ckpt_file!r} could not be read ({e}). "
+                      f"Nothing was recorded; your context is untouched.", file=sys.stderr)
+                return REFUSED
+            if not ckpt_body:
+                print(f"  refused: --checkpoint-file {ckpt_file!r} is empty. The checkpoint is "
+                      f"the one thing a cycle destroys — write it first.", file=sys.stderr)
+                return REFUSED
+            if not a.reason.strip():
+                # First non-blank line, shorn of markdown heading marks. The whole
+                # file goes on the bead; the reason is only the pointer to it.
+                first = next((ln.strip().lstrip("#").strip()
+                              for ln in ckpt_body.splitlines() if ln.strip()), "")
+                a.reason = first[:300]
         if not a.reason.strip():
             print("  refused: --self needs your checkpoint. You are the only one "
                   "who can write it, and it is the only thing the cycle destroys. "
-                  "`st cycle --self -r '<what you are mid-task on, decisions "
-                  "already made, the exact next step>'`", file=sys.stderr)
+                  "`st cycle --self --checkpoint-file <notes>` (or -r '<what you "
+                  "are mid-task on, decisions already made, the exact next step>')",
+                  file=sys.stderr)
             return REFUSED
         if a.dry_run:
             print(f"  would: request a cycle for {agent_name}")
@@ -4952,10 +5078,52 @@ def _cmd_cycle(a) -> int:
                 print(f"  refused: checkpoint bead {checkpoint_bead!r} could not be read ({e})",
                       file=sys.stderr)
                 return REFUSED
-        cycle_mod.Requests(a.root).request(agent_name, a.reason.strip(), checkpoint_bead)
+        # Post the checkpoint file to the bead BEFORE recording the request, so a
+        # failed comment cannot leave a request pointing at a checkpoint that was
+        # never written down. Best-effort by design: if the tracker is unreachable
+        # the cycle must still be requestable — an agent at 600k that cannot hand
+        # off because Dolt is flapping is strictly worse off than one whose notes
+        # live only in the request record.
+        posted_to = ""
+        if ckpt_body:
+            target = checkpoint_bead or _cycle_anchor_bead(a, agent_name)
+            if target:
+                try:
+                    # Beads-specific by construction: appending a checkpoint
+                    # comment is not part of the three-verb tracker contract
+                    # (test_swap pins it), so this reaches the beads helper
+                    # directly and other backends degrade below rather than
+                    # pretend. See beads.append_comment.
+                    if _backend(a, "files") not in ("beads", "br"):
+                        raise RuntimeError(
+                            f"backend {_backend(a, 'files')!r} cannot append a "
+                            f"comment; checkpoint kept as the reason line")
+                    trk = _tracker(a)
+                    beads_mod.append_comment(getattr(trk, "repo", None), target, ckpt_body)
+                    posted_to = target
+                except Exception as e:
+                    print(f"  ⚠ checkpoint file NOT posted to {target} ({e}). "
+                          f"Cycle still requested; the reason line carries the gist, "
+                          f"but re-post the file when the tracker is reachable.",
+                          file=sys.stderr)
+            else:
+                print("  ⚠ no checkpoint bead and no active anchor to post to — "
+                      "the file's first line is recorded as the reason only.",
+                      file=sys.stderr)
+
+        quipu_nodes = [n for n in getattr(a, "quipu_node", []) if n.strip()]
+        cycle_mod.Requests(a.root).request(agent_name, a.reason.strip(),
+                                           checkpoint_bead or posted_to,
+                                           quipu_nodes)
         print(f"  {agent_name}: cycle REQUESTED — checkpoint recorded.")
+        if posted_to:
+            print(f"  checkpoint file posted to {posted_to}.")
+        if quipu_nodes:
+            print(f"  graph context recorded: {', '.join(quipu_nodes)} "
+                  f"— named in your resume dispatch.")
         print(f"  `st tend` performs it. You stay up until it does, so keep "
               f"working; nothing is lost if it never fires.")
+        print(f"  {handoff_text.refusal_note()}")
         return OK
 
     try:
@@ -5149,6 +5317,11 @@ def _cmd_push(a) -> int:
     REFUSES, AND NAMES WHICH REMOTE REFUSED — with two live peers, "push rejected"
     cannot be acted on, because "my branch is behind" and "the other remote moved"
     have different next steps.
+
+    FAILS CLOSED ON BRANCH AMBIGUITY (aegis-72png). If the command is invoked
+    from another worktree of this repository, that checked-out branch is an
+    intentional choice. Refuse when it differs from ``wt/<agent>`` rather than
+    silently publishing the canonical branch and deferred work parked on it.
     """
     agent = a.agent or os.environ.get("SHANTY_AGENT")
     if not agent:
@@ -5166,6 +5339,17 @@ def _cmd_push(a) -> int:
         return REFUSED
 
     branch = f"wt/{agent}"
+    invocation = _push_invocation_branch(Path(dest))
+    if invocation is not None and invocation[1] != branch:
+        caller_path, caller_branch = invocation
+        print(
+            f"  refused before push: checked-out branch '{caller_branch}' at "
+            f"{caller_path} differs from canonical '{branch}' at {dest}. "
+            "No remote was contacted. Run st push from the canonical worktree, "
+            "or use an explicit git push after reviewing the exact ref.",
+            file=sys.stderr,
+        )
+        return REFUSED
     outcomes = push_every_remote(dest, branch, a.branch)
     if not outcomes:
         print(f"  refused: {dest} has no remotes configured — nothing to push to.",
@@ -6060,11 +6244,8 @@ def _dream_sweep(a, cfg, agents, panes, *, force=False, dry_run=False):
 
     policy = cfg.dream
     state = dream_mod.State(a.root)
-    ready = feed_check._bd_ready(feed_check.bd_cwd(_registry(a)))
-    try:
-        active = feed_check.bd_in_progress(feed_check.bd_cwd(_registry(a)))
-    except Exception:
-        active = []
+    tracker = _tracker(a)
+    ready, active = feed_check.queue_state(a.root, _registry(a), tracker)
     free = feed_check.free_feedable_workers(_registry(a), panes, _runtime(a, panes),
                                             root=a.root)
     free = [name for name in free if name not in feed_check.hauls(ready, active)]
@@ -6073,9 +6254,11 @@ def _dream_sweep(a, cfg, agents, panes, *, force=False, dry_run=False):
     cfg_now, governors = _governors(a)
     verdicts = {name: governor.evaluate(persist=False)
                 for name, governor in governors.items()}
-    for name in free:
-        card = cards.get(name)
-        if card is None:
+    for name, card in cards.items():
+        # A periodic DREAM may queue behind foreground work, but only on a live
+        # worker subscription. Leads/admins are coordination capacity, and a
+        # missing pane cannot consume the queued artifact.
+        if card.role != "worker" or not card.pane or not panes.exists(card.pane):
             continue
         harness, governor, unconfigured = _governor_for(
             cfg_now, governors, card, a.root)
@@ -6093,21 +6276,23 @@ def _dream_sweep(a, cfg, agents, panes, *, force=False, dry_run=False):
         if headroom < governor.policy.delegation_reserve_pct:
             continue
         candidates.append({"agent": name, "harness": harness,
-                           "headroom": headroom})
+                           "headroom": headroom,
+                           "idle": name in free})
     cycle, reason = dream_mod.plan(policy, state.read(), ready, candidates,
                                    force=force)
     if cycle is None:
         return None, "", reason
     if dry_run:
         return cycle, "", "dry-run"
-    item = _tracker(a).create(cycle.title, assignee=cycle.agent, priority=4,
-                              labels=cycle.labels,
-                              description=cycle.description)
+    item = tracker.create(cycle.title, assignee=cycle.agent, priority=4,
+                          labels=cycle.labels,
+                          description=cycle.description)
     # Observed create first, state second. A tracker exception leaves the prior
     # due time intact, so the next tend pass retries rather than losing a cycle.
     state.record(cycle, item.id)
     card = cards.get(cycle.agent)
-    if card is not None and card.pane and panes.exists(card.pane):
+    if (cycle.agent in free and card is not None and card.pane
+            and panes.exists(card.pane)):
         panes.send(card.pane, attribute(
             f"Work is on your hook: {item.id} — {cycle.title} — scheduled DREAM "
             f"cycle; read the bead and execute one bounded pass.", "st dream"))

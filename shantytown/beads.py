@@ -14,6 +14,7 @@ it — count the connections, don't hold a stopwatch.
 from __future__ import annotations
 import json
 import re
+import os
 import subprocess
 from pathlib import Path
 
@@ -484,3 +485,40 @@ def items(tracker: "BeadsTracker") -> list[WorkItem]:
                      status=x.get("status", "open"), assignee=x.get("assignee"),
                      priority=_priority(x))
             for x in rows]
+
+
+def append_comment(repo: "str | None", item_id: str, body: str, timeout: int = 30) -> None:
+    """Append a comment to a bead. A MODULE FUNCTION, deliberately not a tracker method.
+
+    I first added this as `BeadsTracker.comment()` and test_swap caught it. That
+    guard pins the tracker interface at exactly {get, update, create} and its
+    docstring names this precise mistake: "a shared contract widened by its owner
+    is a decision; widened at 2am to unblock yourself it is a bug." Mine was the
+    second kind — I needed one command to work.
+
+    So the contract stays at three. This lives outside it, and the cost is honest
+    rather than hidden: appending a checkpoint comment is a BEADS capability, not a
+    tracker-agnostic one, and a caller on another backend must degrade instead of
+    pretending. Whether a checkpoint-to-bead deserves to be a fourth tracker verb
+    is a real question — and it belongs to whoever owns that contract, not to the
+    change that happened to need it first.
+
+    THE BODY GOES THROUGH A FILE. `bd comment -m` does not exist on the deployed bd
+    (it errors), and a body passed as a shell-visible argument is a body that can be
+    expanded — checkpoints are the worst case for that, since they quote the very
+    commands the agent was mid-way through.
+    """
+    import tempfile
+    with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False) as fh:
+        fh.write(body)
+        path = fh.name
+    try:
+        cmd = ["bd"] + (["-C", repo] if repo else []) + ["comment", item_id, "--file", path]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        if r.returncode != 0:
+            raise RuntimeError(f"bd comment {item_id} failed: {r.stderr.strip()[:160]}")
+    finally:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
