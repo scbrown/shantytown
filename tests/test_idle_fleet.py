@@ -13,8 +13,11 @@ from shantytown.answer import Answer
 import json
 
 from shantytown import notify
+from shantytown import input_box
+from shantytown.feed_audit import FeedAudit
 from shantytown.notify import IdleFleetAlerter, _idle_fleet_message
 from shantytown.protocols import Agent
+from types import SimpleNamespace
 
 
 class _Reg:
@@ -232,7 +235,8 @@ def test_the_message_names_who_is_free_and_what_is_ready():
 # --- the haul groundwork (aegis-wjgt): assigned = self-feeding -------------
 
 def _hauling_world(tmp_path, monkeypatch, in_progress=None, context_k=None,
-                   claims=None, ready=None):
+                   claims=None, ready=None, input_verdict=input_box.GHOST,
+                   audit=None):
     """One idle worker with an ASSIGNED ready bead, one admin to (not) alert.
 
     in_progress may be a list (the bd answer) or an Exception instance (bd
@@ -264,7 +268,9 @@ def _hauling_world(tmp_path, monkeypatch, in_progress=None, context_k=None,
                             bd_ready=lambda: ready,
                             bd_in_progress=bd_in_progress,
                             context_k=(lambda w: context_k),
-                            log=lambda m: None), panes
+                            input_preflight=lambda _w: SimpleNamespace(
+                                verdict=input_verdict, detail="test verdict"),
+                            audit=audit, log=lambda m: None), panes
 
 
 def test_an_already_idle_hauler_is_FED_its_next_bead_not_the_coordinator(tmp_path, monkeypatch):
@@ -289,6 +295,61 @@ def test_the_feed_is_once_per_idle_episode(tmp_path, monkeypatch):
     alerter.sweep([])
     alerter.sweep([])
     assert len(panes.sent) == 1, "a 30s heartbeat must not re-spam the worker"
+
+
+def test_natural_feed_journals_acted_on_with_backend_and_window(tmp_path, monkeypatch):
+    audit = FeedAudit(tmp_path, window_id="pass-7")
+    alerter, panes = _hauling_world(tmp_path, monkeypatch, claims=[], audit=audit)
+    assert alerter.sweep([]) == ["billy"]
+    rows = [json.loads(line) for line in audit.path.read_text().splitlines()]
+    landed = [r for r in rows if r["leg"] == "delivery" and r["acted_on"]]
+    assert len(landed) == 1
+    assert landed[0] | {"window_id": "pass-7", "worker": "billy",
+                        "item": "aegis-9", "backend": "bd"} == landed[0]
+    assert landed[0]["eligible"] and landed[0]["attempted"]
+
+
+def test_replaying_the_same_pass_does_not_redispatch(tmp_path, monkeypatch):
+    audit = FeedAudit(tmp_path, window_id="same-pass")
+    first, panes = _hauling_world(tmp_path, monkeypatch, claims=[], audit=audit)
+    assert first.sweep([]) == ["billy"]
+    (tmp_path / "notify" / "idle_fleet.json").unlink()
+    second, _ = _hauling_world(tmp_path, monkeypatch, claims=[], audit=audit)
+    second._panes = panes
+    assert second.sweep([]) == []
+    assert len(panes.sent) == 1
+    rows = [json.loads(line) for line in audit.path.read_text().splitlines()]
+    assert any(r["leg"] == "replay" and r["refused"] for r in rows)
+
+
+def test_ghost_preflight_is_empty_but_typed_and_unknown_fail_closed(tmp_path, monkeypatch):
+    for verdict, should_send in ((input_box.GHOST, True),
+                                 (input_box.TYPED, False),
+                                 (input_box.UNKNOWN, False)):
+        root = tmp_path / verdict
+        audit = FeedAudit(root, window_id=verdict)
+        alerter, panes = _hauling_world(root, monkeypatch, claims=[],
+                                        input_verdict=verdict, audit=audit)
+        assert bool(alerter.sweep([])) is should_send
+        assert bool(panes.sent) is should_send
+        rows = [json.loads(line) for line in audit.path.read_text().splitlines()]
+        input_rows = [r for r in rows if r["leg"] == "input"]
+        assert len(input_rows) == 1
+        assert input_rows[0]["acted_on"] is should_send
+        assert input_rows[0]["refused"] is (not should_send)
+
+
+def test_backend_failure_is_loud_fail_open_and_audited(tmp_path, monkeypatch):
+    log = []
+    audit = FeedAudit(tmp_path, window_id="broken-pass")
+    alerter, _ = _hauling_world(tmp_path, monkeypatch, audit=audit)
+    alerter._bd_ready = lambda: (_ for _ in ()).throw(RuntimeError("backend down"))
+    alerter._log = log.append
+    assert alerter.sweep([]) == []
+    assert any("FAILED" in line and "fail-open" in line for line in log)
+    rows = [json.loads(line) for line in audit.path.read_text().splitlines()]
+    assert any(r["leg"] == "feed" and r["refused"]
+               and "backend down" in r["reason"] for r in rows)
 
 
 def test_an_open_anchor_does_NOT_block_the_feed(tmp_path, monkeypatch):
