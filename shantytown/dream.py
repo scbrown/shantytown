@@ -84,17 +84,12 @@ def plan(policy: Policy, state: dict, ready: list[dict], candidates: list[dict],
                          and float(c["headroom"]) >= policy.min_headroom_pct]
     if not capacity_eligible:
         return None, "no idle subscription has measured spare capacity"
-    # Foreground work preempts DREAM only when this particular idle provider
-    # could actually accept it.  The fleet's board is intentionally never
-    # empty; assigned, decision-gated, dependency-blocked, and governor-held
-    # work is not a runnable queue for this provider.  Missing dispatchability
-    # evidence fails closed: callers must positively show that the candidate
-    # has no ordinary work it can take.
-    eligible = [c for c in capacity_eligible
-                if c.get("ordinary_dispatchable") is False]
-    if not eligible:
-        return None, "normal work is dispatchable to every idle provider"
-    chosen = max(eligible, key=lambda c: (float(c["headroom"]), c["agent"]))
+    # DREAM is a periodic quota, not an idle-board detector.  Queue one bounded
+    # P4 artifact behind a provider's foreground haul; assignment does not
+    # interrupt active work, and the existing-DREAM gate above bounds the queue
+    # globally.  Capacity and delegation reserve remain hard gates.
+    chosen = max(capacity_eligible,
+                 key=lambda c: (float(c["headroom"]), c["agent"]))
     domains = policy.domains or Policy.domains
     previous_domain = state.get("last_domain")
     try:

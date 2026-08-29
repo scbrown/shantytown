@@ -18,11 +18,11 @@ def test_default_is_off_and_signal_absence_is_not_spare_capacity():
     assert plan is None and "measured spare capacity" in why
 
 
-def test_dispatchable_normal_work_preempts_dreaming_for_that_provider():
-    plan, why = dream.plan(dream.Policy(enabled=True), {},
-                           [{"id": "aegis-real", "labels": ["bug"]}],
-                           [_candidate(ordinary_dispatchable=True)], now=100)
-    assert plan is None and why == "normal work is dispatchable to every idle provider"
+def test_periodic_quota_queues_behind_dispatchable_normal_work():
+    cycle, why = dream.plan(dream.Policy(enabled=True), {},
+                            [{"id": "aegis-real", "labels": ["bug"]}],
+                            [_candidate(ordinary_dispatchable=True)], now=100)
+    assert cycle is not None and why == ""
 
 
 def test_ready_but_undispatchable_work_does_not_suppress_dreaming():
@@ -47,10 +47,10 @@ def test_interval_and_headroom_are_hard_gates():
     assert dream.plan(policy, {}, [], [_candidate(headroom=24)], now=4000)[0] is None
 
 
-def test_missing_dispatchability_evidence_fails_closed():
+def test_dispatchability_evidence_is_not_required_for_periodic_quota():
     candidate = {"agent": "arnold", "harness": "codex", "headroom": 80}
-    plan, why = dream.plan(dream.Policy(enabled=True), {}, [], [candidate], now=100)
-    assert plan is None and "dispatchable" in why
+    cycle, why = dream.plan(dream.Policy(enabled=True), {}, [], [candidate], now=100)
+    assert cycle is not None and why == ""
 
 
 def test_rotation_alternates_mode_and_domain_and_picks_most_headroom():
