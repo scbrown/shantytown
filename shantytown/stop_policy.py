@@ -336,7 +336,10 @@ def gather(root, me: str, *, reg=None, panes=None, runtime=None,
         inp.free_feedable, inp.dispatchable = free, ready
         inp.throttled = len(held)
         inp.throttled_why = held[0][2] if held else ""
-    except Exception:      # noqa: BLE001 — fail open: no gate, no block
+    except Exception as exc:      # noqa: BLE001 — fail open: no gate, no block
+        print(f"stop_policy: Rule Zero feed-path read FAILED ({exc!r}) — "
+              "ALLOWING this stop because the gate cannot prove work is dispatchable",
+              file=sys.stderr)
         inp.free_feedable, inp.dispatchable = [], 0
 
     cfg, err = config.load_or_default(root)
