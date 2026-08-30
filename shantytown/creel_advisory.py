@@ -34,7 +34,15 @@ class Advice:
 
     line: str
     key: str
-    actionable: bool
+    actionable: bool = False
+    """Re-push even when the key has NOT changed. OFF for every producer today.
+
+    sattler's ox5dh ruling: push on first occurrence and on value change, silent
+    on all repeats including a nonzero one. The field survives the ruling as a
+    dormant hook — if a nonzero recommendation is ever MEASURED sitting
+    unactioned, a slow re-nag is this flag plus a clock rather than a redesign.
+    Defaulting it False means a new producer gets the ruling by construction.
+    """
 
 
 def recommended_delta(line: str) -> int | None:
@@ -57,9 +65,23 @@ def _creel_advice(line: str) -> Advice:
         key = "unavailable"
     else:
         key = f"record:{line}"
-    # A live recommendation keeps asking until it is acted on; a hold is read
-    # once and then goes quiet (gennaro, 1641346).
-    return Advice(line=line, key=key, actionable=delta not in (None, 0))
+    # SILENT ON EVERY REPEAT, including a nonzero one (sattler's ruling on
+    # aegis-ox5dh, 2026-08-29, superseding gennaro's 1641346 rule that a nonzero
+    # delta stays actionable every pass).
+    #
+    # 1641346's instinct was right — an unactuated recommendation must not go
+    # silent — and the cadence was what made it wrong. Measured on the live
+    # surface: the utilization line pushed the SAME +3 at 20:27, 20:32 and 20:37
+    # while the standing answer was known and deliberate. A channel that repeats
+    # itself is one its reader learns to ignore (aegis-3w0br), which un-builds
+    # the advisory. The standing state is carried by `st crew --governor`, which
+    # is a place you LOOK rather than a thing that interrupts you.
+    #
+    # `actionable` is kept rather than deleted because the re-nag may come back:
+    # if a nonzero recommendation is ever MEASURED sitting unactioned, a slow one
+    # is this flag plus a clock, not a redesign. It is not speculation left armed
+    # — it is off, and turning it on requires the measurement first.
+    return Advice(line=line, key=key, actionable=False)
 
 
 def _looks_like_a_creel_line(value: str) -> bool:
