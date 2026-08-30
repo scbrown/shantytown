@@ -254,19 +254,13 @@ def _plate_reader(root: Path):
     Unknown/unset backend falls back to files (the built-in default), matching
     _backend()'s baseline; a beads repo comes from SHANTY_BEADS_REPO.
     """
-    if (deployment_default(root, "SHANTY_BACKEND") or "files") == "beads":
-        from .beads import (BeadsTracker, EXTRA_REPOS_KEY, parse_extra_repos,
-                            plate as beads_plate)
-        tracker = BeadsTracker(
-            repo=deployment_default(root, "SHANTY_BEADS_REPO"),
-            # aegis-qmfa1: the haul advance fires from here. A plate that cannot
-            # see an embedded store reports that agent idle at every stop.
-            extra_repos=parse_extra_repos(deployment_default(root, EXTRA_REPOS_KEY)))
-        return lambda who: beads_plate(tracker, who)
-    if (deployment_default(root, "SHANTY_BACKEND") or "files") == "br":
+    if (deployment_default(root, "SHANTY_BACKEND") or "files") in ("beads", "br"):
+        from .beads import EXTRA_REPOS_KEY, parse_extra_repos
         from .br import BrTracker, plate as br_plate
         tracker = BrTracker(repo=(deployment_default(root, "SHANTY_BR_REPO")
-                                  or deployment_default(root, "SHANTY_BEADS_REPO")))
+                                  or deployment_default(root, "SHANTY_BEADS_REPO")),
+                            extra_repos=parse_extra_repos(
+                                deployment_default(root, EXTRA_REPOS_KEY)))
         return lambda who: br_plate(tracker, who)
     return lambda who: files_plate(FilesTracker(root / "items"), who)
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import tempfile
 
 from .beads import BeadsTracker, _PLATE_RANK, _priority
 from .inbox import is_message, is_unworkable
@@ -160,3 +161,22 @@ def claim(tracker: BrTracker, bead_id: str) -> None:
     r = tracker._bd("update", bead_id, "--status", "in_progress")
     if r.returncode != 0:
         raise RuntimeError(f"br update {bead_id} failed: {r.stderr.strip()[:120]}")
+
+
+def append_comment(tracker: BrTracker, bead_id: str, body: str) -> None:
+    """Append a comment through br's file-safe comments subcommand."""
+    path = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", delete=False) as f:
+            f.write(body)
+            path = f.name
+        r = tracker._bd_for(bead_id, "comments", "add", bead_id, "--file", path)
+        if r.returncode != 0:
+            raise RuntimeError(
+                f"br comments add {bead_id} failed: {r.stderr.strip()[:160]}")
+    finally:
+        if path:
+            try:
+                os.unlink(path)
+            except FileNotFoundError:
+                pass

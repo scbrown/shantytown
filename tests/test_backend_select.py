@@ -3,14 +3,13 @@
 arnold landed beads.plate() (the reader) but the CLI wired FilesTracker
 unconditionally, so `st --backend beads` did not exist and the beads plate was
 unreachable. These tests prove the SELECTOR: --backend beads builds a
-BeadsTracker and routes the plate to beads.plate; --backend files stays files.
+BrTracker and routes the plate to br.plate; --backend files stays files.
 They assert the ROUTING, not the plate's content (that is beads.plate's job).
 """
 from __future__ import annotations
 from types import SimpleNamespace
 
 from shantytown import cli
-from shantytown.beads import BeadsTracker
 from shantytown.br import BrTracker
 from shantytown.files import FilesTracker
 
@@ -20,10 +19,10 @@ def test_backend_files_is_the_default():
     assert isinstance(cli._tracker(a), FilesTracker)
 
 
-def test_backend_beads_builds_a_beads_tracker():
+def test_backend_beads_builds_the_live_br_tracker():
     a = SimpleNamespace(root=cli.Path("/tmp/x"), backend="beads", repo="/some/repo")
     t = cli._tracker(a)
-    assert isinstance(t, BeadsTracker)
+    assert isinstance(t, BrTracker)
     assert t.repo == "/some/repo"
 
 
@@ -37,19 +36,19 @@ def test_backend_br_builds_a_br_tracker():
 def test_plate_routes_to_the_selected_backend():
     """The reader must match the tracker. A files tracker with a beads plate (or
     vice versa) is the exact mismatch that made prime report empty on beads."""
-    import shantytown.beads as beads_mod
+    import shantytown.br as br_mod
     import shantytown.files as files_mod
 
-    beads_calls, files_calls = [], []
+    br_calls, files_calls = [], []
 
-    def fake_beads_plate(trk, who):
-        beads_calls.append(who); return None
+    def fake_br_plate(trk, who):
+        br_calls.append(who); return None
 
     def fake_files_plate(trk, who):
         files_calls.append(who); return None
 
-    orig_b, orig_f = beads_mod.plate, files_mod.plate
-    beads_mod.plate, files_mod.plate = fake_beads_plate, fake_files_plate
+    orig_b, orig_f = br_mod.plate, files_mod.plate
+    br_mod.plate, files_mod.plate = fake_br_plate, fake_files_plate
     # cli imported files.plate by name at module load; patch that binding too.
     orig_cli_fp = cli.files_plate
     cli.files_plate = fake_files_plate
@@ -59,10 +58,10 @@ def test_plate_routes_to_the_selected_backend():
         cli._plate(SimpleNamespace(root=cli.Path("/tmp/x"), backend="files",
                                    repo=None))("ellie")
     finally:
-        beads_mod.plate, files_mod.plate = orig_b, orig_f
+        br_mod.plate, files_mod.plate = orig_b, orig_f
         cli.files_plate = orig_cli_fp
 
-    assert beads_calls == ["malcolm"], "beads backend did not route to beads.plate"
+    assert br_calls == ["malcolm"], "beads backend did not route to br.plate"
     assert files_calls == ["ellie"], "files backend did not route to files.plate"
 
 
@@ -94,7 +93,7 @@ def test_toml_backend_selects_beads_without_a_flag(tmp_path, monkeypatch):
     _deployment(tmp_path, SHANTY_BACKEND="beads", SHANTY_BEADS_REPO="/the/store")
     a = SimpleNamespace(root=tmp_path, backend=None, repo=None)
     t = cli._tracker(a)
-    assert isinstance(t, BeadsTracker)
+    assert isinstance(t, BrTracker)
     assert t.repo == "/the/store"
 
 
@@ -104,7 +103,7 @@ def test_ambient_env_backend_when_no_toml_declaration(tmp_path, monkeypatch):
     monkeypatch.setenv("SHANTY_BEADS_REPO", "/env/store")
     a = SimpleNamespace(root=tmp_path, backend=None, repo=None)
     t = cli._tracker(a)
-    assert isinstance(t, BeadsTracker)
+    assert isinstance(t, BrTracker)
     assert t.repo == "/env/store"
 
 
@@ -147,4 +146,4 @@ def test_toml_wins_over_ambient_env(tmp_path, monkeypatch):
     monkeypatch.setenv("SHANTY_BACKEND", "files")
     _deployment(tmp_path, SHANTY_BACKEND="beads")
     a = SimpleNamespace(root=tmp_path, backend=None, repo="/r")
-    assert isinstance(cli._tracker(a), BeadsTracker)
+    assert isinstance(cli._tracker(a), BrTracker)

@@ -264,26 +264,20 @@ def _tracker(a, default="files"):
 
     arnold added beads.plate() (the reader) but the CLI still wired FilesTracker
     unconditionally, so `st --backend beads` did not exist and his plate was
-    unreachable. This wires it: --backend beads reaches BeadsTracker; --repo is
-    bd's -C. Identity (registry) stays files — work lives in beads, identity does
-    not.
+    unreachable. This wires it: the deployed ``beads`` name and the explicit
+    ``br`` alias both reach BrTracker. Identity (registry) stays files — work
+    lives in the live br store, identity does not.
     """
     b = _backend(a, default)
-    if b == "beads":
-        return beads_mod.BeadsTracker(
-            repo=getattr(a, "repo", None)
-            or _deployment_default(a, "SHANTY_BEADS_REPO")
-            or _default_bd_repo(a),
-            # aegis-qmfa1: embedded-store work must be visible to the plate/haul.
-            extra_repos=beads_mod.parse_extra_repos(
-                _deployment_default(a, beads_mod.EXTRA_REPOS_KEY)))
-    if b == "br":
+    if b in ("beads", "br"):
         from .br import BrTracker
         return BrTracker(
             repo=getattr(a, "repo", None)
             or _deployment_default(a, "SHANTY_BR_REPO")
             or _deployment_default(a, "SHANTY_BEADS_REPO")
-            or _default_bd_repo(a))
+            or _default_bd_repo(a),
+            extra_repos=beads_mod.parse_extra_repos(
+                _deployment_default(a, beads_mod.EXTRA_REPOS_KEY)))
     if b == "forgejo":
         # --repo is owner/name here (the forge's coordinates), not a directory.
         from .forgejo import ForgejoTracker
@@ -316,12 +310,9 @@ def _default_bd_repo(a) -> str | None:
 
 
 def _plate(a):
-    """The plate reader matching the selected tracker — uses arnold's beads.plate
-    for the beads backend (his is canonical; my duplicate was dropped)."""
+    """The plate reader matching the selected tracker."""
     trk = _tracker(a)
-    if _backend(a) == "beads":
-        return lambda who: beads_mod.plate(trk, who)
-    if _backend(a) == "br":
+    if _backend(a) in ("beads", "br"):
         from .br import plate as br_plate
         return lambda who: br_plate(trk, who)
     return lambda who: files_plate(trk, who)
@@ -381,10 +372,8 @@ def _inbox(a, default="files"):
     # you would go looking in beads for a message that is not there.
     if _backend(a, default) in ("beads", "br"):
         trk = _tracker(a, default)
-        if _backend(a, default) == "br":
-            from .br import items as br_items
-            return TrackerInbox(trk, lambda: br_items(trk))
-        return TrackerInbox(trk, lambda: beads_mod.items(trk))
+        from .br import items as br_items
+        return TrackerInbox(trk, lambda: br_items(trk))
     return FilesInbox(Path(a.root) / "inbox")
 
 
@@ -3402,7 +3391,7 @@ def _cmd_repool(a) -> int:
     except TrackerWriteLost as e:
         # The write was attempted and the read-back still disagrees. Do NOT
         # blind-retry: read the bead first — the row may hold half the update.
-        print(f"  ⚠ COULD NOT CONFIRM: {e}\n  Read the bead (`bd show {a.item}`)"
+        print(f"  ⚠ COULD NOT CONFIRM: {e}\n  Read the bead (`br show {a.item}`)"
               f" before retrying — the row may be half-updated.", file=sys.stderr)
         return CANNOT_TELL
     if r.noop:
@@ -3415,7 +3404,7 @@ def _cmd_repool(a) -> int:
         return OK
     extra = f" ({r.track_attempts} attempts)" if r.track_attempts > 1 else ""
     print(f"  ✓ {a.item} repooled: {frm} -> open/unassigned, verified by "
-          f"read-back{extra}. It is back on `bd ready` and feedable.")
+          f"read-back{extra}. It is back on `br ready` and feedable.")
     return OK
 
 
@@ -3437,7 +3426,7 @@ def _cmd_defer(a) -> int:
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED
     except TrackerWriteLost as e:
-        print(f"  ⚠ COULD NOT CONFIRM: {e}\n  Read the bead (`bd show {a.item}`) "
+        print(f"  ⚠ COULD NOT CONFIRM: {e}\n  Read the bead (`br show {a.item}`) "
               "before retrying — the status and label may already have landed.",
               file=sys.stderr)
         return CANNOT_TELL
@@ -5496,7 +5485,8 @@ def _cmd_cycle(a) -> int:
                             f"backend {_backend(a, 'files')!r} cannot append a "
                             f"comment; checkpoint kept as the reason line")
                     trk = _tracker(a)
-                    beads_mod.append_comment(getattr(trk, "repo", None), target, ckpt_body)
+                    from .br import append_comment as br_append_comment
+                    br_append_comment(trk, target, ckpt_body)
                     posted_to = target
                 except Exception as e:
                     print(f"  ⚠ checkpoint file NOT posted to {target} ({e}). "
