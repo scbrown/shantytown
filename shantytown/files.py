@@ -11,7 +11,8 @@ from pathlib import Path
 
 from .answer import Answer
 from .inbox import is_message, is_unworkable
-from .protocols import Agent, BLOCKER_KIND_LABELS, WorkItem, blocker_kind
+from .protocols import (Agent, BLOCKER_KIND_LABELS, WorkItem, blocker_kind,
+                        _PLATE_RANK, plate_key)
 # The pane-naming policy lives with the tier that writes cards. Imported under a
 # clear name because this module is the zero-dependency floor and a bare
 # `pane_for` here would read as its own.
@@ -269,9 +270,11 @@ class FilesTracker:
         return WorkItem(id=item_id, title=title, status="open", assignee=d.get("assignee"))
 
 
-# Plate precedence, identical to beads._PLATE_RANK so both backends order a plate
-# the same way (two-implementation equivalence).
-_PLATE_RANK = {"hooked": 0, "in_progress": 1}
+# Plate precedence is now ONE definition in protocols, imported by every backend
+# rather than restated per adapter (aegis-fxx3y). The comment this replaces said
+# the copy was "identical to beads._PLATE_RANK" — which was true, and is exactly
+# the arrangement that lets two backends drift apart without anything failing.
+# _PLATE_RANK is re-exported here because this module's readers refer to it.
 
 
 def plate(tracker: FilesTracker, agent: str) -> WorkItem | None:
@@ -317,7 +320,15 @@ def plate(tracker: FilesTracker, agent: str) -> WorkItem | None:
     # Shared precedence with beads.plate: in-hand outranks
     # not-started, then id. Was pure filename order, which would surface an
     # unstarted open item over one you're mid-flight on — the wrong plate.
-    mine.sort(key=lambda it: (_PLATE_RANK.get(it.status, 2), it.id))
+    # ready_ids is None ON PURPOSE, and it is not a shortcut. This backend stores
+    # flat JSON items with NO dependency graph, so blockedness is not merely
+    # unqueried here, it is undefined. None is the honest value: plate_key then
+    # orders by rank, priority and id without inventing a blocker it cannot see.
+    # Passing an empty set would mark every item blocked; passing all ids would
+    # claim everything is ready. Both would be fabrications, and both would make
+    # this backend disagree with the others for a reason no reader could find.
+    mine.sort(key=lambda it: plate_key(it.status, getattr(it, "priority", None),
+                                       it.id, None))
     return mine[0]
 
 

@@ -7,7 +7,9 @@ import subprocess
 import sys
 import tempfile
 
-from .beads import BeadsTracker, _PLATE_RANK, _priority
+from .beads import (BeadsTracker, _PLATE_RANK, _priority, plate_key,
+                    ready_ids_or_none, name_the_blocker)
+from .protocols import is_blocked
 from .inbox import is_message, is_unworkable
 from .protocols import BLOCKER_KIND_LABELS, WorkItem
 
@@ -171,12 +173,22 @@ def plate(tracker: BrTracker, agent: str,
     ]
     if not mine:
         return None
-    mine.sort(key=lambda row: (_PLATE_RANK.get(row.get("status"), 2),
-                               row.get("id", "")))
+    # Readiness is read from the SAME tracker the rows came from, and a failure
+    # degrades to None (previous ordering) rather than to an empty set — the
+    # could-not-look-is-not-empty rule this function's docstring is built on
+    # applies to the readiness call exactly as it does to the rows.
+    ready_ids = ready_ids_or_none(tracker)
+    mine.sort(key=lambda row: plate_key(row.get("status"), _priority(row),
+                                        row.get("id", ""), ready_ids))
     row = mine[0]
-    return WorkItem(id=row.get("id", ""), title=row.get("title", ""),
+    item = WorkItem(id=row.get("id", ""), title=row.get("title", ""),
                     status=row.get("status", "open"),
                     assignee=row.get("assignee"), priority=_priority(row))
+    # Same rule as beads.plate: a blocked plate must name its blocker. One extra
+    # read, only in the case that would otherwise burn a whole turn.
+    if is_blocked(row.get("status"), row.get("id", ""), ready_ids):
+        item = name_the_blocker(tracker, item)
+    return item
 
 
 def items(tracker: BrTracker) -> list[WorkItem]:
