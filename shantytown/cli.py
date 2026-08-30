@@ -134,6 +134,7 @@ from .dispatch import (Dispatcher, TriageRefused, SendUnverified,
                        BLOCKER_KIND_LABELS, TrackerWriteLost)
 from . import forgejo as forgejo_mod
 from . import governor as gov_mod
+from . import governor_utilization as util_mod
 from . import guard as guard_mod
 from . import attribution as attribution_mod
 from .attribution import attribute
@@ -4562,7 +4563,14 @@ def _crew_governor(a) -> int:
     extended a hysteresis hold, merely LOOKING at the bar would ratchet fleet
     policy. `st tend` remains the one writer of the engaged tier.
     """
-    def _render(multi, *, running: int = 0) -> str:
+    try:
+        reg = _registry(a)
+    except Exception:
+        # No registry is a reason the ready count cannot be read, which
+        # `_ready_count` already renders as "could not look" rather than zero.
+        reg = None
+
+    def _render(multi, *, running: int = 0, name: str = "base") -> str:
         """Render one provider with the same two-window contract in every fleet.
 
         The mixed-fleet branch used to call ``Verdict.render()``, whose human
@@ -4612,7 +4620,17 @@ def _crew_governor(a) -> int:
         advisory = creel_advisory_mod.controller_line(
             readings, running=running, cap=verdict.max_agents,
             probe=getattr(cfg, "env", {}).get(creel_advisory_mod.PROBE_ENV))
-        return f"{usage} | {advisory}"
+        # UTILIZATION ON ITS OWN LINE, EVERY PASS (aegis-967a9). Same argument
+        # the fleet cap earns above: under-cap idleness is invisible exactly when
+        # every other field reads "wide open", so a surface that shows it only
+        # when something has gone wrong cannot show this at all. Tonight base ran
+        # 0.90x seven-day pace with ZERO leads live under a cap of six and this
+        # line said nothing. The primary line is left byte-identical so the
+        # documented three-fields-then-label parse is unchanged.
+        util = _utilization(name, readings=readings, policy=multi.policy,
+                            verdict=verdict, live=running, now=clock,
+                            advisory=advisory, root=a.root, reg=reg)
+        return f"{usage} | {advisory}\n  {util.render()}"
 
     # Mixed fleets cannot be represented by the legacy one-line value without
     # lying by omission.  Keep that exact line for old configs; emit one named
@@ -4625,13 +4643,9 @@ def _crew_governor(a) -> int:
         except Exception:
             cards = []
         panes = _panes(a) if cards else None
-        live_by_harness = {}
-        for card in cards:
-            if card.pane and panes is not None and panes.exists(card.pane):
-                harness = harness_mod.name_for(card, root=a.root)
-                live_by_harness[harness] = live_by_harness.get(harness, 0) + 1
+        live_by_harness = _live_by_governor(cards, panes, cfg, governors, a.root)
         for name, multi in sorted(governors.items()):
-            print(f"{name} {_render(multi, running=live_by_harness.get(name, 0))}")
+            print(f"{name} {_render(multi, running=live_by_harness.get(name, 0), name=name)}")
         for harness in sorted({harness_mod.name_for(card, root=a.root) for card in cards}
                               - {"base"} - set(cfg.governor.by_harness)):
             if gov_mod.unconfigured(cfg.governor, harness):
@@ -4685,6 +4699,78 @@ def _crew_governor(a) -> int:
         running = 0
     print(_render(gov, running=running))
     return OK
+
+
+def _live_by_governor(cards, panes, cfg, governors, root):
+    """Live agents bucketed by the GOVERNOR THAT GOVERNS THEM, not by harness name.
+
+    MEASURED 2026-08-29, and both surfaces were wrong in OPPOSITE directions
+    while reading the same fleet in the same minute:
+
+        st crew --governor   base live 0/6      <- bucketed by harness name
+        st tend              base live 5/6      <- every card treated as base
+
+    `harness.name_for` never returns "base" — it returns "claude" for a card that
+    never said — so `live_by_harness.get("base")` was structurally always 0, and
+    a fleet with five agents up reported an empty one. tend's mirror defect
+    counted the codex agents into base as well as into codex.
+
+    Neither number was load-bearing before: `running` only reached Creel's
+    `--running`, where a wrong value skews an advisory quietly. aegis-967a9 puts
+    it on the screen as `live N/cap` and lets it recommend growth, and growth on
+    a miscount is the one direction this governor's fail-safe forbids. So both
+    surfaces now resolve through `_governor_for`, which is the same function the
+    dispatch gate uses — they cannot disagree without it also being wrong.
+
+    An UNGOVERNED harness is counted by neither: it has no cap to be under, and
+    `st crew --governor` already prints it its own "no usage governor" line.
+    """
+    live = {name: 0 for name in governors}
+    for card in cards:
+        if not (card.pane and panes is not None and panes.exists(card.pane)):
+            continue
+        harness, _governor, unconfigured = _governor_for(cfg, governors, card, root)
+        if unconfigured is not None:
+            continue
+        name = harness if harness in governors else "base"
+        live[name] = live.get(name, 0) + 1
+    return live
+
+
+def _ready_count(root, reg):
+    """How many beads are ready to work, or None for COULD NOT LOOK.
+
+    None is not zero and must never render as zero.  An unreadable tracker may
+    not authorise growth, and an empty queue and an unanswered question are
+    different facts with different fixes — the rule `shantytown.answer` exists
+    to enforce, applied to the one input that can turn an advisory into "+6".
+    """
+    try:
+        from . import feed_check
+        return len(feed_check.TrackerAdapter(root, reg).ready().exact())
+    except Exception:
+        return None
+
+
+def _utilization(harness, *, readings, policy, verdict, live, now, advisory,
+                 root, reg=None):
+    """Occupancy for one harness, paying for the tracker query only if it matters.
+
+    `assess` is pure and is called twice rather than handed a callable: the first
+    pass decides whether a ready-work count could change the answer, and only
+    then is one read.  A status bar polling `st crew --governor` every few
+    seconds therefore spawns no tracker read while the fleet is at cap or over
+    its pace bound, which is most of the time.
+
+    Creel's delta is READ OFF Creel's own published line, never recomputed.
+    """
+    kw = dict(readings=readings, policy=policy, cap=verdict.max_agents,
+              live=live, now=now,
+              creel_delta=creel_advisory_mod.recommended_delta(advisory))
+    seen = util_mod.assess(harness, ready=None, **kw)
+    if seen.needs_ready:
+        seen = util_mod.assess(harness, ready=_ready_count(root, reg), **kw)
+    return seen
 
 
 def _crew_count(agents, panes, runtime, untracked_root=None) -> int:
@@ -6923,7 +7009,8 @@ def _tend_once(a, quiet: bool = False) -> int:
         return rc
     panes = _panes(a)
     try:
-        agents = _registry(a).all().exact()
+        reg = _registry(a)
+        agents = reg.all().exact()
     except Exception as e:
         print(f"  could not tell: {e}", file=sys.stderr)
         return CANNOT_TELL
@@ -6938,16 +7025,15 @@ def _tend_once(a, quiet: bool = False) -> int:
     verdicts = {name: gov.evaluate(persist=not a.dry_run)
                 for name, gov in governors.items()}
     setpoint_advisories = {}
+    utilization_advisories = {}
+    util_clock = time.time()
+    live_by_gov = _live_by_governor(agents, panes, cfg, governors, a.root)
     for name, gov in sorted(governors.items()):
         try:
             readings = gov.reader.read_all()
         except Exception:
             readings = {}
-        provider_cards = [card for card in agents
-                          if (name == "base" or
-                              harness_mod.name_for(card, root=a.root) == name)]
-        running = sum(bool(card.pane and panes.exists(card.pane))
-                      for card in provider_cards)
+        running = live_by_gov.get(name, 0)
         line = creel_advisory_mod.controller_line(
             readings, running=running, cap=verdicts[name].max_agents,
             probe=cfg.env.get(creel_advisory_mod.PROBE_ENV))
@@ -6957,6 +7043,21 @@ def _tend_once(a, quiet: bool = False) -> int:
         # this channel and therefore un-builds the advisory when it returns.
         if not line.startswith("advisory unavailable:"):
             print(f"  governor setpoint [{name}]: {line}", file=sys.stderr)
+        # UTILIZATION, on the same pass and the same evidence (aegis-967a9). The
+        # setpoint advisory answers whether the BUDGET wants a different fleet
+        # size; this answers whether the fleet we are already allowed is being
+        # used. A blind governor is skipped entirely: recommending growth while
+        # the usage signal is lost is the one direction the fail-safe forbids.
+        if not verdicts[name].signal_lost:
+            seen = _utilization(name, readings=readings, policy=gov.policy,
+                                verdict=verdicts[name], live=running,
+                                now=util_clock, advisory=line, root=a.root,
+                                reg=reg)
+            utilization_advisories[name] = creel_advisory_mod.Advice(
+                line=seen.render(), key=seen.key(),
+                actionable=bool(seen.advice))
+            print(f"  governor utilization [{name}]: {seen.render()}",
+                  file=sys.stderr)
     # Preserve the byte-for-byte single-governor path.  A mixed fleet has no
     # meaningful global verdict: every decision below resolves from the card.
     verdict = verdicts.get("base") if not cfg.governor.by_harness else None
@@ -7150,6 +7251,19 @@ def _tend_once(a, quiet: bool = False) -> int:
         if advised:
             print(f"  ⚠ pushed changed governor setpoint advisory to the "
                   f"coordinator: {', '.join(advised)}", file=sys.stderr)
+        # A SEPARATE LEDGER, deliberately. The two advisories change on different
+        # events — the budget one when the trajectory error moves, this one when
+        # occupancy does — so sharing a ledger would let either suppress the
+        # other's push. Same recommendation-keyed dedup either way (1641346): a
+        # standing "fill toward cap" keeps asking until it is acted on, a hold is
+        # read once and goes quiet.
+        utilized = _sweep("governor-utilization", lambda: creel_advisory_mod.Alerter(
+            Path(a.root), _registry(a), panes,
+            filename="governor_utilization.json",
+            label="governor utilization").sweep(utilization_advisories))
+        if utilized:
+            print(f"  ⚠ pushed changed governor utilization advisory to the "
+                  f"coordinator: {', '.join(utilized)}", file=sys.stderr)
         # SLEEP/DREAM (aegis-2o5n2): only after the normal idle-work sweep has
         # had first claim. The planner independently requires zero normal ready
         # work, so ordering and predicate both encode "lowest priority".

@@ -14,63 +14,107 @@ import shutil
 import subprocess
 import tempfile
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 
 PROBE_ENV = "SHANTY_CREEL_ADMISSION_PROBE"
 
 
-class Alerter:
-    """Push changed advisory records to the administrator, once per episode."""
+@dataclass(frozen=True)
+class Advice:
+    """One advisory ready to push: what to SAY, what to dedup ON, and whether it
+    is still actionable.
 
-    def __init__(self, root, reg, panes, *, push=None):
-        self.path = Path(root) / "notify" / "governor_advisory.json"
+    The three are separate because they move at different rates.  The line
+    carries live numbers that change every pass; the key carries only the
+    recommendation; actionability decides whether a standing recommendation keeps
+    asking or goes quiet once it has been read.
+    """
+
+    line: str
+    key: str
+    actionable: bool
+
+
+def recommended_delta(line: str) -> int | None:
+    """Creel's recommended agent delta, read off the line Creel published.
+
+    The line IS Creel's record, so reading it is CONSUMING that record rather
+    than forming a second opinion about the budget — the distinction the
+    aegis-rjrwu ruling turns on.  None means the line carries no recommendation
+    at all: an unavailable advisory, or a record shape this reader predates.
+    """
+    match = re.search(r"\bgovernor recommends ([+-]?\d+)\b", line)
+    return int(match.group(1)) if match else None
+
+
+def _creel_advice(line: str) -> Advice:
+    delta = recommended_delta(line)
+    if delta is not None:
+        key = f"delta:{delta}"
+    elif line.startswith("advisory unavailable:"):
+        key = "unavailable"
+    else:
+        key = f"record:{line}"
+    # A live recommendation keeps asking until it is acted on; a hold is read
+    # once and then goes quiet (gennaro, 1641346).
+    return Advice(line=line, key=key, actionable=delta not in (None, 0))
+
+
+_MIGRATED = ("delta:", "record:", "fill:", "cannot-tell:")
+
+
+class Alerter:
+    """Push changed advisory records to the administrator, once per episode.
+
+    Generalised for a second producer (aegis-967a9): the utilization advisory
+    keys on a structured recommendation rather than on Creel's sentence, so it
+    passes `Advice` directly instead of having its rendered line re-parsed.  A
+    plain string still means "a Creel line", which keeps the original call site
+    byte-identical.
+    """
+
+    def __init__(self, root, reg, panes, *, push=None,
+                 filename="governor_advisory.json", label="governor setpoint"):
+        self.path = Path(root) / "notify" / filename
         self.reg = reg
         self.panes = panes
+        self.label = label
         if push is None:
             from .notify import push_to_admin
             push = push_to_admin
         self.push = push
 
-    def sweep(self, lines: dict[str, str]) -> list[str]:
+    def sweep(self, items) -> list[str]:
         try:
             previous = json.loads(self.path.read_text())
         except (OSError, ValueError):
             previous = {}
-        def recommendation(line: str) -> int | None:
-            match = re.search(r"\bgovernor recommends ([+-]?\d+)\b", line)
-            return int(match.group(1)) if match else None
-
-        def key(line: str) -> str:
-            delta = recommendation(line)
-            if delta is not None:
-                return f"delta:{delta}"
-            if line.startswith("advisory unavailable:"):
-                return "unavailable"
-            return f"record:{line}"
+        advices = {name: (item if isinstance(item, Advice) else _creel_advice(item))
+                   for name, item in items.items()}
 
         def previous_key(name: str) -> str | None:
             old = previous.get(name)
             if not isinstance(old, str):
                 return None
-            # Migrate the original line-valued ledger without re-alerting a
-            # hold merely because its storage representation changed.
-            return old if old.startswith(("delta:", "record:")) or old == "unavailable" else key(old)
+            # Migrate the original line-valued ledger without re-alerting a hold
+            # merely because its storage representation changed.
+            if old.startswith(_MIGRATED) or old == "unavailable":
+                return old
+            return _creel_advice(old).key
 
-        changed = []
-        for name, line in sorted(lines.items()):
-            delta = recommendation(line)
-            if delta not in (None, 0) or previous_key(name) != key(line):
-                changed.append(name)
+        changed = [name for name, adv in sorted(advices.items())
+                   if adv.actionable or previous_key(name) != adv.key]
         sent = []
         for name in changed:
             if self.push(self.reg, self.panes,
-                         f"governor setpoint [{name}]: {lines[name]}"):
+                         f"{self.label} [{name}]: {advices[name].line}"):
                 sent.append(name)
         if sent:
             from .files import write_json_atomic
             updated = dict(previous)
-            updated.update({name: key(lines[name]) for name in sent})
+            updated.update({name: advices[name].key for name in sent})
             self.path.parent.mkdir(parents=True, exist_ok=True)
             write_json_atomic(self.path, updated)
         return sent
