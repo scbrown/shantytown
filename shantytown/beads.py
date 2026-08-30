@@ -13,6 +13,7 @@ it — count the connections, don't hold a stopwatch.
 """
 from __future__ import annotations
 import json
+from dataclasses import replace
 import re
 import os
 import subprocess
@@ -20,7 +21,8 @@ from pathlib import Path
 
 from . import stores
 from .inbox import is_message, is_unworkable
-from .protocols import BLOCKER_KIND_LABELS, WorkItem, blocker_kind
+from .protocols import (BLOCKER_KIND_LABELS, WorkItem, blocker_kind,
+                        _PLATE_RANK, is_blocked, plate_key)
 
 
 # The deployment key naming stores BEYOND the primary. One name, declared once,
@@ -356,10 +358,56 @@ def _priority(d: dict) -> int | None:
     return int(v)
 
 
-# Plate precedence, shared verbatim with files.plate so the two backends order a
-# plate identically (the two-implementation equivalence). "In-hand"
-# work outranks "not-started"; anything not listed (open, etc.) sorts last, then id.
-_PLATE_RANK = {"hooked": 0, "in_progress": 1}
+def name_the_blocker(tracker, item: "WorkItem") -> "WorkItem":
+    """Re-read ONE item so a blocked plate can say what is blocking it.
+
+    A plate that serves a blocked item must SAY SO and name the blocker — an
+    instruction the reader cannot act on is worse than no instruction, and
+    "blocked by X" is what turns it back into one. The blocker ids live on
+    `open_blockers`, which the row listing does not carry; only `get()` does.
+
+    Paid for exactly ONE item, and only when it is already known to be blocked —
+    so the ordinary path (an unblocked plate) costs nothing at all, and the
+    expensive case is the one that was about to waste an agent's whole turn.
+
+    Any failure returns the item UNCHANGED rather than raising. The plate reader
+    survives an unreadable store by design; degrading a nice-to-have annotation
+    into an outage of the propulsion loop would invert that.
+    """
+    try:
+        full = tracker.get(item.id)
+    except Exception:
+        return item
+    if not getattr(full, "open_blockers", ()):
+        return item
+    return replace(item, open_blockers=tuple(full.open_blockers),
+                   unreadable_deps=getattr(full, "unreadable_deps", 0))
+
+
+def ready_ids_or_none(tracker) -> "set[str] | None":
+    """Ids the tracker calls ready, or None if it could not say.
+
+    Returns None on ANY failure rather than an empty set, and the distinction is
+    the entire point. An empty set means "nothing is ready", which would mark
+    every not-started item blocked and reorder the whole plate on the strength of
+    a call that did not work. None means "could not look", and plate_key degrades
+    to the previous ordering — the same could-not-look-is-not-empty rule this
+    module's readers are built around.
+
+    Measured before being put on this path: ~0.08s, the same order as the row
+    listing plate() already pays. Cheap enough that no caller needs a flag to opt
+    out, which is what keeps one item from being plate for one caller and not for
+    another.
+    """
+    try:
+        r = tracker._bd("ready", "--json", "--limit", "0")
+        if r.returncode != 0:
+            return None
+        payload = json.loads(r.stdout) if r.stdout.strip() else []
+        rows_ = payload.get("issues", []) if isinstance(payload, dict) else payload
+        return {x.get("id", "") for x in rows_ if x.get("id")}
+    except Exception:
+        return None
 
 
 def rows(tracker: "BeadsTracker") -> list[dict]:
@@ -422,6 +470,7 @@ def plate(tracker: "BeadsTracker", agent: str) -> "WorkItem | None":
     # rather than returning a partial union, preserving this reader's rule that
     # could-not-look must never render as empty-plate.
     rows_ = rows(tracker)
+    ready_ids = ready_ids_or_none(tracker)
     mine = [
         x for x in rows_
         if x.get("assignee") in (agent, agent.split("/")[-1])
@@ -450,15 +499,22 @@ def plate(tracker: "BeadsTracker", agent: str) -> "WorkItem | None":
     # "not closed"; the two-implementation rule exists to catch exactly that. Now
     # both include not-closed, with one shared precedence: in-hand outranks
     # not-started, then lowest id (deterministic across runs and across backends).
-    mine.sort(key=lambda x: (_PLATE_RANK.get(x.get("status"), 2), x.get("id", "")))
+    mine.sort(key=lambda x: plate_key(x.get("status"), _priority(x),
+                                      x.get("id", ""), ready_ids))
     top = mine[0]
-    return WorkItem(
+    item = WorkItem(
         id=top.get("id", ""),
         title=top.get("title", ""),
         status=top.get("status", "open"),
         assignee=top.get("assignee"),
         priority=_priority(top),
     )
+    # Only when the served item is BLOCKED: name what is blocking it, so the
+    # plate is an instruction the agent can act on rather than one they discover
+    # is impossible a turn later.
+    if is_blocked(top.get("status"), top.get("id", ""), ready_ids):
+        item = name_the_blocker(tracker, item)
+    return item
 
 
 def items(tracker: "BeadsTracker") -> list[WorkItem]:

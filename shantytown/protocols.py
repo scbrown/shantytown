@@ -498,3 +498,74 @@ class Context(Protocol):
     rendering a top-N page as the whole answer.
     """
     def relevant(self, query: str, budget: int) -> Answer[list[Snippet]]: ...
+
+
+# Plate precedence, shared verbatim with files.plate so the two backends order a
+# plate identically (the two-implementation equivalence). "In-hand"
+# work outranks "not-started"; anything not listed (open, etc.) sorts last, then id.
+_PLATE_RANK = {"hooked": 0, "in_progress": 1}
+
+#: Statuses that mean the item is already IN HAND. Readiness is never consulted
+#: for these — see plate_key.
+_IN_HAND = frozenset(_PLATE_RANK)
+
+
+def is_blocked(status: str | None, ident: str, ready_ids: "set[str] | None") -> bool:
+    """Is this item dependency-blocked, as far as we can tell?
+
+    `ready_ids` is the set of ids the tracker reports as ready — open AND
+    unblocked. Membership is therefore only meaningful for NOT-STARTED work, and
+    that asymmetry is the whole reason this is a named function:
+
+    **The ready listing contains only `open` rows.** Measured on the live store,
+    39 of 39. `in_progress` and `hooked` items are absent from it *by
+    construction*, not because anything blocks them — so testing them against it
+    marks every item an agent is actually holding as "blocked". Ordering on that
+    would demote all in-hand work beneath any not-started item, which is a worse
+    bug than the one this readiness check exists to fix, and it would look like a
+    deliberate re-prioritisation rather than an artefact.
+
+    So: in-hand work is never blocked here. For not-started work, absence from a
+    ready listing we actually have is positive evidence of blockedness.
+
+    `ready_ids is None` means nobody could tell us. That is reported as NOT
+    blocked, deliberately: a reader that cannot see readiness must degrade to the
+    old ordering, never invent a blocker it did not observe.
+    """
+    if ready_ids is None or status in _IN_HAND:
+        return False
+    return ident not in ready_ids
+
+
+def plate_key(status: str | None, priority: "int | None", ident: str,
+              ready_ids: "set[str] | None" = None) -> tuple:
+    """The ONE plate ordering, shared by every backend (aegis-fxx3y).
+
+    Four keys, in this order, and each one earns its place:
+
+    1. **in-hand before not-started** — the pre-existing contract, unchanged.
+    2. **unblocked before blocked**, within a rank. This is the fix. A
+       dependency-blocked bead's *status* is still `open`, so blockedness is
+       invisible at this surface unless readiness is consulted; serving one tells
+       an agent to execute work that cannot proceed while hiding the item that
+       can. Note this only ever separates NOT-STARTED items — see is_blocked.
+    3. **priority**, stated ones first and in order. Unstated sorts last rather
+       than defaulting: `_priority` refuses to invent a 2, and an item whose
+       importance nobody stated must not outrank a stated P1 by accident.
+    4. **id**, last, purely as a deterministic tiebreak.
+
+    Key 4 used to be key 2, and that was the whole defect: among equal-status
+    items the winner was decided ALPHABETICALLY. `aegis-8fydl` beat `aegis-rl1kg`
+    for exactly that reason while being blocked BY it — the plate named child 4 of
+    a correctly-wired chain whose only ready head was rl1kg.
+
+    Keeping this in one function is the point. Three backends implement plate();
+    a forked ordering means the same item can be plate for one caller and not for
+    another, which is the divergence the two-implementation rule exists to catch.
+    """
+    return (
+        _PLATE_RANK.get(status, 2),
+        1 if is_blocked(status, ident, ready_ids) else 0,
+        (1, 0) if priority is None else (0, priority),
+        ident,
+    )

@@ -83,6 +83,17 @@ class Anchoring:
         if self.item:
             L.append(f"    ▶ {self.item.id}  {self.item.title}".rstrip()
                      + f"        ({self.item.status})")
+            # BLOCKED WORK MUST SAY SO (aegis-fxx3y). The plate is read as an
+            # instruction — "execute immediately" — so serving a dependency-
+            # blocked item without a word sends an agent to spend a turn
+            # discovering it cannot proceed. Ordering now prefers ready work, so
+            # reaching this line means NOTHING ready was on the plate: the item
+            # is the best available, and the blocker is the thing to chase.
+            blockers = getattr(self.item, "open_blockers", ())
+            if blockers:
+                L.append(f"      ⛔ BLOCKED by {', '.join(blockers)}"
+                         " — nothing ready is on your plate. Chase the blocker,"
+                         " or `st ready` for unassigned work.")
         else:
             # Say it plainly. An empty plate is an answer, not a blank section.
             L.append("    nothing. `st go <item> <you>` or ask your lead.")
