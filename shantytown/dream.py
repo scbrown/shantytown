@@ -63,6 +63,15 @@ def is_dream(item: dict) -> bool:
     return bool(DREAM_LABELS.intersection(labels))
 
 
+def is_queued_dream(item: dict) -> bool:
+    """True only for a dream artifact still waiting to be claimed.
+
+    Assigned proposal/discrepancy outputs retain dream provenance, but they are
+    somebody's foreground haul rather than a queued reflection cycle.
+    """
+    return is_dream(item) and not str(item.get("assignee") or "").strip()
+
+
 def plan(policy: Policy, state: dict, ready: list[dict], candidates: list[dict],
          now: float | None = None, force: bool = False) -> tuple[Plan | None, str]:
     """Return one bounded cycle or the explicit reason it must stay asleep.
@@ -77,7 +86,7 @@ def plan(policy: Policy, state: dict, ready: list[dict], candidates: list[dict],
     if (not force and isinstance(last, (int, float))
             and now < float(last) + policy.interval_minutes * 60):
         return None, "not due"
-    if any(is_dream(item) for item in ready):
+    if any(is_queued_dream(item) for item in ready):
         return None, "a dream cycle is already queued"
     capacity_eligible = [c for c in candidates
                          if c.get("headroom") is not None

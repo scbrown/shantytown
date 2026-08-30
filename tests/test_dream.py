@@ -40,6 +40,25 @@ def test_one_existing_dream_bounds_the_queue():
     assert plan is None and why == "a dream cycle is already queued"
 
 
+def test_assigned_dream_output_does_not_poison_the_queue_gate():
+    cycle, why = dream.plan(
+        dream.Policy(enabled=True), {},
+        [{"id": "aegis-output", "labels": ["dream-proposal"],
+          "assignee": "ian"}],
+        [_candidate()], now=100)
+    assert cycle is not None and why == ""
+
+
+def test_mixed_state_blocks_only_for_the_unassigned_cycle():
+    plan, why = dream.plan(
+        dream.Policy(enabled=True), {},
+        [{"id": "aegis-output", "labels": ["dream-proposal"],
+          "assignee": "ian"},
+         {"id": "aegis-queued", "labels": ["dream"], "assignee": ""}],
+        [_candidate()], now=100)
+    assert plan is None and why == "a dream cycle is already queued"
+
+
 def test_interval_and_headroom_are_hard_gates():
     policy = dream.Policy(enabled=True, interval_minutes=60, min_headroom_pct=25)
     assert dream.plan(policy, {"last_at": 50}, [], [_candidate(headroom=90)],
