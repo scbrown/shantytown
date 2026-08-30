@@ -213,7 +213,10 @@ def test_st_crew_governor_prints_BOTH_restrictions(monkeypatch, capsys):
     monkeypatch.setattr(cli.creel_advisory_mod, "controller_line",
                         lambda *a, **k: "governor recommends +2")
     rc = cli._crew_governor(types.SimpleNamespace(root="/nonexistent"))
-    out = capsys.readouterr().out.strip()
+    # The indented UTIL line beneath is aegis-967a9's; the CAPACITY line's parse
+    # contract is what this test is about and is deliberately unchanged.
+    out = "\n".join(l for l in capsys.readouterr().out.strip().splitlines()
+                    if not l.strip().startswith("UTIL[")).strip()
     assert rc == cli.OK
     assert out == ("ok 3/50/- 79/80/- dispatch only P0 and above "
                    "[seven_day >= 70%]; only support crew runs [seven_day >= 80%] "

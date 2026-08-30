@@ -25,6 +25,20 @@ def _run(monkeypatch, capsys, governor):
     return rc, capsys.readouterr().out.strip()
 
 
+def _capacity(out: str) -> str:
+    """The parseable capacity line(s), without the utilization line beneath.
+
+    `st crew --governor` grew a second, indented UTIL line per harness
+    (aegis-967a9). The capacity line's contract — three fields then a free-text
+    label — is deliberately unchanged, and these tests assert THAT contract, so
+    they read the primary line rather than the whole stream. The utilization
+    line has its own tests below; asserting both here would make every future
+    wording change to one look like a regression in the other.
+    """
+    return "\n".join(line for line in out.splitlines()
+                      if not line.strip().startswith("UTIL["))
+
+
 class _Reader:
     def __init__(self, readings):
         self._readings = readings
@@ -78,7 +92,7 @@ def test_both_windows_no_tier(monkeypatch, capsys):
              _verdict())
     rc, out = _run(monkeypatch, capsys, g)
     assert rc == cli.OK
-    assert out == "ok 45/50/- 24/45/- | governor recommends +2"
+    assert _capacity(out) == "ok 45/50/- 24/45/- | governor recommends +2"
 
 
 def test_engaged_tier_is_named(monkeypatch, capsys):
@@ -127,14 +141,14 @@ def test_absent_window_is_a_question_mark_not_zero(monkeypatch, capsys):
     as maximum headroom — the most expensive direction for this wrong answer."""
     g = _Gov({gov_mod.FIVE_HOUR: _reading(45)}, _verdict())   # no seven_day
     _, out = _run(monkeypatch, capsys, g)
-    assert out == "ok 45/50/- ?/?/? | governor recommends +2"
+    assert _capacity(out) == "ok 45/50/- ?/?/? | governor recommends +2"
 
 
 def test_not_ok_reading_is_a_question_mark(monkeypatch, capsys):
     g = _Gov({gov_mod.FIVE_HOUR: _reading(45),
               gov_mod.SEVEN_DAY: _reading(None, ok=False)}, _verdict())
     _, out = _run(monkeypatch, capsys, g)
-    assert out == "ok 45/50/- ?/?/? | governor recommends +2"
+    assert _capacity(out) == "ok 45/50/- ?/?/? | governor recommends +2"
 
 
 @pytest.mark.parametrize("case", ["lost", "off"])
@@ -159,7 +173,7 @@ def test_next_threshold_shows_the_window_asymmetry(monkeypatch, capsys):
     g = _Gov({gov_mod.FIVE_HOUR: _reading(44), gov_mod.SEVEN_DAY: _reading(44)},
              _verdict())
     _, out = _run(monkeypatch, capsys, g)
-    assert out == "ok 44/50/- 44/45/- | governor recommends +2"
+    assert _capacity(out) == "ok 44/50/- 44/45/- | governor recommends +2"
 
 
 def test_above_every_tier_renders_a_dash_not_a_number(monkeypatch, capsys):
@@ -190,9 +204,79 @@ def test_mixed_fleet_renders_both_windows_not_legacy_primary(monkeypatch, capsys
                         lambda *a, **k: "governor recommends +2")
 
     rc = cli._crew_governor(types.SimpleNamespace(root="/nonexistent"))
-    lines = capsys.readouterr().out.strip().splitlines()
+    lines = _capacity(capsys.readouterr().out.strip()).splitlines()
 
     assert rc == cli.OK
     assert lines[0].startswith("base ok 4/50/- 93/-/- ")
     assert "FULL STOP" in lines[0]
     assert lines[1] == "codex ok ?/?/? 3/45/- | governor recommends +2"
+
+
+def test_utilization_line_appears_beneath_the_capacity_line(monkeypatch, capsys):
+    """aegis-967a9. Under-cap idleness is invisible exactly when every other
+    field reads "wide open", so this line is STANDING instrumentation — printed
+    every pass, not only when something has already gone wrong."""
+    g = _Gov({gov_mod.FIVE_HOUR: _reading(45), gov_mod.SEVEN_DAY: _reading(24)},
+             _verdict())
+    _, out = _run(monkeypatch, capsys, g)
+    lines = out.splitlines()
+    assert lines[0] == "ok 45/50/- 24/45/- | governor recommends +2"
+    assert lines[1].strip().startswith("UTIL[live ")
+
+
+@pytest.mark.parametrize("case", ["lost", "off"])
+def test_a_blind_governor_gets_no_utilization_line(monkeypatch, capsys, case):
+    """Recommending growth while the usage signal is lost is the one direction
+    the governor's fail-safe forbids (the aegis-jrax3 armed-and-blind lesson), and
+    the blind line must stay unparseable as a reading. Both are the same rule."""
+    if case == "lost":
+        g = _Gov({gov_mod.FIVE_HOUR: _reading(99)}, _verdict(signal_lost=True))
+    else:
+        g = None
+    _, out = _run(monkeypatch, capsys, g)
+    assert "UTIL[" not in out
+    assert out == case
+
+
+def _card(name, harness, pane="p"):
+    return types.SimpleNamespace(name=name, harness=harness, role="worker",
+                                 pane=pane)
+
+
+def test_live_agents_bucket_by_governor_not_by_harness_name():
+    """REGRESSION, measured 2026-08-29 on the live fleet. `harness.name_for`
+    never returns "base" — an unset card is "claude" — so bucketing live agents
+    by harness name sent every Claude agent to a key no governor line reads:
+
+        st crew --governor   base live 0/6    (five agents were up)
+        st tend              base live 5/6    (codex counted into base too)
+
+    Two surfaces, one fleet, one minute apart, wrong in opposite directions.
+    Harmless while the number only fed Creel's `--running`; not harmless once it
+    is printed as `live N/cap` and can recommend growth."""
+    policy = gov_mod.Policy(tiers=_TIERS, by_harness={"codex": object()})
+    cfg = types.SimpleNamespace(governor=policy)
+    governors = {"base": object(), "codex": object()}
+    panes = types.SimpleNamespace(exists=lambda p: p is not None)
+    cards = [_card("arnold", "claude"), _card("franklin", "claude"),
+             _card("gennaro", None), _card("muldoon", "codex"),
+             _card("ellie", "claude", pane=None)]          # no pane: not live
+
+    live = cli._live_by_governor(cards, panes, cfg, governors, root=None)
+
+    assert live == {"base": 3, "codex": 1}
+    assert sum(live.values()) == 4, "a live card is counted exactly once"
+
+
+def test_an_ungoverned_harness_is_counted_by_no_governor():
+    """It has no cap to be under, and `st crew --governor` already gives it its
+    own "no usage governor" line. Counting it into base would put an agent under
+    a budget nobody is measuring it against."""
+    policy = gov_mod.Policy(tiers=_TIERS, by_harness={"codex": object()})
+    cfg = types.SimpleNamespace(governor=policy)
+    governors = {"base": object(), "codex": object()}
+    panes = types.SimpleNamespace(exists=lambda p: True)
+
+    live = cli._live_by_governor([_card("x", "gemini")], panes, cfg,
+                                 governors, root=None)
+    assert live == {"base": 0, "codex": 0}

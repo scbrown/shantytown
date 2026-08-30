@@ -85,3 +85,42 @@ def test_nonzero_recommendation_remains_actionable_each_pass(tmp_path):
     lines = {"codex": "governor recommends +2 — under trajectory"}
     assert alerter.sweep(lines) == ["codex"]
     assert alerter.sweep(lines) == ["codex"]
+
+
+def _alerter(tmp_path, sent, **kw):
+    return advisory.Alerter(tmp_path, None, None,
+                            push=lambda reg, panes, msg: sent.append(msg) or True,
+                            **kw)
+
+
+def test_a_standing_recommendation_keeps_asking_but_a_hold_goes_quiet(tmp_path):
+    """gennaro's 1641346 semantics, now shared with the utilization advisory
+    (aegis-967a9): an unactuated recommendation must keep nagging, while a hold
+    is read once. Both are keyed on the RECOMMENDATION, so drifting numbers in
+    the line never re-page anyone."""
+    sent = []
+    fill = advisory.Advice(line="UTIL[live 0/6 · fill toward cap: +6 — a]",
+                           key="fill:6:0/6", actionable=True)
+    moved = advisory.Advice(line="UTIL[live 0/6 · fill toward cap: +6 — b]",
+                            key="fill:6:0/6", actionable=True)
+    hold = advisory.Advice(line="UTIL[live 6/6 · hold — at cap]",
+                           key="fill:0:6/6", actionable=False)
+
+    mk = lambda: _alerter(tmp_path, sent, filename="u.json",
+                          label="governor utilization")
+    assert mk().sweep({"base": fill}) == ["base"]
+    assert mk().sweep({"base": moved}) == ["base"], "unactuated advice keeps asking"
+    assert mk().sweep({"base": hold}) == ["base"], "the change to hold is news"
+    assert mk().sweep({"base": hold}) == [], "a standing hold goes quiet"
+    assert sent[-1].startswith("governor utilization [base]: ")
+
+
+def test_the_two_advisories_do_not_share_a_ledger(tmp_path):
+    """They change on different events, so one ledger would let either suppress
+    the other's push."""
+    sent = []
+    hold = advisory.Advice(line="hold", key="fill:0:6/6", actionable=False)
+    _alerter(tmp_path, sent, filename="u.json").sweep({"base": hold})
+    # The setpoint ledger is untouched, so its own first hold is still news.
+    assert _alerter(tmp_path, sent).sweep(
+        {"base": "governor recommends 0 — hold"}) == ["base"]
