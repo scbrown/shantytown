@@ -558,10 +558,10 @@ def test_plate_reader_follows_declared_beads_backend(tmp_path, monkeypatch):
     seen = {}
     class _FakeItem:
         id, status = "aegis-haul1", "open"
-    def _fake_beads_plate(tracker, who):
+    def _fake_br_plate(tracker, who):
         seen["repo"] = tracker.repo; seen["who"] = who
         return _FakeItem()
-    monkeypatch.setattr("shantytown.beads.plate", _fake_beads_plate)
+    monkeypatch.setattr("shantytown.br.plate", _fake_br_plate)
 
     reader = stop_event._plate_reader(root)
     item = reader("billy")

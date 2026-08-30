@@ -237,10 +237,10 @@ class HasOpenBlocker(Exception):
             f"{item_id} is gated by {len(self.blockers)} unmet blocker(s): {names}. "
             f"Refusing to serve it to {requested} — dispatching it puts work on a "
             f"plate that cannot be advanced. Read from this item's own `blocks` "
-            f"dependencies, just now. If `bd ready` offered you this item, the two "
+            f"dependencies, just now. If `br ready` offered you this item, the two "
             f"disagree and THAT is worth a bead — do not assume either is stale. "
             f"Close the blocker, or drop the dependency if it is no longer real "
-            f"(`bd dep remove {item_id} <blocker>`), then dispatch."
+            f"(`br dep remove {item_id} <blocker>`), then dispatch."
         )
 
 
@@ -276,7 +276,7 @@ class Blocked(Exception):
             f"it would overwrite that status with in_progress and put an item "
             f"nobody can advance on an agent's plate — which is what cycles "
             f"agents. If the block is resolved, clear it deliberately "
-            f"(`bd update {item_id} --status open`), then dispatch. If it is not, "
+            f"(`br update {item_id} --status open`), then dispatch. If it is not, "
             f"the bead's own comment says what it is waiting for."
         )
 
@@ -302,7 +302,7 @@ class Closed(Exception):
             f"{item_id} is CLOSED; refusing to serve it to {requested}. Closed is "
             f"terminal — serving it would revert it to in_progress and re-do "
             f"finished work. If it must be worked again, reopen it deliberately "
-            f"(`bd update {item_id} --status open`), then dispatch."
+            f"(`br update {item_id} --status open`), then dispatch."
         )
 
 
@@ -787,11 +787,11 @@ class Dispatcher:
             raise RepoolRefused(
                 f"{item_id} is closed — closed is terminal and there is nothing "
                 f"to hand back. Reopening is a deliberate act "
-                f"(`bd update {item_id} --status open`), never a repool side effect.")
+                f"(`br update {item_id} --status open`), never a repool side effect.")
         if item.status == "blocked":
             raise RepoolRefused(
                 f"{item_id} is blocked — blocked is a decision, and repooling it "
-                f"would serve that decision to the next free agent via `bd ready`. "
+                f"would serve that decision to the next free agent via `br ready`. "
                 f"Clear the blocker deliberately first, then repool.")
         holder = (item.assignee or "").strip()
         if item.status == "open" and not holder:

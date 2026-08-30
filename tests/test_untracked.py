@@ -305,7 +305,7 @@ def test_plate_reader_follows_the_deployment_backend(tmp_path, monkeypatch):
     (tmp_path / "shantytown.toml").write_text(
         '[env]\nSHANTY_BACKEND = "beads"\nSHANTY_BEADS_REPO = "/some/store"\n')
     read = plate_reader(tmp_path)
-    assert "beads" in repr(read.__closure__[0].cell_contents.__module__)
+    assert "br" in repr(read.__closure__[0].cell_contents.__module__)
 
 
 def test_plate_reader_refuses_a_backend_it_cannot_wire(tmp_path, monkeypatch):

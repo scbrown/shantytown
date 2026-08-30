@@ -10,7 +10,7 @@ import subprocess
 import pytest
 
 from shantytown import cli
-from shantytown.br import BrTracker, items, plate, rows
+from shantytown.br import BrTracker, append_comment, items, plate, rows
 from shantytown.tmux import NullPanes
 
 
@@ -48,6 +48,8 @@ def test_real_br_crud_readers_and_terminal_transition(br_store):
 
     tracker.update(made.id, status="in_progress", blocker_kind="blocked:human",
                    defer_reason="measured")
+    append_comment(tracker, made.id, "checkpoint proof")
+    assert "checkpoint proof" in (br_store / ".beads" / "issues.jsonl").read_text()
     got = tracker.get(made.id)
     assert got.status == "in_progress" and got.blocker_kind == "blocked:human"
     tracker.update(made.id, status="closed")
@@ -85,3 +87,14 @@ def test_deployment_keys_select_br_store(br_store, tmp_path, monkeypatch):
     tracker = cli._tracker(args)
     assert isinstance(tracker, BrTracker)
     assert tracker.repo == str(br_store.resolve())
+
+
+def test_deployed_beads_name_selects_br_not_retired_bd(br_store, tmp_path):
+    root = _root(tmp_path)
+    (root / "shantytown.toml").write_text(
+        f'[env]\nSHANTY_BACKEND = "beads"\nSHANTY_BEADS_REPO = "{br_store}"\n')
+    args = type("Args", (), {"root": root, "backend": None, "repo": None})()
+    tracker = cli._tracker(args)
+    assert isinstance(tracker, BrTracker)
+    made = tracker.create("deployed-name proof", priority=1)
+    assert tracker.get(made.id).title == "deployed-name proof"

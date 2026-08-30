@@ -527,7 +527,7 @@ def _br_tracker(root, reg):
     (aegis-mxgzh). Two readers of the same store must not resolve it two ways.
     """
     from .deployment import deployment_default
-    if deployment_default(root, "SHANTY_BACKEND") != "br":
+    if deployment_default(root, "SHANTY_BACKEND") not in ("beads", "br"):
         return None
     from .br import BrTracker
     return BrTracker(repo=(deployment_default(root, "SHANTY_BR_REPO")
