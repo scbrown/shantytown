@@ -1227,7 +1227,7 @@ class BlockedStaleAlerter:
 
     def sweep(self) -> list[str]:
         """One pass. Returns the bead ids actually re-surfaced (usually none)."""
-        from .inbox import is_blocked
+        from .inbox import is_blocked, is_decision
         from .feed_check import bd_cwd, bd_show
         cwd = bd_cwd(self._reg) if self._bd_blocked is None else None
         try:
@@ -1263,7 +1263,19 @@ class BlockedStaleAlerter:
             if age is None or age < BLOCKED_MIN_AGE_DAYS:
                 continue
             last = ledger.get(bid)
-            if isinstance(last, (int, float)) and (now - last) < BLOCKED_RENOTIFY_DAYS * 86400:
+            decision_hold = is_decision(r.get("labels"))
+            verified_at = r.get("updated_at") or r.get("created_at") or "unknown"
+            if decision_hold:
+                # A decision label is a standing acknowledgement, not another
+                # forgotten block. Report it once per bead revision; repeating
+                # the same escalation every day only forces the coordinator to
+                # re-read the same decision history (aegis-y4so3).
+                if (isinstance(last, dict)
+                        and last.get("kind") == "decision-hold"
+                        and last.get("verified_at") == verified_at):
+                    continue
+            elif (isinstance(last, (int, float))
+                  and (now - last) < BLOCKED_RENOTIFY_DAYS * 86400):
                 continue                            # already nudged this cadence
             try:
                 detail = self._bd_show(bid) if self._bd_show else bd_show(cwd, bid, root=self._root, reg=self._reg)
@@ -1299,7 +1311,13 @@ class BlockedStaleAlerter:
         held_back = max(0, len(due) - BLOCKED_MAX_PER_PASS)
         for i, (bid, r, age, kind, blockers) in enumerate(due[:BLOCKED_MAX_PER_PASS]):
             who = (r.get("assignee") or "").split("/")[-1] or "nobody"
-            if kind == "work":
+            decision_hold = is_decision(r.get("labels"))
+            verified_at = r.get("updated_at") or r.get("created_at") or "unknown"
+            if decision_hold:
+                classification = ("DELIBERATE HOLD: decision label present; "
+                                  f"verified at {verified_at}. This standing "
+                                  "notice repeats only when the bead changes.")
+            elif kind == "work":
                 classification = (f"BLOCKED-ON-WORK: open issue blocker(s) "
                                   f"{', '.join(blockers)}. Chase that work; do "
                                   f"not re-ask a human for the blocked bead.")
@@ -1307,7 +1325,9 @@ class BlockedStaleAlerter:
                 classification = ("BLOCKED-ON-HUMAN: no open issue blocker "
                                   "exists. A person must clear/correct the status "
                                   "or supply the external decision/action.")
-            msg = (f"⚠ BLOCKED and going stale: {bid} "
+            heading = ("BLOCKED deliberate hold" if decision_hold
+                       else "⚠ BLOCKED and going stale")
+            msg = (f"{heading}: {bid} "
                    f"(p{r.get('priority')}, assignee {who}) — created "
                    f"{age:.0f}d ago, still blocked. {(r.get('title') or '')[:90]}. "
                    f"{classification} "
@@ -1320,7 +1340,8 @@ class BlockedStaleAlerter:
                 msg += (f" [+{held_back} more aged blocked bead(s) held back this "
                         f"pass to avoid a wall; they surface on following passes.]")
             if self._push(self._reg, self._panes, msg):
-                ledger[bid] = now
+                ledger[bid] = ({"kind": "decision-hold", "verified_at": verified_at}
+                               if decision_hold else now)
                 surfaced.append(bid)
             else:
                 self._log(f"blocked-stale: {bid} is stale but the push to the "

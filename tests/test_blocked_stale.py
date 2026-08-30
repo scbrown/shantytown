@@ -172,13 +172,42 @@ def test_it_does_not_re_nudge_every_pass(tmp_path):
     """tend runs every 5 minutes. A daily nudge is a nudge; a nudge every pass is
     noise about forgotten work, which is how work stays forgotten."""
     push = _Push()
-    rows = [_row("degd", 17)]
+    rows = [_row("degd", 17, labels=[])]
     assert _alerter(tmp_path, rows, push).sweep() == ["degd"]
     assert _alerter(tmp_path, rows, push).sweep() == [], "re-nudged on the very next pass"
     assert len(push.msgs) == 1
     # ...but a day later it comes back, because it is still stopped.
     later = _alerter(tmp_path, rows, push, now=NOW + 86400 * 1.5).sweep()
     assert later == ["degd"], "went silent again — the exact defect this exists for"
+
+
+def test_a_decision_hold_is_reported_once_until_the_bead_changes(tmp_path):
+    """aegis-y4so3: a classified human decision is a deliberate hold, not a
+    forgotten bead that needs the same full re-triage every day."""
+    push = _Push()
+    rows = [_row("held", 17, labels=["decision-stiwi"])]
+    assert _alerter(tmp_path, rows, push).sweep() == ["held"]
+    assert "DELIBERATE HOLD" in push.msgs[0]
+    assert "going stale" not in push.msgs[0]
+
+    much_later = _alerter(tmp_path, rows, push, now=NOW + 30 * 86400)
+    assert much_later.sweep() == []
+    assert len(push.msgs) == 1
+
+    rows[0]["updated_at"] = datetime.fromtimestamp(
+        NOW + 31 * 86400, timezone.utc).isoformat().replace("+00:00", "Z")
+    changed = _alerter(tmp_path, rows, push, now=NOW + 31 * 86400)
+    assert changed.sweep() == ["held"]
+    assert len(push.msgs) == 2
+
+
+def test_a_non_decision_block_keeps_the_daily_resurface_cadence(tmp_path):
+    """Control: quieting acknowledged decisions must not hide ordinary blocks."""
+    push = _Push()
+    rows = [_row("forgotten", 17, labels=[])]
+    assert _alerter(tmp_path, rows, push).sweep() == ["forgotten"]
+    assert _alerter(tmp_path, rows, push, now=NOW + 1.5 * 86400).sweep() == ["forgotten"]
+    assert len(push.msgs) == 2
 
 
 def test_a_FAILED_push_is_not_ledgered(tmp_path):
