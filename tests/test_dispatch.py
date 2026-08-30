@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 from shantytown.dispatch import Dispatcher
+from shantytown.feed_audit import FeedAudit
 from shantytown.files import FilesRegistry, FilesTracker
 from shantytown.tmux import NullPanes
 
@@ -81,6 +82,17 @@ def test_dispatch_actually_dispatches(world):
     pane, text = panes.sent[0]
     assert pane == "%5"
     assert "item-1" in text
+
+
+def test_production_dispatch_records_claim_send_and_correlation(world, tmp_path):
+    _d, tracker, panes = world
+    audit = FeedAudit(tmp_path)
+    d = Dispatcher(_d.registry, tracker, panes, audit=audit)
+    plan = d.go("item-1", "ellie")
+    rows = [json.loads(line) for line in audit.path.read_text().splitlines()]
+    assert [r["state"] for r in rows] == ["claim_committed", "input_sent"]
+    assert rows[0]["serve_id"] == rows[1]["serve_id"] == plan.serve_id
+    assert f"[st serve:{plan.serve_id} worker:ellie]" in panes.sent[0][1]
 
 
 def test_budget_counts_not_stopwatch(world):
