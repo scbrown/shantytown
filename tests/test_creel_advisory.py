@@ -148,3 +148,38 @@ def test_utilization_pushes_on_change_only_while_setpoint_stays_actionable(tmp_p
     mk_s = lambda: _alerter(tmp_path, sent, filename="s.json")
     assert mk_s().sweep({"base": "governor recommends +2"}) == ["base"]
     assert mk_s().sweep({"base": "governor recommends +2"}) == ["base"]
+
+
+def test_an_unknown_key_shape_settles_instead_of_re_pushing_forever(tmp_path):
+    """REGRESSION for a defect I introduced and caught by replaying the real
+    ledger, not by these tests.
+
+    `previous_key` first migrated the legacy line-valued ledger by WHITELISTING
+    known key prefixes. That silently required every future producer to add its
+    own: the utilization advisory's `cause` labels were not on the list, so a
+    stored `over-pace:0` never compared equal to the `over-pace:0` computed next
+    pass, and every hold re-pushed ON EVERY PASS — an infinite re-page, strictly
+    worse than the duplicate the keys were added to prevent.
+
+    The check is now inverted: a legacy value is RECOGNISABLE (a Creel sentence
+    or an explicit unavailability); anything else is already a key, whoever made
+    it. A new producer needs to do nothing to be deduped correctly."""
+    sent = []
+    mk = lambda: _alerter(tmp_path, sent, filename="u.json")
+    for shape in ("over-pace:0", "at-cap:0", "budget-shrinking:0",
+                  "a-cause-nobody-has-invented-yet:7"):
+        item = {"base": advisory.Advice(line="x", key=shape, actionable=False)}
+        assert mk().sweep(item) == ["base"], f"{shape}: the change is news"
+        assert mk().sweep(item) == [], f"{shape}: and then it goes QUIET"
+
+
+def test_a_legacy_line_valued_ledger_still_migrates_without_re_alerting(tmp_path):
+    """The property the whitelist existed to protect, kept."""
+    import json
+    (tmp_path / "notify").mkdir()
+    (tmp_path / "notify" / "s.json").write_text(
+        json.dumps({"base": "governor recommends 0 — hold"}))
+    sent = []
+    assert _alerter(tmp_path, sent, filename="s.json").sweep(
+        {"base": "governor recommends 0 — hold"}) == [], \
+        "a hold must not re-alert merely because its storage shape changed"
