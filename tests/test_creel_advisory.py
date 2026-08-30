@@ -46,15 +46,29 @@ def test_bad_record_is_explicitly_unavailable(tmp_path):
     assert line == "advisory unavailable: creel probe returned no controller record"
 
 
-def test_alerter_keeps_nonzero_recommendations_actionable(tmp_path):
+def test_alerter_is_silent_on_every_repeat_including_a_nonzero_one(tmp_path):
+    """sattler's ruling on aegis-ox5dh (2026-08-29) — push on FIRST OCCURRENCE
+    and on VALUE CHANGE, silent on all repeats including a nonzero one. It
+    supersedes 1641346, whose rule this test previously asserted in the opposite
+    direction (`test_alerter_keeps_nonzero_recommendations_actionable`).
+
+    That rule's instinct was right — an unactuated recommendation must not go
+    silent — and its cadence was what made it wrong. Measured live: the same +3
+    at 20:27, 20:32 and 20:37 while the standing answer was known and deliberate.
+    The standing state now lives on `st crew --governor`, a place you LOOK rather
+    than a thing that interrupts you. A slow re-nag returns only if a nonzero
+    recommendation is ever MEASURED sitting unactioned."""
     pushed = []
-    alerter = advisory.Alerter(tmp_path, object(), object(),
+    mk = lambda: advisory.Alerter(tmp_path, object(), object(),
         push=lambda reg, panes, message: pushed.append(message) or "admin")
     lines = {"codex": "governor recommends +2"}
 
-    assert alerter.sweep(lines) == ["codex"]
-    assert alerter.sweep(lines) == ["codex"]
-    assert pushed == ["governor setpoint [codex]: governor recommends +2"] * 2
+    assert mk().sweep(lines) == ["codex"], "first occurrence is news"
+    assert mk().sweep(lines) == [], "and every repeat after it is not"
+    assert mk().sweep({"codex": "governor recommends +4"}) == ["codex"], \
+        "a CHANGED value is news again"
+    assert pushed == ["governor setpoint [codex]: governor recommends +2",
+                      "governor setpoint [codex]: governor recommends +4"]
 
 
 def test_unavailable_record_is_also_deduped(tmp_path):
@@ -78,13 +92,17 @@ def test_hold_dedup_keys_on_recommendation_not_changing_error_prose(tmp_path):
     assert len(pushed) == 1
 
 
-def test_nonzero_recommendation_remains_actionable_each_pass(tmp_path):
+def test_a_nonzero_recommendation_goes_quiet_once_read(tmp_path):
+    """SUPERSEDED 1641346's rule, per sattler's ox5dh ruling — this test asserted
+    the opposite and is kept, inverted, rather than deleted, so the change of
+    mind is visible to the next reader instead of looking like it never
+    happened."""
     pushed = []
-    alerter = advisory.Alerter(tmp_path, object(), object(),
+    mk = lambda: advisory.Alerter(tmp_path, object(), object(),
         push=lambda reg, panes, message: pushed.append(message) or "admin")
     lines = {"codex": "governor recommends +2 — under trajectory"}
-    assert alerter.sweep(lines) == ["codex"]
-    assert alerter.sweep(lines) == ["codex"]
+    assert mk().sweep(lines) == ["codex"]
+    assert mk().sweep(lines) == []
 
 
 def _alerter(tmp_path, sent, **kw):
@@ -93,23 +111,21 @@ def _alerter(tmp_path, sent, **kw):
                             **kw)
 
 
-def test_a_standing_recommendation_keeps_asking_but_a_hold_goes_quiet(tmp_path):
-    """gennaro's 1641346 semantics, now shared with the utilization advisory
-    (aegis-967a9): an unactuated recommendation must keep nagging, while a hold
-    is read once. Both are keyed on the RECOMMENDATION, so drifting numbers in
-    the line never re-page anyone."""
+def test_a_standing_recommendation_and_a_hold_both_go_quiet(tmp_path):
+    """Both keyed on the RECOMMENDATION, so drifting numbers in the line never
+    re-page anyone, and neither a standing fill nor a standing hold repeats."""
     sent = []
     fill = advisory.Advice(line="UTIL[live 0/6 · fill toward cap: +6 — a]",
-                           key="fill:6:0/6", actionable=True)
+                           key="fill:6")
     moved = advisory.Advice(line="UTIL[live 0/6 · fill toward cap: +6 — b]",
-                            key="fill:6:0/6", actionable=True)
+                            key="fill:6")
     hold = advisory.Advice(line="UTIL[live 6/6 · hold — at cap]",
-                           key="fill:0:6/6", actionable=False)
+                           key="at-cap:0")
 
     mk = lambda: _alerter(tmp_path, sent, filename="u.json",
                           label="governor utilization")
-    assert mk().sweep({"base": fill}) == ["base"]
-    assert mk().sweep({"base": moved}) == ["base"], "unactuated advice keeps asking"
+    assert mk().sweep({"base": fill}) == ["base"], "first occurrence is news"
+    assert mk().sweep({"base": moved}) == [], "same recommendation, drifted prose"
     assert mk().sweep({"base": hold}) == ["base"], "the change to hold is news"
     assert mk().sweep({"base": hold}) == [], "a standing hold goes quiet"
     assert sent[-1].startswith("governor utilization [base]: ")
@@ -126,15 +142,13 @@ def test_the_two_advisories_do_not_share_a_ledger(tmp_path):
         {"base": "governor recommends 0 — hold"}) == ["base"]
 
 
-def test_utilization_pushes_on_change_only_while_setpoint_stays_actionable(tmp_path):
-    """The two advisories carry DIFFERENT actionability on purpose (sattler,
-    measured 2026-08-29).
-
-    A nonzero SETPOINT delta is a rare trajectory event and keeps asking until
-    acted on — gennaro's 1641346, deliberately. Occupancy is not an event:
-    "under cap with work ready" stays true for hours, and re-pushing it every
-    pass put base +3 in front of the admin twice in twenty minutes while the
-    standing answer was known and deliberate."""
+def test_both_advisories_push_on_change_only(tmp_path):
+    """UNIFIED per sattler's ox5dh ruling. I first shipped these with different
+    actionability — occupancy silent, setpoint still nagging — reasoning that a
+    rare budget EVENT differs from a standing occupancy STATE. sattler ruled the
+    distinction away, and the ruling is better: the argument for silence never
+    depended on which advisory it was, only on the cadence, and two rules on one
+    mechanism is a thing the next reader has to hold in their head for no gain."""
     sent = []
     fill = advisory.Advice(line="UTIL[... +3 ...]", key="fill:3", actionable=False)
     mk_u = lambda: _alerter(tmp_path, sent, filename="u.json")
@@ -144,10 +158,11 @@ def test_utilization_pushes_on_change_only_while_setpoint_stays_actionable(tmp_p
     grown = advisory.Advice(line="UTIL[... +4 ...]", key="fill:4", actionable=False)
     assert mk_u().sweep({"base": grown}) == ["base"], "a CHANGED recommendation pushes"
 
-    # ...while the setpoint line keeps its own behaviour, unchanged.
+    # ...and the setpoint line now behaves identically.
     mk_s = lambda: _alerter(tmp_path, sent, filename="s.json")
     assert mk_s().sweep({"base": "governor recommends +2"}) == ["base"]
-    assert mk_s().sweep({"base": "governor recommends +2"}) == ["base"]
+    assert mk_s().sweep({"base": "governor recommends +2"}) == []
+    assert mk_s().sweep({"base": "governor recommends +5"}) == ["base"]
 
 
 def test_an_unknown_key_shape_settles_instead_of_re_pushing_forever(tmp_path):
