@@ -59,7 +59,7 @@ def cycle_now(depth_k: float | int | None = None,
     where = (f"{int(depth_k)}k, past the {int(threshold_k)}k cycle line"
              if depth_k and threshold_k else "past the cycle line")
     return (f"⚠ CONTEXT HIGH ({where}). CHECKPOINT, then cycle:\n"
-            f"  bd comment <bead> --file <notes>  &&  {CYCLE_CMD} "
+            f"  br comments add <bead> --file <notes>  &&  {CYCLE_CMD} "
             f"--checkpoint-file <notes>\n"
             f"{NO_CLEAR} Cycle keeps bypass/MCP/skills/hooks and re-dispatches "
             f"your plate. Keep working until it fires. {HELP_POINTER}")
@@ -73,7 +73,7 @@ def haul_handoff(context_k: float | int, line_k: float | int) -> str:
     """
     return (f"⚠ HANDOFF: {int(context_k)}k, past the {int(line_k)}k line. Do not "
             f"start the next item. CHECKPOINT, then cycle:\n"
-            f"  bd comment <bead> --file <notes>  &&  {CYCLE_CMD} "
+            f"  br comments add <bead> --file <notes>  &&  {CYCLE_CMD} "
             f"--checkpoint-file <notes>\n"
             f"{NO_CLEAR} Your haul resumes itself afterwards. {HELP_POINTER}")
 

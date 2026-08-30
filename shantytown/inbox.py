@@ -392,7 +392,7 @@ class TrackerInbox:
             raise MessageTooLong(
                 f"too long: {typed_size} {unit}, cap {budget}. Put it in a bead and "
                 f"send the pointer: `st inbox {to} 'see <bead-id>'` "
-                f"(`bd comment <id> --file` for the body). `st help inbox`."
+                f"(`br comments add <id> --file` for the body). `st help inbox`."
                 f"{note}",
                 budget=budget,
                 unit=unit,

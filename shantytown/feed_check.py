@@ -721,12 +721,12 @@ def haul_feed_message(nid: str, title: str, rest: int, headroom: str = "",
     # behind it is noise to learn to skip.
     authority = f"Yours to work — {headroom}. " if headroom else "Yours to work. "
     return (
-        f"HAUL: {nid} ({t}) — `bd show {nid}`, execute, close to advance "
+        f"HAUL: {nid} ({t}) — `br show {nid}`, execute, close to advance "
         f"({rest} more). {again}{authority}"
         f"{handoff_text.deep_context_hint()}\n"
-        f"Not this one? done -> `bd close {nid}` · gated -> `st defer {nid} "
+        f"Not this one? done -> `br close {nid}` · gated -> `st defer {nid} "
         f"<bead|human|access|external|parked> --reason-file <f>` · not yours -> "
-        f"`bd update {nid} -a \"\"`. "
+        f"`br update {nid} -a \"\"`. "
         f"(A bare status change does NOT stop the re-serve, and clearing the "
         f"assignee only re-pools it.) Options: `st help haul`.")
 
@@ -743,7 +743,7 @@ def haul_resume_message(nid: str, title: str) -> str:
     t = (title or "")[:80]
     return (
         f"HAUL RESUME: {nid} ({t}) is still your active anchor. Continue it now "
-        f"(`bd show {nid}`), execute the remaining work, verify it, and close it "
+        f"(`br show {nid}`), execute the remaining work, verify it, and close it "
         f"when done so the haul can advance. If it is genuinely gated, record "
         f"the evidence, then use `st defer {nid} "
         f"<bead|human|access|external|parked> --reason-file <file>`; if it is not "

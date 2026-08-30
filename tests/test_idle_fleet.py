@@ -285,7 +285,7 @@ def test_an_already_idle_hauler_is_FED_its_next_bead_not_the_coordinator(tmp_pat
     assert "p-billy" in targets, "the worker must be fed"
     assert "p-admin" not in targets, "the coordinator must hear nothing"
     (_, msg), = [x for x in panes.sent if x[0] == "p-billy"]
-    assert "HAUL" in msg and "aegis-9" in msg and "bd show aegis-9" in msg
+    assert "HAUL" in msg and "aegis-9" in msg and "br show aegis-9" in msg
     assert claims == ["aegis-9"], "the fed bead is claimed in_progress"
 
 

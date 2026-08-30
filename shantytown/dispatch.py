@@ -467,7 +467,7 @@ class Plan:
                 f"  would: ⚠ {self.unreadable_deps} dependency row(s) UNREADABLE "
                 f"— counted by the tracker, resolvable in no store reachable from "
                 f"here. If one of them is a `blocks` edge, this item is NOT ready "
-                f"and nothing can tell you so (`bd show {self.item_id} --json`: "
+                f"and nothing can tell you so (`br show {self.item_id} --json`: "
                 f"compare dependency_count against dependencies)")
         lines.append("  would NOT: create a convoy, spawn a session, wait for ack")
         return "\n".join(lines)

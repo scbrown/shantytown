@@ -699,7 +699,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="hand an item back to the pool: status -> open AND assignee "
              "cleared, in one verified write. Clearing the assignee alone "
              "leaves the status at in_progress, which drops the item out of "
-             "`bd ready`, every haul, and every plate.")
+             "`br ready`, every haul, and every plate.")
     rp.add_argument("item")
     rp.add_argument("-n", "--dry-run", action="store_true")
 
@@ -3991,7 +3991,7 @@ def _cmd_crew(a) -> int:
         p1 = f", {n_p1} of them P1 or above" if n_p1 else ""
         print(f"  {n_un} open bead(s) in NOBODY'S haul{p1} — unassigned, so they "
               f"self-feed to no one and no stop event advances to them. "
-              f"`bd list --status open` and route by domain.")
+              f"`br list --status open` and route by domain.")
         print(f"    (includes any `decision-needed` beads, which are correctly "
               f"unassigned — st cannot read labels, see _unassigned_open.)")
     # THROTTLED-IDLE IS NOT IDLE (aegis-diasw). `3 free` means "three agents can
