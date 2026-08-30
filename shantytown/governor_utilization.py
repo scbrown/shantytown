@@ -119,6 +119,15 @@ class Utilization:
     advice: int | None
     reason: str
     ready: int | None
+    cause: str = "fill"
+    """A STABLE label for WHY, used as the dedup key instead of the prose.
+
+    The reason sentence carries live numbers — a ratio, a points figure, an ETA —
+    and every one of them drifts on every pass. Keying a ledger on it would
+    re-page the administrator every five minutes about a recommendation that had
+    not changed, which is the exact defect this key exists to prevent and the one
+    sattler measured on the live surface within an hour of it shipping.
+    """
     needs_ready: bool = False
     """True when a ready-work count is the ONLY missing input.
 
@@ -143,16 +152,21 @@ class Utilization:
         return "UTIL[" + " · ".join(parts) + "]"
 
     def key(self) -> str:
-        """The dedup key: the RECOMMENDATION, not the line (gennaro, 1641346).
+        """The dedup key: the RECOMMENDATION AND ITS CAUSE, never the line.
 
-        Numbers on this line move every pass — elapsed climbs, points fall — so
-        keying on the text would re-alert the administrator every five minutes
-        with a recommendation they have already read and acted on.  The same
-        defect 1641346 fixed for the setpoint advisory, and the same fix.
+        Numbers on this line move every pass — elapsed climbs, points fall, an
+        ETA counts down — so keying on the rendered text re-pages the
+        administrator every five minutes about a recommendation that has not
+        changed. That is gennaro's 1641346 defect, and my first cut reintroduced
+        a narrower version of it by folding `live/cap` and the reason prose into
+        the key: sattler measured base +3 pushed TWICE in ~20 minutes with an
+        unchanged recommendation, within an hour of this shipping.
+
+        `cause` exists so this key is a pair of stable labels. Two holds for
+        DIFFERENT reasons (at cap vs over pace) are genuinely different states
+        and still key apart; the same hold with drifting numbers does not.
         """
-        if self.advice is None:
-            return f"cannot-tell:{self.reason}"
-        return f"fill:{self.advice}:{self.live}/{self.cap}"
+        return f"{self.cause}:{self.advice}"
 
 
 def _ceiling(policy, window: str) -> float:
@@ -208,21 +222,21 @@ def assess(harness: str, *, readings, policy, cap: int | None, live: int,
                     for name in _ORDER)
         if w is not None)
 
-    def out(advice, reason, needs_ready=False):
+    def out(advice, reason, cause, needs_ready=False):
         return Utilization(harness=harness, live=live, cap=cap, windows=windows,
                            advice=advice, reason=reason, ready=ready,
-                           needs_ready=needs_ready)
+                           cause=cause, needs_ready=needs_ready)
 
     if cap is None:
-        return out(0, "no fleet cap declared — nothing to fill toward")
+        return out(0, "no fleet cap declared — nothing to fill toward", "uncapped")
     if live >= cap:
-        return out(0, f"at cap ({live}/{cap})")
+        return out(0, f"at cap ({live}/{cap})", "at-cap")
 
     rated = [w for w in windows if w.ratio is not None]
     if not rated:
         why = "; ".join(f"{w.window}: {w.why_no_ratio}" for w in windows) or \
             "no readable window"
-        return out(None, f"no window can be rated for pace ({why})")
+        return out(None, f"no window can be rated for pace ({why})", "unratable")
 
     # RULE 2 — the strictest window binds. Checked before the under-pace case so
     # a tight five-hour budget can never be outvoted by a comfortable weekly one.
@@ -230,7 +244,7 @@ def assess(harness: str, *, readings, policy, cap: int | None, live: int,
     if over:
         w = max(over, key=lambda x: x.ratio / x.bound)
         return out(0, f"{w.window} is at {w.ratio:.2f}x against its "
-                      f"{w.bound:.2f}x bound — not under-utilized")
+                      f"{w.bound:.2f}x bound — not under-utilized", "over-pace")
 
     # WHICH WINDOW JUSTIFIES THE RECOMMENDATION — the one with the most time
     # left, NOT the most under-spent. Measured on the live fleet 2026-08-29: base
@@ -249,18 +263,20 @@ def assess(harness: str, *, readings, policy, cap: int | None, live: int,
     if ready is None:
         return out(None, f"{lead.window} is under pace at {lead.ratio:.2f}x, but "
                          "ready work could not be read — declining to recommend "
-                         "growth on an unproven signal", needs_ready=True)
+                         "growth on an unproven signal", "ready-unknown",
+                         needs_ready=True)
     if ready <= 0:
         return out(0, f"{lead.window} is under pace at {lead.ratio:.2f}x but no "
-                      "ready work — filling the cap would add idle agents")
+                      "ready work — filling the cap would add idle agents",
+                   "no-ready")
     if creel_delta is not None and creel_delta < 0:
         # The budget controller outranks occupancy when they disagree, the same
         # direction the 45vco design gives every clamp: this may only ever
         # decline to recommend growth, never authorise it.
         return out(0, f"{lead.window} is under pace at {lead.ratio:.2f}x with "
                       f"{ready} ready, but the budget controller recommends "
-                      f"{creel_delta:+d} — deferring to it")
+                      f"{creel_delta:+d} — deferring to it", "budget-shrinking")
     return out(slack, f"{lead.window} at {lead.ratio:.2f}x is under its "
                       f"{lead.bound:.2f}x bound, {ready} ready, "
                       f"{lead.points:.0f} points expire in "
-                      f"{gov_mod.fmt_eta(lead.resets_in)}")
+                      f"{gov_mod.fmt_eta(lead.resets_in)}", "fill")

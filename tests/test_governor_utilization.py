@@ -209,6 +209,7 @@ def test_key_is_the_recommendation_not_the_line():
                                                           length=WEEK)})
     assert early.render() != later.render()      # the numbers moved
     assert early.key() == later.key()            # the recommendation did not
+    assert early.key() == "fill:6"
 
     # ...but a changed recommendation is a changed key.
     filled = _assess(live=3,
@@ -225,3 +226,37 @@ def test_assess_is_pure():
     kw = dict(readings={gov_mod.SEVEN_DAY: _reading(52, elapsed=0.58,
                                                     length=WEEK)})
     assert _assess(**kw) == _assess(**kw)
+
+
+
+def test_two_holds_for_different_reasons_key_apart():
+    """`cause` is what makes the key safe to shrink. At-cap and over-pace are
+    both advice 0 and are genuinely different states; the admin should hear the
+    transition between them."""
+    at_cap = _assess(live=6, readings={
+        gov_mod.SEVEN_DAY: _reading(52, elapsed=0.58, length=WEEK)})
+    over = _assess(readings={
+        gov_mod.SEVEN_DAY: _reading(90, elapsed=0.50, length=WEEK)})
+    assert at_cap.advice == over.advice == 0
+    assert at_cap.key() == "at-cap:0"
+    assert over.key() == "over-pace:0"
+
+
+def test_a_drifting_reason_does_not_move_the_key():
+    """MEASURED by sattler 2026-08-29: base +3 was pushed TWICE in ~20 minutes
+    with an unchanged recommendation, because the first key folded in `live/cap`
+    and the reason prose — both of which carry numbers that move every pass.
+
+    The standing answer to that +3 was known and deliberate (one agent
+    soak-anchored, one clock-gated). Re-paging it every pass is exactly how a
+    channel trains its reader to ignore it (aegis-3w0br)."""
+    first = _assess(readings={gov_mod.SEVEN_DAY: _reading(52, elapsed=0.58,
+                                                          length=WEEK)})
+    # twenty minutes later: more elapsed, more consumed, fewer points, new ETA,
+    # a different ready count — and the same recommendation.
+    second = _assess(ready=35,
+                     readings={gov_mod.SEVEN_DAY: _reading(52.4, elapsed=0.582,
+                                                           length=WEEK)})
+    assert first.advice == second.advice == 6
+    assert first.reason != second.reason, "the prose really does drift"
+    assert first.key() == second.key(), "but the recommendation did not change"

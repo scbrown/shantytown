@@ -7053,9 +7053,18 @@ def _tend_once(a, quiet: bool = False) -> int:
                                 verdict=verdicts[name], live=running,
                                 now=util_clock, advisory=line, root=a.root,
                                 reg=reg)
+            # PUSH ON CHANGE ONLY, unlike the setpoint line beside it, and the
+            # difference is deliberate (sattler, measured 2026-08-29). gennaro's
+            # 1641346 keeps a nonzero SETPOINT delta actionable every pass so an
+            # unactuated budget recommendation cannot go silent — right for a
+            # rare trajectory event. Occupancy is not an event: "under cap with
+            # work ready" stays true for hours, so the same rule re-paged +3
+            # twice in twenty minutes while the standing answer was known and
+            # deliberate. A channel that repeats itself is one the admin learns
+            # to ignore (aegis-3w0br), which un-builds the advisory.
+            # A NEWLY nonzero recommendation still pushes: the key changes.
             utilization_advisories[name] = creel_advisory_mod.Advice(
-                line=seen.render(), key=seen.key(),
-                actionable=bool(seen.advice))
+                line=seen.render(), key=seen.key(), actionable=False)
             print(f"  governor utilization [{name}]: {seen.render()}",
                   file=sys.stderr)
     # Preserve the byte-for-byte single-governor path.  A mixed fleet has no

@@ -124,3 +124,27 @@ def test_the_two_advisories_do_not_share_a_ledger(tmp_path):
     # The setpoint ledger is untouched, so its own first hold is still news.
     assert _alerter(tmp_path, sent).sweep(
         {"base": "governor recommends 0 — hold"}) == ["base"]
+
+
+def test_utilization_pushes_on_change_only_while_setpoint_stays_actionable(tmp_path):
+    """The two advisories carry DIFFERENT actionability on purpose (sattler,
+    measured 2026-08-29).
+
+    A nonzero SETPOINT delta is a rare trajectory event and keeps asking until
+    acted on — gennaro's 1641346, deliberately. Occupancy is not an event:
+    "under cap with work ready" stays true for hours, and re-pushing it every
+    pass put base +3 in front of the admin twice in twenty minutes while the
+    standing answer was known and deliberate."""
+    sent = []
+    fill = advisory.Advice(line="UTIL[... +3 ...]", key="fill:3", actionable=False)
+    mk_u = lambda: _alerter(tmp_path, sent, filename="u.json")
+
+    assert mk_u().sweep({"base": fill}) == ["base"], "newly nonzero still pushes"
+    assert mk_u().sweep({"base": fill}) == [], "an unchanged +3 goes quiet"
+    grown = advisory.Advice(line="UTIL[... +4 ...]", key="fill:4", actionable=False)
+    assert mk_u().sweep({"base": grown}) == ["base"], "a CHANGED recommendation pushes"
+
+    # ...while the setpoint line keeps its own behaviour, unchanged.
+    mk_s = lambda: _alerter(tmp_path, sent, filename="s.json")
+    assert mk_s().sweep({"base": "governor recommends +2"}) == ["base"]
+    assert mk_s().sweep({"base": "governor recommends +2"}) == ["base"]
