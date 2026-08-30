@@ -261,11 +261,11 @@ def _plate_reader(root: Path):
                                   or deployment_default(root, "SHANTY_BEADS_REPO")),
                             extra_repos=parse_extra_repos(
                                 deployment_default(root, EXTRA_REPOS_KEY)))
-        return lambda who: br_plate(tracker, who)
-    return lambda who: files_plate(FilesTracker(root / "items"), who)
+        return lambda who, warn=None: br_plate(tracker, who, warn=warn)
+    return lambda who, warn=None: files_plate(FilesTracker(root / "items"), who)
 
 
-def _plate_of(root: Path, me: str) -> tuple[str | None, str | None]:
+def _plate_of(root: Path, me: str) -> "tuple[str | None, str | None, list[str]]":
     """What `me` held when it stopped: (item_id, status).
 
     Three distinct answers, and the third is why this returns a pair instead of an
@@ -278,11 +278,18 @@ def _plate_of(root: Path, me: str) -> tuple[str | None, str | None]:
     on a beads fleet a files-only read named no item for any stopped worker, so
     every stop event said "empty plate" regardless of what the worker held.
     """
+    notes: list[str] = []
     try:
-        item = _plate_reader(root)(me)
-    except Exception:
-        return None, "?"
-    return (item.id, item.status) if item else (None, None)
+        item = _plate_reader(root)(me, warn=notes.append)
+    except Exception as e:
+        # A tracker that fails OUTRIGHT still degrades to "?" - but it now says
+        # what happened. An unreadable EXTRA store no longer reaches here at all
+        # (br.plate degrades loudly instead), which is the whole point: every
+        # stop event on this fleet carried a bare "?" for hours after the clbx2
+        # cutover and it read as pane noise rather than as the anchor outage it
+        # was (aegis-r2isg seam, sattler 2026-08-30).
+        return None, "?", [f"tracker unreadable: {type(e).__name__}: {e}"[:200]]
+    return ((item.id, item.status) if item else (None, None)) + (notes,)
 
 
 def _send(reg: FilesRegistry, events: FilesEvents, panes, me: str,
@@ -297,7 +304,8 @@ def _send(reg: FilesRegistry, events: FilesEvents, panes, me: str,
     reason = routing.reason.value if routing.reason else None
     shells = _my_shells(reg, panes, me)
     context_k = _my_context_k(reg, panes, me)
-    item, item_status = _plate_of(root, me) if root is not None else (None, "?")
+    item, item_status, plate_notes = (
+        _plate_of(root, me) if root is not None else (None, "?", []))
     ev = events.persist(to=routing.to, frm=me, reason=reason, rose=routing.rose,
                         shells=shells, item=item, item_status=item_status,
                         context_k=context_k)
@@ -307,7 +315,9 @@ def _send(reg: FilesRegistry, events: FilesEvents, panes, me: str,
     print(f"stop_event: {me} stopped -> persisted {ev.id} to {routing.to}"
           + (f" (ROSE: {reason})" if routing.rose else "")
           + (f" [{shells} shell(s) still running]" if shells else "")
-          + (f" [SATURATED {int(context_k)}k]" if over else ""), file=sys.stderr)
+          + (f" [SATURATED {int(context_k)}k]" if over else "")
+          + "".join(f" [PLATE INCOMPLETE: {n}]" for n in plate_notes),
+          file=sys.stderr)
     return 0
 
 

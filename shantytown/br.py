@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 import tempfile
 
 from .beads import BeadsTracker, _PLATE_RANK, _priority
@@ -59,18 +60,55 @@ class BrTracker(BeadsTracker):
                 f"br update {item_id} failed: {r.stderr.strip()[:120]}")
 
 
-def rows(tracker: BrTracker) -> list[dict]:
-    """Every issue in every configured br store, refusing partial unions."""
+def _failure_reason(r) -> str:
+    """The human reason a br call failed.
+
+    br reports failures as a JSON envelope on STDOUT and frequently leaves
+    STDERR EMPTY, so the obvious `r.stderr` read renders a real fault as a blank
+    reason. That is how the NA store took `st anchor` down fleet-wide while the
+    only message anyone saw ended at the colon with nothing after it
+    (aegis-r2isg's shantytown seam) - an outage that named its own cause and
+    still read as a mystery. Prefer the envelope, fall back to stderr, and never
+    return "" so a caller can always print something.
+    """
+    try:
+        err = (json.loads(r.stdout) or {}).get("error") or {}
+        code, msg = err.get("code"), err.get("message")
+        if code or msg:
+            return f"{code}: {msg}" if code and msg else str(code or msg)
+    except (ValueError, AttributeError, TypeError):
+        pass
+    return r.stderr.strip()[:200] or f"br exited {r.returncode} with no message"
+
+
+def rows_partial(tracker: BrTracker) -> "tuple[list[dict], list[str]]":
+    """Rows from every READABLE store, plus one named note per store that failed.
+
+    The union-query contract (`rows()`, below) is unchanged and still refuses a
+    partial answer. This is the seam underneath it, for the one caller that must
+    survive an unreadable store: `plate()`. See its docstring for why the answer
+    there is "degrade LOUDLY", not "raise" and not "shorten quietly".
+    """
     out: list[dict] = []
+    failures: list[str] = []
     repos = tracker.repos or [None]
     for repo in repos:
         r = tracker._bd_in(repo, "list", "--json", "--limit", "0")
         if r.returncode != 0:
-            raise RuntimeError(
+            failures.append(
                 f"br list failed for store {repo or '(default)'}: "
-                f"{r.stderr.strip()[:120]}")
+                f"{_failure_reason(r)}")
+            continue
         payload = json.loads(r.stdout) if r.stdout.strip() else {}
         out.extend(payload.get("issues", []) if isinstance(payload, dict) else payload)
+    return out, failures
+
+
+def rows(tracker: BrTracker) -> list[dict]:
+    """Every issue in every configured br store, refusing partial unions."""
+    out, failures = rows_partial(tracker)
+    if failures:
+        raise RuntimeError(failures[0])
     return out
 
 
@@ -92,9 +130,40 @@ def in_progress(tracker: BrTracker) -> list[dict]:
     return payload.get("issues", []) if isinstance(payload, dict) else payload
 
 
-def plate(tracker: BrTracker, agent: str) -> WorkItem | None:
+def _warn_stderr(note: str) -> None:
+    """Default degradation channel: loud, unmissable, and impossible to forget.
+
+    A caller silences this by passing its own `warn`, never by omission.
+    """
+    print(f"  \u26a0 PLATE INCOMPLETE - {note}", file=sys.stderr)
+
+
+def plate(tracker: BrTracker, agent: str,
+          warn: "callable | None" = None) -> WorkItem | None:
+    """The agent's ONE held item, surviving an unreadable extra store.
+
+    WHY THIS DOES NOT RAISE, AND DOES NOT GO QUIET (aegis-r2isg seam).
+
+    `rows()` refuses a partial union and that is correct FOR A QUERY: a shorter
+    answer at exit 0 is a wrong answer, not a small one. But `plate()` is not a
+    query, it is the FIRST STEP OF EVERY CREW SESSION - `st anchor`, the stop
+    event, the governor and the dashboard all read it. Raising there converted
+    one unreadable store into a fleet-wide outage of the propulsion loop:
+    measured 2026-08-30, `st anchor` died with a traceback for EVERY agent while
+    the primary store - the one holding essentially every plate - was healthy.
+
+    So the answer is the third one: return the plate we can actually see, and
+    say LOUDLY which store we could not read. `warn` defaults to a stderr print,
+    so silence has to be asked for explicitly; a caller that forgets is loud, not
+    quiet. That keeps the aegis-tisp property the raise was protecting - an
+    agent holding an item in the unreadable store still never reads as a clean
+    empty plate, because the warning names the store the answer is missing.
+    """
+    seen, failures = rows_partial(tracker)
+    for note in failures:
+        (warn or _warn_stderr)(note)
     mine = [
-        row for row in rows(tracker)
+        row for row in seen
         if row.get("assignee") in (agent, agent.split("/")[-1])
         and row.get("status") != "closed"
         and not is_message(row.get("title", ""))

@@ -558,7 +558,10 @@ def test_plate_reader_follows_declared_beads_backend(tmp_path, monkeypatch):
     seen = {}
     class _FakeItem:
         id, status = "aegis-haul1", "open"
-    def _fake_br_plate(tracker, who):
+    def _fake_br_plate(tracker, who, warn=None):
+        # `warn` matches the real br.plate signature: an unreadable EXTRA store
+        # degrades loudly through it instead of raising out of the drain
+        # (aegis-r2isg seam). A fake that omits it stops matching the seam.
         seen["repo"] = tracker.repo; seen["who"] = who
         return _FakeItem()
     monkeypatch.setattr("shantytown.br.plate", _fake_br_plate)
