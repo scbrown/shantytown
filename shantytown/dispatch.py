@@ -391,6 +391,7 @@ class Plan:
     store: str = ""   # the `[st store: ...]` tag riding the payload (aegis-81zyb)
     quipu_nodes: list = field(default_factory=list)  # graph context (aegis-x6yoq)
     sender: str = ""  # who the payload is signed as, "" = unsigned (aegis-5vxmz)
+    serve_id: str = ""
     unreadable_deps: int = 0   # dependency rows the tracker counted but could
                                # not resolve, so we cannot tell if they block
                                # (aegis-kt7jr)
@@ -474,7 +475,7 @@ class Plan:
 
 class Dispatcher:
     def __init__(self, registry: Registry, tracker: Tracker, panes: Panes,
-                 governor=None, sender: str | None = None):
+                 governor=None, sender: str | None = None, audit=None):
         self.registry = registry
         self.tracker = tracker
         self.panes = panes
@@ -485,6 +486,8 @@ class Dispatcher:
         # surrounding process happens to carry: the sender is a fact the CALLER
         # knows, and a transport that guesses it is the failure this prevents.
         self.sender = sender
+        self._new_serve = audit.new_serve if audit is not None else None
+        self._audit_record = audit.record if audit is not None else None
         # governor(item) -> "" | a refusal string. INJECTED, and None by default,
         # so the dispatcher keeps working with no config, no metric and no
         # Prometheus — the usage governor is a policy this module CONSULTS, never
@@ -642,7 +645,10 @@ class Dispatcher:
             text += (" — NOTE: this item was already in_progress with NO assignee: "
                      "you are RESUMING work somebody started and handed back, not "
                      "starting it. Read its comments before acting.")
+        serve_id = self._new_serve() if self._new_serve is not None else ""
         text = attribute(text, self.sender)
+        if serve_id:
+            text += f" — [st serve:{serve_id} worker:{agent_name}]"
         return Plan(
             item_id=item_id,
             agent=agent_name,
@@ -653,6 +659,7 @@ class Dispatcher:
             store=tag,
             quipu_nodes=nodes,
             sender=self.sender or "",
+            serve_id=serve_id,
             # Carried, NEVER raised (aegis-kt7jr). We cannot know the dropped
             # rows' type, so refusing here would refuse work over what might be a
             # `relates-to` link — the exact "cannot-tell manufacturing a refusal"
@@ -717,6 +724,16 @@ class Dispatcher:
             p.track_attempts = self._track(item_id, p.updates)
         except Exception as e:                         # noqa: BLE001 — any store failure
             raise DispatchedButUntracked(item_id, agent_name, p.pane, e) from e
+        if self._audit_record is not None:
+            window_id = f"dispatch-{p.serve_id}"
+            self._audit_record(window_id, leg="claim", worker=agent_name,
+                               item=item_id, attempted=True, acted_on=True,
+                               serve_id=p.serve_id, state="claim_committed",
+                               reason="tracker write read back applied")
+            self._audit_record(window_id, leg="delivery", worker=agent_name,
+                               item=item_id, attempted=True, acted_on=True,
+                               serve_id=p.serve_id, state="input_sent",
+                               reason="pane send verified before tracker update")
         return p
 
     def _track(self, item_id: str, updates: dict) -> int:

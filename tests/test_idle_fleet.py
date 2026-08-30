@@ -307,6 +307,10 @@ def test_natural_feed_journals_acted_on_with_backend_and_window(tmp_path, monkey
     assert landed[0] | {"window_id": "pass-7", "worker": "billy",
                         "item": "aegis-9", "backend": "bd"} == landed[0]
     assert landed[0]["eligible"] and landed[0]["attempted"]
+    assert landed[0]["state"] == "input_sent"
+    assert landed[0]["serve_id"]
+    (_, delivered), = panes.sent
+    assert f"[st serve:{landed[0]['serve_id']} worker:billy]" in delivered
 
 
 def test_replaying_the_same_pass_does_not_redispatch(tmp_path, monkeypatch):

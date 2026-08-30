@@ -534,7 +534,8 @@ class IdleFleetAlerter:
 
     def __init__(self, root, reg, panes, runtime, *, push=push_to_admin,
                  bd_ready=None, bd_in_progress=None, context_k=None,
-                 handoff_k=None, log=None, audit=None, input_preflight=None):
+                 handoff_k=None, log=None, audit=None, input_preflight=None,
+                 turn_receipts=None):
         self._root = root          # aegis-mxgzh: the sweeps need it to resolve the br backend
         self.path = Path(root) / "notify" / "idle_fleet.json"
         # Kept for the launch-stamp ownership gate (aegis-2j2r): tend must
@@ -562,6 +563,12 @@ class IdleFleetAlerter:
         self._log = log or (lambda msg: None)
         from .feed_audit import FeedAudit
         self._audit = audit or FeedAudit(Path(root))
+        if turn_receipts is None:
+            from .feed_audit import codex_turn_starts
+            self._turn_receipts = lambda: codex_turn_starts(
+                Path.home() / ".codex" / "sessions")
+        else:
+            self._turn_receipts = turn_receipts
         self._input_preflight = input_preflight or self._pane_input_preflight
 
     def _pane_input_preflight(self, worker: str):
@@ -617,6 +624,13 @@ class IdleFleetAlerter:
         from .stop_event import _stood_down
         window_id = self._audit.begin()
         backend = feed_check.backend_kind(self._root, self._reg)
+        try:
+            unacked = self._audit.reconcile_turn_starts(self._turn_receipts())
+            for serve_id in unacked:
+                self._log(f"haul: serve {serve_id} is START_UNACKNOWLEDGED — "
+                          "input was sent but no matching Codex turn began")
+        except Exception as exc:  # evidence loss must not stop the feed
+            self._log(f"haul: turn receipt reconciliation unavailable ({exc!r})")
         if _stood_down(self._shanty_root):
             self._log("idle-fleet: fleet stood down — correctly not alerting")
             return []
@@ -764,6 +778,7 @@ class IdleFleetAlerter:
             else:
                 nid = feedable[0]
                 delivery_item = nid
+                serve_id = self._audit.new_serve()
                 self._audit.record(window_id, leg="candidate", backend=backend,
                                    worker=worker, item=nid, eligible=True,
                                    reason="idle worker owns ready non-anchor item")
@@ -801,6 +816,11 @@ class IdleFleetAlerter:
                                    attempted=True, reason="claim attempted")
                 try:
                     feed_check.bd_claim(cwd, nid, root=self._root, reg=self._reg)
+                    self._audit.record(window_id, leg="claim", backend=backend,
+                                       worker=worker, item=nid, eligible=True,
+                                       attempted=True, acted_on=True,
+                                       serve_id=serve_id, state="claim_committed",
+                                       reason="claim command completed")
                 except Exception as exc:
                     self._audit.record(window_id, leg="claim", backend=backend,
                                        worker=worker, item=nid, eligible=True,
@@ -812,6 +832,7 @@ class IdleFleetAlerter:
                 message = feed_check.haul_feed_message(
                     nid, "", len(feedable) - 1,
                     headroom=sb.headroom(limits, spend), repeats=repeats)
+                message += f" — [st serve:{serve_id} worker:{worker}]"
             target = push_to_own_pane(self._reg, self._panes, worker, message)
             if target is None:
                 self._audit.record(window_id, leg="delivery", backend=backend,
@@ -827,6 +848,8 @@ class IdleFleetAlerter:
                 window_id, leg="delivery", backend=backend, worker=worker,
                 item=delivery_item, eligible=bool(delivery_item), attempted=True,
                 acted_on=True,
+                serve_id=(serve_id if delivery_item else ""),
+                state=("input_sent" if delivery_item else ""),
                 reason=("natural tend feed delivered" if delivery_item
                         else "handoff instruction delivered; no item fed"))
             self._log(f"haul: fed {worker} its next bead ({feedable[0]}; "

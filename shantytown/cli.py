@@ -419,8 +419,10 @@ def _wire(a) -> Dispatcher:
     # sender=_me(a): `st go` signs the dispatch with whoever ran it (aegis-5vxmz).
     # One resolution, the same one `st inbox` attributes with — a coordinator must
     # not be one name on a message and another on the work it hands out.
+    from .feed_audit import FeedAudit
     return Dispatcher(_registry(a), _tracker(a), _panes(a),
-                      governor=_dispatch_gate(a), sender=_me(a))
+                      governor=_dispatch_gate(a), sender=_me(a),
+                      audit=FeedAudit(Path(a.root)))
 
 
 def _governors(a):
