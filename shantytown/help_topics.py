@@ -64,9 +64,9 @@ HAUL — the self-feeding queue
   close one and the next is served at your stop. Nobody dispatches per bead.
 
   RELEASING AN ITEM — a bare status change does NOT stop the re-serve
-    done            bd close <id>
+    done            br close <id>
     gated           st defer <id> <bead|human|access|external|parked> --reason-file <f>
-    not yours       bd update <id> -a ""
+    not yours       br update <id> -a ""
 
   Why defer rather than just closing or unassigning: `defer` records the KIND of
   block and takes the bead OUT of the ready pool until you undo it. Clearing the
@@ -91,7 +91,7 @@ INBOX — a pointer channel, not a document store
 
   OVER THE CAP — put the substance in a bead and send the pointer:
 
-    bd comment <id> --file <notes>
+    br comments add <id> --file <notes>
     st inbox <who> -d 'see <bead-id>: <one-line gist>'
 
   WHY IT IS CAPPED

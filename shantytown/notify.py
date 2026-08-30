@@ -1109,7 +1109,7 @@ class StalledAlerter:
         one = items[0]
         return (f"⚠ st tend (self-heal) — you are idle holding {', '.join(items)} "
                 f"with no progress for {mins:.0f}m. An in_progress bead DAMS your "
-                f"haul until you resolve it. If it is DONE: `bd close {one}`. If "
+                f"haul until you resolve it. If it is DONE: `br close {one}`. If "
                 f"it is blocked or gated (nobody should work it yet): put why on "
                 f"the bead, then `st defer {one} "
                 f"<bead|human|access|external|parked> --reason-file <file>` — "
@@ -1354,7 +1354,7 @@ class BlockedStaleAlerter:
                    f"(p{r.get('priority')}, assignee {who}) — created "
                    f"{age:.0f}d ago, still blocked. {(r.get('title') or '')[:90]}. "
                    f"{classification} "
-                   f"BLOCKED is invisible everywhere else — off bd ready, off the "
+                   f"BLOCKED is invisible everywhere else — off br ready, off the "
                    f"Rule Zero sweep, off every capacity report — so it is STOPPED, "
                    f"not waiting. "
                    f"(age is created_at, an UPPER bound — bd records no "
@@ -1453,7 +1453,7 @@ class BlockedMisstatusAlerter:
         for bid, row, deps in due:
             msg = (f"⚠ MIS-STATUSED BLOCKED bead: {bid} has dependencies and "
                    f"EVERY one is closed ({', '.join(deps)}). It is unblocked "
-                   f"in fact but blocked on paper, so bd ready and every feed "
+                   f"in fact but blocked on paper, so br ready and every feed "
                    f"path hide it. Clear/correct the status; do not chase a "
                    f"blocker that no longer exists. {(row.get('title') or '')[:90]}")
             if self._push(self._reg, self._panes, msg):

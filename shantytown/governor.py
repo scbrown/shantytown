@@ -2081,7 +2081,7 @@ class Verdict:
             return (f"{self._tier_says()} and {getattr(item, 'id', 'this item')} "
                     f"carries NO priority, so it cannot be shown to clear the "
                     f"floor. Set one and re-dispatch "
-                    f"(`bd update {getattr(item, 'id', '<id>')} --priority=<0-4>`).")
+                    f"(`br update {getattr(item, 'id', '<id>')} --priority=<0-4>`).")
         if priority > floor:
             return (f"{self._tier_says()} and {getattr(item, 'id', 'this item')} "
                     f"is P{priority}. Dispatch it when usage falls, or raise its "

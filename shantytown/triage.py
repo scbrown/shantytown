@@ -53,7 +53,7 @@ _TAIL_LINES = 8
 #
 # MEASURED across 18 live panes, 2026-07-20, `capture-pane -p -e`:
 #
-#   placeholder   \x1b[39m❯\xa0\x1b[2mbd ready — pick the next item\x1b[0m
+#   placeholder   \x1b[39m❯\xa0\x1b[2mbr ready — pick the next item\x1b[0m
 #   real input    \x1b[38;5;246m❯\xa0\x1b[39mzzPROBEzz
 #   empty         \x1b[38;5;246m❯\xa0\x1b[39m
 #

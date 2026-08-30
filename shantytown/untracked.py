@@ -319,7 +319,7 @@ def _how_to_hook(me: str, card) -> str:
     ask = (f"  · or ask {lead} to dispatch you one: `st go <id> {me}`\n"
            if lead else "")
     return (f"  · `bd create \"<what you are actually doing>\" -p 2` then "
-            f"`bd update <id> --assignee={me} --status=in_progress`\n{ask}")
+            f"`br update <id> --assignee={me} --status=in_progress`\n{ask}")
 
 
 def _warn_text(me: str, card, strikes: int, elapsed: float) -> str:
