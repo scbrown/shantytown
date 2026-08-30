@@ -62,7 +62,23 @@ def _creel_advice(line: str) -> Advice:
     return Advice(line=line, key=key, actionable=delta not in (None, 0))
 
 
-_MIGRATED = ("delta:", "record:", "fill:", "cannot-tell:")
+def _looks_like_a_creel_line(value: str) -> bool:
+    """Is this a stored LINE from before the ledger held keys, or a key already?
+
+    INVERTED ON PURPOSE, and the inversion is the whole point. This was first
+    written as a whitelist of known key PREFIXES, which silently requires every
+    future producer to add its own: the utilization advisory's `cause` labels
+    (`over-pace:`, `at-cap:`, …) were not on that list, so every hold failed the
+    comparison and re-pushed ON EVERY PASS — an infinite re-page, strictly worse
+    than the duplicate it was added to fix. Caught by replaying the real ledger
+    before deploying, not by the unit tests, which used `fill:` keys throughout.
+
+    A legacy value is RECOGNISABLE — it is a Creel sentence carrying a
+    recommendation, or an explicit unavailability. Everything else is already a
+    key, whoever produced it. A new producer now needs to do nothing.
+    """
+    return (recommended_delta(value) is not None
+            or value.startswith("advisory unavailable:"))
 
 
 class Alerter:
@@ -100,9 +116,7 @@ class Alerter:
                 return None
             # Migrate the original line-valued ledger without re-alerting a hold
             # merely because its storage representation changed.
-            if old.startswith(_MIGRATED) or old == "unavailable":
-                return old
-            return _creel_advice(old).key
+            return _creel_advice(old).key if _looks_like_a_creel_line(old) else old
 
         changed = [name for name, adv in sorted(advices.items())
                    if adv.actionable or previous_key(name) != adv.key]
