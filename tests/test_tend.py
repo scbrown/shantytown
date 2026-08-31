@@ -1074,3 +1074,114 @@ def test_install_PROCEEDS_past_a_masked_but_still_active_foreign_unit(unit_home,
         is_masked=lambda u: True)
     assert changed, f"refused a tombstone: {msg}"
     assert (unit_home / supervisor.TIMER).exists()
+
+
+def test_a_slow_sweep_sheds_the_rest_of_the_pass_instead_of_wedging_respawn(
+        tmp_path, monkeypatch, capsys):
+    """A pass that runs long is not a slow pass, it is NO SUPERVISION (aegis-qwadc).
+
+    Measured 2026-08-30: two passes took 27 and 36 minutes against a normal 25-40s,
+    both inside br writes on a contended store, both completing successfully. The
+    timer is OnUnitActiveSec over a Type=oneshot with no start timeout, and the
+    crew watchdog is masked, so tend is the sole respawn path — 36 minutes of a
+    best-effort notification sweep is 36 minutes in which nothing can respawn.
+
+    The budget must SHED the remaining sweeps and say which.
+    """
+    import json as _json
+
+    from shantytown import cli, notify as notify_mod
+
+    crew = tmp_path / "crew"; crew.mkdir()
+    (crew / "w.json").write_text(_json.dumps({"role": "worker", "pane": "p-w"}))
+    panes = _Panes(screens={"p-w": IDLE})
+    monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: panes)
+
+    # The FIRST sweep burns the whole budget and RETURNS NORMALLY — the case that
+    # matters, because a sweep that finishes is not an error and nothing else in
+    # the pass has any reason to suspect it took half an hour.
+    clock = {"t": 0.0}
+    monkeypatch.setattr(cli.time, "monotonic", lambda: clock["t"])
+    monkeypatch.setattr(cli, "_TEND_SWEEP_BUDGET_S", 120.0)
+
+    class _Slow:
+        def __init__(self, *a, **k): pass
+
+        def sweep(self, *a, **k):
+            clock["t"] += 2160.0          # the measured 36-minute pass
+            return []
+
+    monkeypatch.setattr(notify_mod, "Notifier", _Slow)
+
+    class _A:
+        root = tmp_path; dry_run = False
+        backend = "files"; repo = None; registry = "files"
+
+    rc = cli._tend_once(_A())
+    err = capsys.readouterr().err
+
+    assert rc in (cli.OK, cli.CANNOT_TELL)
+    assert "sweep budget" in err
+    assert "DEFERRED" in err
+    # NAMED, not counted: "3 sweeps deferred" does not tell an operator whether a
+    # blocked worker went unpushed.
+    assert "saturation-cycle" in err
+    # And the promise the whole design rests on.
+    assert "Respawn is unaffected" in err
+
+
+def test_the_budget_never_interrupts_a_sweep_in_flight(tmp_path, monkeypatch):
+    """It skips the NEXT sweep; it does not kill the running one.
+
+    A wall-clock timeout would land SIGTERM inside a `br create`, and a
+    half-applied bead write is worse than a late cycle. So a sweep that starts
+    under budget must run to completion even if it blows through it — which is
+    exactly what the slow sweep above does, and this asserts it rather than
+    leaving it implied.
+    """
+    import json as _json
+
+    from shantytown import cli, notify as notify_mod
+
+    crew = tmp_path / "crew"; crew.mkdir()
+    (crew / "w.json").write_text(_json.dumps({"role": "worker", "pane": "p-w"}))
+    monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: _Panes(screens={"p-w": IDLE}))
+
+    clock = {"t": 0.0}
+    monkeypatch.setattr(cli.time, "monotonic", lambda: clock["t"])
+    monkeypatch.setattr(cli, "_TEND_SWEEP_BUDGET_S", 120.0)
+    finished = []
+
+    class _Slow:
+        def __init__(self, *a, **k): pass
+
+        def sweep(self, *a, **k):
+            clock["t"] += 2160.0
+            finished.append("ran to completion")
+            return []
+
+    monkeypatch.setattr(notify_mod, "Notifier", _Slow)
+
+    class _A:
+        root = tmp_path; dry_run = False
+        backend = "files"; repo = None; registry = "files"
+
+    cli._tend_once(_A())
+    assert finished == ["ran to completion"]
+
+
+def test_a_normal_pass_defers_nothing(tmp_path, monkeypatch, capsys):
+    """The quiet direction. A budget that trips on an ordinary pass would shed
+    supervision every five minutes and read as though the store were on fire."""
+    import json as _json
+
+    from shantytown import cli
+
+    crew = tmp_path / "crew"; crew.mkdir()
+    (crew / "w.json").write_text(_json.dumps({"role": "worker", "pane": "p-w"}))
+    monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: _Panes(screens={"p-w": IDLE}))
+
+    cli._tend_once(type("A", (), {"root": tmp_path, "dry_run": False,
+                                  "backend": "files", "repo": None,
+                                  "registry": "files"})())
+    assert "DEFERRED" not in capsys.readouterr().err
