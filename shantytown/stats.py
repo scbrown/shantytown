@@ -21,7 +21,8 @@ Three faces, one file:
 
 The store is .shanty/stats.sqlite (WAL, busy_timeout) — append-only in spirit:
 capture only INSERTs (events) or UPSERTs monotonically (tokens). No external
-service is consulted, ever, on the capture path.
+service is consulted, ever, on the capture path. It also scrubs Quipu bearer
+values from the transcript output before they can persist there (aegis-02k5sq).
 """
 from __future__ import annotations
 
@@ -107,6 +108,12 @@ _DURATION = re.compile(r"^[0-9]+(\.[0-9]+)?[smhd]?$")
 # cd — it is `cd somewhere && <the thing you actually ran>`.
 _NAVIGATION = ("cd", "pushd", "popd", "source", ".", "true", ":")
 _SEGMENT_SPLIT = ("&&", "||", ";", "|", "&")
+
+_QUIPU_TOKEN_FILE = Path(".config/aegis/quipu_token")
+_SCRUB_TAIL_BYTES = 1024 * 1024
+_BEARER_OUTPUT = re.compile(
+    rb"(?i)(authorization\s*:\s*bearer\s+)([a-z0-9._~+/=-]{24,})"
+)
 
 
 def _strip_heredocs(cmd: str) -> str:
@@ -418,6 +425,87 @@ def _transcript_tokens(path: str) -> tuple[int, int]:
     return inp, out
 
 
+def _known_quipu_bearers() -> tuple[bytes, ...]:
+    """Return bearer values without ever rendering them in hook output.
+
+    Read both sources: a session can retain the pre-rotation environment value
+    while the file already contains its replacement. Both have appeared in the
+    same operational window, and either value is sensitive transcript content.
+    """
+    values: list[str] = []
+    env_value = os.environ.get("QUIPU_AUTH_TOKEN", "").strip()
+    if env_value:
+        values.append(env_value)
+    token_file = Path(os.environ.get(
+        "QUIPU_TOKEN_FILE", Path.home() / _QUIPU_TOKEN_FILE))
+    try:
+        file_value = token_file.read_text(encoding="utf-8").strip()
+    except OSError:
+        file_value = ""
+    if file_value:
+        values.append(file_value)
+    # Refuse tiny strings: replacing a short misconfigured value such as "yes"
+    # would destroy unrelated transcript content rather than protect a secret.
+    return tuple(dict.fromkeys(v.encode() for v in values if len(v) >= 16))
+
+
+def _mask(length: int) -> bytes:
+    marker = b"[REDACTED]"
+    return (marker + b"*" * length)[:length]
+
+
+def _redact_bearer_output(data: bytes) -> tuple[bytes, int]:
+    """Redact credential-shaped OUTPUT while preserving every byte offset."""
+    count = 0
+    for secret in _known_quipu_bearers():
+        hits = data.count(secret)
+        if hits:
+            data = data.replace(secret, _mask(len(secret)))
+            count += hits
+
+    def redact_match(match: re.Match[bytes]) -> bytes:
+        nonlocal count
+        count += 1
+        return match.group(1) + _mask(len(match.group(2)))
+
+    return _BEARER_OUTPUT.sub(redact_match, data), count
+
+
+def _scrub_transcript(path: str, *, full: bool = False) -> int:
+    """Scrub a transcript in place; PostToolUse tails, Stop checks all of it.
+
+    Equal-length replacement preserves JSONL validity, offsets, and the inode a
+    still-running harness may have open. PostToolUse is synchronous, so its most
+    recent tool result is in the tail; Stop is the full-file backstop.
+    """
+    with open(path, "r+b") as fh:
+        size = fh.seek(0, os.SEEK_END)
+        overlap = max((len(v) for v in _known_quipu_bearers()), default=256)
+        start = 0 if full else max(0, size - _SCRUB_TAIL_BYTES - overlap)
+        fh.seek(start)
+        before = fh.read()
+        after, count = _redact_bearer_output(before)
+        if count:
+            fh.seek(start)
+            fh.write(after)
+            fh.flush()
+        return count
+
+
+def _safe_scrub_transcript(path: object, *, full: bool = False) -> None:
+    """Best-effort wrapper preserving capture's fail-open hook contract."""
+    if not isinstance(path, str) or not os.path.isfile(path):
+        return
+    try:
+        count = _scrub_transcript(path, full=full)
+        if count:
+            print(f"stats capture: redacted {count} credential occurrence(s)",
+                  file=sys.stderr)
+    except Exception as exc:  # noqa: BLE001 — observer must never block a tool
+        print(f"stats capture: transcript scrub failed: {type(exc).__name__}",
+              file=sys.stderr)
+
+
 def capture(root: Path, payload: dict) -> None:
     """One hook firing -> at most one events row (+ a tokens upsert on stop)."""
     now = time.time()
@@ -427,6 +515,10 @@ def capture(root: Path, payload: dict) -> None:
     conn = _db(root)
     try:
         if hook == "PostToolUse" or payload.get("tool_name"):
+            # Inspect RESULT CONTENT, not command text. The five motivating
+            # leaks were stdout shaped like `token present: yes<bearer>`; a
+            # command-text guard would have caught zero of them (aegis-02k5sq).
+            _safe_scrub_transcript(payload.get("transcript_path"))
             ti = payload.get("tool_input") or {}
             tool = payload.get("tool_name") or "?"
             # `detail` holds the invoked binary for Bash, so CLI-via-Bash usage
@@ -448,6 +540,7 @@ def capture(root: Path, payload: dict) -> None:
             )
             tp = payload.get("transcript_path")
             if tp and os.path.isfile(tp):
+                _safe_scrub_transcript(tp, full=True)
                 inp, out = _transcript_tokens(tp)
                 conn.execute(
                     "INSERT INTO tokens(session, agent, input_toks, output_toks,"

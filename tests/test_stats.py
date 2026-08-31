@@ -169,6 +169,67 @@ def test_skill_use_recorded_as_skill(tmp_path, monkeypatch):
     assert skill == "graph-extract"
 
 
+def test_post_tool_scrubs_bearer_from_result_output(tmp_path, monkeypatch):
+    """The guard watches persisted OUTPUT, where all five leaks occurred."""
+    token = "synthetic_quipu_bearer_0123456789abcdef"
+    token_file = tmp_path / "quipu-token"
+    token_file.write_text(token)
+    monkeypatch.setenv("QUIPU_TOKEN_FILE", str(token_file))
+    monkeypatch.delenv("QUIPU_AUTH_TOKEN", raising=False)
+    monkeypatch.delenv("ST_STATS_PUSHGATEWAY", raising=False)
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text(json.dumps({
+        "type": "tool_result", "content": "token present: yes" + token,
+    }) + "\n")
+    original_size = transcript.stat().st_size
+    payload = _payload_tool(transcript_path=str(transcript))
+
+    assert _run_capture(tmp_path, payload, monkeypatch) == 0
+    scrubbed = transcript.read_text()
+    assert token not in scrubbed
+    assert "token present: yes[REDACTED]" in scrubbed
+    assert transcript.stat().st_size == original_size
+    json.loads(scrubbed)
+
+
+def test_scrub_covers_cached_old_and_rotated_file_bearers(tmp_path, monkeypatch):
+    old = "synthetic_old_quipu_bearer_0123456789"
+    new = "synthetic_new_quipu_bearer_9876543210"
+    token_file = tmp_path / "quipu-token"
+    token_file.write_text(new)
+    monkeypatch.setenv("QUIPU_AUTH_TOKEN", old)
+    monkeypatch.setenv("QUIPU_TOKEN_FILE", str(token_file))
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text(f"old={old} new={new}\n")
+
+    assert stats._scrub_transcript(str(transcript), full=True) == 2
+    scrubbed = transcript.read_text()
+    assert old not in scrubbed and new not in scrubbed
+
+
+def test_scrub_catches_authorization_output_without_known_token(
+        tmp_path, monkeypatch):
+    bearer = "synthetic_unknown_bearer_0123456789abcdef"
+    monkeypatch.delenv("QUIPU_AUTH_TOKEN", raising=False)
+    monkeypatch.setenv("QUIPU_TOKEN_FILE", str(tmp_path / "missing"))
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text(f"Authorization: Bearer {bearer}\n")
+
+    assert stats._scrub_transcript(str(transcript), full=True) == 1
+    assert bearer not in transcript.read_text()
+
+
+def test_safe_boolean_presence_output_is_unchanged(tmp_path, monkeypatch):
+    monkeypatch.delenv("QUIPU_AUTH_TOKEN", raising=False)
+    monkeypatch.setenv("QUIPU_TOKEN_FILE", str(tmp_path / "missing"))
+    transcript = tmp_path / "session.jsonl"
+    original = "token present: yes\nAuthorization: Bearer <token>\n"
+    transcript.write_text(original)
+
+    assert stats._scrub_transcript(str(transcript), full=True) == 0
+    assert transcript.read_text() == original
+
+
 def test_stop_sums_transcript_tokens_idempotently(tmp_path, monkeypatch):
     """Token totals are ABSOLUTE per session and upserted — capturing the same
     stop twice must not double-count (re-summing is the idempotency)."""
@@ -187,6 +248,28 @@ def test_stop_sums_transcript_tokens_idempotently(tmp_path, monkeypatch):
     rows = sqlite3.connect(tmp_path / "stats.sqlite").execute(
         "SELECT input_toks, output_toks FROM tokens").fetchall()
     assert rows == [(17, 8)]
+
+
+def test_stop_scrubs_full_transcript_before_counting(tmp_path, monkeypatch):
+    token = "synthetic_quipu_bearer_0123456789abcdef"
+    token_file = tmp_path / "quipu-token"
+    token_file.write_text(token)
+    monkeypatch.setenv("QUIPU_TOKEN_FILE", str(token_file))
+    monkeypatch.delenv("QUIPU_AUTH_TOKEN", raising=False)
+    monkeypatch.delenv("ST_STATS_PUSHGATEWAY", raising=False)
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text(
+        json.dumps({"content": token}) + "\n" +
+        json.dumps({"message": {"usage": {
+            "input_tokens": 4, "output_tokens": 2,
+        }}}) + "\n")
+    stop = {"session_id": "s-stop", "hook_event_name": "Stop",
+            "transcript_path": str(transcript)}
+
+    assert _run_capture(tmp_path, stop, monkeypatch) == 0
+    assert token not in transcript.read_text()
+    assert sqlite3.connect(tmp_path / "stats.sqlite").execute(
+        "SELECT input_toks, output_toks FROM tokens").fetchone() == (4, 2)
 
 
 # --- fail-open: the contract ----------------------------------------------
