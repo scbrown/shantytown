@@ -197,6 +197,16 @@ DEFAULT_RELAX_MARGIN = 5
 # buys the first read after the wake being genuinely post-reset.
 WAKE_SKEW_S = 60
 
+# A window whose remaining time exceeds its own length by no more than this is
+# AT ITS RESET BOUNDARY, not misconfigured (aegis-lvfm5). `reset_at` comes from
+# the producer's clock and is published rounded; `now` is ours. So for the tick
+# in which a window rolls over, the arithmetic reads `left` a hair PAST `length`
+# — which the length guard below, reading strictly, reported as proof of a bad
+# configuration. It was measured saying "reset is 7d 0h away but the window is
+# only 7d 0h long" about a perfectly correct 7-day window. Same minute, and the
+# same reason, as WAKE_SKEW_S: one tick's worth of two clocks disagreeing.
+RESET_BOUNDARY_SKEW_S = 60
+
 # A reset timestamp further ahead than this is not scheduled, it is WRONG. The
 # longest budget here is seven days; anything past eight is a parse error or a
 # clock problem, and arming a timer for it would silently replace a five-minute
@@ -413,16 +423,36 @@ def pace_ratio(pct: float, reset_at: float | None, now: float,
         # has not caught up to, NOT a fresh budget. Deriving elapsed >= 1 from it
         # would report a fully-elapsed window on the stalest number available.
         return None, "the published reset is already past (producer has not re-read)"
-    if left > length:
+    if left > length + RESET_BOUNDARY_SKEW_S:
         # PROOF the length is wrong, not a maybe: a window cannot have more time
-        # remaining than it has in total. This is the guard that makes inferring
-        # seven_day -> 168h safe to do at all (see WINDOW_LENGTH_S).
+        # remaining than it has in total, by more than two clocks can disagree.
+        # This is the guard that makes inferring seven_day -> 168h safe to do at
+        # all (see WINDOW_LENGTH_S), and the skew allowance does not weaken it:
+        # a length that is genuinely too short is wrong by a large fraction of
+        # the window, never by a minute.
         return None, (f"reset is {fmt_eta(left)} away but the window is only "
                       f"{fmt_eta(length)} long — the configured/inferred length "
                       f"is too short to be right, so pace is not computed on it")
-    elapsed = 1.0 - (left / length)
+    # Inside the allowance, the window has just rolled: pin elapsed at 0 rather
+    # than letting it go negative and report a window running backwards.
+    elapsed = 1.0 - (min(left, float(length)) / length)
     if elapsed <= 0:
-        return None, "the window has not started"
+        if pct <= 0:
+            # A JUST-RESET WINDOW IS RATEABLE, AND IT IS WIDE OPEN (aegis-lvfm5).
+            # `0 used / 0 elapsed` is undefined as arithmetic, but the question
+            # the governor actually asks — "is this lane running ahead of its
+            # budget?" — has an unambiguous answer at a fresh reset: no, nothing
+            # has been spent and the whole budget is ahead. Returning None here
+            # instead spelled that as "unrated", and Stiwi's standing rule is
+            # that the governor is the only brake — so for one tick per window
+            # the brake read BLIND, and a blind gauge must never be read as
+            # green. This is the one place where refusing to answer was the less
+            # honest option.
+            return 0.0, ""
+        # Usage inside a window that has not started is not pace, it is a
+        # reading to distrust — and it stays unrated, loudly.
+        return None, ("the window has not started, yet the producer reports "
+                      f"{pct:.0f}% used")
     return (pct / 100.0) / elapsed, ""
 
 

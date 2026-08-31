@@ -275,6 +275,83 @@ def test_pace_ratio_says_WHY_it_cannot_answer(reset_at, length):
     assert why, "an undefined ratio must carry its reason"
 
 
+# --- the reset boundary (aegis-lvfm5) -----------------------------------------
+#
+# For exactly one tick per window, `left` sits at or a hair past `length` and the
+# strict guard read that as PROOF of a bad configuration — measured saying "reset
+# is 7d 0h away but the window is only 7d 0h long" about a correct 7-day window.
+# The lane then reported `unrated`, and since the governor is the only brake, the
+# brake read BLIND for that tick. A blind gauge must never be read as green, so
+# refusing to answer was, uniquely here, the less honest option: a window with
+# nothing spent and the whole budget ahead is not unrateable, it is WIDE OPEN.
+
+@pytest.mark.parametrize("overshoot", [0.0, 1.0, 30.0, gov.RESET_BOUNDARY_SKEW_S])
+def test_a_JUST_RESET_window_rates_wide_open_and_is_never_unrated(overshoot):
+    """0 used with the full budget ahead is 0.00x, not a refusal to answer."""
+    ratio, why = gov.pace_ratio(0.0, T0 + WEEK + overshoot, T0, int(WEEK))
+    assert why == "", f"a fresh reset must not be unrated (overshoot {overshoot}s)"
+    assert ratio == pytest.approx(0.0), "nothing spent is 0.00x — wide open"
+
+
+def test_the_length_guard_STILL_refuses_a_genuinely_short_window():
+    """The skew allowance must not weaken the guard it sits in front of. A length
+    that is really wrong is wrong by a large fraction of the window, never by a
+    minute — so one minute of tolerance costs the guard nothing, and this test is
+    what says so."""
+    ratio, why = gov.pace_ratio(0.0, T0 + WEEK, T0, int(WEEK // 2))
+    assert ratio is None
+    assert "too short to be right" in why
+
+    just_past = gov.pace_ratio(0.0, T0 + WEEK + gov.RESET_BOUNDARY_SKEW_S + 1.0,
+                               T0, int(WEEK))
+    assert just_past[0] is None, "beyond the allowance is still refused"
+    assert "too short to be right" in just_past[1]
+
+
+def test_usage_in_a_window_that_has_not_started_stays_UNRATED():
+    """The other side of the boundary case, and the reason it is not simply
+    `elapsed <= 0 -> 0.0`. Spend reported against a window that has not begun is
+    not a pace of zero, it is a reading to distrust — and distrust is spelled
+    `unrated`, loudly, exactly as before."""
+    ratio, why = gov.pace_ratio(5.0, T0 + WEEK, T0, int(WEEK))
+    assert ratio is None, "usage before the window starts must not rate as open"
+    assert "has not started" in why and "5%" in why
+
+
+def test_the_TICK_LINE_reads_wide_open_at_the_boundary_not_unrated():
+    """The bead's own close criterion, at the level it was reported from: the
+    line an operator reads on `st tend`. `0.00x` is the answer; the word
+    `unrated` on a lane that is genuinely wide open is the bug."""
+    from shantytown import governor_utilization as gu
+
+    class _R:
+        ok = True
+        pct = 0.0
+        reset_at = T0 + WEEK          # the exact boundary
+
+    line = gu._window_use(gov.Policy(), SEVEN, _R(), T0).render()
+    assert "unrated" not in line, f"the brake still reads blind: {line}"
+    assert "0.00x" in line, line
+    assert "0%used" in line and "0%elapsed" in line, line
+
+
+def test_elapsed_is_never_reported_NEGATIVE_at_the_boundary():
+    """The display half. `pace_ratio` pins elapsed at 0; the utilization line
+    derives its own percentage from the same inputs, so it is clamped too or an
+    operator reads a window running backwards."""
+    from shantytown import governor_utilization as gu
+
+    class _R:
+        ok = True
+        pct = 0.0
+        reset_at = T0 + WEEK + 30.0
+
+    use = gu._window_use(gov.Policy(), SEVEN, _R(), T0)
+    assert use is not None
+    assert use.ratio == pytest.approx(0.0), "and it is rated, not None"
+    assert use.elapsed_pct is not None and use.elapsed_pct >= 0.0
+
+
 # --- observability (design constraint 5) --------------------------------------
 
 def test_the_pace_line_states_BOTH_numbers(tmp_path):
