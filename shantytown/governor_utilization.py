@@ -196,8 +196,12 @@ def _window_use(policy, window: str, reading, now: float) -> WindowUse | None:
     # here would be the second opinion this module exists not to have.
     ratio, why = gov_mod.pace_ratio(reading.pct, reading.reset_at, now, length)
     left = None if reading.reset_at is None else reading.reset_at - now
+    # Clamped at 0 for the same reason `pace_ratio` pins it there: inside the
+    # reset-boundary skew allowance `left` can sit a hair past `length`, and a
+    # window is never less than 0% elapsed (aegis-lvfm5). This is display
+    # arithmetic on an already-decided ratio, not a second opinion about it.
     elapsed = (None if (ratio is None or not length)
-               else 100.0 * (1.0 - (left / length)))
+               else max(0.0, 100.0 * (1.0 - (left / length))))
     ceiling = _ceiling(policy, window)
     return WindowUse(
         window=window, pct=float(reading.pct), elapsed_pct=elapsed,
