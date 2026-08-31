@@ -23,6 +23,7 @@ import json
 from dataclasses import dataclass
 
 from shantytown.cycle import CYCLE_REASON, Requests, assess, requires_checkpoint_bead
+from shantytown.protocols import WorkItem
 
 
 @dataclass
@@ -38,6 +39,32 @@ def _clean(_tree):
 
 
 CHECKPOINT = "mid-way through the read-back fix; budget test still to update"
+
+
+def test_cycle_checkpoint_defaults_to_the_single_plate_item(monkeypatch):
+    """plate() returns one WorkItem, not an iterable backlog.
+
+    The checkpoint fallback must preserve that one-item contract: iterating the
+    dataclass crashed ``st cycle --self --checkpoint-file`` before it could save
+    the request.
+    """
+    import shantytown.cli as cli
+
+    monkeypatch.setattr(cli, "_tracker", lambda _a: object())
+    monkeypatch.setattr(
+        cli, "_tracker_plate", lambda _tracker, _agent: WorkItem("aegis-y062io")
+    )
+
+    assert cli._cycle_anchor_bead(object(), "gennaro") == "aegis-y062io"
+
+
+def test_cycle_checkpoint_without_a_plate_has_no_default(monkeypatch):
+    import shantytown.cli as cli
+
+    monkeypatch.setattr(cli, "_tracker", lambda _a: object())
+    monkeypatch.setattr(cli, "_tracker_plate", lambda _tracker, _agent: None)
+
+    assert cli._cycle_anchor_bead(object(), "gennaro") == ""
 
 
 # --- the checkpoint gate ------------------------------------------------------
