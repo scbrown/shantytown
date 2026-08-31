@@ -58,8 +58,10 @@ from pathlib import Path
 from .answer import Answer
 
 from . import governor as governor_mod
+from . import hostmem as hostmem_mod
 from . import session_budget as session_budget_mod
 from .governor import Policy as GovernorPolicy
+from .hostmem import Limits as HostMemLimits
 from .session_budget import Limits as SessionLimits
 from .protocols import Agent
 from .dream import Policy as DreamPolicy
@@ -188,6 +190,11 @@ class Config:
     # usage gauge, and it was the second that went unbounded for six hours. Same
     # default-off-by-omission rule as the governor.
     session_budget: SessionLimits = field(default_factory=SessionLimits)
+    # [hostmem] — the PHYSICAL brake (aegis-do672). A third axis beside the usage
+    # governor and the per-session ceiling: tokens are refilled by waiting, RAM is
+    # refilled by something finishing, and a governor that can only see the first
+    # will admit an agent onto a box that cannot hold it.
+    hostmem: HostMemLimits = field(default_factory=HostMemLimits)
     # [dream] — bounded background reflection on measured spare provider budget.
     # Default OFF: silence must never start spending tokens.
     dream: DreamPolicy = field(default_factory=DreamPolicy)
@@ -282,7 +289,8 @@ def load_or_default(root) -> tuple[Config, str | None]:
 # --- parsing ----------------------------------------------------------------
 
 _TOP_KEYS = {"startup", "modes", "hibernate", "fleet", "crew", "env", "tmux", "dream",
-             "roles", "precedence", "governor", "session_budget", "harness",
+             "roles", "precedence", "governor", "session_budget", "hostmem",
+             "harness",
              "model"}
 _HARNESS_KEYS = {"default", "by_role"}
 _MODEL_KEYS = {"default", "by_role"}
@@ -356,6 +364,7 @@ def _resolve(data: dict, path: Path) -> Config:
                   governor=_governor(path, _table(path, data, "governor")),
                   session_budget=_session_budget(
                       path, _table(path, data, "session_budget")),
+                  hostmem=_hostmem(path, _table(path, data, "hostmem")),
                   dream=_dream(path, _table(path, data, "dream")),
                   path=path)
 
@@ -520,6 +529,18 @@ def _session_budget(path: Path, tbl: dict) -> SessionLimits:
     try:
         return session_budget_mod.parse(tbl)
     except session_budget_mod.BudgetError as e:
+        raise ConfigError(f"{path}: {e}") from e
+
+
+def _hostmem(path: Path, tbl: dict) -> HostMemLimits:
+    """[hostmem] — the physical admission floor (aegis-do672).
+
+    Same split as _governor and _session_budget: hostmem.py owns what a valid floor
+    IS, this function owns putting the file name on the complaint.
+    """
+    try:
+        return hostmem_mod.parse(tbl)
+    except hostmem_mod.HostMemError as e:
         raise ConfigError(f"{path}: {e}") from e
 
 

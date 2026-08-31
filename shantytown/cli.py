@@ -501,6 +501,11 @@ def _dispatch_gate(a):
             return False
         return harness_mod.name_for(target, root=a.root) != sender_harness
 
+    # Said ONCE per gate, not once per agent. `st go` gates every candidate in a
+    # loop, so an unlatched warning prints the same sentence N times and the
+    # operator learns to scroll past the block that contains the refusal.
+    _hostmem_said = [False]
+
     def gate(item, agent=None):
         """SAY IT WHEN A WAIVER IS WHAT LET THIS THROUGH (aegis-yegfx).
 
@@ -518,6 +523,26 @@ def _dispatch_gate(a):
             return ("FLEET STOOD DOWN — dispatch suppressed. Clear "
                     "`[fleet] stood_down` to resume. Cross-subscription "
                     "delegation remains available.")
+        # THE PHYSICAL BRAKE, checked BEFORE `if not governors` on purpose
+        # (aegis-do672). Host memory is not conditional on a usage governor
+        # existing: a deployment with no [governor] table still runs on a box that
+        # can be OOM-killed, and returning early above would skip the one brake
+        # that is about the machine rather than about the budget.
+        #
+        # It is also checked before the usage tiers because its refusal is the more
+        # actionable one — "wait for a build to finish" is a thing the operator can
+        # do now, where a usage floor is a thing they wait out.
+        mem = _hostmem_verdict(cfg)
+        if mem is not None:
+            if mem.alarm and not _hostmem_said[0]:
+                _hostmem_said[0] = True
+                print(f"  ⚠ {mem.alarm}", file=sys.stderr)
+            if mem.refusal:
+                return mem.refusal
+            if mem.warning and not _hostmem_said[0]:
+                _hostmem_said[0] = True
+                print(f"  ⚠ {mem.warning}", file=sys.stderr)
+
         if not governors:
             return ""
 
@@ -552,6 +577,24 @@ def _dispatch_gate(a):
         return refusal
 
     return gate
+
+
+
+def _hostmem_verdict(cfg):
+    """The physical admission verdict, or None when the brake is off (aegis-do672).
+
+    An env override beats the config table for one run — the alternative an
+    operator reaches for under a brake they need to get past is commenting out the
+    table, which disarms it for everyone and stays disarmed.
+    """
+    from . import hostmem
+
+    limits = hostmem.env_override()
+    if limits is None:
+        limits = getattr(cfg, "hostmem", None)
+    if limits is None or not limits.active:
+        return None
+    return hostmem.check(limits)
 
 
 def _default_root() -> Path:
