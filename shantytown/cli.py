@@ -597,6 +597,19 @@ def _hostmem_verdict(cfg):
     return hostmem.check(limits)
 
 
+
+#: How long a tend pass may spend on the BEST-EFFORT sweeps that follow respawn
+#: (aegis-qwadc). Not a timeout on the pass and not a timeout on any one sweep:
+#: once the budget is spent, the NEXT sweep is skipped rather than started, and
+#: whatever is already running finishes normally.
+#:
+#: 120s against a measured normal pass of 25-40s, and well inside the 5-minute
+#: timer interval — the number that matters is not "how long is too long for a
+#: sweep" but "how late may the next respawn be", and the answer is one interval.
+#: The two measured blowouts were 27 and 36 MINUTES, so this is not a tight
+#: squeeze on ordinary work; it is a ceiling on the pathological case.
+_TEND_SWEEP_BUDGET_S = float(os.environ.get("SHANTY_TEND_SWEEP_BUDGET_S", "120"))
+
 def _default_root() -> Path:
     """Where the store is when nobody said — the shared discovery chain.
 
@@ -6552,6 +6565,11 @@ def _code_fingerprint(pkg=None) -> str | None:
 
 
 def _tend_once(a, quiet: bool = False) -> int:
+    # Best-effort sweeps shed by the pass budget (aegis-qwadc). Declared HERE
+    # rather than beside the deadline so a pass that returns before the sweeps
+    # run — a dry run, an early refusal — still has something for the summary
+    # to read. It was scoped to the sweep block first and two tests caught it.
+    deferred: list[str] = []
     panes = _panes(a)
     try:
         agents = _registry(a).all().exact()
@@ -6673,7 +6691,41 @@ def _tend_once(a, quiet: bool = False) -> int:
         # files (the ev-172 dam). A notification layer must never take the
         # respawn layer down with it: the pass itself (respawn, PassLog) is the
         # job; the pushes are best-effort on top.
+        # ...AND A SWEEP MUST NOT TAKE THE NEXT PASS DOWN EITHER (aegis-qwadc).
+        #
+        # The paragraph above is about a sweep that CRASHES. The same argument
+        # applies to one that is merely SLOW, and that half was missing. Measured
+        # 2026-08-30: two passes took 27 and 36 minutes against a normal 25-40s,
+        # both in `br create`/`br update` on a contended store, one `br create`
+        # spanning 18+s. Both completed successfully.
+        #
+        # A long pass is not a slow pass, it is NO SUPERVISION. `st-tend.timer` is
+        # `OnUnitActiveSec` over a `Type=oneshot` service whose systemd default
+        # `TimeoutStartSec` is infinity, so while the pass runs the timer shows no
+        # next elapse at all — and since the crew watchdog is masked, tend is the
+        # SOLE respawn path. Thirty-six minutes of a best-effort notification sweep
+        # is thirty-six minutes in which nothing can respawn a dead agent.
+        #
+        # SO THE BUDGET SKIPS THE NEXT SWEEP; IT NEVER INTERRUPTS THE ONE RUNNING.
+        # That distinction is the whole design. A wall-clock timeout would land
+        # SIGTERM in the middle of a `br create`, and a half-applied bead write is
+        # worse than a late cycle — the same reasoning as the indeterminate-commit
+        # rule. Declining to START the next phase costs nothing and cannot corrupt
+        # anything: every sweep here is idempotent and re-runs next pass.
+        #
+        # RESPAWN IS NOT AFFECTED, and that is not luck. `pass_over` runs well
+        # above this helper, so it has already happened before the first sweep is
+        # considered — the budget can only ever shed the best-effort layer the
+        # comment above calls "on top".
+        sweep_deadline = time.monotonic() + _TEND_SWEEP_BUDGET_S
+
         def _sweep(label, fn):
+            if time.monotonic() > sweep_deadline:
+                # Collected, not printed per sweep: a pass that blows the budget
+                # skips most of what follows, and one line each would bury the
+                # summary in its own noise.
+                deferred.append(label)
+                return []
             try:
                 return fn()
             except Exception as e:  # noqa: BLE001 — any sweep error is survivable
@@ -6825,6 +6877,19 @@ def _tend_once(a, quiet: bool = False) -> int:
             print(verdict.render(time.time()))
         print(rep.render())
         print()
+    # SAY WHAT THE BUDGET SHED (aegis-qwadc). A pass that quietly skipped half
+    # its sweeps and reported a clean render would be the same silent-degradation
+    # failure the crash handler above exists to avoid — worse, because a crash at
+    # least prints. Named, not counted: which sweeps were skipped is the whole
+    # diagnostic, and "3 sweeps deferred" tells an operator nothing about whether
+    # a blocked worker went unpushed.
+    if deferred:
+        print(f"  ⚠ tend: the pass exceeded its {_TEND_SWEEP_BUDGET_S:.0f}s sweep "
+              f"budget, so {len(deferred)} best-effort sweep(s) were DEFERRED to "
+              f"the next pass: {', '.join(deferred)}. Respawn is unaffected — it "
+              f"runs before any of these. A recurring deferral means the store or "
+              f"a notifier is slow, not that supervision is failing.",
+              file=sys.stderr)
     # The health signal, written even on a dry run — "a pass ran" is the fact
     # somebody needs when the supervisor itself has stopped. Recorded AFTER the
     # pass so it can never claim work that did not happen.
