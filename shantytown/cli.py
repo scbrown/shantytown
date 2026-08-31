@@ -5433,11 +5433,10 @@ def _cycle_anchor_bead(a, agent: str) -> str:
         plate = _tracker_plate(_tracker(a), agent)
     except Exception:
         return ""
-    for item in (plate or []):
-        iid = getattr(item, "id", None) or (item.get("id") if isinstance(item, dict) else None)
-        if iid:
-            return str(iid)
-    return ""
+    if plate is None:
+        return ""
+    iid = getattr(plate, "id", None) or (plate.get("id") if isinstance(plate, dict) else None)
+    return str(iid) if iid else ""
 
 
 def _cmd_cycle(a) -> int:
