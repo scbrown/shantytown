@@ -68,7 +68,13 @@ TICKET_PATTERNS=""
 # EMPTY MEANS EVERYWHERE, deliberately. An old or un-regenerated config must keep
 # TODAY's behaviour rather than silently checking nothing — a scope that fails
 # open is a guard that reports success while enforcing less than it says.
-TICKET_PATHS=""
+# (Named TICKET_PATHS here until aegis-o4a3k; the reader below is
+# TICKET_EXEMPT_RE, so the rename left this variable with no default at all.
+# Under `set -u` a config missing the key then killed ticket_files' subshell —
+# an unbound-variable error on stderr and the ticket arm silently skipped for
+# that commit. Not hypothetical: the stale emitter in aegis-akh22 emitted no
+# ticket_exempt_path_re at all, which is exactly this config.)
+TICKET_EXEMPT_RE=""
 if [ -r "$CONF" ]; then
   # shellcheck disable=SC1090
   internal_host_re=""; patterns=""
@@ -81,6 +87,100 @@ if [ -r "$CONF" ]; then
     esac
   done < "$CONF"
 fi
+
+# ── A PRESENT-BUT-BROKEN CONFIG DISARMS THIS GUARD, AND ONLY --selftest LOOKED ──
+# The no-config case above fails open LOUDLY, on purpose. The broken-config case
+# failed open SILENTLY, which is the worse half, and it is the half that happened.
+#
+# aegis-m3jpf: the governed private-IPv4 rule reached this file as PCRE `\d{1,3}`.
+# POSIX ERE has no `\d`, so grep -E read it as a literal letter d, the arm required
+# a `d` inside an IP address, and it matched nothing across five public repos.
+# aegis-akh22: the SAME break, four weeks later, from regenerating the config out of
+# a 426-commit-stale checkout of the emitter. Both times --selftest caught it. Both
+# times only because somebody ran --selftest. Nothing looked at push time, and push
+# time is the only moment that decides anything.
+#
+# Three ways a config disarms this guard. All three measured on this host, with the
+# live grep, under aegis-o4a3k:
+#
+#   1. `patterns` is not a valid ERE   -> grep -E exits 2 on every call, and every
+#                                         call site swallows it with `|| true`, so
+#                                         the push is reported CLEAN and allowed
+#   2. `patterns` is valid but VACUOUS -> the `\d` case: compiles, matches nothing
+#   3. `internal_host_re` is empty     -> `grep -qE ""` matches EVERY url, so every
+#                                         push looks like an internal-forge push and
+#                                         exits 0 before scanning a single commit
+#
+# (3) is the widest and the least visible: the guard is entirely off for public
+# pushes and prints nothing at all. It is not a what-if — the stale emitter in
+# aegis-akh22 dropped `ticket_exempt_path_re` from this same file, so silently
+# dropping a key is a MEASURED behaviour of this config path.
+#
+# WHAT WE DO ABOUT IT: enforce MORE, never less, and say so on stderr. Same rule the
+# ticket scope above already follows. We deliberately do NOT refuse the push over a
+# broken config — the pusher did not break it, and a guard that refuses everything
+# is a guard that gets --no-verify'd, which is how we end up with no guard at all.
+#
+# RFC1918 is the one arm reconstructible WITHOUT the estate's names: it is in the
+# RFC, not in anybody's topology. That is what lets the fallback live in a public
+# repository, and it is why it is the only arm we can rebuild from in here.
+# The trailing class is `[^0-9]`, not `[^0-9.]`: excluding the dot would have made
+# the fallback miss an address at the end of a sentence ("... reaches 172.16.4.9.")
+# to avoid matching a five-part version string, and prose is where these actually
+# leak. It over-matches x.y.z.w.v by design — loud is the right error here, since
+# this arm only runs at all when the config is ALREADY broken and already shouting.
+BUILTIN_RFC1918='(^|[^0-9.])(10\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}|172\.(1[6-9]|2[0-9]|3[01])\.[0-9]{1,3}\.[0-9]{1,3}|192\.168\.[0-9]{1,3}\.[0-9]{1,3})([^0-9]|$)'
+
+# ere_usable <regex> — can grep -E actually COMPILE it? An invalid regex exits 2; a
+# valid one that simply does not match exits 1. Every `|| true` in this file erases
+# that difference, which is defect (1) above in one character.
+ere_usable() { printf '' | grep -qE "$1" 2>/dev/null; [ "$?" -lt 2 ]; }
+
+# harden_config — called on the PUBLIC-push path only, so a sound config costs three
+# greps on three short strings and an internal push is not nagged. Repairs PATTERNS
+# toward MORE coverage and leaves the reason in CONFIG_DEGRADED (empty = sound).
+CONFIG_DEGRADED=""
+harden_config() {
+  if [ -n "$TICKET_PATTERNS" ] && ! ere_usable "$TICKET_PATTERNS"; then
+    # Safe to blank: the ticket call site is already `[ -n "$TICKET_PATTERNS" ]`-gated.
+    # An invalid regex there enforces nothing anyway, loudly and per-commit; blanking
+    # it turns that into one honest sentence instead of a wall of grep errors.
+    CONFIG_DEGRADED="ticket_patterns= is not a valid POSIX ERE, so the ticket-id arm
+  is OFF for this push. Internal-name checking below is unaffected."
+    TICKET_PATTERNS=""
+  fi
+  [ -z "$PATTERNS" ] && return 0        # the unconfigured path below owns that case
+  if ! ere_usable "$PATTERNS"; then
+    CONFIG_DEGRADED="patterns= is not a valid POSIX ERE. grep -E refused it, and this
+  guard swallows that exit status at every call site, so EVERY internal-name check in
+  this push would have found nothing and reported the push clean."
+    PATTERNS="$BUILTIN_RFC1918"
+    return 0
+  fi
+  # Non-vacuity, one probe per RFC1918 block — it was ONE arm that was dead in
+  # aegis-m3jpf and a single probe would have kept missing the other two. These
+  # addresses are top-of-range in each block, in use on no estate this guard
+  # protects, so they exercise every arm and publish nothing about anyone.
+  for probe in 10.255.255.1 172.31.255.1 192.168.255.1; do
+    printf '%s\n' "$probe" | grep -qE "$PATTERNS" && continue
+    CONFIG_DEGRADED="patterns= does not match private address space (probe $probe).
+  That is the aegis-m3jpf/aegis-akh22 failure: a PCRE construct such as \\d reaching a
+  grep -E consumer, or an emitter that dropped the arm. The rest of patterns= still
+  applies; the private-address arm below is this guard's own reconstruction."
+    PATTERNS="$PATTERNS|$BUILTIN_RFC1918"
+    return 0
+  done
+  return 0
+}
+
+warn_degraded() {
+  [ -z "$CONFIG_DEGRADED" ] && return 0
+  echo "⚠ pre-push-scrub-guard: THE CONFIG WAS ENFORCING LESS THAN IT SAYS." >&2
+  echo "  $CONFIG_DEGRADED" >&2
+  echo "  Fix: regenerate from a checkout you have JUST FETCHED (a stale emitter is" >&2
+  echo "       how this breaks — aegis-akh22), then run:  $0 --selftest" >&2
+  echo "  Refs: aegis-m3jpf, aegis-akh22, aegis-o4a3k" >&2
+}
 
 # ticket_files <from> <to|commit> — the changed files this rule GOVERNS, i.e.
 # every changed file its exemption regex does not name. ONE definition, shared
@@ -230,6 +330,93 @@ if [ "${1:-}" = "--selftest" ]; then
     rm -rf "$r"
   fi
 
+  # ── A BROKEN CONFIG MUST NOT DISARM THE GUARD (aegis-o4a3k) ────────────────
+  # Every arm above proves the guard works when the config is SOUND. None of them
+  # could fail for the reason the guard has actually failed twice: a config that
+  # loads cleanly and enforces nothing. So these arms break the config on purpose,
+  # three ways, and assert a real leak is still REFUSED — end to end, through the
+  # hook's own stdin protocol, not by inspecting a variable.
+  #
+  # Each of the three was measured ALLOWING this exact push before the fix.
+  # Reserved space only: 192.168.255.1 is top-of-range RFC1918, on no estate.
+  if command -v git >/dev/null 2>&1; then
+    r=$(mktemp -d); (
+      set -e
+      git init -q --bare "$r/pub.git"
+      git clone -q "$r/pub.git" "$r/w" 2>/dev/null
+      cd "$r/w"
+      git config user.email t@t; git config user.name t
+      echo "seed" > f.txt; git add f.txt; git commit -qm seed
+      git push -q origin HEAD:main; git fetch -q origin 2>/dev/null
+      git checkout -q -b leak
+      echo "addr 192.168.255.1" > leak.txt; git add leak.txt; git commit -qm "a private address"
+      Z=0000000000000000000000000000000000000000
+      LINE="refs/heads/leak $(git rev-parse leak) refs/heads/leak $Z"
+      # All three RFC1918 blocks: that is the invariant harden_config and the
+      # live-config control both assert, and a fixture narrower than the invariant
+      # would make the sound-config arm report a defect that is not one.
+      GOOD='(10|192\.168|172\.(1[6-9]|2[0-9]|3[01]))\.[0-9]{1,3}(\.[0-9]{1,3}){1,2}'
+
+      # 1. NO internal_host_re. `grep -qE ""` matches every url, so the guard used
+      #    to exit 0 here before scanning anything — fully off, silently, on a
+      #    PUBLIC push. This is the widest of the three.
+      cf="$r/c1"; printf 'patterns=%s\n' "$GOOD" > "$cf"
+      out=$(echo "$LINE" | SCRUB_PATTERNS_FILE="$cf" bash "$SELF" origin "$r/pub.git" 2>&1); rc=$?
+      # rc alone is not enough: ANY non-zero exit reads as a refusal, including a
+      # crash. Require the guard's own banner AND the address it found, so the arm
+      # can only pass for the reason it is testing.
+      if [ "$rc" -eq 0 ]; then
+        echo "FAIL empty internal_host_re let a public leak through (the guard was OFF)"; exit 1
+      elif printf '%s' "$out" | grep -q '✗ REFUSED' && printf '%s' "$out" | grep -q '192.168.255.1'; then
+        echo "ok   empty internal_host_re still scans as public"
+      else echo "FAIL exited non-zero without refusing on the address — a crash, not a decision"; exit 1; fi
+
+      # 1b. THE CONTROL, and it is the one that matters: enforcing more must not
+      #     cost the internal forge its exemption. A named forge still exits 0.
+      cf="$r/c1b"; printf 'internal_host_re=forge\\.invalid\npatterns=%s\n' "$GOOD" > "$cf"
+      out=$(echo "$LINE" | SCRUB_PATTERNS_FILE="$cf" bash "$SELF" internal 'ssh://git@forge.invalid/x/y.git' 2>&1); rc=$?
+      if [ "$rc" -ne 0 ]; then echo "FAIL a named internal forge was refused"; exit 1
+      elif printf '%s' "$out" | grep -q 'ENFORCING LESS'; then
+        echo "FAIL a sound config was reported as degraded"; exit 1
+      else echo "ok   a named internal forge is still exempt, and stays quiet"; fi
+
+      # 2. patterns= is not a valid ERE. grep -E exits 2 at every call site and
+      #    every one of them says `|| true`, so the push read CLEAN.
+      cf="$r/c2"; printf 'internal_host_re=forge\\.invalid\npatterns=192\\.168\\.(\n' > "$cf"
+      out=$(echo "$LINE" | SCRUB_PATTERNS_FILE="$cf" bash "$SELF" origin "$r/pub.git" 2>&1); rc=$?
+      if [ "$rc" -eq 0 ]; then echo "FAIL an unparseable patterns= let a leak through"; exit 1
+      elif printf '%s' "$out" | grep -q 'ENFORCING LESS' \
+           && printf '%s' "$out" | grep -q '✗ REFUSED' \
+           && printf '%s' "$out" | grep -q '192.168.255.1'; then
+        echo "ok   an unparseable patterns= falls back and says so"
+      else echo "FAIL refused, but not on the address and/or without naming the broken config"; exit 1; fi
+
+      # 3. THE aegis-m3jpf/akh22 BREAK ITSELF, verbatim: PCRE \d in an ERE
+      #    consumer. Compiles, matches nothing, five public repos, four weeks.
+      cf="$r/c3"; printf 'internal_host_re=forge\\.invalid\npatterns=192\\.168\\.\\d{1,3}\\.\\d{1,3}\n' > "$cf"
+      out=$(echo "$LINE" | SCRUB_PATTERNS_FILE="$cf" bash "$SELF" origin "$r/pub.git" 2>&1); rc=$?
+      if [ "$rc" -eq 0 ]; then echo "FAIL the \\d break still lets a private address through"; exit 1
+      elif printf '%s' "$out" | grep -q 'ENFORCING LESS' \
+           && printf '%s' "$out" | grep -q '✗ REFUSED' \
+           && printf '%s' "$out" | grep -q '192.168.255.1'; then
+        echo "ok   a vacuous private-address arm is rebuilt and reported"
+      else echo "FAIL refused, but not on the address and/or without naming the vacuous arm"; exit 1; fi
+
+      # 4. CRY-WOLF CONTROL. A sound config on a clean push must be silent and
+      #    exit 0 — otherwise the warnings above become noise and get ignored,
+      #    which is the failure mode that ends with --no-verify.
+      git checkout -q -b clean origin/main
+      echo "nothing here" > ok.txt; git add ok.txt; git commit -qm "clean"
+      cf="$r/c4"; printf 'internal_host_re=forge\\.invalid\npatterns=%s\n' "$GOOD" > "$cf"
+      out=$(echo "refs/heads/clean $(git rev-parse clean) refs/heads/clean $Z" \
+            | SCRUB_PATTERNS_FILE="$cf" bash "$SELF" origin "$r/pub.git" 2>&1); rc=$?
+      if [ "$rc" -ne 0 ]; then echo "FAIL a sound config refused a clean push"; exit 1
+      elif [ -n "$out" ]; then echo "FAIL a sound config printed: $out"; exit 1
+      else echo "ok   a sound config is silent on a clean push"; fi
+    ) || fail=1
+    rm -rf "$r"
+  fi
+
   # TICKET SCOPE (aegis-4boql). BOTH OUTCOMES, on a real repo, because the whole
   # ruling is that the rule must fire in one place and not another — and a scope
   # is exactly the kind of change that can silently degrade into "never fires".
@@ -364,9 +551,27 @@ GUARD_EXCLUDE=(
 
 REMOTE_URL="${2:-}"
 PUSH_REMOTE="${1:-}"
-if printf '%s' "$REMOTE_URL" | grep -qE "$INTERNAL_HOST_RE"; then
+# An UNUSABLE forge regex names no forge. grep -E exits 2 and the test below reads
+# false, which already sends us down the public path — correct, but silent about why.
+if [ -n "$INTERNAL_HOST_RE" ] && ! ere_usable "$INTERNAL_HOST_RE"; then
+  echo "⚠ pre-push-scrub-guard: internal_host_re= in $CONF is not a valid POSIX ERE," >&2
+  echo "  so no remote can be recognised as the internal forge. Scanning as public." >&2
+  INTERNAL_HOST_RE=""
+fi
+# EMPTY MEANS NO REMOTE IS INTERNAL — not every remote (aegis-o4a3k). `grep -qE ""`
+# matches any url, so the earlier form exited 0 RIGHT HERE on a public push whenever
+# the key was missing: the whole guard off, nothing scanned, nothing printed. Same
+# choice as the ticket scope above — an unset field enforces MORE and never less.
+if [ -n "$INTERNAL_HOST_RE" ] && printf '%s' "$REMOTE_URL" | grep -qE "$INTERNAL_HOST_RE"; then
   exit 0   # internal forge — internal names belong there
 fi
+if [ -z "$INTERNAL_HOST_RE" ]; then
+  echo "⚠ pre-push-scrub-guard: $CONF names no internal_host_re, so every push is" >&2
+  echo "  scanned as PUBLIC. If this refuses a push to the internal forge, that is" >&2
+  echo "  this warning: regenerate the config, do not --no-verify." >&2
+fi
+harden_config
+warn_degraded
 
 # ── IS THIS COMMIT ALREADY ON ANOTHER REMOTE? ───────────────────────────────
 # The question the refusal could not answer, and it is the difference between
