@@ -210,6 +210,7 @@ class Config:
     # is every deployment that predates this table.
     harness_default: str | None = None
     harness_by_role: dict[str, str] = field(default_factory=dict)
+    harness_required_by_role: dict[str, str] = field(default_factory=dict)
     # [model] — WHICH MODEL, for cards that do not say. Same two levels and the
     # same precedence as [harness], because it is the same question one axis
     # over: harness picks the PROGRAM, model picks what that program runs.
@@ -292,7 +293,7 @@ _TOP_KEYS = {"startup", "modes", "hibernate", "fleet", "crew", "env", "tmux", "d
              "roles", "precedence", "governor", "session_budget", "hostmem",
              "harness",
              "model"}
-_HARNESS_KEYS = {"default", "by_role"}
+_HARNESS_KEYS = {"default", "by_role", "required_by_role"}
 _MODEL_KEYS = {"default", "by_role"}
 _STARTUP_KEYS = {"mode"}
 _HIB_KEYS = {"enabled", "max_quiet_minutes"}
@@ -344,13 +345,14 @@ def _resolve(data: dict, path: Path) -> Config:
     # against what `[roles.*]` declares (GitHub #37). No ordering hazard: both
     # tables come out of the same already-parsed `data`.
     declared_roles = _roles(path, _table(path, data, "roles"))
-    harness_default, harness_by_role = _harness(
+    harness_default, harness_by_role, harness_required_by_role = _harness(
         path, _table(path, data, "harness"), declared=set(declared_roles))
     model_default, model_by_role = _model(
         path, _table(path, data, "model"), declared=set(declared_roles))
     return Config(mode=mode, modes=modes,
                   harness_default=harness_default,
                   harness_by_role=harness_by_role,
+                  harness_required_by_role=harness_required_by_role,
                   model_default=model_default,
                   model_by_role=model_by_role,
                   hibernate=_hibernate(path, _table(path, data, "hibernate")),
@@ -392,7 +394,8 @@ def _dream(path: Path, tbl: dict) -> DreamPolicy:
 
 
 def _harness(path: Path, tbl: dict,
-             declared: set[str] | None = None) -> tuple[str | None, dict[str, str]]:
+             declared: set[str] | None = None
+             ) -> tuple[str | None, dict[str, str], dict[str, str]]:
     """[harness] — which agent PROGRAM, for cards that do not say.
 
         [harness]
@@ -442,21 +445,25 @@ def _harness(path: Path, tbl: dict,
     default = tbl.get("default")
     default = _named("harness] default", default) if default is not None else None
 
-    raw = tbl.get("by_role", {})
-    if not isinstance(raw, dict):
-        raise ConfigError(f"{path}: [harness.by_role] must be a table, got "
-                          f"{type(raw).__name__}")
     allowed = set(VALID_ROLES) | set(declared or ())
-    by_role: dict[str, str] = {}
-    for role, value in raw.items():
-        if role not in allowed:
-            raise ConfigError(
-                f"{path}: [harness.by_role] {role!r} is not a role this deployment "
-                f"has; roles: {', '.join(sorted(allowed))}. Declare it as "
-                f"[roles.{role}] to use it here — a rule for a role nobody has "
-                f"applies to nobody and reads as applied.")
-        by_role[role] = _named(f"harness.by_role] {role}", value)
-    return default, by_role
+
+    def _role_map(key: str) -> dict[str, str]:
+        raw = tbl.get(key, {})
+        if not isinstance(raw, dict):
+            raise ConfigError(f"{path}: [harness.{key}] must be a table, got "
+                              f"{type(raw).__name__}")
+        out: dict[str, str] = {}
+        for role, value in raw.items():
+            if role not in allowed:
+                raise ConfigError(
+                    f"{path}: [harness.{key}] {role!r} is not a role this deployment "
+                    f"has; roles: {', '.join(sorted(allowed))}. Declare it as "
+                    f"[roles.{role}] to use it here — a rule for a role nobody has "
+                    f"applies to nobody and reads as applied.")
+            out[role] = _named(f"harness.{key}] {role}", value)
+        return out
+
+    return default, _role_map("by_role"), _role_map("required_by_role")
 
 
 def _model(path: Path, tbl: dict,

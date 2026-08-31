@@ -69,6 +69,21 @@ def test_the_CARD_beats_everything(tmp_path):
     assert harness_mod.name_for(card, root=root) == "claude"
 
 
+def test_required_by_role_refuses_a_conflicting_explicit_card(tmp_path):
+    root = _store(tmp_path, '[harness]\n'
+                            'default = "codex"\n\n'
+                            '[harness.required_by_role]\n'
+                            'worker = "codex"\n')
+    card = Agent(name="ada", role="worker", harness="claude")
+    with pytest.raises(harness_mod.Unsupported, match="requires 'codex'"):
+        harness_mod.require_role_harness(card, root=root)
+
+
+def test_required_by_role_allows_the_required_harness(tmp_path):
+    root = _store(tmp_path, '[harness.required_by_role]\nlead = "claude"\n')
+    harness_mod.require_role_harness(Agent(name="ada", role="lead"), root=root)
+
+
 def test_no_table_no_root_and_no_file_all_mean_claude(tmp_path):
     """Three ways of saying nothing, one answer — the behaviour of every
     deployment that predates this table."""

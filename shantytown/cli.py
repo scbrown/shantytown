@@ -1668,6 +1668,7 @@ def _launch(a, card, panes, runtime, *, dry_run: bool = False,
     # traceback instead of the `refused:` exit-1 path every other refusal uses
     # (aegis-85ox). It belongs here with the others: same seam, same outcome.
     try:
+        harness_mod.require_role_harness(card, root=a.root)
         launch = runtime.compose(card)
     except (CapabilityError, SettingsError, harness_mod.UnknownHarness,
             harness_mod.Unsupported) as e:

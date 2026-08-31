@@ -221,6 +221,12 @@ max_load_per_core = 4.0
 # lead = "claude"
 # administrator = "claude"
 
+# Optional hard admission rule. Unlike by_role, an explicit card cannot override
+# this table; all launch paths refuse a mismatch before creating a session.
+# [harness.required_by_role]
+# worker = "codex"
+# lead = "claude"
+
 # ---------------------------------------------------------------------------
 # [roles.<name>] — YOUR role vocabulary, as traits.
 #

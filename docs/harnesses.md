@@ -17,6 +17,11 @@ default = "codex"            # every card that does not say otherwise
 [harness.by_role]
 lead = "claude"              # …except these roles
 administrator = "claude"
+
+# Optional hard admission rule. Explicit card fields cannot override it.
+[harness.required_by_role]
+worker = "codex"
+lead = "claude"
 ```
 
 ```json
@@ -28,6 +33,10 @@ administrator = "claude"
 moved by a config written afterwards; the table answers for the silent. A resolved default is
 never written back onto the card — that would be a claim nobody made, and it would outlive the
 config being changed back.
+
+When `required_by_role` is present, every launch path refuses a mismatch before
+creating a session. `scripts/check-card-harness-consistency.py --root <root>`
+audits the whole card registry for the same policy.
 
 ### …and which MODEL that program runs
 

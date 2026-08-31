@@ -95,6 +95,22 @@ class Unsupported(Exception):
     wrong thing. Raised at COMPOSE time, so nothing is launched."""
 
 
+def require_role_harness(card, root=None) -> None:
+    """Enforce an opt-in deployment role/harness admission policy."""
+    if root is None:
+        return
+    from .config import load_or_default
+    cfg, _err = load_or_default(root)
+    required = cfg.harness_required_by_role.get(getattr(card, "role", None))
+    if required is None:
+        return
+    actual = name_for(card, root=root)
+    if actual != required:
+        raise Unsupported(
+            f"card {card.name!r} role={card.role!r} resolves harness {actual!r}, "
+            f"but this deployment requires {required!r} for that role")
+
+
 @dataclass(frozen=True)
 class Usage:
     """Absolute token totals from one transcript; absence is ``None``, not zero."""

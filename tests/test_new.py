@@ -218,6 +218,20 @@ def test_new_refuses_a_card_naming_an_unknown_harness(tmp_path, monkeypatch, cap
     assert panes.sent == [], "a refusal must launch nothing"
 
 
+def test_new_refuses_role_harness_policy_mismatch_before_tmux(tmp_path, monkeypatch,
+                                                               capsys):
+    root = _world(tmp_path, role="worker", harness="claude")
+    (root / "shantytown.toml").write_text(
+        '[harness.required_by_role]\nworker = "codex"\n')
+    panes = NullPanes(live=set())
+    monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: panes)
+
+    assert cli._cmd_new(_Args(root=root, dry_run=True)) == cli.REFUSED
+    err = capsys.readouterr().err
+    assert "refused:" in err and "requires 'codex'" in err
+    assert panes.sent == []
+
+
 def test_new_refuses_a_lead_on_a_non_blocking_harness(tmp_path, monkeypatch, capsys):
     """The capability gate THROUGH THE CLI, on the harness the card selects. Before
     aegis-85ox the CLI's hardcoded ClaudeRuntime (blocking_stop=True) rubber-stamped
