@@ -5,6 +5,7 @@ argv is used to identify the daemon kind, never the card it belongs to.
 """
 from __future__ import annotations
 
+import json
 import os
 import signal
 import time
@@ -65,6 +66,28 @@ def _cmdline(pid: int, proc: Path) -> str:
         return ""
 
 
+def _recorded_pid(home: Path) -> int | None:
+    """Read Codex's own control-server identity record."""
+    try:
+        value = json.loads(
+            (home / "app-server-daemon" / "app-server.pid").read_text()
+        )["pid"]
+        return value if isinstance(value, int) and value > 0 else None
+    except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+        return None
+
+
+def _is_control_server(cmd: str) -> bool:
+    """Match the production remote-control argv, not the updater daemon."""
+    words = cmd.split()
+    return (
+        "app-server" in words
+        and "--remote-control" in words
+        and "--listen" in words
+        and "unix://" in words
+    )
+
+
 def inspect(agent: str, *, runtime_dir: Path | None = None,
             proc: Path = Path("/proc"), now: float | None = None) -> Health:
     """Return the named card's launch blocker; report only proven facts."""
@@ -79,13 +102,14 @@ def inspect(agent: str, *, runtime_dir: Path | None = None,
         pids = [int(p.name) for p in proc.iterdir() if p.name.isdigit()]
     except OSError:
         pids = []
+    recorded_pid = _recorded_pid(home)
     for pid in pids:
         st = _stat(pid, proc)
         if st:
             parents[pid] = st
         cmd = _cmdline(pid, proc)
         owned = _environ(pid, proc).get("SHANTY_AGENT") == agent
-        if "app-server" in cmd and "daemon" in cmd and owned:
+        if pid == recorded_pid and _is_control_server(cmd) and owned:
             daemons.append(pid)
     daemon_set = set(daemons)
     for pid, (state, ppid) in parents.items():
@@ -95,9 +119,10 @@ def inspect(agent: str, *, runtime_dir: Path | None = None,
     stale = None
     try:
         age = (time.time() if now is None else now) - lock.stat().st_mtime
-        live_children = [pid for pid, (state, ppid) in parents.items()
-                         if ppid in daemon_set and state != "Z"]
-        if age > STALE_LOCK_S and not live_children:
+        # The lock itself is empty and survives healthy launches.  Its age is
+        # therefore evidence only when Codex's recorded control-server PID is
+        # absent; an old lock beside a live recorded server is healthy.
+        if age > STALE_LOCK_S and recorded_pid is not None and not daemon_set:
             stale = lock
     except OSError:
         pass
@@ -108,12 +133,20 @@ def repair(agent: str, *, runtime_dir: Path | None = None,
            proc: Path = Path("/proc"), kill=os.kill,
            now: float | None = None) -> Health:
     """Terminate only a proven unhealthy daemon for ``agent`` and clear its lock."""
+    runtime_dir = runtime_dir or Path(
+        os.environ.get("XDG_RUNTIME_DIR", Path.home() / ".cache")
+    )
+    home = runtime_dir / "shantytown" / "codex" / agent
     found = inspect(agent, runtime_dir=runtime_dir, proc=proc, now=now)
     if not found.blocked:
         return found
     for pid in found.daemon_pids:
         # Re-check identity immediately before signalling: PIDs can be reused.
-        if _environ(pid, proc).get("SHANTY_AGENT") == agent:
+        if (
+            _recorded_pid(home) == pid
+            and _is_control_server(_cmdline(pid, proc))
+            and _environ(pid, proc).get("SHANTY_AGENT") == agent
+        ):
             try:
                 kill(pid, signal.SIGTERM)
             except ProcessLookupError:
