@@ -119,6 +119,7 @@ class Utilization:
     advice: int | None
     reason: str
     ready: int | None
+    blocked: int = 0
     cause: str = "fill"
     """A STABLE label for WHY, used as the dedup key instead of the prose.
 
@@ -142,6 +143,8 @@ class Utilization:
     def render(self) -> str:
         cap = "uncapped" if self.cap is None else str(self.cap)
         parts = [f"live {self.live}/{cap}"]
+        if self.blocked:
+            parts.append(f"blocked {self.blocked} codex-daemon-wedged")
         parts.extend(w.render() for w in self.windows)
         if self.advice is None:
             parts.append(f"? cannot tell: {self.reason}")
@@ -212,7 +215,7 @@ def _window_use(policy, window: str, reading, now: float) -> WindowUse | None:
 
 def assess(harness: str, *, readings, policy, cap: int | None, live: int,
            now: float, ready: int | None,
-           creel_delta: int | None = None) -> Utilization:
+           creel_delta: int | None = None, blocked: int = 0) -> Utilization:
     """Occupancy for one harness. A total function of its inputs — no clock, no
     storage, no I/O — so the replay discipline the 45vco design required of the
     controller applies here too.
@@ -229,7 +232,7 @@ def assess(harness: str, *, readings, policy, cap: int | None, live: int,
     def out(advice, reason, cause, needs_ready=False):
         return Utilization(harness=harness, live=live, cap=cap, windows=windows,
                            advice=advice, reason=reason, ready=ready,
-                           cause=cause, needs_ready=needs_ready)
+                           blocked=blocked, cause=cause, needs_ready=needs_ready)
 
     if cap is None:
         return out(0, "no fleet cap declared — nothing to fill toward", "uncapped")
@@ -260,7 +263,10 @@ def assess(harness: str, *, readings, policy, cap: int | None, live: int,
     # here; seven_day is why. A window with no reset timestamp sorts last: it
     # cannot be shown to have runway, and this is the growth path.
     lead = max(rated, key=lambda x: (x.resets_in is not None, x.resets_in or 0.0))
-    slack = cap - live
+    slack = max(0, cap - live - blocked)
+    if blocked and slack == 0:
+        return out(0, f"{blocked} agent(s) are unlaunchable until their "
+                      "codex-daemon-wedged state is repaired", "launch-blocked")
 
     # RULE 1 — growth is the dangerous direction. An unreadable tracker cannot
     # authorise adding agents, and must not be reported as "hold" either.

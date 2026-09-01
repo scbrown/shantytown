@@ -97,6 +97,7 @@ BELOW_TARGET = "at-target"    # down, and NOT respawned because `--target N` is
                               # already satisfied. A cap, not a fault: the
                               # operator asked for N live agents and there are N.
 GOVERNED = "governed"         # down, and NOT respawned because the USAGE
+CODEX_DAEMON_WEDGED = "codex-daemon-wedged"  # named launch-depth blocker
                               # GOVERNOR's current tier excludes it (aegis-hdqej).
                               # A cap in exactly the same sense as BELOW_TARGET,
                               # and reported the same way — it comes back on its
@@ -405,7 +406,8 @@ class Tender:
         # the governor will not let come up, and `--target` would silently mean
         # something different whenever a tier is engaged.
         tendable = [a for a in agents
-                    if a.pane and not is_retired(a) and not self._withheld(a)]
+                    if a.pane and not is_retired(a) and not self._withheld(a)
+                    and not self._codex_block(a)]
         live = [a for a in tendable if self._panes.exists(a.pane)]
         room = self._target - len(live)
         if room <= 0:
@@ -415,6 +417,16 @@ class Tender:
         return {a.name for a in down[:room]}
 
     # --- one agent -----------------------------------------------------------
+
+    @staticmethod
+    def _codex_block(card: Agent):
+        """A proven per-card daemon blocker, or None. Inspection is read-only."""
+        try:
+            from . import codex_daemon
+            found = codex_daemon.inspect(card.name)
+            return found if found.blocked else None
+        except Exception:  # noqa: BLE001 — an unreadable /proc is cannot-prove
+            return None
 
     def _withheld(self, card: Agent) -> str:
         """"" if the governor allows this card up, else WHY not.
@@ -478,6 +490,11 @@ class Tender:
             return Finding(card.name, "down", RETIRED,
                            f"deliberately retired — NOT a fault, NOT "
                            f"respawned{prov}")
+
+        if blocked := self._codex_block(card):
+            return Finding(card.name, "up" if up else "down", CODEX_DAEMON_WEDGED,
+                           f"{CODEX_DAEMON_WEDGED}: {blocked.reason()} — "
+                           f"`st new {card.name}` repairs it before launch")
 
         if up:
             if self._crashes is not None:

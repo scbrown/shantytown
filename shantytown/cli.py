@@ -1661,6 +1661,15 @@ def _launch(a, card, panes, runtime, *, dry_run: bool = False,
     """
     if not window_restore and (rc := _window_launch_gate(a)) is not None:
         return rc
+    # A dead app-server can outlive its pane behind Codex's per-card daemon and
+    # make every subsequent launch time out. Repair only the daemon whose
+    # /proc environment names this card; argv is never an ownership signal.
+    if harness_mod.name_for(card, root=a.root) == "codex" and not dry_run:
+        from . import codex_daemon
+        fixed = codex_daemon.repair(card.name)
+        if fixed.blocked:
+            print(f"  repaired {codex_daemon.FLAG} for {card.name}: {fixed.reason()}",
+                  file=sys.stderr)
     session = _session_for(card)
     # PRE-FLIGHT: compose refuses capability/settings/unknown-harness BEFORE we
     # touch tmux. UnknownHarness is a REFUSAL by design (harness.py) but was not in
@@ -2237,6 +2246,12 @@ def _cmd_stop(a) -> int:
         return REFUSED
     session = agent.pane      # the address; None/absent = not running
     if not session or not panes.exists(session):
+        if harness_mod.name_for(agent, root=a.root) == "codex" and not a.dry_run:
+            from . import codex_daemon
+            fixed = codex_daemon.repair(agent.name)
+            if fixed.blocked:
+                print(f"  repaired {codex_daemon.FLAG} for {agent.name}: "
+                      f"{fixed.reason()}", file=sys.stderr)
         print(f"  {a.agent} was not running.")
         return OK
     # OWNERSHIP GUARD. The session is live — but st only reaps what
@@ -2274,6 +2289,12 @@ def _cmd_stop(a) -> int:
     if a.dry_run:
         print(f"  would: kill-session {session}")
         return OK
+    if harness_mod.name_for(agent, root=a.root) == "codex":
+        from . import codex_daemon
+        fixed = codex_daemon.repair(agent.name)
+        if fixed.blocked:
+            print(f"  repaired {codex_daemon.FLAG} for {agent.name}: {fixed.reason()}",
+                  file=sys.stderr)
     panes.kill_session(session)
     if panes.exists(session):
         print(f"  could not tell: killed {session} but it is still there",
@@ -2471,6 +2492,19 @@ def _cmd_doctor(a) -> int:
         # "has the fail-open governance nudge actually run?" Only on a full run —
         # `st doctor bobbin` asked about bobbin, not the fleet's hooks.
         if len(specs) == len(doc.SPECS):
+            from . import codex_daemon
+            try:
+                daemon_blocks = [h for card in _registry(a).all().exact()
+                                 if (h := codex_daemon.inspect(card.name)).blocked]
+            except Exception:
+                daemon_blocks = []
+            if daemon_blocks:
+                print("\n  CODEX DAEMON LAUNCH DEPTH")
+                for h in daemon_blocks:
+                    print(f"  ! {h.agent}: {codex_daemon.FLAG}: {h.reason()}")
+                code = _fold_generic(code, 1)
+            else:
+                print("\n  CODEX DAEMON LAUNCH DEPTH\n  ✓ no proven per-card blockers")
             from . import provision as prov_mod
             try:
                 uniform, uniform_broken = prov_mod.uniformity_report(
@@ -3916,6 +3950,7 @@ def _cmd_crew(a) -> int:
     manual = []
     bad_cards = []
     role_drift = []
+    codex_blocked = []
     # One reader, built once: live_wiring off each pane's cmdline. A Panes
     # adapter with no cmdline genuinely cannot answer, and that is a cannot-tell
     # (live_verdict returns UNVERIFIED), never a pass.
@@ -3962,6 +3997,11 @@ def _cmd_crew(a) -> int:
         # what the pane says and stays what the pane says — this is why.
         if state == "down" and (rec := stops.get(ag.name)) is not None:
             deliberate.append((ag.name, rec))
+        if state != "up":
+            from . import codex_daemon
+            found = codex_daemon.inspect(ag.name)
+            if found.blocked:
+                codex_blocked.append((ag.name, found.reason()))
         # OBSERVED posture, and separately what the CARD lacks.
         # A live agent in manual mode is the running defect; a card with gaps is
         # the one waiting to be re-armed. Both were invisible; they need
@@ -4019,6 +4059,11 @@ def _cmd_crew(a) -> int:
               f"{who}")
         print(f"    `st new <agent>` brings one back. Still respawned by "
               f"`st tend` — use `st tend --retire` to make it stay down.")
+    if codex_blocked:
+        print(f"  ⚠ {len(codex_blocked)} codex-daemon-wedged launch blocker(s):")
+        for name, why in codex_blocked:
+            print(f"    · {name}: {why}")
+        print("    `st new <agent>` repairs only that card's daemon and stale lock.")
     if cycling_agents:
         print(f"  {len(cycling_agents)} planned context cycle(s): "
               f"{', '.join(cycling_agents)}")
@@ -4801,7 +4846,7 @@ def _ready_count(root, reg):
 
 
 def _utilization(harness, *, readings, policy, verdict, live, now, advisory,
-                 root, reg=None):
+                 root, reg=None, blocked=0):
     """Occupancy for one harness, paying for the tracker query only if it matters.
 
     `assess` is pure and is called twice rather than handed a callable: the first
@@ -4813,7 +4858,7 @@ def _utilization(harness, *, readings, policy, verdict, live, now, advisory,
     Creel's delta is READ OFF Creel's own published line, never recomputed.
     """
     kw = dict(readings=readings, policy=policy, cap=verdict.max_agents,
-              live=live, now=now,
+              live=live, now=now, blocked=blocked,
               creel_delta=creel_advisory_mod.recommended_delta(advisory))
     seen = util_mod.assess(harness, ready=None, **kw)
     if seen.needs_ready:
@@ -7081,6 +7126,17 @@ def _tend_once(a, quiet: bool = False) -> int:
     utilization_advisories = {}
     util_clock = time.time()
     live_by_gov = _live_by_governor(agents, panes, cfg, governors, a.root)
+    from . import codex_daemon
+    blocked_by_gov = {name: 0 for name in governors}
+    for card in agents:
+        found = codex_daemon.inspect(card.name)
+        if not found.blocked:
+            continue
+        harness, _governor, unconfigured = _governor_for(
+            cfg, governors, card, a.root)
+        if unconfigured is None:
+            name = harness if harness in governors else "base"
+            blocked_by_gov[name] = blocked_by_gov.get(name, 0) + 1
     for name, gov in sorted(governors.items()):
         try:
             readings = gov.reader.read_all()
@@ -7105,7 +7161,7 @@ def _tend_once(a, quiet: bool = False) -> int:
             seen = _utilization(name, readings=readings, policy=gov.policy,
                                 verdict=verdicts[name], live=running,
                                 now=util_clock, advisory=line, root=a.root,
-                                reg=reg)
+                                reg=reg, blocked=blocked_by_gov.get(name, 0))
             # PUSH ON CHANGE ONLY, unlike the setpoint line beside it, and the
             # difference is deliberate (sattler, measured 2026-08-29). gennaro's
             # 1641346 keeps a nonzero SETPOINT delta actionable every pass so an

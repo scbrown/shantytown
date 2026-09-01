@@ -71,6 +71,14 @@ def test_the_measured_gap_recommends_filling():
     assert "52%used/58%elapsed" in rendered
 
 
+def test_unlaunchable_agents_are_blocked_not_advertised_as_fill_slots():
+    u = _assess(blocked=6, readings={
+        gov_mod.SEVEN_DAY: _reading(52, elapsed=0.58, length=WEEK)})
+    assert u.advice == 0
+    assert "blocked 6 codex-daemon-wedged" in u.render()
+    assert "fill toward cap" not in u.render()
+
+
 def test_at_cap_holds_and_never_asks_for_ready_work():
     """A full fleet is a proven hold, and must not pay for a tracker query to
     learn it — this command is polled by a status bar every few seconds."""
