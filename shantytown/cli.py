@@ -3920,7 +3920,16 @@ def _cmd_crew(a) -> int:
     # it relaunches.  It therefore protects the acknowledgement window that
     # would otherwise be delivered to a pane that cannot answer.
     from . import cycle as cycle_mod
-    cycling = set(cycle_mod.Requests(a.root).pending())
+    _pending = cycle_mod.Requests(a.root).pending()
+    # aegis-7xptd5: a REFUSED request is not a cycle in flight. Both are records
+    # in the same file, and printing `cycling` for each is how six stalled agents
+    # rendered as six cycles in progress for over an hour.
+    cycle_blocked = {}
+    for _who, _rec in _pending.items():
+        _path, _why = cycle_mod.refusal_summary(_rec)
+        if _why:
+            cycle_blocked[_who] = (_path, _why)
+    cycling = set(_pending) - set(cycle_blocked)
     panes = _panes(a)
     try:
         agents = _registry(a).all().exact()
@@ -3942,6 +3951,7 @@ def _cmd_crew(a) -> int:
     work_unknown = []
     deliberate = []
     cycling_agents = []
+    blocked_cycles = []
     tree_stale = []
     verdicts = []
     waiting = []
@@ -3959,9 +3969,13 @@ def _cmd_crew(a) -> int:
              else (lambda pane: None))
     print()
     for ag, state, work, posture in _crew_states(
-            agents, panes, runtime, cycling=cycling, untracked_root=a.root):
+            agents, panes, runtime, cycling=cycling, untracked_root=a.root,
+            cycle_blocked=cycle_blocked):
         if state == "cycling":
             cycling_agents.append(ag.name)
+        if state == "cycle-blocked":
+            path, _why = cycle_blocked.get(ag.name, ("", ""))
+            blocked_cycles.append((ag.name, path))
         if work.endswith("sh"):
             shelled.append(f"{ag.name}({work.rsplit('+', 1)[1][:-2]})")
         if work.startswith(triage_mod.IDLE):
@@ -4030,7 +4044,7 @@ def _cmd_crew(a) -> int:
             lv, lv_why = roles_mod.live_verdict(ag, agents, _live)
             if lv == roles_mod.BROKEN:
                 role_drift.append((ag.name, ag.role, lv_why))
-        print(f"  {ag.name:<11} {ag.role:<14} {state:<8} {verdict:<8} "
+        print(f"  {ag.name:<11} {ag.role:<14} {state:<13} {verdict:<8} "
               f"{tree_cell:<9} {work:<16} {posture:<7} {ag.pane or '—'}")
     stale, unknown = _reach_buckets(verdicts)
     # THE SWEEP, AS A LINE (aegis-ib65p decision 6). Learning that 12 of 12
@@ -4064,6 +4078,15 @@ def _cmd_crew(a) -> int:
         for name, why in codex_blocked:
             print(f"    · {name}: {why}")
         print("    `st new <agent>` repairs only that card's daemon and stale lock.")
+    if blocked_cycles:
+        print(f"  ⚠ {len(blocked_cycles)} REQUESTED cycle(s) REFUSED and still "
+              f"pending — NOT in flight:")
+        for name, path in blocked_cycles:
+            where = path or f"(run `st cycle {name}` to see it)"
+            print(f"    · {name:<11} blocked on {where}")
+        print("    Each of these agents keeps working on a context already judged "
+              "full. Commit + `st push` that tree, and the next `st tend` serves "
+              "the cycle.")
     if cycling_agents:
         print(f"  {len(cycling_agents)} planned context cycle(s): "
               f"{', '.join(cycling_agents)}")
@@ -4390,7 +4413,8 @@ def _keeper_findings(agents, rule_path: Path, alert) -> list[str]:
     return []
 
 
-def _crew_states(agents, panes, runtime, cycling=(), untracked_root=None):
+def _crew_states(agents, panes, runtime, cycling=(), untracked_root=None,
+                 cycle_blocked=()):
     """(agent, pane state, work verdict, permission posture) per agent, by name.
     THE code path for the busy/idle judgment — the table renders it and `--count`
     counts it, so the number a status bar shows can never disagree with the roster
@@ -4409,8 +4433,16 @@ def _crew_states(agents, panes, runtime, cycling=(), untracked_root=None):
     hand, which is why three agents sat that way for a night.
     """
     cycling = set(cycling)
+    cycle_blocked = set(cycle_blocked)
     for ag in sorted(agents, key=lambda x: x.name):
-        if ag.name in cycling:
+        if ag.name in cycle_blocked:
+            # aegis-7xptd5: REFUSED, not in flight. Distinct from `cycling`
+            # because the two need opposite responses — a cycle in flight is
+            # waited out, a refused one needs somebody to commit a tree. The pane
+            # is still live and still working, so unlike `cycling` this is not a
+            # reason to withhold dispatch.
+            state = "cycle-blocked"
+        elif ag.name in cycling:
             # A durable request is stronger than a still-live pane during the
             # brief pre-stop interval: consumers must not mistake that pane for
             # an acknowledgement-capable destination.
@@ -5656,6 +5688,14 @@ def _cmd_cycle(a) -> int:
         allow_loss=a.allow_loss)
     if not verdict.ok:
         print(f"  refused: {verdict.render()}", file=sys.stderr)
+        # aegis-7xptd5: STAMP THE REFUSAL ON THE PENDING REQUEST. The refusal is
+        # printed here and nowhere else, so without this the stall exists only in
+        # a journal nobody reads — `st crew` saw a request record and could not
+        # tell "in flight" from "refused an hour ago". A no-op when nothing is
+        # pending, so an operator's ad-hoc cycle of an agent that never asked
+        # cannot mint a request.
+        cycle_mod.Requests(a.root).mark_refused(
+            agent_name, verdict.reason, verdict.risks)
         return REFUSED
     if verdict.risks:
         # --allow-loss was used. SAY WHAT IS BEING SPENT — an override that prints
@@ -7395,6 +7435,22 @@ def _tend_once(a, quiet: bool = False) -> int:
                       f"(exit {rc_c}) — the request stays pending. Usually a dirty "
                       f"or unpushed tree; run `st cycle {who} -r '...'` to see it.",
                       file=sys.stderr)
+        # TELL THE AGENTS THEMSELVES (aegis-7xptd5). The loop above records each
+        # refusal on the request (via _cmd_cycle) and reports it to stderr, where
+        # only a coordinator reading the journal would find it. The agent — the
+        # one party who can actually clear a dirty tree — was told nothing, and
+        # was told at request time to expect nothing. One line per refusal reason,
+        # re-armed when the blockage changes.
+        #
+        # Re-read pending AFTER the loop so it reflects this pass's refusals and
+        # this pass's completions, not the state we started from.
+        blocked_told = _sweep("cycle-blocked-notify", lambda:
+            notify_mod.CycleBlockedNotifier(
+                Path(a.root), _registry(a), panes).sweep(
+                    cycle_mod.Requests(a.root).pending()))
+        if blocked_told:
+            print(f"  ⚠ told {len(blocked_told)} agent(s) their requested cycle is "
+                  f"blocked: {', '.join(blocked_told)}", file=sys.stderr)
         # ALERT THE IDLE FLEET (aegis-nk0e): the SOFT half of Rule Zero. If free
         # feedable workers and dispatchable beads coexist, push the coordinator —
         # a coordinator forgetting to dispatch is the same invisible failure w0kk

@@ -427,6 +427,85 @@ class CycleDriver:
         return live_wiring(card.pane, reader)
 
 
+class CycleBlockedNotifier:
+    """TELL THE AGENT its requested cycle was REFUSED (aegis-7xptd5).
+
+    `st cycle --self` records a request and tells the agent "you stay up until
+    tend does it; nothing is lost if it never fires." That sentence is true and it
+    is also why a refusal is silent: the agent has been told not to expect
+    anything, so it keeps working on a context it already judged full, and the
+    refusal goes only to tend's stderr. Measured 2026-09-01: six agents in that
+    state at once, for over an hour, none of them told.
+
+    ONE line per refusal REASON, not per pass. tend runs every five minutes and a
+    dirty tree stays dirty, so an un-deduped push would be twelve interruptions an
+    hour telling an agent the same thing — which is how a channel stops being
+    read. The ledger key is the refusal signature (reason + the blocking paths),
+    so a CHANGED blockage speaks again: fixing one tree and stalling on the next
+    is new information, and an agent that fixed the named path deserves to hear
+    that it was not enough.
+
+    Fail-open: an unreachable pane is not ledgered, so it is retried next sweep
+    rather than being recorded as told.
+    """
+
+    def __init__(self, root, reg, panes, *, push=push_to_own_pane):
+        self.path = Path(root) / "notify" / "cycle-blocked.json"
+        self._reg = reg
+        self._panes = panes
+        self._push = push
+
+    def _load(self) -> dict:
+        try:
+            data = json.loads(self.path.read_text())
+            return data if isinstance(data, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    def _save(self, ledger: dict) -> None:
+        from .files import write_json_atomic
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        write_json_atomic(self.path, ledger)
+
+    @staticmethod
+    def signature(reason: str, paths) -> str:
+        return "|".join([str(reason)] + sorted(str(p) for p in (paths or [])))
+
+    def sweep(self, pending: dict) -> list[str]:
+        """`pending` is Requests.pending(). Push to each agent whose refusal is
+        new or has CHANGED; drop ledger entries for agents no longer refused, so a
+        later refusal speaks again. Returns the names actually told."""
+        ledger = self._load()
+        told = []
+        live = set()
+        for agent, record in sorted((pending or {}).items()):
+            refused = (record or {}).get("refused") or {}
+            if not refused:
+                continue
+            live.add(agent)
+            sig = self.signature(refused.get("reason", ""),
+                                 refused.get("paths"))
+            if ledger.get(agent) == sig:
+                continue
+            paths = refused.get("paths") or []
+            where = paths[0] if paths else "an unreadable tree"
+            more = (f" (+{len(paths) - 1} more)" if len(paths) > 1 else "")
+            msg = (f"your requested context cycle is BLOCKED on {where}{more}: "
+                   f"commit + `st push` there, or the request stays pending and "
+                   f"you keep running on the context you asked to shed. "
+                   f"`st cycle {agent}` shows every blocking tree.")
+            if self._push(self._reg, self._panes, agent, msg) is None:
+                continue        # unreachable pane: retried next sweep, not swallowed
+            ledger[agent] = sig
+            told.append(agent)
+        # RE-ARM on anything no longer refused — the request was served, cleared,
+        # or re-made. Keeping the entry would silence the NEXT refusal.
+        for gone in [k for k in ledger if k not in live]:
+            ledger.pop(gone)
+        self._save(ledger)
+        return told
+
+
 class Notifier:
     """The dedup ledger + the push. A worker is woken-about ONCE per block episode.
 

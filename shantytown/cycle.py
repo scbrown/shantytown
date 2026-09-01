@@ -33,6 +33,7 @@ part whose failure destroys work.
 """
 from __future__ import annotations
 import json
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -191,8 +192,45 @@ class Requests:
                        # the fresh session queries quipu instead of re-deriving the
                        # context it just shed. Always a list, never absent, so the
                        # resume path never has to branch on presence.
-                       "quipu_nodes": list(quipu_nodes or [])}
+                       "quipu_nodes": list(quipu_nodes or []),
+                       # aegis-7xptd5: a NEW request re-arms. The old refusal
+                       # described a tree state the agent has since had a chance to
+                       # fix, and carrying it forward would report a stall that may
+                       # already be resolved — the same cannot-tell-read-as-fact
+                       # error in the other direction.
+                       "refused": None}
         self._save(data)
+
+    def mark_refused(self, agent: str, reason: str, risks=()) -> bool:
+        """Record WHY a pending cycle did not happen (aegis-7xptd5).
+
+        Until this existed, a refused request and a cycle in flight were the same
+        observable: both are simply "a record in this file", and `st crew` printed
+        `cycling` for each. Measured 2026-09-01: six agents sat refused on dirty
+        trees for over an hour while the summary read "6 planned context cycle(s)"
+        and a coordinator read that as progress.
+
+        NO-OP WITHOUT A PENDING REQUEST, and that is the point rather than a
+        convenience: an operator's ad-hoc `st cycle <agent>` on an agent that never
+        asked must not mint a request record. Only a refusal of something already
+        pending is a stall. Returns whether anything was recorded.
+        """
+        data = self._load()
+        record = data.get(agent)
+        if not isinstance(record, dict):
+            # Bare-string records predate the dict form. Upgrade in place rather
+            # than refusing to annotate them — a legacy request can stall too.
+            if agent not in data:
+                return False
+            record = {"checkpoint": str(data[agent]), "checkpoint_bead": "",
+                      "quipu_nodes": []}
+        paths = [getattr(r, "path", "") or "" for r in risks]
+        record["refused"] = {"reason": reason,
+                             "paths": [p for p in paths if p],
+                             "at": time.time()}
+        data[agent] = record
+        self._save(data)
+        return True
 
     def pending(self) -> dict:
         # Old string entries remain readable after the record upgrade.
@@ -205,6 +243,9 @@ class Requests:
                  else {"checkpoint": str(value), "checkpoint_bead": ""})
             d.setdefault("checkpoint_bead", "")
             d.setdefault("quipu_nodes", [])
+            # None, never absent — so every reader tests one thing (is there a
+            # refusal?) and none of them has to branch on the record's vintage.
+            d.setdefault("refused", None)
             return d
         return {agent: norm(value) for agent, value in self._load().items()}
 
@@ -216,6 +257,21 @@ class Requests:
         data = self._load()
         if data.pop(agent, None) is not None:
             self._save(data)
+
+
+def refusal_summary(record) -> tuple[str, str]:
+    """(first blocking path, reason) for a pending request, or ("", "") if none.
+
+    FIRST path, not all of them: `st crew` is a one-line-per-agent table, and an
+    agent with eight dirty trees would otherwise wrap the roster. The first is
+    enough to act on — the operator runs `st cycle <agent>` for the full list, and
+    the refusal itself already names every one.
+    """
+    refused = (record or {}).get("refused") or {}
+    if not refused:
+        return "", ""
+    paths = refused.get("paths") or []
+    return (paths[0] if paths else ""), refused.get("reason", "")
 
 
 def requires_checkpoint_bead(role: str, checkpoint_bead: str) -> bool:
