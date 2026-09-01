@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from shantytown.cli import _resolve_repo
+from shantytown.cli import _resolve_push_worktree, _resolve_repo
 
 
 @pytest.fixture
@@ -96,3 +96,22 @@ def test_a_real_direct_checkout_wins_over_a_source_suffix(
     (gt_root / "hank-src" / ".git").mkdir(parents=True)
     monkeypatch.chdir(tmp_path)
     assert _resolve_repo("hank") == gt_root / "hank"
+
+
+def test_push_follows_source_alias_not_archived_same_name_worktree(
+        gt_root, monkeypatch, tmp_path):
+    """The production regression: hank-wt is the archived repository while
+    hank-src-wt belongs to active yupana. Push must apply the same source alias
+    as worktree provisioning before an old same-name container can capture it.
+    """
+    (gt_root / ".git").mkdir()
+    (gt_root / "hank").mkdir()
+    (gt_root / "hank" / ".beads").mkdir()
+    (gt_root / "hank-src" / ".git").mkdir(parents=True)
+    archived = gt_root / "hank-wt" / "grant"
+    active = gt_root / "hank-src-wt" / "grant"
+    archived.mkdir(parents=True)
+    active.mkdir(parents=True)
+    monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path / "workspace"))
+
+    assert _resolve_push_worktree("hank", "grant") == active

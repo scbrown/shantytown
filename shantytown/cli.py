@@ -5420,12 +5420,19 @@ def _resolve_push_worktree(repo: str, agent: str) -> Path:
     if p.is_absolute() or "/" in repo:
         return worktree_for(p, agent)
 
-    roots = (
-        Path(os.environ.get("GT_ROOT", Path.home() / "gt")),
-        Path(os.environ.get("WORKSPACE_ROOT", Path.home() / "workspace")),
-    )
-    matches = [root / f"{repo}-wt" / agent for root in roots
-               if (root / f"{repo}-wt" / agent).is_dir()]
+    gt_root = Path(os.environ.get("GT_ROOT", Path.home() / "gt"))
+    workspace_root = Path(os.environ.get(
+        "WORKSPACE_ROOT", Path.home() / "workspace"))
+    resolved = _resolve_repo(repo)
+
+    # A bare name can be a compatibility alias for a differently named source
+    # checkout (currently hank -> hank-src).  Resolve that alias BEFORE looking
+    # for an existing worktree: otherwise a stale hank-wt left by the archived
+    # repository captures `st push hank`, even while `st worktree hank` correctly
+    # provisions from the active hank-src checkout.
+    gt_worktree = worktree_for(resolved, agent)
+    candidates = [gt_worktree, workspace_root / f"{repo}-wt" / agent]
+    matches = [path for path in dict.fromkeys(candidates) if path.is_dir()]
     if len(matches) > 1:
         listed = ", ".join(str(path) for path in matches)
         raise WorkspaceError(
@@ -5434,7 +5441,7 @@ def _resolve_push_worktree(repo: str, agent: str) -> Path:
         )
     if matches:
         return matches[0]
-    return worktree_for(_resolve_repo(repo), agent)
+    return gt_worktree
 
 
 def _push_invocation_branch(dest: Path) -> tuple[Path, str] | None:
