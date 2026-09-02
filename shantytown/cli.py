@@ -1,4 +1,4 @@
-"""st — the CLI. Twenty-nine commands, and the count is load-bearing: each earns its slot.
+"""st — the CLI. Thirty commands, and the count is load-bearing: each earns its slot.
 
     anchor [--short|--events|--harness] · go · repool · defer · inbox [--count] · task
     · crew [--count|--governor] · input [--show|--clear|--dismiss] · ask · answer
@@ -7,6 +7,7 @@
     · tend [--install|--status|--reauth|--target] · attach [-r|--no-start]
     · dashboard [admin] · subscribe · cycle [--self|--allow-loss] · worktree [--gc]
     · push [--branch] · window {plan|drain|clear|release|abort} · stats · help <topic>
+    · history <agent>
 
 `help` earned the twenty-eighth slot in aegis-x6yoq. The recurring pane messages
 were essays because the WHY had nowhere else to live, so every reason anyone might
@@ -1206,6 +1207,14 @@ def build_parser() -> argparse.ArgumentParser:
     ph.add_argument("--branch", default="main",
                     help="destination branch on each remote (default: main)")
 
+    hi = sub.add_parser("history",
+                        help="list an agent's CAPTURED transcripts — the durable "
+                             "archive of sessions incl. reasoning")
+    hi.add_argument("agent", nargs="?",
+                    help="whose sessions; omit to list every agent")
+    hi.add_argument("--all", action="store_true",
+                    help="list every session, not just the 20 most recent")
+
     return ap
 
 
@@ -1237,6 +1246,72 @@ def _parse_args(argv: list[str] | None):
         setattr(ns, key, value)
     return ns
 
+
+
+def _cmd_history(a) -> int:
+    """List captured transcripts for an agent.
+
+    The column that matters is SOURCE. Codex writes its rollouts under
+    CODEX_HOME=/run/user/<uid>/... which is tmpfs, so a session whose source is
+    GONE exists ONLY here — that row is the archive earning its keep. A session
+    whose source is still present is merely backed up.
+    """
+    import os
+    from pathlib import Path
+
+    dest = Path(os.environ.get(
+        "ST_HISTORY_DIR",
+        Path.home() / "gt" / "shantytown" / ".shanty" / "history"))
+    if not dest.is_dir():
+        print(f"no transcript archive at {dest}")
+        print("run scripts/st-history-capture.sh (or wait for the */30 timer)")
+        return 1
+
+    # Source paths come from the manifest, which is append-only: the LAST line
+    # for a file is its most recent capture.
+    sources: dict[str, tuple[str, str]] = {}
+    man = dest / "manifest.tsv"
+    if man.exists():
+        for line in man.read_text(errors="replace").splitlines():
+            f = line.split("\t")
+            if len(f) >= 6:
+                sources[f[3]] = (f[0], f[5])
+
+    agents = [a.agent] if a.agent else sorted(
+        d.name for d in dest.iterdir() if d.is_dir())
+    if not agents:
+        print(f"archive at {dest} holds no agents yet")
+        return 1
+
+    total = rescued = 0
+    for name in agents:
+        adir = dest / name
+        if not adir.is_dir():
+            print(f"no captured sessions for {name!r} under {dest}")
+            return 1
+        files = sorted(adir.glob("*.jsonl"),
+                       key=lambda f: f.stat().st_mtime, reverse=True)
+        if not files:
+            continue
+        shown = files if a.all else files[:20]
+        print(f"\n{name}  ({len(files)} session(s))")
+        for f in shown:
+            when, src = sources.get(f.name, ("?", ""))
+            harness = "codex" if f.name.startswith("rollout-") else "claude"
+            live = "source-gone" if src and not Path(src).exists() else "source-live"
+            if live == "source-gone":
+                rescued += 1
+            print("  %-7s %-11s %7.1f MB  captured %s  %s"
+                  % (harness, live, f.stat().st_size / 1048576, when, f.name[:44]))
+        if not a.all and len(files) > 20:
+            print(f"  ... {len(files) - 20} older (use --all)")
+        total += len(files)
+
+    print(f"\n{total} session(s) archived at {dest}")
+    if rescued:
+        print(f"{rescued} of them no longer exist at their source — "
+              "those are recoverable ONLY from here")
+    return 0
 
 def main(argv: list[str] | None = None) -> int:
     a = _parse_args(argv)
@@ -1332,6 +1407,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_worktree(a)
     if a.cmd == "push":
         return _cmd_push(a)
+    if a.cmd == "history":
+        return _cmd_history(a)
     return _not_yet(a.cmd)
 
 

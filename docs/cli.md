@@ -60,6 +60,7 @@ st stats --graph              graph-context adoption: what share of dispatches c
 st dashboard [admin]          live, tier-scoped view: roster/state/work, self-refreshing
 st subscribe                  watch quipu entity events; route governed workflows to the admin
 st help <topic>               rationale pages: handoff/cycle, haul, inbox
+st history <agent>            captured transcripts, and whether the source survives
 st cycle <agent> [--self]     clear an agent's context WITHOUT destroying its runtime:
                               checkpoint -> stop -> relaunch -> re-dispatch. `/clear`
                               drops bypass into MANUAL; this keeps it. --self REQUESTS
@@ -85,15 +86,19 @@ Codex input already includes its cached subset. This makes
 `cache_read / usage_in` a provider-independent prompt-cache hit rate. The fields
 are omitted—not zeroed—when every matching transcript is unknown.
 
-Twenty-nine. `--dry-run` is on every command that writes, from commit one. The surface grew past the
+Thirty. `--dry-run` is on every command that writes, from commit one. The surface grew past the
 original eight, each slot on a specific ask — not drift: **inbox**/**task** (the dispatch/tracker
 pair, owner-directed), **context** (the bobbin Context protocol), **doctor**
 (out-of-box detect/install, Stiwi's direct ask), **subscribe** (the quipu events adapter,
 routing governed workflows to the admin), **repool** (the whole hand-back in one verified
 write — clearing an assignee alone leaves an item in_progress, which parks it outside `bd ready`,
 every haul, and every plate; a hand-back that drops work off the board was the measured defect),
-and **defer** (the whole structured park: status, exactly one blocker-kind label, and a durable
-reason in one verified action). Each is named on purpose: this doc once
+**defer** (the whole structured park: status, exactly one blocker-kind label, and a durable
+reason in one verified action), and **history** (the durable transcript archive: codex writes its
+rollouts under a CODEX_HOME on tmpfs, so an agent's sessions — reasoning included — were RAM-resident
+and died with the machine; `history` lists what was captured and, per session, whether its source
+still exists, because a row whose source is gone is recoverable only from the archive). Each is
+named on purpose: this doc once
 said "eight" while the code had twelve, and a count nobody enforces is a comment — in the one repo
 whose whole pitch is the exact count, that was the bug.
 

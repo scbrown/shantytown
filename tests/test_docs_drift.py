@@ -182,7 +182,7 @@ def test_cli_md_stated_count_matches_the_wired_count():
              21: "Twenty-one", 22: "Twenty-two",
              23: "Twenty-three", 24: "Twenty-four", 25: "Twenty-five",
              26: "Twenty-six", 27: "Twenty-seven", 28: "Twenty-eight",
-             29: "Twenty-nine"}
+             29: "Twenty-nine", 30: "Thirty"}
     n = len(_subcommands())
     assert n in words, "add the number word and update docs/cli.md"
     text = CLI_MD.read_text()
