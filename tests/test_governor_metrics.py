@@ -334,7 +334,7 @@ def test_publish_pushes_both_groups_and_bumps_the_counter(tmp_path, monkeypatch)
     monkeypatch.setenv(gm.PUSHGATEWAY_ENV, "http://gw.invalid/")
     sent = []
     monkeypatch.setattr(gm, "_push",
-                        lambda url, job, inst, body, timeout=None:
+                        lambda url, job, inst, body, timeout=None, env=None:
                         sent.append((job, inst, body)))
     seen = _assess(readings={gov_mod.SEVEN_DAY: _reading(52, elapsed=0.58,
                                                           length=WEEK)})
@@ -357,7 +357,7 @@ def test_liveness_is_pushed_even_when_the_sample_push_failed(tmp_path, monkeypat
     monkeypatch.setenv(gm.PUSHGATEWAY_ENV, "http://gw.invalid/")
     sent = []
 
-    def _fake(url, job, inst, body, timeout=None):
+    def _fake(url, job, inst, body, timeout=None, env=None):
         if job == gm.JOB:
             raise OSError("gateway refused")
         sent.append((job, body))
@@ -366,3 +366,52 @@ def test_liveness_is_pushed_even_when_the_sample_push_failed(tmp_path, monkeypat
     assert rc == gm.PUSH_FAILED
     assert sent and sent[0][0] == gm.PRODUCER_JOB
     assert f"st_governor_publish_status {gm.PUSH_FAILED}" in sent[0][1]
+
+
+# --- the credential, which must not become a second copy --------------------
+
+def test_the_password_is_read_from_its_file_at_push_time(tmp_path):
+    """A rotation-managed secret copied into a config splits at the next rotate:
+    both copies look fine, one stops working, and it surfaces as an auth error
+    from a producer nobody changed. Reading the file at push time means a
+    rotation needs no edit anywhere."""
+    pw = tmp_path / "pw"
+    pw.write_text("first-secret\n")
+    env = {gm.PASSWORD_FILE_ENV: str(pw), gm.USER_ENV: "someuser"}
+    _base, headers = gm._auth_header("http://gw.invalid/", env)
+    import base64 as b64
+    assert b64.b64decode(headers["Authorization"].split()[1]) == b"someuser:first-secret"
+    # ROTATE the file only — no config change anywhere.
+    pw.write_text("second-secret\n")
+    _base, headers = gm._auth_header("http://gw.invalid/", env)
+    assert b64.b64decode(headers["Authorization"].split()[1]) == b"someuser:second-secret"
+
+
+def test_userinfo_in_the_url_still_works_and_is_stripped_from_the_target():
+    base, headers = gm._auth_header("http://u:p@gw.invalid/", {})
+    assert base == "http://gw.invalid"          # never send userinfo in the path
+    assert "Authorization" in headers
+
+
+def test_an_unreadable_credential_file_does_not_silently_go_anonymous(tmp_path):
+    """It must fail with a 401 that shows up as publish_status, not become an
+    unauthenticated request that reads like a gateway problem."""
+    env = {gm.PASSWORD_FILE_ENV: str(tmp_path / "nope"), gm.USER_ENV: "someuser"}
+    _base, headers = gm._auth_header("http://gw.invalid/", env)
+    assert "Authorization" not in headers
+
+
+def test_the_deployment_env_is_consulted_not_only_os_environ(tmp_path, monkeypatch):
+    """st does not export `[env]` into its own process. A publish that read only
+    the ambient environment would leave a configured deployment unexported —
+    configured-but-not-live, which is the class this repo names everywhere."""
+    monkeypatch.delenv(gm.PUSHGATEWAY_ENV, raising=False)
+    sent = []
+    monkeypatch.setattr(gm, "_push",
+                        lambda url, job, inst, body, timeout=None, env=None:
+                        sent.append(job))
+    assert gm.publish(tmp_path, [_lane()], instance="host-a") == gm.NOTHING_TO_SAY
+    assert not sent
+    rc = gm.publish(tmp_path, [_lane()], instance="host-a",
+                    env={gm.PUSHGATEWAY_ENV: "http://gw.invalid/"})
+    assert rc == gm.OK and sent == [gm.JOB, gm.PRODUCER_JOB]

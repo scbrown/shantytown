@@ -7315,6 +7315,11 @@ def _tend_once(a, quiet: bool = False) -> int:
         gov_metrics_mod.publish(
             Path(a.root), gov_metric_lanes,
             agents=_agent_counts(a, agents, panes, runtime),
+            # The deployment's [env] table, NOT os.environ — st does not export
+            # it into its own process, so reading only the ambient environment
+            # would leave a correctly configured deployment silently unexported.
+            # Same reason the creel probe above is read off cfg.env.
+            env=cfg.env,
             log=lambda msg: print(f"  ⚠ {msg}", file=sys.stderr))
     # Preserve the byte-for-byte single-governor path.  A mixed fleet has no
     # meaningful global verdict: every decision below resolves from the card.

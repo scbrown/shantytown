@@ -79,12 +79,27 @@ from urllib.parse import urlsplit, urlunsplit
 
 from . import governor as gov_mod
 
-#: Env var holding the pushgateway base URL, optionally with basic-auth userinfo:
-#: ``http://user:pass@pushgateway.example``.  Unset -> this module does nothing at
-#: all, the same local-first discipline `stats._maybe_export` follows: the
-#: exporter is a bonus, never a dependency, and there are no import-time side
+#: Env/`[env]` key holding the pushgateway base URL.  Unset -> this module does
+#: nothing at all, the same local-first discipline `stats._maybe_export` follows:
+#: the exporter is a bonus, never a dependency, and there are no import-time side
 #: effects.
 PUSHGATEWAY_ENV = "ST_GOVERNOR_PUSHGATEWAY"
+
+#: The basic-auth credential, AS A FILE PATH plus a username — deliberately not
+#: baked into the URL as userinfo.
+#:
+#: The gateway password is rotation-managed and already lives in one file on
+#: every host that has one.  Copying it into a second place (a URL in a config,
+#: an env var in a unit) silently SPLITS at the next rotation: both copies look
+#: fine, one of them stops working, and the failure surfaces as an
+#: authentication error from a producer nobody changed.  Reading the file at push
+#: time means a rotation is picked up with no edit anywhere.
+#:
+#: Userinfo in the URL is still honoured, because that is what `stats.py` already
+#: does and a deployment may have no credential file — but it is the fallback,
+#: not the recipe.
+PASSWORD_FILE_ENV = "ST_GOVERNOR_PUSHGATEWAY_PASSWORD_FILE"
+USER_ENV = "ST_GOVERNOR_PUSHGATEWAY_USER"
 
 JOB = "st_governor"
 PRODUCER_JOB = "st_governor_producer"
@@ -448,28 +463,47 @@ def render_producer(*, now: float, status: int, lanes: int, samples: int,
 # --- the push --------------------------------------------------------------
 
 
+def _auth_header(url: str, env) -> tuple[str, dict]:
+    """(url without userinfo, headers).  Credential file first, userinfo second.
+
+    An unreadable credential file is NOT a silent fallback to anonymous: it
+    returns no header, the push then fails with a 401, and the failure is
+    reported through `st_governor_publish_status` rather than being papered over
+    into an unauthenticated request that looks like a gateway problem.
+    """
+    parts = urlsplit(url)
+    netloc, cred = parts.netloc, None
+    if "@" in netloc:
+        cred, netloc = netloc.rsplit("@", 1)
+    path = env.get(PASSWORD_FILE_ENV, "").strip()
+    user = env.get(USER_ENV, "").strip()
+    if path and user:
+        try:
+            cred = f"{user}:{Path(path).expanduser().read_text().strip()}"
+        except OSError:
+            cred = cred          # keep whatever userinfo carried, else None
+    headers = {"Content-Type": "text/plain"}
+    if cred:
+        headers["Authorization"] = "Basic " + base64.b64encode(
+            cred.encode()).decode()
+    return urlunsplit((parts.scheme, netloc, parts.path.rstrip("/"), "", "")), headers
+
+
 def _push(url: str, job: str, instance: str, body: str,
-          timeout: float = PUSH_TIMEOUT_S) -> None:
+          timeout: float = PUSH_TIMEOUT_S, env=None) -> None:
     """PUT one group.  PUT, not POST: it REPLACES the group, so a lane or a
     window that stops existing stops being served instead of being frozen at its
     last value forever — the corpse class `PushgatewayJobStale`'s runbook is
     about."""
-    parts = urlsplit(url)
-    headers = {"Content-Type": "text/plain"}
-    netloc = parts.netloc
-    if "@" in netloc:
-        cred, netloc = netloc.rsplit("@", 1)
-        headers["Authorization"] = "Basic " + base64.b64encode(
-            cred.encode()).decode()
-    target = (urlunsplit((parts.scheme, netloc, parts.path.rstrip("/"), "", ""))
-              + f"/metrics/job/{job}/instance/{instance}")
+    base, headers = _auth_header(url, os.environ if env is None else env)
+    target = f"{base}/metrics/job/{job}/instance/{instance}"
     req = urllib.request.Request(target, data=body.encode(), headers=headers,
                                  method="PUT")
     urllib.request.urlopen(req, timeout=timeout).read()
 
 
 def publish(root, lanes, *, agents=None, now=None, url=None, instance=None,
-            log=None) -> int:
+            env=None, log=None) -> int:
     """Render, count and push one pass.  Returns the publish status.
 
     NEVER RAISES.  This is telemetry hanging off the one pass that respawns dead
@@ -479,9 +513,17 @@ def publish(root, lanes, *, agents=None, now=None, url=None, instance=None,
     logs, and returns a status the producer group publishes.
 
     Unset `ST_GOVERNOR_PUSHGATEWAY` -> NOTHING_TO_SAY and no HTTP at all.
+
+    `env` is the DEPLOYMENT's `[env]` table, which is NOT injected into
+    `os.environ` — `st` hands it to the consumers that need it, the way
+    `creel_advisory`'s probe path is read.  Reading only the ambient environment
+    here would leave a correctly configured deployment silently unexported, which
+    is the "configured but not live" class this repo names on every surface.
+    Ambient environment is the fallback, so a one-off run still works.
     """
     now = time.time() if now is None else now
-    url = os.environ.get(PUSHGATEWAY_ENV, "").strip() if url is None else url
+    env = dict(os.environ) if env is None else {**os.environ, **env}
+    url = env.get(PUSHGATEWAY_ENV, "").strip() if url is None else url
     if not url:
         return NOTHING_TO_SAY
     instance = instance or os.uname().nodename.split(".")[0]
@@ -506,7 +548,7 @@ def publish(root, lanes, *, agents=None, now=None, url=None, instance=None,
                   if line and not line.startswith("#"))
     if status == OK:
         try:
-            _push(url, JOB, instance, body)
+            _push(url, JOB, instance, body, env=env)
         except Exception as exc:                 # noqa: BLE001
             status = PUSH_FAILED
             if log:
@@ -518,7 +560,7 @@ def publish(root, lanes, *, agents=None, now=None, url=None, instance=None,
             now=now, status=status, lanes=len(lanes), samples=samples,
             agents_counted=(None if not agents
                             else sum((agents.get("state") or {}).values())))
-        _push(url, PRODUCER_JOB, instance, producer)
+        _push(url, PRODUCER_JOB, instance, producer, env=env)
     except Exception as exc:                     # noqa: BLE001
         if log:
             log(f"governor telemetry: liveness push FAILED ({exc!r}) — this pass "
