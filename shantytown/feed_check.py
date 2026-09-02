@@ -110,7 +110,7 @@ def st_launched_agents(root) -> set[str] | None:
         return None
 
 
-def free_feedable_workers(reg, panes, runtime, root=None) -> list[str]:
+def free_feedable_workers(reg, panes, runtime, root=None, roles=("worker",)) -> list[str]:
     """IDLE workers st can actually dispatch to — the same idle verdict `st crew`
     shows, gated on the `send` wiring so a dark worker is never counted as free.
     When `root` is given, additionally gated on the launch stamp: agents st did
@@ -126,6 +126,19 @@ def free_feedable_workers(reg, panes, runtime, root=None) -> list[str]:
     The gate lives HERE, in the one computation the soft alert (IdleFleetAlerter)
     and the hard stop gate share, precisely so they cannot disagree about who is
     free — a second opinion is the thing this function exists to prevent.
+
+    `roles` EXISTS SO THE HAUL FEED CAN ASK ABOUT LEADS WITHOUT CHANGING WHO IS
+    "FREE" (aegis-n9f2pc). It defaults to workers, so every existing caller —
+    the Rule Zero coordinator alert and the hard dispatch gate — is byte-for-byte
+    unchanged. `idle_haulable_leads` below is the only caller that widens it, and
+    it feeds only the haul path: a lead's OWN assigned ready work, never the
+    unassigned-dispatch list. Administrators are excluded from both.
+
+    A SECOND COPY OF THESE GATES WAS THE ALTERNATIVE AND IT IS THE WRONG ONE.
+    There are six here (role, retired, dark, launch stamp, idle verdict, send
+    wiring) and each was added because it was measured missing. Re-deriving them
+    for leads is exactly the drift the paragraph above forbids — the two would
+    agree until the night they don't.
     """
     from . import triage as triage_mod
     from .runtime import asks_a_question, auth_expired, live_wiring
@@ -138,7 +151,7 @@ def free_feedable_workers(reg, panes, runtime, root=None) -> list[str]:
     stamped = st_launched_agents(root) if root is not None else None
     out = []
     for ag in reg.all().exact():
-        if ag.role != "worker" or not ag.pane or not panes.exists(ag.pane):
+        if ag.role not in roles or not ag.pane or not panes.exists(ag.pane):
             continue
         # Cheap, and FIRST among the card checks — the same ordering rule
         # tend._one states: a retirement test that runs after the logic it is
@@ -170,6 +183,51 @@ def free_feedable_workers(reg, panes, runtime, root=None) -> list[str]:
             continue                     # dark or unreadable -> not feedable
         out.append(ag.name)
     return sorted(out)
+
+
+def idle_haulable_leads(reg, panes, runtime, root=None) -> list[str]:
+    """IDLE LEADS, for the HAUL feed only — never for the Rule Zero alert.
+
+    THE HOLE THIS CLOSES (aegis-n9f2pc). tend's haul advance considers exactly
+    `free_feedable_workers() | idle_resumable_codex()`. The first is workers-only;
+    the second admits leads but ONLY on the codex harness. So a **claude lead**
+    is in neither set and can never be fed by tend, however ready its own queue
+    is. Three facts then compose into an agent that cannot be reached at all:
+
+      1. a non-empty haul EXCLUDES an agent from the coordinator's feedable list,
+         deliberately — its next work is already determined;
+      2. the primary advance (stop_event._haul) runs only AT a stop;
+      3. an agent already idle at its prompt will not produce another stop.
+
+    So when a haul becomes ready AFTER the last stop, the agent is excluded from
+    dispatch (1), unreachable by the stop advance (2), and incapable of
+    generating the event that would trigger it (3).
+
+    MEASURED 2026-09-02: dearing idle at 19:31Z with aegis-2b2tti ready and
+    assigned; the 19:33:45Z tend pass reported "13 agent(s) · acted on 0" and the
+    bead stayed OPEN until a coordinator ran `st go` by hand. Confirmed by
+    walking the gates per agent on the live fleet: `wu`, an idle lead, failed
+    **only** the role gate — wired, stamped, not retired, not dark, verdict idle.
+
+    THIS IS aegis-rvxcf1'S TWIN, ONE TRIGGER OVER. That bead widened
+    stop_event._haul from "workers and CODEX leads" to worker+lead on every
+    harness, on measurements showing a claude lead does NOT keep an autonomous
+    turn loop past its Stop hook. The tend trigger carried the identical premise
+    and was not widened with it, so the fix closed the stop path and left the
+    BACKUP path — the one that exists for exactly the case the stop path cannot
+    cover — with the same hole.
+
+    SCOPED TO THE HAUL DELIBERATELY. This does not make leads "free": they are
+    not added to `free`, so they never enter `dispatchable()` and the coordinator
+    is never told to hand a lead somebody else's unassigned bead. It only lets
+    tend hand a lead the work that is ALREADY ITS OWN — which is what the haul
+    is, and what `st go` had to be typed by hand to do.
+
+    ADMINISTRATORS STAY EXCLUDED, same reasoning as rvxcf1: the coordinator's
+    assigned beads are not a haul, and feeding them would put the person who
+    dispatches work head-down in a bead.
+    """
+    return free_feedable_workers(reg, panes, runtime, root=root, roles=("lead",))
 
 
 def idle_resumable_codex(reg, panes, runtime, active_beads, root=None) -> list[str]:

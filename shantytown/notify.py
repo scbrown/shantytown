@@ -735,7 +735,26 @@ class IdleFleetAlerter:
         resumable = feed_check.idle_resumable_codex(
             self._reg, self._panes, self._runtime, active,
             root=self._shanty_root)
-        observed_idle = sorted(set(free) | set(resumable))
+        # IDLE LEADS ARE HAUL-FEEDABLE, ON EVERY HARNESS (aegis-n9f2pc).
+        #
+        # A THIRD input, not a widening of `free`, and the distinction is the
+        # whole design. `free` feeds the Rule Zero coordinator alert and the hard
+        # dispatch gate — putting leads there would start telling the coordinator
+        # to hand a lead somebody else's unassigned bead. This set reaches only
+        # `hauling_newly` below, i.e. a lead's OWN assigned ready work.
+        #
+        # Without it a CLAUDE LEAD is in neither existing input (free is
+        # workers-only; idle_resumable_codex is leads but codex-only) and can
+        # never be fed by tend at all. That is the case this backup exists for:
+        # the stop advance runs only AT a stop, and an already-idle agent never
+        # stops again. Measured 2026-09-02 — dearing idle with aegis-2b2tti ready
+        # and assigned, tend "acted on 0", bead OPEN until a hand-typed `st go`.
+        try:
+            lead_haulers = feed_check.idle_haulable_leads(
+                self._reg, self._panes, self._runtime, root=self._shanty_root)
+        except Exception:                 # noqa: BLE001 — fail-open like `free`
+            lead_haulers = []
+        observed_idle = sorted(set(free) | set(resumable) | set(lead_haulers))
         already = set(self._load())
 
         # Re-arm: a worker no longer free is forgotten, so a LATER idle episode
