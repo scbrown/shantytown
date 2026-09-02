@@ -65,27 +65,75 @@ def test_history_stop_hook_writes_nothing_to_stdout(tmp_path):
     _assert_stdout_is_a_valid_stop_payload(r.stdout, "st-history-stop-hook.sh")
 
 
-def test_stop_event_send_and_haul_write_nothing_on_the_ordinary_path(tmp_path):
-    """The component the first hypothesis accused, pinned as INNOCENT.
+def _world(tmp_path, with_admin: bool):
+    """A roster on disk. HERMETIC — and the first version of this was not.
 
-    Both exit 0 with zero bytes when there is nothing to say — `send` always
-    (it reports on stderr), `haul` whenever the queue is empty. If a future
-    change makes either chatty, codex stops break and nothing else notices.
+    It gave ian a lead (dearing) and no administrator, and passed locally purely
+    because `shanty-dearing` is a real tmux pane on the author's host, so the
+    lead read as UP. On CI, with no tmux, the lead reads DOWN, the stop RISES,
+    finds no administrator, and `send` correctly reports a stranded stop and
+    exits 1. That reddened main across four Pythons — a test asserting a fact
+    about the machine it happened to run on. `env` still inherits os.environ, so
+    the roster must make routing resolve on its own rather than relying on
+    anything ambient being present or absent.
     """
+    # PANE NAMES THAT CANNOT EXIST ON ANY HOST. Using the real fleet's names
+    # ("shanty-ian", "shanty-dearing") makes the verdict depend on whether the
+    # machine running the suite happens to have those panes up — which is how
+    # this file first passed locally and reddened CI, and then, once the roster
+    # was fixed, passed on CI and failed locally. Same defect, both directions.
     crew = tmp_path / "crew"; crew.mkdir()
     (crew / "ian.json").write_text(json.dumps(
-        {"role": "worker", "pane": "shanty-ian", "reports_to": "dearing"}))
+        {"role": "worker", "pane": "no-such-pane-ian-6ab8hd",
+         "reports_to": "dearing"}))
     (crew / "dearing.json").write_text(json.dumps(
-        {"role": "lead", "pane": "shanty-dearing"}))
+        {"role": "lead", "pane": "no-such-pane-dearing-6ab8hd"}))
+    if with_admin:
+        # No pane, so it is never "up" — but route_stop needs a destination to
+        # rise TO, and that is what makes the exit code deterministic off-tmux.
+        (crew / "sattler.json").write_text(json.dumps({"role": "administrator"}))
     (tmp_path / "events").mkdir()
     env = dict(os.environ, SHANTY_AGENT="ian")
     env.pop("TMUX_PANE", None)      # else _stop_identity refuses on a foreign pane
+    return env
+
+
+def _run(mode, tmp_path, env):
+    return subprocess.run(
+        [sys.executable, "-m", "shantytown.stop_event", mode, "--root", str(tmp_path)],
+        capture_output=True, env=env, cwd=str(REPO), timeout=60)
+
+
+def test_stop_event_send_and_haul_write_nothing_on_the_ordinary_path(tmp_path):
+    """The component the first hypothesis accused, pinned as INNOCENT.
+
+    Both write ZERO BYTES to stdout when there is nothing to say — `send`
+    always (it reports on stderr), `haul` whenever the queue is empty. If a
+    future change makes either chatty, codex stops break and nothing else
+    notices.
+    """
+    env = _world(tmp_path, with_admin=True)
     for mode in ("send", "haul"):
-        r = subprocess.run(
-            [sys.executable, "-m", "shantytown.stop_event", mode, "--root", str(tmp_path)],
-            capture_output=True, env=env, cwd=str(REPO), timeout=60)
+        r = _run(mode, tmp_path, env)
         assert r.returncode == 0, f"{mode} exited {r.returncode}: {r.stderr[:300]!r}"
         _assert_stdout_is_a_valid_stop_payload(r.stdout, f"stop_event {mode}")
+
+
+def test_a_STRANDED_stop_still_writes_nothing_to_stdout(tmp_path):
+    """The case that reddened main, kept as a test instead of engineered away.
+
+    A stop with nowhere to go is a real misconfiguration and `_send` exits 1 on
+    purpose — "surfaced, not swallowed". THE EXIT CODE IS NOT THE CONTRACT THIS
+    FILE IS ABOUT. What matters on the codex Stop path is that even this error
+    path keeps stdout clean: a hook may fail loudly, but if it fails by PRINTING
+    a message to stdout it also breaks the harness's JSON parse, and the operator
+    then has two faults reported as one.
+    """
+    env = _world(tmp_path, with_admin=False)
+    r = _run("send", tmp_path, env)
+    assert r.returncode == 1, "a stranded stop is surfaced, not swallowed"
+    assert b"stranded" in r.stderr, "and it says why, on STDERR"
+    _assert_stdout_is_a_valid_stop_payload(r.stdout, "stop_event send (stranded)")
 
 
 def test_the_assertion_itself_rejects_plain_text():
