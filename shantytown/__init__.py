@@ -1,5 +1,25 @@
 """shantytown — a small harness for running a crew of coding agents."""
-__version__ = "0.4.0"
+# 0.4.0+dev, NOT 0.4.0 — DELIBERATE (aegis-sb706d).
+#
+# THE DECISION: shantytown does not cut releases on a cadence. The editable
+# install off the canonical checkout IS the delivery mechanism — pulling that
+# repo is what deploys new `st` behaviour — so a tag is stale the moment it is
+# cut and answers no question anyone actually asks. "Nobody looked" was the
+# previous state and was not a decision; this is one.
+#
+# WHY THE MARKER IS NOT COSMETIC. main is 858 commits past v0.4.0 (measured
+# 2026-09-02 against the GitHub API, not inferred), and a bare "0.4.0" reads as
+# a RELEASED 0.4.0. That string is what an agent quotes when answering "which st
+# found this bug?" and "is my st current?" — questions this fleet has answered
+# wrong before. The `+dev` local-version segment makes the honest answer
+# unmissable, and deployed_sha() beside it carries the identity that actually
+# distinguishes two builds.
+#
+# The Release workflow is KEPT, not deleted: it gates a tag on the suite, and a
+# deliberate milestone tag should still be possible. Its own "tag matches the
+# declared version" step reads pyproject, so cutting one means setting a clean
+# version in the release commit — normal flow, already enforced.
+__version__ = "0.4.0+dev"
 
 
 def deployed_sha() -> str:
