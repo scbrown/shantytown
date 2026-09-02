@@ -68,7 +68,8 @@ def test_the_two_registrations_are_the_SAME_command(tmp_path):
     fed by a command that resolves a different interpreter or a different store
     root — the failure `_capture_cmd`'s baked-in --root exists to prevent."""
     hooks = json.loads(provision._with_capture_hook("{}", tmp_path))["hooks"]
-    post = [h["command"] for b in hooks["PostToolUse"] for h in b["hooks"]]
+    post = [h["command"] for b in hooks["PostToolUse"] for h in b["hooks"]
+            if "shantytown.stats capture" in h["command"]]
     stop = [h["command"] for b in hooks["Stop"] for h in b["hooks"]]
     assert post == stop
 

@@ -61,6 +61,10 @@ def test_capture_hook_injected_with_real_interpreter_and_root(root, ws):
     assert "shantytown.stats capture" in cmd
     assert f"--root {Path(root).resolve()}" in cmd
     assert not cmd.startswith("python "), "bare 'python' is not on PATH (tim)"
+    advisory = post[0]["hooks"][1]
+    assert "yupana hook post-edit" in advisory["command"]
+    assert advisory["timeout"] == 5
+    assert "|| exit 0" in advisory["command"], "advisory must fail open"
 
 
 def test_capture_injection_never_breaks_provisioning_on_a_non_json_template(root, ws):

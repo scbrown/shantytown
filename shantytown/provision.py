@@ -463,7 +463,7 @@ def _with_capture_hook(text: str, root) -> str:
     the reason provisioning fails: a non-JSON / non-dict template passes through
     verbatim.
     """
-    from .runtime import _capture_cmd  # lazy: provision<->runtime import hygiene
+    from .runtime import _capture_cmd, _yupana_post_tool_cmd  # lazy import hygiene
     try:
         cfg = json.loads(text)
     except ValueError:
@@ -471,7 +471,10 @@ def _with_capture_hook(text: str, root) -> str:
     if not isinstance(cfg, dict):
         return text
     hooks = cfg.setdefault("hooks", {})
-    hooks["PostToolUse"] = [{"matcher": ".*", "hooks": [_capture_cmd(root)]}]
+    hooks["PostToolUse"] = [{
+        "matcher": ".*",
+        "hooks": [_capture_cmd(root), _yupana_post_tool_cmd()],
+    }]
     # NO MATCHER on Stop: Stop carries no tool name, and a matcher on an event
     # that has nothing to match is the aegis-ac5x failure — a registration that
     # looks specific and fires zero times.

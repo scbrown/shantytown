@@ -334,6 +334,22 @@ def _capture_cmd(root=None) -> dict:
     return {"type": "command", "command": cmd}
 
 
+def _yupana_post_tool_cmd() -> dict:
+    """The PostToolUse advisory channel, including credential-output hygiene.
+
+    Capture records every tool but deliberately emits no user context. Yupana
+    owns the advisory semantics and its per-session stable-cause dedupe, so run
+    it beside capture and pass through stdout only after a clean exit. A stale
+    binary or crashed hook must remain fail-open and must not leak partial JSON
+    into the harness protocol.
+    """
+    return {
+        "type": "command",
+        "command": 'out=$(yupana hook post-edit) || exit 0; printf %s "$out"',
+        "timeout": 5,
+    }
+
+
 def _untracked_hook(root=None) -> dict:
     """The PreToolUse untracked-work nudge (aegis-fv2zc). The COMMAND lives here
     with the other hook composers — the interpreter and root resolution are this
