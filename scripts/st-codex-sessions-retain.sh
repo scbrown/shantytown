@@ -26,6 +26,25 @@
 # if it is at least as large as what it would replace.
 #
 # DRY-RUN BY DEFAULT. --apply is required to delete anything.
+#
+# ⚠️ THIS ONE IS ON A TIMER AND st-history-retain.sh IS NOT. That is deliberate,
+# not an inconsistency somebody forgot to fix, and it must not be "harmonised"
+# by arming the other one (aegis-yl5uza).
+#
+# The two have opposite worst cases:
+#
+#   st-history-retain.sh  prunes the ARCHIVE, whose whole job is to hold the copy
+#                         of record for sessions whose source is gone. Its worst
+#                         case is IRREVERSIBLE LOSS OF THE ONLY COPY, so it stays
+#                         manual: "no cron line can start pruning by accident".
+#
+#   this one              prunes a SOURCE, and only when the archive already
+#                         holds a copy at least as large. Its worst case is
+#                         deleting a file that provably still exists elsewhere.
+#
+# A hard safety gate is what makes automation defensible here and is exactly what
+# the archive pruner lacks. Automate the one that cannot lose data; leave the one
+# that can to a human.
 set -uo pipefail
 
 ROOT="${ST_CODEX_SESSIONS_ROOT:-${XDG_STATE_HOME:-$HOME/.local/state}/shantytown/codex}"
