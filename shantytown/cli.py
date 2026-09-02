@@ -4179,7 +4179,7 @@ def _cmd_crew(a) -> int:
     print()
     for ag, state, work, posture in _crew_states(
             agents, panes, runtime, cycling=cycling, untracked_root=a.root,
-            cycle_blocked=cycle_blocked):
+            cycle_blocked=cycle_blocked, budget_root=a.root):
         if state == "cycling":
             cycling_agents.append(ag.name)
         if state == "cycle-blocked":
@@ -4702,7 +4702,7 @@ def _keeper_findings(agents, rule_path: Path, alert) -> list[str]:
 
 
 def _crew_states(agents, panes, runtime, cycling=(), untracked_root=None,
-                 cycle_blocked=()):
+                 cycle_blocked=(), budget_root=None):
     """(agent, pane state, work verdict, permission posture) per agent, by name.
     THE code path for the busy/idle judgment — the table renders it and `--count`
     counts it, so the number a status bar shows can never disagree with the roster
@@ -4812,6 +4812,44 @@ def _crew_states(agents, panes, runtime, cycling=(), untracked_root=None,
                 tokens = triage_mod.context_tokens_k(plain)
                 if tokens is not None:
                     work = f"{work}·{int(tokens)}k"
+            # AT ITS SESSION CEILING IS NOT IDLE (aegis-9cobou). An agent that
+            # has hit the budget gate has been told to stop and is WAITING FOR
+            # ITS LEAD TO STOP IT — it is not available, and nudging it produces
+            # exactly the reply it already gave.
+            #
+            # MEASURED 2026-09-02: malcolm (codex) answered wu's ceiling question
+            # in its pane — "I remain at the enforced four-item session ceiling.
+            # Please stop me deliberately with that reason; I cannot pick up
+            # aegis-j0yaxj.1 this session." — `st crew` rendered it `idle`, and
+            # wu nudged again without reading the pane and got the same answer.
+            #
+            # THE FEED ALREADY KNEW. IdleFleetAlerter asks `session_budget.gate`
+            # and refuses to feed a ceilinged agent ("NOT fed; it has been asked
+            # to report and stop"). So the machine had the fact and the TABLE a
+            # human reads did not — the same two-surfaces-disagree shape as
+            # aegis-4j4ypk, and the fourth crew-table misread of the night.
+            # Reading the same gate here is what makes the two agree; deriving a
+            # second opinion is what feed_check's docstring exists to forbid.
+            #
+            # A COMPUTED FACT, NOT PROSE. The bead proposed detecting "the last
+            # assistant block ends in a question". Malcolm's specimen does not
+            # end in a question — it is a declarative request — so that detector
+            # would have missed the very case it was filed for, while risking
+            # false positives that strand a genuinely idle agent. This asks the
+            # budget instead, which either tripped or did not.
+            #
+            # ONLY EVER CONVERTS AN `idle`, like every other refinement here, so
+            # it cannot take an agent that reads busy and start calling it
+            # stopped. Fail-open by construction: `gate` returns None on any
+            # error, and unknown must never withhold an agent from work.
+            if work == triage_mod.IDLE and budget_root is not None:
+                try:
+                    from . import session_budget as _sb
+                    _ceiling = _sb.gate(Path(budget_root), ag.name)[2]
+                except Exception:            # noqa: BLE001
+                    _ceiling = None
+                if _ceiling is not None:
+                    work = f"ceiling ({_ceiling.measure})"
             # PANE-IDLE IS NOT WORK-IDLE (aegis-eh6ok). The PreToolUse
             # untracked-work detector already records a non-admin ACTING with an
             # empty hook. Consume that ledger instead of building a second
