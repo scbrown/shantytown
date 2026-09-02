@@ -68,3 +68,20 @@ def test_codex_keeps_dialogue_and_invocations_but_not_outputs(tmp_path):
     assert "[assistant/tool:exec_command] do thing" in text
     assert "duplicated command output" not in text
     assert "/tool_result]" not in text
+
+
+def test_old_projection_is_rebuilt_even_when_its_mtime_is_newer(tmp_path):
+    files = {"agent/session.jsonl": [
+        {"type": "user", "message": {"content": "current dialogue"}},
+    ]}
+    corpus = _run(tmp_path, files)
+    output = tmp_path / "corpus" / "agent" / "session.txt"
+    output.write_text("# old projection without a version\n[user/tool_result] stale output\n")
+    source = tmp_path / "scrubbed" / "agent" / "session.jsonl"
+    os.utime(output, (source.stat().st_mtime + 60, source.stat().st_mtime + 60))
+
+    corpus = _run(tmp_path, files)
+    text = corpus["agent/session.txt"]
+    assert "# projection: 2" in text
+    assert "current dialogue" in text
+    assert "stale output" not in text

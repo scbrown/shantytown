@@ -34,6 +34,7 @@ python3 - "$SRC" "$OUT" <<'PY'
 import json, pathlib, sys
 
 src, out = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+PROJECTION_VERSION = 2  # v2 drops tool results and adds plaintext thinking
 
 def clip(s, n=4000):
     s = " ".join(str(s).split())
@@ -81,11 +82,15 @@ for f in sorted(src.rglob("*.jsonl")):
     harness = "codex" if f.name.startswith("rollout-") else "claude"
     dst = out / agent / (f.stem + ".txt")
     dst.parent.mkdir(parents=True, exist_ok=True)
-    # Skip when the projection is already newer than its source: the archive is
-    # append-only for a live session, so an up-to-date projection is current.
+    # Skip when this projector version is already newer than its source. The
+    # version marker matters: an mtime-only cache left every old output intact
+    # after the v2 scope change, so shipping a new projector changed no corpus.
     try:
         if dst.exists() and dst.stat().st_mtime >= f.stat().st_mtime:
-            files += 1; continue
+            with dst.open(encoding="utf-8", errors="replace") as old:
+                header = "".join(old.readline() for _ in range(4))
+            if f"# projection: {PROJECTION_VERSION}\n" in header:
+                files += 1; continue
     except OSError:
         pass
     turns = 0
@@ -95,6 +100,7 @@ for f in sorted(src.rglob("*.jsonl")):
         # a search hit is useless without them.
         o.write(f"# transcript: agent={agent} harness={harness} session={f.stem}\n")
         o.write(f"# source: {f.name}\n#\n")
+        o.write(f"# projection: {PROJECTION_VERSION}\n")
         gen = codex_turns(fh) if harness == "codex" else claude_turns(fh)
         for role, kind, text in gen:
             if not text:
