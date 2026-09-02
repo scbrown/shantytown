@@ -38,6 +38,46 @@ import os
 import sys
 from pathlib import Path
 
+# RE-EXEC under an interpreter that can import shantytown, before anything else.
+#
+# WHY: invoked the obvious way (`./scripts/st-history-timer-gate.py`) the shebang
+# picks the SYSTEM python3, which has no shantytown — and this gate then reports
+# CANNOT TELL and exits 2. Fail-safe, and completely inert: the one invocation a
+# reader would actually type could never return an answer.
+#
+# That defect shipped because the only measurement taken was under an explicitly
+# named venv python. A green obtained through an interpreter nobody else would
+# think to use proves the CODE and says nothing about the LANE. Found by sattler
+# within the hour, via `bash -n` on a file whose .sh name was itself a lie (now
+# .py) — the wrong check for this file, which nonetheless found a real fault the
+# right check had not been pointed at.
+#
+# Same doctrine as runtime._hook_interpreter: prefer the interpreter beside the
+# installed `st`. Guarded by an env marker so a failed re-exec cannot loop.
+def _reexec_with_shantytown() -> None:
+    try:
+        import shantytown  # noqa: F401
+        return
+    except ImportError:
+        pass
+    if os.environ.get("_ST_GATE_REEXEC"):
+        return                      # already tried; fall through to CANNOT TELL
+    import shutil
+    st = shutil.which("st")
+    if not st:
+        return
+    cand = Path(st).resolve().parent / "python"
+    if not cand.is_file():
+        return
+    os.environ["_ST_GATE_REEXEC"] = "1"
+    try:
+        os.execv(str(cand), [str(cand), os.path.abspath(__file__), *sys.argv[1:]])
+    except OSError:
+        return                      # honest CANNOT TELL beats a crash
+
+
+_reexec_with_shantytown()
+
 ROOT = Path(os.environ.get("SHANTY_ROOT",
                            Path.home() / "gt" / "shantytown" / ".shanty"))
 LOG = Path(os.environ.get("ST_HISTORY_DIR", ROOT / "history")) / "hook.log"

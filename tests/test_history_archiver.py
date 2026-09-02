@@ -204,7 +204,7 @@ def _gate():
     spec = importlib.util.spec_from_loader(
         "timer_gate",
         importlib.machinery.SourceFileLoader(
-            "timer_gate", str(SCRIPTS / "st-history-timer-gate.sh")))
+            "timer_gate", str(SCRIPTS / "st-history-timer-gate.py")))
     m = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(m)
     return m
@@ -260,3 +260,30 @@ def test_a_missing_log_is_an_empty_set_not_an_error(tmp_path):
     expected state — it must read as 'nobody has fired', not as a fault."""
     g = _gate()
     assert g.read_fired(tmp_path / "absent.log") == set()
+
+
+def test_the_gate_answers_when_invoked_THE_WAY_A_READER_WOULD():
+    """THE LANE, not the code. The gate's decision rule was tested and correct
+    while `./scripts/st-history-timer-gate.py` could only ever return CANNOT
+    TELL — the shebang picked the system python3, which has no shantytown. The
+    only measurement taken had named a venv python explicitly, and a green
+    obtained through an interpreter nobody else would type proves the code and
+    says nothing about the lane a reader uses.
+
+    So: execute it as a program, with no interpreter named, and require that it
+    REACHED the fleet question.
+
+    Asserted on the IMPORT lane, not on the verdict: "no live agents" is a
+    legitimate CANNOT TELL and is what CI sees, so pinning rc in (0,1) would
+    make this test a fleet-liveness test that goes red on every machine without
+    a running crew. The defect being pinned is narrower and permanent — the gate
+    could not load shantytown at all, so no invocation could ever produce an
+    answer.
+    """
+    gate = SCRIPTS / "st-history-timer-gate.py"
+    assert os.access(gate, os.X_OK), "the gate must be executable to be a lane"
+    r = subprocess.run([str(gate)], capture_output=True, text=True, timeout=120)
+    out = r.stdout + r.stderr
+    assert "not importable" not in out, (
+        f"the gate cannot load shantytown when run as a program:\n{out}")
+    assert r.returncode in (0, 1, 2) and out.strip(), out
