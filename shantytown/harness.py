@@ -621,6 +621,43 @@ class ClaudeHarness:
         return HookSpec(blocking_stop=True)
 
 
+def codex_sessions_setup(daemon_home: Path, durable: Path) -> str:
+    """Shell that points a card's codex `sessions/` at durable storage.
+
+    aegis-tx4fiy. A card's CODEX_HOME lives under XDG_RUNTIME_DIR, which is
+    tmpfs -- RAM. That is CORRECT for the app-server socket, the caches and the
+    locks it holds, and wrong for `sessions/`, the one thing in there that is a
+    record rather than a working file. An uncaptured rollout is destroyed by the
+    next reboot, which is the unrecoverable session aegis-xfmon3 exists for.
+
+    The whole home cannot simply be moved: the control socket lives in it and is
+    already near the 108-byte sun_path ceiling. So only `sessions` is
+    redirected. Codex writes rollouts THROUGH the symlink and leaves it intact
+    -- measured against codex-cli 0.152.1, not assumed.
+
+    TWO THINGS HERE ARE LOAD-BEARING AND BOTH LOOK OPTIONAL:
+
+    1. The MIGRATION. `ln -sfn` onto an existing real directory does not replace
+       it -- it creates the link INSIDE it, as `sessions/sessions`. Rollouts
+       would keep going to tmpfs and nothing would look wrong. Every card that
+       has already run codex has exactly that real directory.
+    2. The trailing `|| true`. A durability improvement must never be the reason
+       an agent fails to launch. If this fails, capture is still the safety net,
+       which is why aegis-tx4fiy keeps the Stop hook and the kill-path captures
+       rather than retiring them once this lands.
+
+    Returned as shell rather than done in Python because compose() must stay
+    free of side effects -- `st new --dry-run` renders this string and must not
+    touch the filesystem.
+    """
+    dh = shlex.quote(str(daemon_home / "sessions"))
+    dur = shlex.quote(str(durable))
+    return (f"{{ mkdir -p {dur} && "
+            f"if [ -d {dh} ] && [ ! -L {dh} ]; then "
+            f"cp -an {dh}/. {dur}/ && rm -rf {dh}; fi && "
+            f"ln -sfn {dur} {dh}; }} || true")
+
+
 class CodexHarness:
     """OpenAI's Codex CLI. The second implementation — and, per docs/adapters.md,
     the thing that proves the first did not leak.
@@ -794,6 +831,21 @@ class CodexHarness:
                     f"bytes, maximum 107): {socket}. Set XDG_RUNTIME_DIR to a "
                     "short private directory."
                 )
+            # DURABILITY: rollouts must not live on tmpfs (aegis-tx4fiy).
+            # XDG_RUNTIME_DIR is RAM, which is CORRECT for the socket, the caches
+            # and the locks in this home -- and wrong for `sessions/`, the one
+            # thing in it that is a record rather than a working file. Codex
+            # writes rollouts THROUGH a symlink (measured against codex-cli
+            # 0.152.1: the rollout landed in the link target and the link
+            # survived the run), so `sessions` is redirected to durable state
+            # while everything else stays where it belongs. The whole home
+            # cannot simply be moved: the app-server control socket lives here
+            # and is already at the edge of the 108-byte sun_path ceiling
+            # enforced a few lines above.
+            state_base = Path(os.environ.get(
+                "XDG_STATE_HOME", Path.home() / ".local" / "state"))
+            durable_sessions = (state_base / "shantytown" / "codex"
+                                / card.name / "sessions")
             bootstrap = " && ".join((
                 f"mkdir -p {shlex.quote(str(daemon_home))}",
                 f"ln -sfn {shlex.quote(str(home / codex_mod().CONFIG_FILE))} "
@@ -831,7 +883,25 @@ class CodexHarness:
             # per-card home yet; asking Codex to resolve that empty CODEX_HOME
             # makes stop refuse, and the shell's && then prevents start (and
             # the old start-owned bootstrap) from ever running.
-            daemon_start = f"{bootstrap} && {stop} && ({start} || {start}) && "
+            # Runs AFTER stop and BEFORE start: the first launch under this
+            # change migrates an existing tmpfs `sessions/` directory, and doing
+            # that while the old daemon still holds it open is asking for a
+            # half-copied record.
+            #
+            # NON-FATAL BY CONSTRUCTION -- note the trailing `|| true`. A
+            # durability improvement must never be the reason an agent cannot
+            # launch; the same doctrine the startup inbox follows. If this
+            # fails, capture is still the safety net (the Stop hook and the
+            # kill paths), which is exactly why aegis-tx4fiy says keep them
+            # rather than retire them once this lands.
+            #
+            # `ln -sfn` alone is NOT enough and would be a silent no-op: with a
+            # real directory at the destination it creates the link INSIDE it
+            # (sessions/sessions), and rollouts would keep going to tmpfs with
+            # nothing to show anything was wrong. Hence the explicit migrate.
+            sessions_setup = codex_sessions_setup(daemon_home, durable_sessions)
+            daemon_start = (f"{bootstrap} && {stop} && {sessions_setup} && "
+                            f"({start} || {start}) && ")
             flags += f" --remote unix://{socket}"
             if card.workspace:
                 flags += f" --cd {shlex.quote(str(card.workspace))}"

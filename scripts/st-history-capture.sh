@@ -102,7 +102,15 @@ if [ -d "$CODEX_ROOT" ]; then
   while IFS= read -r f; do
     agent="$(sed -E "s#^$CODEX_ROOT/([^/]+)/.*#\1#" <<<"$f")"
     capture "$agent" codex "$f"
-  done < <(find "$CODEX_ROOT" -name 'rollout-*.jsonl' -type f 2>/dev/null)
+  # -L FOLLOWS SYMLINKS, and it is load-bearing rather than defensive.
+  # aegis-tx4fiy redirects each card's `sessions/` to durable state with a
+  # symlink, so from this root the rollouts are now BEHIND one. Plain `find`
+  # does not descend into a symlinked directory: measured against the real
+  # layout, the same sweep returned 0 without -L and 1 with it. That is the
+  # worst shape a capture failure can take -- it reports success having
+  # archived nothing, and the thing it stopped archiving is the half that does
+  # not survive a reboot.
+  done < <(find -L "$CODEX_ROOT" -name 'rollout-*.jsonl' -type f 2>/dev/null)
 else
   say "NOTE: no codex root at $CODEX_ROOT"
 fi
