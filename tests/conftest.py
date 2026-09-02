@@ -168,3 +168,35 @@ def _no_ambient_agent(monkeypatch):
     # it ambient makes an otherwise isolated test claim it is running in the
     # developer's real pane, and identity verification then reaches real tmux.
     monkeypatch.delenv("TMUX_PANE", raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _no_ambient_checkout(monkeypatch):
+    """No test's Stop-hook shape may depend on WHICH FILES EXIST in a sibling
+    checkout. Fourth instance of the class above, caught before it bit.
+
+    The transcript archiver (aegis-xfmon3) is emitted only when
+    `selfcheck.canonical_source()` resolves AND the capture script is present
+    there. That is right for production — a hook with a guessed path is worse
+    than no hook — but it makes the emitted Stop list a function of the
+    filesystem. Measured while writing it: seven tests asserting exact stop-hook
+    counts were GREEN on the branch and RED the moment the same code was run with
+    the canonical source pointing somewhere the script existed. Nothing about the
+    code under test differs between those two runs.
+
+    That is the worst shape a suite can have — it would have passed review,
+    passed CI, and then gone red for everyone at once on the deploy that
+    installed the script, looking like the deploy broke something. The failure
+    would arrive detached from its cause by however long the merge took.
+
+    Pinning to None rather than deleting $SHANTY_CANONICAL_SOURCE: deleting the
+    variable is not enough, because canonical_source() falls back to `git
+    worktree list` on the running package's own checkout and would resolve
+    anyway. Absent is also the state that makes the archiver tests' CONTROL
+    meaningful ("no checkout -> no hook, and the role's own machinery is
+    untouched"); a test that wants the archiver emitted says so by patching
+    runtime.canonical_source itself, which runs after this fixture and wins.
+    """
+    from shantytown import runtime
+    monkeypatch.delenv("SHANTY_CANONICAL_SOURCE", raising=False)
+    monkeypatch.setattr(runtime, "canonical_source", lambda *a, **k: None)

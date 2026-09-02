@@ -383,3 +383,103 @@ def test_the_bash_guard_and_the_mcp_guard_are_INDEPENDENT(tmp_path):
     bash_cmds = [h["command"] for g in s["hooks"]["PreToolUse"]
                  if g.get("matcher") == "Bash" for h in g["hooks"]]
     assert bash_cmds == ["yupana hook pre-bash || exit 0"], bash_cmds
+
+
+# --- the transcript archiver Stop hook (aegis-xfmon3) ------------------------
+#
+# Emitted by SHANTYTOWN, not by the deployment: `SHANTY_STOP_CAPTURE` is a
+# single-valued slot this deployment already spends on its quipu session-capture
+# dispatcher, and `st history` is a shantytown command whose scripts ship here.
+
+def _with_checkout(monkeypatch, tmp_path, script=True):
+    """Point canonical_source at a tmp checkout, optionally containing the
+    capture script. Overrides conftest's _no_ambient_checkout, which pins
+    resolution OFF so no test inherits the runner's filesystem."""
+    if script:
+        d = tmp_path / "co" / "scripts"
+        d.mkdir(parents=True)
+        (d / "st-history-stop-hook.sh").write_text("#!/bin/sh\n")
+    else:
+        (tmp_path / "co").mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(runtime, "canonical_source",
+                        lambda *a, **k: str(tmp_path / "co"))
+    return tmp_path / "co" / "scripts" / "st-history-stop-hook.sh"
+
+
+def test_archiver_runs_before_anything_that_can_block(tmp_path, monkeypatch):
+    """ORDERING IS THE WHOLE TEST. Codex stops after the first BLOCKING Stop
+    hook, and haul/drain/policy all block — so an archiver appended last (the
+    obvious slot, where the deployment capture hook goes) would never run on
+    codex at all. Codex is the half of the fleet whose transcripts live on tmpfs
+    and are the reason this epic exists.
+
+    Asserted as an INDEX comparison, not "is present": presence is what a
+    last-appended hook would also satisfy.
+    """
+    script = _with_checkout(monkeypatch, tmp_path)
+    for role, blockers in (("worker", ("haul",)),
+                           ("lead", ("haul", "drain")),
+                           ("administrator", ("stop_policy",))):
+        cmds = [h["command"] for h in runtime.role_stop_hooks(role, root=tmp_path)]
+        assert str(script) in cmds, role
+        i = cmds.index(str(script))
+        for b in blockers:
+            assert i < next(j for j, c in enumerate(cmds) if b in c), (role, b)
+
+
+def test_archiver_still_sits_behind_send(tmp_path, monkeypatch):
+    """Send-first persistence is what makes a stop legible, and `send` does not
+    block — so the archiver goes after it, never in front of it. The
+    administrator has no send and _policy_cmd blocks, so there the archiver is
+    first; its transcripts are no less lost to a reboot than anyone else's."""
+    script = _with_checkout(monkeypatch, tmp_path)
+    for role in ("worker", "lead"):
+        cmds = [h["command"] for h in runtime.role_stop_hooks(role, root=tmp_path)]
+        assert "stop_event send" in cmds[0], role
+        assert cmds[1] == str(script), role
+    admin = [h["command"] for h in runtime.role_stop_hooks("administrator",
+                                                           root=tmp_path)]
+    assert admin[0] == str(script)
+
+
+def test_no_checkout_emits_no_archiver_and_leaves_the_role_untouched(tmp_path,
+                                                                     monkeypatch):
+    """CANNOT-TELL is not a licence to guess a path. A Stop hook that dies on a
+    bad path is indistinguishable from a tier with no capture — which is the
+    exact failure this epic exists to fix, so it must not be the failure the fix
+    introduces. Positive shape assert, not just absence."""
+    monkeypatch.setattr(runtime, "canonical_source", lambda *a, **k: None)
+    cmds = [h["command"] for h in runtime.role_stop_hooks("worker", root=tmp_path)]
+    assert len(cmds) == 2 and all("stop_event" in c for c in cmds)
+
+
+def test_a_checkout_without_the_script_emits_no_archiver(tmp_path, monkeypatch):
+    """Resolving a checkout is not the same as that checkout carrying the
+    script — an older deploy resolves fine and has no archiver in it."""
+    _with_checkout(monkeypatch, tmp_path, script=False)
+    cmds = [h["command"] for h in runtime.role_stop_hooks("worker", root=tmp_path)]
+    assert len(cmds) == 2 and all("stop_event" in c for c in cmds)
+
+
+def test_archiver_bakes_in_no_agent_name(tmp_path, monkeypatch):
+    """Identity is resolved AT RUN TIME from $SHANTY_AGENT, because settings are
+    emitted per ROLE and there is no per-agent file to bake a name into. An
+    earlier proposal on the bead assumed otherwise; this is the assertion that
+    keeps the assumption from coming back."""
+    script = _with_checkout(monkeypatch, tmp_path)
+    hook = [h for h in runtime.role_stop_hooks("lead", root=tmp_path)
+            if h["command"] == str(script)]
+    assert len(hook) == 1
+    assert hook[0]["command"] == str(script)      # no --agent, no name
+    assert hook[0]["timeout"] == 30
+
+
+def test_archiver_coexists_with_the_deployment_capture_hook(tmp_path, monkeypatch):
+    """The two are different mechanisms in different slots, and neither may
+    displace the other: SHANTY_STOP_CAPTURE stays LAST, the archiver stays ahead
+    of the blockers."""
+    _deployment_env(tmp_path, SHANTY_STOP_CAPTURE="/usr/local/lib/hooks/cap.sh")
+    script = _with_checkout(monkeypatch, tmp_path)
+    cmds = [h["command"] for h in runtime.role_stop_hooks("worker", root=tmp_path)]
+    assert cmds[-1] == "/usr/local/lib/hooks/cap.sh"
+    assert cmds.index(str(script)) < cmds.index("/usr/local/lib/hooks/cap.sh")

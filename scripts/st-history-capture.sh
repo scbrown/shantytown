@@ -29,6 +29,9 @@ CODEX_ROOT="${ST_CODEX_ROOT:-/run/user/$(id -u)/shantytown/codex}"
 CLAUDE_ROOT="${ST_CLAUDE_ROOT:-$HOME/.claude/projects}"
 DRY=0
 ONLY_AGENT=""
+# Defined BEFORE the arg loop: the loop refuses an empty --agent and needs to
+# say so, and a function referenced before its definition is a runtime failure.
+say() { echo "$(date -u +%H:%M:%SZ) $*"; }
 while [ $# -gt 0 ]; do
   case "$1" in
     --dry-run) DRY=1 ;;
@@ -37,14 +40,24 @@ while [ $# -gt 0 ]; do
     # costs. A full sweep is 3.1s measured — not ruinous, but paying it on every
     # stop fleet-wide to re-skip 300+ unchanged files of other people's sessions
     # is work nobody asked for.
-    --agent) shift; ONLY_AGENT="${1:-}" ;;
+    # An EMPTY value is REFUSED, never treated as "no filter". `--agent ""`
+    # and no --agent at all would otherwise be the same world to this script,
+    # and one of them is a bug: the Stop hook passes "$SHANTY_AGENT", so an
+    # unset identity would silently turn a one-agent capture into a fleet-wide
+    # sweep on every stop — the expensive wrong thing, done quietly.
+    --agent) shift
+             if [ -z "${1:-}" ]; then
+               say "REFUSED: --agent needs a name (got empty). Captured nothing."
+               say "  In the Stop hook this means \$SHANTY_AGENT is unset."
+               exit 1
+             fi
+             ONLY_AGENT="$1" ;;
     *) ;;
   esac
   shift
 done
 
 copied=0; skipped=0; bytes=0
-say() { echo "$(date -u +%H:%M:%SZ) $*"; }
 
 capture() {   # <agent> <harness> <src>
   local agent="$1" harness="$2" src="$3"
@@ -62,9 +75,16 @@ capture() {   # <agent> <harness> <src>
   # Enforced HERE rather than by a one-shot chmod, because every future capture
   # would otherwise land at the default umask and silently undo the lock.
   chmod 700 "$DEST" "$dir" 2>/dev/null || true
-  cp -p "$src" "$dst.part" 2>/dev/null || { say "FAILED $src"; return; }
-  chmod 600 "$dst.part" 2>/dev/null || true
-  mv -f "$dst.part" "$dst"
+  # The staging name carries THIS PROCESS'S pid. Two capturers can legitimately
+  # target the same live jsonl at once — the Stop hook and the interim timer
+  # overlap by design until the timer is retired — and a SHARED .part is two
+  # writers interleaving into one file that is then published as if whole. With
+  # a per-pid stage the worst case is last-writer-wins between two COMPLETE
+  # copies, which is the same outcome as running them a second apart.
+  local part="$dst.$$.part"
+  cp -p "$src" "$part" 2>/dev/null || { say "FAILED $src"; rm -f "$part"; return; }
+  chmod 600 "$part" 2>/dev/null || true
+  mv -f "$part" "$dst"
   local sz; sz="$(stat -c %s "$dst" 2>/dev/null || echo 0)"
   bytes=$((bytes+sz)); copied=$((copied+1))
   # One manifest line per capture. Append-only: the history of a session's growth

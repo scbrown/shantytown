@@ -46,6 +46,11 @@ from typing import Callable, Protocol, runtime_checkable
 
 from .deployment import deployment_default
 from .protocols import Agent
+# canonical_source, not this module's own toplevel: selfcheck already owns the
+# "where is the real checkout" question, including the refusal to let a linked
+# worktree vouch for itself. selfcheck imports nothing from the package, so this
+# is not a cycle.
+from .selfcheck import canonical_source
 
 
 @dataclass(frozen=True)
@@ -332,6 +337,42 @@ def _capture_cmd(root=None) -> dict:
     if root is not None:
         cmd += f" --root {Path(root).resolve()}"
     return {"type": "command", "command": cmd}
+
+
+def _history_cmd(root=None) -> dict | None:
+    """The per-agent transcript-capture Stop hook (aegis-xfmon3), or None if this
+    checkout cannot be located.
+
+    WHY THIS ONE IS SHANTYTOWN'S AND NOT THE DEPLOYMENT'S. `SHANTY_STOP_CAPTURE`
+    already exists for deployment session-capture hooks, and it is the obvious
+    slot — but it is a SINGLE value and this deployment has already spent it on
+    its quipu session-capture dispatcher. Wiring history there would silently
+    displace a live mechanism. And the archive is not a deployment concern
+    anyway: `st history` is a shantytown command and the capture scripts ship in
+    this repo, so shantytown owning the hook is where it already lived.
+
+    IDENTITY IS RESOLVED AT RUN TIME, not baked in. Settings are emitted per
+    ROLE (worker/lead/administrator), so there is no per-agent file to bake a
+    name into — the hook reads $SHANTY_AGENT, the same launcher-exported
+    identity `shantytown.stop_event` reads. (An earlier proposal on the bead
+    assumed `--agent <name>` could be baked in at emit time; per-role settings
+    are why it cannot.)
+
+    Returns None when the checkout is unknown, rather than emitting a hook with
+    a guessed path. Same doctrine as bash_guard_command: no hook at all is
+    honest, and a Stop hook that dies on a bad path is indistinguishable from a
+    tier with no capture — which is exactly the failure this epic exists to fix.
+    """
+    src = canonical_source()
+    if not src:
+        return None
+    script = Path(src) / "scripts" / "st-history-stop-hook.sh"
+    if not script.is_file():
+        return None
+    # 30s: the measured cost is 1.8s for one agent (capture + scoped scrub), and
+    # the archive grows, so the ceiling is generous rather than tight. It is a
+    # ceiling and not a budget — this hook must never be the reason a stop hangs.
+    return {"type": "command", "command": str(script), "timeout": 30}
 
 
 def _yupana_post_tool_cmd() -> dict:
@@ -676,18 +717,36 @@ def role_stop_hooks(role: str, root=None) -> list[dict]:
         lead          -> [send, haul, drain] (continues own work before reports)
         administrator -> [drain]         (root: receives only; its stop terminates)
     """
+    # The transcript archiver, placed immediately after `send` and BEFORE the
+    # first command that can BLOCK. Ordering is not cosmetic here: codex stops
+    # after the first blocking Stop hook (the same fact that forces haul before
+    # drain for a lead, just below), and haul/drain/policy all block. Appended
+    # last — the obvious slot, and where the deployment capture hook goes — the
+    # archiver would simply never run on codex for any role. Which is the half
+    # of the fleet whose transcripts live on tmpfs and are the reason this epic
+    # exists.
+    #
+    # It still goes AFTER `send`, because send-first persistence is the rule
+    # that makes a stop legible at all, and it does not block.
+    history = _history_cmd(root)
+
     if role == "worker":
         # send FIRST (the stop event persists whatever happens), then the HAUL
         # advance — the self-feed for a worker whose queue is already assigned
         # (anchor closed -> block-with-next; fail-open, self-terminating).
-        stop = [_stop_cmd("send", root), _stop_cmd("haul", root)]
+        stop = [_stop_cmd("send", root)]
+        if history:
+            stop.append(history)
+        stop.append(_stop_cmd("haul", root))
     elif role == "lead":
         # A Codex lead owns work AND receives reports. Its own active anchor must
         # resume before drain: Codex stops after the first blocking Stop hook, so
         # drain-first can consume the boundary and strand the lead's haul. Claude
         # reaches haul too, but _haul is a no-op for Claude leads.
-        stop = [_stop_cmd("send", root), _stop_cmd("haul", root),
-                _stop_cmd("drain", root)]
+        stop = [_stop_cmd("send", root)]
+        if history:
+            stop.append(history)
+        stop += [_stop_cmd("haul", root), _stop_cmd("drain", root)]
     elif role == "administrator":
         # ONE decision (docs/stop-policy-spec.md). This was [drain, feed_check] —
         # two commands that could each BLOCK the same stop and neither of which
@@ -695,7 +754,11 @@ def role_stop_hooks(role: str, root=None) -> list[dict]:
         # policy inert and scraped the same panes three times per turn boundary.
         # stop_policy folds delivery, Rule Zero and hibernate into five ordered
         # ranks and emits exactly one verdict with one reason.
-        stop = [_policy_cmd(root)]
+        #
+        # The administrator has no `send` to sit behind, and _policy_cmd blocks,
+        # so the archiver goes first here — an administrator's own transcripts
+        # are no less lost to a reboot than anyone else's.
+        stop = ([history] if history else []) + [_policy_cmd(root)]
     else:
         raise ValueError(f"unknown role {role!r}; expected worker/lead/administrator")
     # Deployment session-capture hook (aegis-x84i): emitted ONLY when the
