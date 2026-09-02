@@ -348,3 +348,47 @@ def test_reauth_never_relaunches_a_retired_agent(tmp_path, monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "RETIRED" in out and "not relaunching" in out
     assert panes.capture("p-ellie") == AUTH_DEAD_PANE   # untouched
+
+
+# --- the reauth relaunch kills too, and no Stop hook fires for it -------------
+# aegis-ay3gv2. This path was not named on that bead and is the same exposure:
+# `_tend_reauth` kills an auth-dead session outright, so the transcript archiver
+# (a Stop hook, fired on a NATURAL turn end) never runs for it, and a codex
+# rollout under CODEX_HOME -- measured tmpfs -- is destroyed by the next reboot.
+
+def test_reauth_captures_transcripts_BEFORE_it_kills_each_agent(
+        tmp_path, monkeypatch, capsys):
+    order: list[str] = []
+    root, panes = _reauth_fixture(
+        tmp_path, monkeypatch,
+        screens={"ellie": AUTH_DEAD_PANE, "malcolm": IDLE_PANE},
+        owned={"ellie", "malcolm"})
+    real_kill = panes.kill_session
+
+    def _kill(name):
+        order.append(f"kill:{name}")
+        return real_kill(name)
+    monkeypatch.setattr(panes, "kill_session", _kill)
+    monkeypatch.setattr(cli, "_capture_history_before_kill",
+                        lambda a, name, why: order.append(f"capture:{name}:{why}"))
+
+    a = _ReauthArgs(root)
+    a.reauth = True
+    assert cli._tend_reauth(a) == cli.OK
+
+    # captured first, and only for the agent actually being killed
+    assert order == ["capture:ellie:reauth", "kill:p-ellie"], order
+
+
+def test_reauth_dry_run_captures_nothing(tmp_path, monkeypatch):
+    """--dry-run mutates nothing, and an archive write is a mutation."""
+    called = []
+    root, _panes = _reauth_fixture(tmp_path, monkeypatch,
+                                   screens={"ellie": AUTH_DEAD_PANE},
+                                   owned={"ellie"})
+    monkeypatch.setattr(cli, "_capture_history_before_kill",
+                        lambda a, n, w: called.append(n))
+    a = _ReauthArgs(root)
+    a.dry_run = True
+    assert cli._tend_reauth(a) == cli.OK
+    assert called == []

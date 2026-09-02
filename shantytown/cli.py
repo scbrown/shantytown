@@ -2370,6 +2370,72 @@ def _report_hibernate(cfg) -> None:
           f"wakes on a push{valve}.")
 
 
+# Every path that KILLS a session takes the runtime down without a natural turn
+# end, so the transcript archiver -- a Stop hook -- never fires for it.
+_KILL_CAPTURE_TIMEOUT = 30
+
+
+def _capture_history_before_kill(a, agent_name: str, why: str) -> None:
+    """Archive an agent's transcripts BEFORE its session is killed.
+
+    THE GAP THIS CLOSES (aegis-ay3gv2). The archiver is a Stop hook, so it fires
+    on a NATURAL turn end. `st stop`, the cycle that `st tend` performs THROUGH
+    it, and the auth-dead relaunch all kill the runtime instead, and no hook
+    fires for any of them.
+
+    That is survivable for claude, whose transcripts sit on durable disk and are
+    picked up by any later capture. It is NOT survivable for codex: CODEX_HOME
+    lives under /run/user/<uid>, measured tmpfs, so an uncaptured rollout is
+    destroyed by the next reboot -- which is the incident aegis-xfmon3 exists
+    for. Retiring the */30 safety net once the hook was proven (xfmon3 step 3)
+    was right for the natural-stop path and turned a 30-minute worst case into an
+    unbounded one for these three.
+
+    Best-effort, and it NEVER changes the caller's verdict. A capture that could
+    refuse a stop would be an archiver holding a shutdown hostage, and the whole
+    point of a deliberate stop is that it happens.
+
+    Logged to kill-capture.log, deliberately NOT to hook.log. The timer gate
+    reads hook.log to decide whether the HOOK is live; a kill-capture written
+    there would read as a hook fire and quietly destroy the one instrument that
+    can tell "the hook works" from "something else is covering for it". Keeping
+    the two logs apart is what makes the next retirement decision provable.
+    """
+    import subprocess
+    # runtime.canonical_source, NOT selfcheck's: it is the same function, but
+    # runtime's is the name the suite's ambient-checkout guard pins, so a test
+    # cannot accidentally resolve the developer's real checkout and run a real
+    # capture against the live archive.
+    from . import runtime as _runtime
+
+    log = Path(os.environ.get("ST_HISTORY_DIR") or (Path(a.root) / "history"))
+    src = _runtime.canonical_source()
+    script = Path(src) / "scripts" / "st-history-capture.sh" if src else None
+    if script is None or not script.is_file():
+        # Same doctrine as the hook itself: no guessed path. Say so rather than
+        # log a success for work that never ran.
+        note, rc = "skipped: canonical source unknown", "-"
+    else:
+        try:
+            done = subprocess.run([str(script), "--agent", agent_name],
+                                  capture_output=True, text=True,
+                                  timeout=_KILL_CAPTURE_TIMEOUT)
+            note, rc = "captured", str(done.returncode)
+        except Exception as e:  # noqa: BLE001 -- a stop must never fail on this
+            note, rc = f"FAILED {type(e).__name__}: {str(e)[:60]}", "-"
+    if not note.startswith("captured"):
+        print(f"  \u26a0 transcript capture before killing {agent_name}: {note}. "
+              f"A codex rollout not yet archived is on tmpfs and does not "
+              f"survive a reboot.", file=sys.stderr)
+    try:
+        log.mkdir(parents=True, exist_ok=True)
+        with open(log / "kill-capture.log", "a") as fh:
+            fh.write(f"{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}\t"
+                     f"{agent_name}\t{why}\t{note}\trc={rc}\n")
+    except Exception:  # noqa: BLE001 -- an unwritable log never disturbs a stop
+        pass
+
+
 def _cmd_stop(a) -> int:
     """stop <agent> — kill the agent's session (#5).
 
@@ -2436,6 +2502,8 @@ def _cmd_stop(a) -> int:
         if fixed.blocked:
             print(f"  repaired {codex_daemon.FLAG} for {agent.name}: {fixed.reason()}",
                   file=sys.stderr)
+    # BEFORE the kill, never after: after it, the codex rollout is gone.
+    _capture_history_before_kill(a, a.agent, "stop")
     panes.kill_session(session)
     if panes.exists(session):
         print(f"  could not tell: killed {session} but it is still there",
@@ -7994,6 +8062,7 @@ def _tend_reauth(a) -> int:
           f"{', '.join(c.name for c in relaunch)}")
     stuck = 0
     for card in relaunch:
+        _capture_history_before_kill(a, card.name, "reauth")
         panes.kill_session(card.pane)
         if panes.exists(card.pane):
             print(f"  could not tell: killed {card.pane} but it is still there — "
