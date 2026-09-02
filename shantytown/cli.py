@@ -4729,6 +4729,28 @@ def _crew_states(agents, panes, runtime, cycling=(), untracked_root=None,
             # waited out, a refused one needs somebody to commit a tree. The pane
             # is still live and still working, so unlike `cycling` this is not a
             # reason to withhold dispatch.
+            #
+            # ...AND THAT LAST SENTENCE IS WHY THE WORK VERDICT MUST STILL BE
+            # READ (aegis-4j4ypk). It states the pane is live and working, and
+            # the code then fell through to `if state == "up"` — false — so the
+            # pane was never captured and the work column printed `—`. The
+            # comment's own premise was the fact being discarded.
+            #
+            # MEASURED 2026-09-02: `st crew` showed `ian  cycle-blocked  —`
+            # while ian's pane read "• Waiting for background terminal (2m 53s •
+            # esc to interrupt)" and it was mid-way through an ansible apply.
+            # kelly the same, at "Working (13s)". A refused cycle is STICKY —
+            # the request stays pending until somebody commits a tree — so this
+            # is not a momentary blind spot: an agent reads unlooked-at for as
+            # long as its tree is dirty, which can be hours.
+            #
+            # The two columns answer different questions. STATE is "what is this
+            # agent's disposition" (a card/request fact); WORK is "is it moving
+            # right now" (a pane fact). Letting a request state blank a pane
+            # observation is the same collapse `running_shells` refuses one
+            # module over: `—` means NOT LOOKED AT, and printing it for a pane
+            # we could have read puts a false unknown in the one column a
+            # coordinator uses to decide whether to interrupt.
             state = "cycle-blocked"
         elif ag.name in cycling:
             # A durable request is stronger than a still-live pane during the
@@ -4739,7 +4761,13 @@ def _crew_states(agents, panes, runtime, cycling=(), untracked_root=None,
             state = "up" if panes.exists(ag.pane) else "down"
         else:
             state = "no pane"          # not "down" — we did not look
-        if state == "up":
+        # A cycle-blocked agent's pane is up by construction (the request was
+        # refused, nothing took it down), so it gets the same reading as `up`.
+        # `cycling` deliberately does NOT: that pane is about to stop, and a
+        # verdict about a session in its pre-stop interval would be stale by the
+        # time it is read.
+        if state == "up" or (state == "cycle-blocked" and ag.pane
+                             and panes.exists(ag.pane)):
             # attrs=True: work_state needs dim to tell a placeholder suggestion
             # from queued-unsubmitted text. shows_ready_ui matches PLAIN
             # substrings and its markers arrive colour-split word by word, so it

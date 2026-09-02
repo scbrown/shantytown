@@ -157,16 +157,68 @@ def looks_wedged(screen: str) -> bool:
     return any(m in _tail(screen) for m in WEDGED_MARKERS)
 
 
+# How far ABOVE the input box the in-flight marker may sit and still be chrome.
+# Claude puts its marker in the footer BELOW the prompt, so the plain tail window
+# has always found it. Codex puts it ABOVE, with the whole tool-call block in
+# between — and that block is not a fixed height (aegis-4j4ypk).
+#
+# MEASURED 2026-09-02 across every live pane, as headroom before the marker falls
+# out of the 8-line tail: ian 1, gennaro 2, malcolm 2, dearing 6. Three of four
+# codex panes sat one or two lines from being misread, and the thing that spends
+# those lines is ordinary: a tool-call continuation (`  └ …`) that wraps instead
+# of truncating. Reproduced exactly — same footer, 3 continuation lines instead
+# of 1, and mid_flight goes False with the marker plainly on screen.
+_CHROME_ABOVE_PROMPT = 8
+
+
+def _chrome(screen: str) -> str:
+    """The runtime's chrome block: the tail window, EXTENDED UP past the input
+    box when one is on screen.
+
+    A fixed window off the bottom assumes the marker is a fixed distance from
+    it. That holds for claude (marker below the prompt, in the footer) and does
+    NOT hold for codex (marker above the prompt, with a variable-height tool-call
+    block between the two). Anchoring on the input box instead of on the bottom
+    makes the window mean the same thing on both: "the region the runtime paints
+    around its prompt", not "the last N rows".
+
+    Still bounded, and that bound is the point — `_tail`'s docstring is right
+    that "esc to interrupt" appears in this very file, so an agent reading
+    triage.py must not read as permanently busy. This widens the window by a
+    measured amount; it does not remove it.
+    """
+    lines = strip_attrs(screen).splitlines()
+    while lines and not lines[-1].strip():
+        lines.pop()                       # padding is not content (see _tail)
+    if not lines:
+        return ""
+    start = max(0, len(lines) - _TAIL_LINES)
+    for i in range(len(lines) - 1, -1, -1):
+        stripped = lines[i].lstrip()
+        if stripped and stripped[0] in _PROMPT_GLYPHS:
+            start = min(start, max(0, i - _CHROME_ABOVE_PROMPT))
+            break
+    return "\n".join(lines[start:])
+
+
 def mid_flight(screen: str) -> bool:
     """An agent actively working. Sending now interrupts it.
 
     Gas Town's own nudge help says --mode immediate 'Send directly via tmux
     send-keys' and warns it interrupts. REFUSE is a real outcome.
 
-    Tail-only, same reason as looks_wedged: "esc to interrupt" appears in this
-    very file, so an agent reading triage.py must not read as permanently busy.
+    Chrome-scoped, same reason as looks_wedged is tail-scoped: "esc to interrupt"
+    appears in this very file, so an agent reading triage.py must not read as
+    permanently busy.
+
+    WHY THE WINDOW IS ANCHORED ON THE PROMPT AND NOT ON THE BOTTOM. A false IDLE
+    here is the expensive direction: it puts a working agent on the free list and
+    a coordinator dispatches into a live turn (measured 3x on 2026-09-02, and it
+    is the same disagreement `st go` correctly refused on the same evidence). A
+    false BUSY costs one skipped dispatch that the next pass retries. So when the
+    two errors are traded off, this errs toward BUSY — see _chrome.
     """
-    return any(m in _tail(screen) for m in INFLIGHT_MARKERS)
+    return any(m in _chrome(screen) for m in INFLIGHT_MARKERS)
 
 
 # --- background shells: work that outlives the turn -------------------------
