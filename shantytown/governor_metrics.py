@@ -351,7 +351,7 @@ def _window_rows(out: _Out, lane: str, utilization, readings, now: float) -> Non
 
 def _lane_rows(out: _Out, lane: str, *, verdict, utilization, readings,
                live: int | None, blocked: int, setpoint_delta, now: float,
-               totals: Totals) -> None:
+               totals: Totals, known_windows=()) -> None:
     lb = dict(lane=lane)
     if verdict is not None:
         out.add("st_governor_signal_lost", bool(verdict.signal_lost), **lb)
@@ -363,7 +363,17 @@ def _lane_rows(out: _Out, lane: str, *, verdict, utilization, readings,
         # a real floor (P0 only) and is the strictest one there is, so a sentinel
         # in this series would render "no restriction" as "the tightest possible
         # restriction" on every dashboard that reads it.
+        #
+        # ...and therefore it needs the companion beside it, for the same reason
+        # `recommendation` has `recommendation_known`: a family that is absent in
+        # the HEALTHY case leaves a panel reading "No data", which on a capacity
+        # dashboard reads as headroom (goldblum's check-dashboard-metrics states
+        # exactly this, and refused this panel until the companion existed). The
+        # companion is always emitted, so "no floor" is a measured 0 rather than
+        # a silence a reader has to interpret.
         out.add("st_governor_priority_floor", verdict.floor, **lb)
+        out.add("st_governor_priority_floor_declared",
+                verdict.floor is not None, **lb)
         for tier in verdict.engaged or ():
             out.add("st_governor_engaged_tier_percent", tier.at,
                     lane=lane, window=tier.window)
@@ -393,18 +403,27 @@ def _lane_rows(out: _Out, lane: str, *, verdict, utilization, readings,
         for name in dict.fromkeys(tuple(CAUSES) + ((cause,) if cause else ())):
             out.add("st_governor_cause", name == cause, lane=lane, cause=name)
 
+    # EVERY bucket at 0 rather than only the ones that have fired, so
+    # `increase()` over a quiet direction or a quiet window is 0 instead of
+    # no-data — and "no data" keeps its one meaning, that the producer is gone.
+    # The event counters need the same treatment as the decision one, which is
+    # the inconsistency goldblum's check-dashboard-metrics found: a relaxation
+    # counter that does not exist until the first relaxation leaves its panel
+    # empty for exactly as long as everything is fine.
     for direction in DIRECTIONS:
         out.add("st_governor_decisions_total",
                 totals.decisions.get((lane, direction), 0),
                 kind="counter", lane=lane, direction=direction)
-    for key, value in sorted(totals.relaxations.items()):
-        if key[0] == lane:
-            out.add("st_governor_relaxations_total", value, kind="counter",
-                    lane=lane, window=key[1])
-    for key, value in sorted(totals.burndowns.items()):
-        if key[0] == lane:
-            out.add("st_governor_burndowns_total", value, kind="counter",
-                    lane=lane, window=key[1])
+    windows = sorted({w for (ln, w) in totals.relaxations if ln == lane}
+                     | {w for (ln, w) in totals.burndowns if ln == lane}
+                     | set(known_windows or ()))
+    for window in windows:
+        out.add("st_governor_relaxations_total",
+                totals.relaxations.get((lane, window), 0),
+                kind="counter", lane=lane, window=window)
+        out.add("st_governor_burndowns_total",
+                totals.burndowns.get((lane, window), 0),
+                kind="counter", lane=lane, window=window)
 
 
 def render(lanes, *, agents=None, now: float, totals: Totals = EMPTY) -> str:
@@ -430,7 +449,12 @@ def render(lanes, *, agents=None, now: float, totals: Totals = EMPTY) -> str:
                    readings=lane.get("readings") or {},
                    live=lane.get("live"), blocked=lane.get("blocked") or 0,
                    setpoint_delta=lane.get("setpoint_delta"), now=now,
-                   totals=totals)
+                   totals=totals,
+                   # Every window this lane can SEE, so its event counters exist
+                   # at 0 from the first pass rather than from the first event.
+                   known_windows=set(lane.get("readings") or {}) | {
+                       w.window for w in
+                       getattr(lane.get("utilization"), "windows", ()) or ()})
         _window_rows(out, name, lane.get("utilization"),
                      lane.get("readings") or {}, now)
     for (harness, state), count in sorted((agents or {}).get("state", {}).items()):

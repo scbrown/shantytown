@@ -415,3 +415,28 @@ def test_the_deployment_env_is_consulted_not_only_os_environ(tmp_path, monkeypat
     rc = gm.publish(tmp_path, [_lane()], instance="host-a",
                     env={gm.PUSHGATEWAY_ENV: "http://gw.invalid/"})
     assert rc == gm.OK and sent == [gm.JOB, gm.PRODUCER_JOB]
+
+
+def test_quiet_counters_and_the_floor_companion_exist_from_the_first_pass():
+    """A family that only appears once something has gone wrong leaves its panel
+    reading "No data" for exactly as long as everything is fine — and on a
+    capacity dashboard that reads as headroom. goldblum's check-dashboard-metrics
+    refused three of these; this is the rule they were missing."""
+    seen = _assess(readings={gov_mod.SEVEN_DAY: _reading(52, elapsed=0.58,
+                                                          length=WEEK)})
+    s = _samples(gm.render([_lane(utilization=seen, verdict=gov_mod.Verdict(
+        reading=gov_mod.Reading(pct=52.0), pct=52.0))], now=NOW))
+    lb = 'lane="base",window="seven_day"'
+    assert s[f'st_governor_relaxations_total{{{lb}}}'] == 0
+    assert s[f'st_governor_burndowns_total{{{lb}}}'] == 0
+    # No tier declares a floor, so the floor itself is absent BY DESIGN — and the
+    # companion says so as a measured 0 rather than as a silence.
+    assert 'st_governor_priority_floor{lane="base"}' not in s
+    assert s['st_governor_priority_floor_declared{lane="base"}'] == 0
+
+
+def test_a_window_that_has_relaxed_keeps_its_total_after_the_event_passes():
+    totals = gm.Totals(decisions={}, burndowns={},
+                       relaxations={("base", "five_hour"): 4})
+    s = _samples(gm.render([_lane()], now=NOW, totals=totals))
+    assert s['st_governor_relaxations_total{lane="base",window="five_hour"}'] == 4
