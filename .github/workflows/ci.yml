@@ -82,3 +82,42 @@ jobs:
       # import the modules directly rather than invoking the script.
       - name: Console script runs
         run: st --version
+
+  # The `test` job above answers "is the suite green in one process?". That is
+  # a weaker statement than it looks: the suite was measured (aegis-rig9vu) to
+  # be order-dependent in BOTH directions -- tests that fail alone and pass in
+  # the full run, and tests that pass alone and fail in it. While that was
+  # true, a green `test` job was not evidence, because the full run concealed
+  # two genuinely broken tests, and a red one was not attributable either.
+  #
+  # This job asserts the property `test` cannot: that a test's verdict does not
+  # depend on what ran before it. It runs the suite whole, then every file
+  # alone, and fails if the two disagree.
+  #
+  # ONE version, not the matrix. Coupling between tests is a property of the
+  # code, not of the interpreter, so running it four times would buy four
+  # copies of the same answer for four times the runtime. 3.14 is the version
+  # the consuming hosts actually run.
+  order-independence:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+          python -m pip install pytest
+
+      # Proves the detector's three findings paths (HIDDEN / INDUCED / FLAKY)
+      # against a synthetic suite built for the purpose. A detector whose
+      # finding path has never executed is not evidence of anything, and this
+      # one reports success by staying silent -- exactly the shape that rots
+      # unnoticed.
+      - name: Detector selftest
+        run: bash scripts/check-test-order-independence.sh --selftest
+
+      - name: Suite is order-independent
+        run: bash scripts/check-test-order-independence.sh
