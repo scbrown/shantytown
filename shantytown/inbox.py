@@ -190,8 +190,52 @@ def is_deferred(status) -> bool:
     row, files.plate a WorkItem.
     """
     if isinstance(status, dict):
+        # THE FIELD, NOT ONLY THE STATUS (aegis-vyc3aa). Everything this docstring
+        # says about `status == "deferred"` was measured on the DOLT store, where
+        # deferral WAS a status. The br store (clbx2 cutover, 2026-08-29) records
+        # it as a `defer_until` TIMESTAMP and leaves `status` as `open` — so this
+        # predicate went blind at the cutover while continuing to answer, and
+        # both plate readers resumed serving deferred beads.
+        #
+        # MEASURED 2026-09-02: `br show aegis-f46wu` -> status 'open',
+        # defer_until '2026-09-03T13:00:00Z'; `br ready --limit 0 | grep -c
+        # f46wu` -> 0 (ready correctly excludes it), and `st anchor dearing`
+        # served it anyway as "ON YOUR PLATE". A coordinator had deferred that
+        # bead SPECIFICALLY so the queue would feed past it.
+        #
+        # The seam below did its job — one predicate, both backends — and that
+        # is exactly why this is worth the comment: the composition was intact
+        # and irrelevant, because the REPRESENTATION moved underneath it. A
+        # migration kills readers, not writers; `br ready` (a writer-side query)
+        # was updated and this reader was not.
+        if _deferred_until_is_future(status.get("defer_until")):
+            return True
         status = status.get("status")
     return (status or "").strip().lower() == "deferred"
+
+
+def _deferred_until_is_future(value, now=None) -> bool:
+    """Is `defer_until` a timestamp that has NOT yet arrived?
+
+    UNPARSEABLE OR ABSENT IS **NOT** DEFERRED, deliberately. This predicate gates
+    whether an agent may be handed work at all, so a value we cannot read must
+    fail toward WORKABLE: the cost of misreading a stamp is one turn spent on a
+    bead that was going to be workable in a few hours, and the cost of the other
+    direction is an agent silently withheld from its own queue with no signal
+    anywhere. A lapsed deferral is likewise workable — that is the whole point
+    of a deadline.
+    """
+    if not value:
+        return False
+    from datetime import datetime, timezone
+    try:
+        text = str(value).strip().replace("Z", "+00:00")
+        when = datetime.fromisoformat(text)
+    except (TypeError, ValueError):
+        return False
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return when > (now or datetime.now(timezone.utc))
 
 
 def is_unworkable(status) -> bool:

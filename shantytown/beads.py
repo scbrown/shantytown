@@ -488,7 +488,7 @@ def plate(tracker: "BeadsTracker", agent: str) -> "WorkItem | None":
         # ellie` served a deferred bead over eight workable ones. ONE composed
         # predicate, shared with files.plate, so a third such status cannot land
         # on one backend and not the other.
-        and not is_unworkable(x.get("status"))
+        and not is_unworkable(x)     # the ROW: deferral is a FIELD on br (aegis-vyc3aa)
     ]
     if not mine:
         return None

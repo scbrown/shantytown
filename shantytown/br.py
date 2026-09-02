@@ -169,7 +169,7 @@ def plate(tracker: BrTracker, agent: str,
         if row.get("assignee") in (agent, agent.split("/")[-1])
         and row.get("status") != "closed"
         and not is_message(row.get("title", ""))
-        and not is_unworkable(row.get("status"))
+        and not is_unworkable(row)   # the ROW: deferral is a FIELD on br (aegis-vyc3aa)
     ]
     if not mine:
         return None
