@@ -34,10 +34,37 @@ if [ -z "$AGENT" ]; then
   exit 1
 fi
 
+# ⚠️ STDOUT BELONGS TO THE HARNESS ON A STOP HOOK — SEND THE CHILDREN TO STDERR.
+#
+# Both scripts below print a human summary on stdout when run by hand
+# ("captured=1 skipped_unchanged=18 bytes=5831700 agent=ian ...", "scrubbed 1
+# file(s) ..."). That is right for a terminal and WRONG here: codex parses a Stop
+# hook's stdout as JSON, so 405 bytes of plain text is a FAILED hook —
+#   "• Stop hook (failed)  error: hook returned invalid stop hook JSON output"
+# — on every codex stop, while the hook itself exits 0 and logs rc=0 (aegis-6ab8hd).
+#
+# MEASURED, codex-cli 0.152.1, scripts/probe-codex-stop-stdout.sh, two arms:
+#   silent hooks (0 bytes)      -> "hook: Stop Completed"
+#   one hook printing plain text-> "hook: Stop Failed"
+# So it is NOT that codex rejects empty stdout — the first hypothesis, and the
+# expensive one, because it points at shantytown.stop_event (which correctly
+# writes zero bytes on the ordinary path) instead of at this hook.
+#
+# The diagnostics are not lost, they are re-routed: stderr is what a human sees
+# when running the hook by hand, and it is what both harnesses surface on a
+# failure. Claude Code discards a non-blocking Stop hook's stdout, so nothing
+# depended on these lines being there.
+#
+# WHY THIS IS LOUD RATHER THAN A ONE-CHARACTER FIX. The failure is silent in the
+# only place anyone looks: hook.log records rc=0 (the hook DID succeed — the
+# capture happened), the stop event is persisted, and the agent stops. The only
+# symptom is a red line in a pane, and it is buried whenever a later hook in the
+# group blocks. It was visible for ~16h before anyone read a pane at the one
+# moment — an empty haul — when nothing followed it to push it off screen.
 rc=0
-"$HERE/st-history-capture.sh" --agent "$AGENT" || rc=$?
+"$HERE/st-history-capture.sh" --agent "$AGENT" >&2 || rc=$?
 if [ "$rc" -eq 0 ]; then
-  "$HERE/st-history-scrub.sh" --agent "$AGENT" || rc=$?
+  "$HERE/st-history-scrub.sh" --agent "$AGENT" >&2 || rc=$?
 fi
 
 # The remap. See the warning above — 2 is Claude Code's blocking code and this
