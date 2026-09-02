@@ -31,23 +31,56 @@ def test_already_satisfied_target_refuses_before_writing_a_plan(tmp_path):
 
 
 def test_two_simultaneous_window_ids_cannot_coexist(tmp_path):
+    """Exactly one contender wins; the other is REFUSED.
+
+    ⚠️ THIS TEST IS NOT TIMING-SENSITIVE, despite reading like it (aegis-rig9vu).
+    If the two threads fail to overlap at all, one still wins and the other is
+    still refused — non-overlap is not a failure mode. So the reported CI
+    signature, `expected ["refused","won"], got ["won"]` with ONE element in the
+    list, could never have been "a contender never contended". It could only be a
+    contender that RAISED and was silently dropped: the except clause caught only
+    WindowRefused, `window.WindowUnreadable` is a sibling class it does not
+    match, and a thread that raises prints to stderr and never fails its test.
+
+    That cost two human-tier pages on main (8f1bd4a, 367cbf92), each an ack plus
+    an investigation plus a rerun, and neither could name the cause because the
+    cause had been swallowed.
+
+    The contender below therefore records EVERY outcome, including an unexpected
+    exception, so `outcomes` always has one entry per thread and the assertion
+    failure carries the real error instead of an absence.
+    """
     barrier = threading.Barrier(2)
     outcomes = []
 
     def contender(wid):
-        barrier.wait()
+        try:
+            barrier.wait(timeout=30)
+        except BaseException as exc:                      # noqa: BLE001
+            outcomes.append((wid, f"barrier-failed: {exc!r}"))
+            return
         try:
             _plan(tmp_path, wid)
             outcomes.append((wid, "won"))
         except window.WindowRefused:
             outcomes.append((wid, "refused"))
+        except BaseException as exc:                      # noqa: BLE001
+            # The whole point: an unexpected exception must be REPORTED, not
+            # dropped. WindowUnreadable from a mid-write read is the known
+            # candidate (b54f060 fixed the empty-file case; this catches whatever
+            # is left, and names it).
+            outcomes.append((wid, f"unexpected {type(exc).__name__}: {exc}"))
 
     threads = [threading.Thread(target=contender, args=(wid,)) for wid in ("a", "b")]
     for t in threads:
         t.start()
     for t in threads:
-        t.join()
-    assert sorted(result for _, result in outcomes) == ["refused", "won"]
+        t.join(timeout=60)
+    assert not [t for t in threads if t.is_alive()], "a contender thread hung"
+    # Assert on the FULL list, so an unexpected outcome prints itself rather than
+    # vanishing into a length mismatch.
+    assert len(outcomes) == 2, f"a contender produced no outcome: {outcomes}"
+    assert sorted(result for _, result in outcomes) == ["refused", "won"], outcomes
     assert window.active(tmp_path)["id"] in {"a", "b"}
 
 
