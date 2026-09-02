@@ -31,10 +31,10 @@ OUT="${ST_HISTORY_CORPUS_DIR:-$HOME/gt/shantytown/.shanty/history-corpus}"
 mkdir -p "$OUT"; chmod 700 "$OUT"
 
 python3 - "$SRC" "$OUT" <<'PY'
-import json, pathlib, sys
+import datetime, json, pathlib, sys
 
 src, out = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
-PROJECTION_VERSION = 2  # v2 drops tool results and adds plaintext thinking
+PROJECTION_VERSION = 3  # v3 emits Bobbin archive Markdown with frontmatter
 
 def clip(s, n=4000):
     s = " ".join(str(s).split())
@@ -80,7 +80,8 @@ files = kept = 0
 for f in sorted(src.rglob("*.jsonl")):
     agent = f.parent.name
     harness = "codex" if f.name.startswith("rollout-") else "claude"
-    dst = out / agent / (f.stem + ".txt")
+    dst = out / agent / (f.stem + ".md")
+    legacy = out / agent / (f.stem + ".txt")
     dst.parent.mkdir(parents=True, exist_ok=True)
     # Skip when this projector version is already newer than its source. The
     # version marker matters: an mtime-only cache left every old output intact
@@ -89,15 +90,30 @@ for f in sorted(src.rglob("*.jsonl")):
         if dst.exists() and dst.stat().st_mtime >= f.stat().st_mtime:
             with dst.open(encoding="utf-8", errors="replace") as old:
                 header = "".join(old.readline() for _ in range(4))
-            if f"# projection: {PROJECTION_VERSION}\n" in header:
+            if f"projection_version: {PROJECTION_VERSION}\n" in header:
                 files += 1; continue
     except OSError:
         pass
     turns = 0
     with f.open(encoding="utf-8", errors="replace") as fh, \
          dst.open("w", encoding="utf-8") as o:
-        # PROVENANCE HEADER — the epic asks for agent/session/harness labels, and
-        # a search hit is useless without them.
+        # Bobbin archive records are Markdown with matching YAML frontmatter.
+        # The timestamp is the scrubbed source's mtime: capture is append-only,
+        # so it identifies the latest material represented by this projection.
+        timestamp = datetime.datetime.fromtimestamp(
+            f.stat().st_mtime, datetime.timezone.utc
+        ).isoformat().replace("+00:00", "Z")
+        o.write("---\n")
+        o.write("schema: agent-transcript/v1\n")
+        o.write(f"projection_version: {PROJECTION_VERSION}\n")
+        o.write(f"id: {f.stem}\n")
+        o.write(f"timestamp: {timestamp}\n")
+        o.write(f"agent: {agent}\n")
+        o.write(f"harness: {harness}\n")
+        o.write(f"source_file: {f.name}\n")
+        o.write("---\n\n")
+        # Human-readable provenance remains in the body so a raw search hit is
+        # useful even on clients that do not render archive metadata.
         o.write(f"# transcript: agent={agent} harness={harness} session={f.stem}\n")
         o.write(f"# source: {f.name}\n#\n")
         o.write(f"# projection: {PROJECTION_VERSION}\n")
@@ -111,6 +127,7 @@ for f in sorted(src.rglob("*.jsonl")):
         dst.unlink(missing_ok=True)   # nothing indexable — do not ship an empty file
     else:
         kept += 1
+    legacy.unlink(missing_ok=True)   # v2 was plain .txt, invisible to archive indexing
     files += 1
 print(f"corpus: {files} transcripts scanned, {kept} projected -> {out}")
 PY

@@ -24,7 +24,7 @@ def _run(tmp_path: Path, files: dict[str, list[dict]]) -> dict[str, str]:
     }
     done = subprocess.run([str(SCRIPT)], env=env, capture_output=True, text=True)
     assert done.returncode == 0, done.stderr
-    return {str(p.relative_to(output)): p.read_text() for p in output.rglob("*.txt")}
+    return {str(p.relative_to(output)): p.read_text() for p in output.rglob("*.md")}
 
 
 def test_claude_keeps_dialogue_thinking_and_invocations_but_not_results(tmp_path):
@@ -40,7 +40,10 @@ def test_claude_keeps_dialogue_thinking_and_invocations_but_not_results(tmp_path
         ]}},
     ]
     corpus = _run(tmp_path, {"dearing/session.jsonl": rows})
-    text = corpus["dearing/session.txt"]
+    text = corpus["dearing/session.md"]
+    assert "schema: agent-transcript/v1" in text
+    assert "agent: dearing" in text
+    assert "harness: claude" in text
     assert "[assistant/thinking] reasoned signal" in text
     assert "[assistant/text] assistant dialogue" in text
     assert "[assistant/tool:Read]" in text
@@ -63,7 +66,9 @@ def test_codex_keeps_dialogue_and_invocations_but_not_outputs(tmp_path):
         }},
     ]
     corpus = _run(tmp_path, {"gennaro/rollout-2026-09-02.jsonl": rows})
-    text = corpus["gennaro/rollout-2026-09-02.txt"]
+    text = corpus["gennaro/rollout-2026-09-02.md"]
+    assert "schema: agent-transcript/v1" in text
+    assert "harness: codex" in text
     assert "[assistant/text] codex dialogue" in text
     assert "[assistant/tool:exec_command] do thing" in text
     assert "duplicated command output" not in text
@@ -75,13 +80,24 @@ def test_old_projection_is_rebuilt_even_when_its_mtime_is_newer(tmp_path):
         {"type": "user", "message": {"content": "current dialogue"}},
     ]}
     corpus = _run(tmp_path, files)
-    output = tmp_path / "corpus" / "agent" / "session.txt"
+    output = tmp_path / "corpus" / "agent" / "session.md"
     output.write_text("# old projection without a version\n[user/tool_result] stale output\n")
     source = tmp_path / "scrubbed" / "agent" / "session.jsonl"
     os.utime(output, (source.stat().st_mtime + 60, source.stat().st_mtime + 60))
 
     corpus = _run(tmp_path, files)
-    text = corpus["agent/session.txt"]
-    assert "# projection: 2" in text
+    text = corpus["agent/session.md"]
+    assert "# projection: 3" in text
     assert "current dialogue" in text
     assert "stale output" not in text
+
+
+def test_v3_replaces_the_legacy_txt_derivative(tmp_path):
+    output = tmp_path / "corpus" / "agent" / "session.txt"
+    output.parent.mkdir(parents=True)
+    output.write_text("[user/tool_result] legacy duplicated output\n")
+    corpus = _run(tmp_path, {"agent/session.jsonl": [
+        {"type": "user", "message": {"content": "kept dialogue"}},
+    ]})
+    assert "agent/session.md" in corpus
+    assert not output.exists()
