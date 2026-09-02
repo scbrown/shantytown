@@ -204,9 +204,17 @@ def test_unknown_context_depth_never_triggers_the_handoff(monkeypatch, capsys):
     assert "HAUL:" in block["reason"] and "HANDOFF" not in block["reason"]
 
 
-def test_a_non_worker_never_hauls(monkeypatch, capsys):
+def test_a_non_hauling_role_never_hauls(monkeypatch, capsys):
+    """Was `test_a_non_worker_never_hauls`, with a LEAD as its fixture. aegis-rvxcf1
+    changed that contract deliberately — leads self-feed now, because measuring
+    the old behaviour showed a lead's haul advancing in the tracker while the
+    pane sat idle awaiting a manual `st go`. The rule this test protects is
+    still real, so it is re-pointed at the role that genuinely does not haul
+    rather than deleted: an administrator's assigned beads are not a haul, and
+    feeding them would put the person who dispatches work head-down in a bead."""
     rc, block = _run(monkeypatch, capsys,
-                     reg=_Reg([Agent(name="billy", role="lead", pane="p-b")]),
+                     reg=_Reg([Agent(name="billy", role="administrator",
+                                     pane="p-b")]),
                      ready=[{"id": "aegis-2", "assignee": "billy"}])
     assert rc == 0 and block is None
 
@@ -400,3 +408,43 @@ def test_an_armed_budget_with_NO_signal_feeds_and_says_it_is_blind(tmp_path,
     cap = capsys.readouterr()
     assert "aegis-2" in cap.out, "blind must not block the haul"
     assert "SIGNAL LOST" in cap.err and "UNMEASURED" in cap.err
+
+
+# --- a LEAD's haul must self-feed too (aegis-rvxcf1) -------------------------
+#
+# MEASURED three times in one afternoon: dearing (a CLAUDE lead) closed a bead,
+# the next ready item sat in her own queue, and the pane went idle with an empty
+# buffer until a coordinator ran `st go` by hand. Every haul advance cost one
+# coordinator turn — exactly the per-bead dispatch a haul exists to remove.
+#
+# The cause was this function's role gate, which admitted only workers and codex
+# leads. Its comment read "Claude leads keep their autonomous turn loop", and
+# that premise is what the measurement falsifies: once the Stop hook allows the
+# stop, there is no turn loop left to keep. A claude WORKER is fed precisely
+# because nothing else would continue it, and a claude lead is no different.
+
+def test_a_claude_lead_with_a_closed_anchor_IS_FED(monkeypatch, capsys):
+    lead = Agent(name="billy", role="lead", pane="p-b", harness="claude")
+    claims = []
+    rc, block = _run(
+        monkeypatch, capsys, reg=_Reg([lead]), claims=claims,
+        ready=[{"id": "aegis-2", "title": "next up", "assignee": "billy"}],
+    )
+    assert rc == 0
+    assert block is not None, "a lead with ready assigned work was left idle"
+    assert "aegis-2" in block["reason"] and "HAUL" in block["reason"]
+    assert claims == ["aegis-2"], "the fed bead is claimed in_progress"
+
+
+def test_a_claude_lead_mid_work_is_still_silent(monkeypatch, capsys):
+    """NEGATIVE CONTROL, and the reason the fix is a role gate change and not a
+    harness one: an ACTIVE anchor is a turn boundary, not an idle agent. Claude
+    owns its own loop mid-work, so that case must stay silent for leads exactly
+    as it does for workers."""
+    lead = Agent(name="billy", role="lead", pane="p-b", harness="claude")
+    rc, block = _run(
+        monkeypatch, capsys, reg=_Reg([lead]),
+        ready=[{"id": "aegis-2", "assignee": "billy"}],
+        in_progress=[{"id": "aegis-1", "assignee": "billy"}],
+    )
+    assert rc == 0 and block is None

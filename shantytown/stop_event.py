@@ -421,10 +421,27 @@ def _haul(reg: FilesRegistry, panes, me: str, root: Path) -> int:
         card = reg.get(me)
         from . import harness as harness_mod
         harness_name = harness_mod.name_for(card, root=root)
-        # Leads hold assigned work too. Codex leads need the same explicit
-        # continuation as workers; Claude leads keep their autonomous turn loop.
-        if card.role != "worker" and not (card.role == "lead" and
-                                           harness_name == "codex"):
+        # LEADS SELF-FEED TOO, on every harness (aegis-rvxcf1).
+        #
+        # This gate used to admit workers and CODEX leads only, on the reasoning
+        # that "Claude leads keep their autonomous turn loop". Measured three
+        # times in one afternoon: they do not. Once the Stop hook allows the
+        # stop there is no turn loop left to keep — the pane goes idle with an
+        # empty buffer, and the next haul item sits in the lead's own queue
+        # until a coordinator types `st go`. That is one coordinator turn per
+        # bead, which is the exact per-bead dispatch a haul exists to remove,
+        # and it makes a fully-fed lead look like an idle loop on `st crew`.
+        #
+        # A claude WORKER is fed for precisely the reason a claude lead needs
+        # to be: nothing else continues it. The harness distinction that IS
+        # real lives below, on the ACTIVE-anchor branch — a mid-work turn
+        # boundary stays silent for claude and resumes explicitly for codex —
+        # and that is untouched.
+        #
+        # ADMINISTRATORS ARE STILL EXCLUDED, deliberately: the coordinator's
+        # assigned beads are not a haul, and feeding them would put the person
+        # who dispatches work head-down in a bead.
+        if card.role not in ("worker", "lead"):
             return 0
         from .feed_check import bd_cwd
         cwd = bd_cwd(reg)
