@@ -193,3 +193,70 @@ def test_an_unwritable_log_does_not_change_the_hooks_verdict(tmp_path):
     (raw / "hook.log").mkdir()          # a directory where the log wants a file
     r = _run(HOOK, env=env, agent="tester")
     assert r.returncode == 0, r.stdout + r.stderr
+
+
+# --- the timer-retirement gate (aegis-xfmon3 step 3) -------------------------
+
+def _gate():
+    """Load the gate's decision rule. It is a script, not a module, so it is
+    loaded by path — the same way it runs."""
+    import importlib.util
+    spec = importlib.util.spec_from_loader(
+        "timer_gate",
+        importlib.machinery.SourceFileLoader(
+            "timer_gate", str(SCRIPTS / "st-history-timer-gate.sh")))
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    return m
+
+
+def test_one_agents_proof_does_not_license_removing_a_fleet_wide_timer():
+    """THE POINT OF THE GATE. Settings reach a live agent only on RELAUNCH, so at
+    the moment the hook is proven on the first relaunched agent every OTHER live
+    agent still has no archiver at all — and the timer is their only capture.
+    Removing it then un-covers the fleet silently, because the archive keeps
+    growing from the agents that ARE covered."""
+    g = _gate()
+    rc, out = g.decide(live=["a", "b"], stale=["b"], unknown=[], fired={"a"})
+    assert rc == 1
+    assert "NOT SAFE" in "\n".join(out)
+
+
+def test_current_settings_are_not_proof_the_hook_ever_RAN():
+    """An agent can be on the current file and still never have fired it.
+    Settings prove the config was LOADED; only the log proves the harness RAN
+    it. This repo already draws that line for pane liveness vs hook
+    registration."""
+    g = _gate()
+    rc, out = g.decide(live=["a"], stale=[], unknown=[], fired=set())
+    assert rc == 1
+    assert "hook has never fired for: a" in "\n".join(out)
+
+
+def test_unknown_launch_verdict_is_never_rounded_to_safe():
+    g = _gate()
+    rc, _ = g.decide(live=["a"], stale=[], unknown=["a"], fired={"a"})
+    assert rc == 1
+
+
+def test_an_empty_fleet_is_cannot_tell_not_safe():
+    """Nobody live is the least informative moment to make a permanent change,
+    and it is exactly when the check looks cleanest."""
+    g = _gate()
+    rc, out = g.decide(live=[], stale=[], unknown=[], fired=set())
+    assert rc == 2
+    assert "CANNOT TELL" in out[0]
+
+
+def test_safe_requires_every_live_agent_on_both_counts():
+    g = _gate()
+    rc, out = g.decide(live=["a", "b"], stale=[], unknown=[], fired={"a", "b"})
+    assert rc == 0
+    assert "SAFE" in "\n".join(out)
+
+
+def test_a_missing_log_is_an_empty_set_not_an_error(tmp_path):
+    """Before the first stop under the new settings, no log is the true and
+    expected state — it must read as 'nobody has fired', not as a fault."""
+    g = _gate()
+    assert g.read_fired(tmp_path / "absent.log") == set()
