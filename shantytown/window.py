@@ -48,9 +48,37 @@ class WindowStore:
         try:
             fd = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         except FileExistsError as exc:
-            current = self.load()
+            # THE REFUSAL IS ALREADY DECIDED, by O_EXCL above. Reading the
+            # winner's manifest is only so the message can name it — and that
+            # read is a RACE, because the winner creates this file EMPTY and
+            # fills it a moment later. A loser arriving inside that gap read
+            # `""`, json.loads raised ValueError, and load() turned a correct
+            # refusal into WindowUnreadable. That is not a nicer error, it is
+            # the WRONG one: the caller is told the ledger is corrupt when in
+            # fact it simply lost a race it is supposed to lose gracefully.
+            #
+            # Measured on shantytown main (CI run on ef4b9fc):
+            #   test_two_simultaneous_window_ids_cannot_coexist
+            #   assert ['won'] == ['refused', 'won']
+            #   WindowUnreadable: ... Expecting value: line 1 column 1 (char 0)
+            # The loser's exception escaped its thread, so its outcome was never
+            # recorded at all.
+            #
+            # So: wait briefly for the winner to finish writing, but NEVER let
+            # an unreadable ledger change the verdict. Refuse either way.
+            current = None
+            deadline = time.monotonic() + 2.0
+            while True:
+                try:
+                    current = self.load()
+                    break
+                except WindowUnreadable:
+                    if time.monotonic() >= deadline:
+                        break
+                    time.sleep(0.01)
+            named = f"{current['id']!r}" if current else "(id not yet readable)"
             raise WindowRefused(
-                f"maintenance window {current['id']!r} already exists; "
+                f"maintenance window {named} already exists; "
                 "release or abort it before planning another") from exc
         try:
             with os.fdopen(fd, "w") as f:

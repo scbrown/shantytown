@@ -51,6 +51,25 @@ def test_two_simultaneous_window_ids_cannot_coexist(tmp_path):
     assert window.active(tmp_path)["id"] in {"a", "b"}
 
 
+def test_loser_is_refused_even_when_the_winner_has_not_written_yet(tmp_path):
+    """A loser that arrives mid-create must be REFUSED, not told the ledger is corrupt.
+
+    create() establishes exclusivity with O_EXCL, which leaves the file EMPTY
+    until the json.dump lands. A contender arriving inside that gap used to read
+    "" and raise WindowUnreadable — the wrong verdict, and one the caller cannot
+    act on: it says "corrupt" when the truth is "you lost a race".
+
+    This is deterministic where the threaded test above is not: it recreates the
+    exact intermediate state rather than hoping to hit it. That matters, because
+    the threaded test PASSED locally ten times in a row while main was red.
+    """
+    (tmp_path / "window").mkdir(parents=True)
+    (tmp_path / "window" / "active.json").write_text("")  # winner mid-create
+
+    with pytest.raises(window.WindowRefused):
+        window.WindowStore(tmp_path).create({"id": "b"})
+
+
 def test_dirty_or_live_worker_prevents_clear_and_is_named(tmp_path):
     _plan(tmp_path)
     window.drain(tmp_path, "w1", pause_timer=lambda: None)
