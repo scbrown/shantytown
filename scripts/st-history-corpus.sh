@@ -11,19 +11,18 @@
 # already lives, and lets bobbin index a directory of text files the way it
 # already indexes several.
 #
-# SCOPE IS sattler's CORPUS RULING: messages + tool calls, BOTH harnesses.
+# SCOPE IS wu's CAPACITY/RELEVANCE RULING (aegis-oeswpq): dialogue,
+# reasoning when plaintext exists, and tool INVOCATIONS — never tool RESULTS.
+# Tool output is largely source and command stdout already represented in the
+# code index; it was measured at 49.5% of the first projection's bytes.
 #
-#   codex   response_item payloads: message, custom_tool_call,
-#           custom_tool_call_output
-#   claude  assistant/user text, assistant tool_use, user tool_result
+#   codex   response_item payloads: message, custom_tool_call
+#   claude  assistant/user text + thinking, assistant tool_use
 #
-# Deliberately EXCLUDED, and this is the ruling's whole point: reasoning. codex
-# `reasoning` payloads carry `encrypted_content` with an EMPTY summary — measured
-# — so codex reasoning cannot be indexed as text at all. claude `thinking` IS
-# plaintext and IS preserved in the archive, but indexing it for one harness and
-# not the other builds a corpus whose coverage silently depends on which harness
-# an agent happened to run. The ruling picked the common denominator on purpose.
-# Adding claude thinking later is a deliberate widening, not an oversight.
+# Codex `reasoning` payloads carry encrypted_content with an empty summary, so
+# there is no plaintext to project. Claude `thinking` is plaintext and is kept.
+# The provenance header names the harness, making that coverage difference
+# explicit rather than silently discarding the reasoning that does exist.
 set -uo pipefail
 
 SRC="${ST_HISTORY_SCRUBBED_DIR:-$HOME/gt/shantytown/.shanty/history-scrubbed}"
@@ -55,11 +54,10 @@ def claude_turns(fh):
             t = b.get("type")
             if t == "text":
                 yield role, "text", clip(b.get("text", ""))
+            elif t == "thinking":
+                yield role, "thinking", clip(b.get("thinking", ""))
             elif t == "tool_use":
                 yield role, f"tool:{b.get('name')}", clip(json.dumps(b.get("input", {})))
-            elif t == "tool_result":
-                c = b.get("content")
-                yield role, "tool_result", clip(c if isinstance(c, str) else json.dumps(c))
 
 def codex_turns(fh):
     for line in fh:
@@ -76,8 +74,6 @@ def codex_turns(fh):
             yield p.get("role", "?"), "text", clip(c)
         elif t == "custom_tool_call":
             yield "assistant", f"tool:{p.get('name')}", clip(p.get("input", ""))
-        elif t == "custom_tool_call_output":
-            yield "user", "tool_result", clip(p.get("output", ""))
 
 files = kept = 0
 for f in sorted(src.rglob("*.jsonl")):
