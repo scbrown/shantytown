@@ -276,9 +276,13 @@ def test_resolve_from_walks_past_the_clone_boundary(tmp_path):
     assert stores.resolve_from(str(ws)) == str(rig.resolve())
 
 
-def test_resolve_from_reports_could_not_tell_rather_than_guessing(tmp_path):
+def test_resolve_from_reports_could_not_tell_rather_than_guessing(beadsless_tmp):
+    # `beadsless_tmp`, not tmp_path: resolve_from walks upward, and on this host
+    # pytest's basetemp is under $HOME, which has a .beads — so tmp_path made
+    # this assert a claim about the RUNNER'S filesystem, not the resolver
+    # (aegis-rig9vu).
     assert stores.resolve_from(None) is None
-    assert stores.resolve_from(str(tmp_path / "nope" / "deeper")) is None
+    assert stores.resolve_from(str(beadsless_tmp / "nope" / "deeper")) is None
 
 
 def test_identity_reads_dolt_database_not_the_backend_key(tmp_path):

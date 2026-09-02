@@ -37,6 +37,7 @@ is handed out for a non-reason is one nobody reads later.
 from __future__ import annotations
 
 import pytest
+from pathlib import Path
 
 from shantytown import beads as beads_mod
 
@@ -200,3 +201,50 @@ def _no_ambient_checkout(monkeypatch):
     from shantytown import runtime
     monkeypatch.delenv("SHANTY_CANONICAL_SOURCE", raising=False)
     monkeypatch.setattr(runtime, "canonical_source", lambda *a, **k: None)
+
+
+@pytest.fixture
+def beadsless_tmp(tmp_path):
+    """A directory with NO `.beads` in ANY ancestor.
+
+    Two tests assert that store resolution walking upward finds nothing and
+    returns None rather than guessing. Both resolvers deliberately walk past the
+    git boundary all the way up (feed_check.bd_cwd says why: the rig root lives
+    ABOVE the admin's clone). So "nothing above it" is a property of the
+    FILESYSTEM, and `tmp_path` does not provide it.
+
+    MEASURED 2026-09-02: on this host pytest's basetemp sits under $HOME, and
+    $HOME has a `.beads`. Both tests therefore failed for every crew agent while
+    passing in CI — and they failed as a confident assertion about the resolver
+    (it printed the resolved HOME path where None was expected) rather than as
+    "your TMPDIR has a store above it". `TMPDIR=/tmp` made them pass, which is
+    the whole diagnosis.
+
+    This is the same class conftest already guards three times over: a test whose
+    verdict depends on the runner's ambient environment. It is the nastiest
+    variant, because the ambient thing is the TEMP DIRECTORY that pytest itself
+    chose, so nothing in the test looks environmental.
+
+    Rather than pin TMPDIR globally — which would change every other test's
+    environment to fix two — this hands back a base that is verified clean, and
+    SKIPS with the reason if the host can offer none. A skip that names the cause
+    beats a red that misattributes it to the code under test.
+    """
+    import tempfile
+
+    def _clean(p):
+        p = Path(p).resolve()
+        return not any((anc / ".beads").exists() for anc in (p, *p.parents))
+
+    if _clean(tmp_path):
+        return tmp_path
+    for base in ("/tmp", "/var/tmp"):
+        if not Path(base).is_dir():
+            continue
+        cand = Path(tempfile.mkdtemp(prefix="shantytown-beadsless-", dir=base))
+        if _clean(cand):
+            return cand
+    pytest.skip(
+        "no writable base without a .beads ancestor on this host — this test "
+        "asserts upward store resolution finds NOTHING, which the filesystem "
+        "must actually provide (aegis-rig9vu)")

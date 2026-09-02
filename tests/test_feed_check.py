@@ -272,12 +272,14 @@ def test_a_workspace_with_its_own_store_wins_over_an_ancestor(tmp_path):
     assert feed_check.bd_cwd(reg) == str(ws)
 
 
-def test_bd_cwd_without_an_admin_workspace_or_store_is_None_not_a_guess(tmp_path):
+def test_bd_cwd_without_an_admin_workspace_or_store_is_None_not_a_guess(beadsless_tmp):
     assert feed_check.bd_cwd(_Reg([Agent(name="w", role="worker")])) is None
     assert feed_check.bd_cwd(
         _Reg([Agent(name="a", role="administrator")])) is None
-    # a workspace with NO .beads anywhere above it: still None, never a guess
-    ws = tmp_path / "lonely" / "crew" / "a"
+    # A workspace with NO .beads anywhere above it: still None, never a guess.
+    # `beadsless_tmp`, not tmp_path — bd_cwd walks ALL the way up, and on this
+    # host pytest's basetemp is under $HOME, which has a .beads (aegis-rig9vu).
+    ws = beadsless_tmp / "lonely" / "crew" / "a"
     ws.mkdir(parents=True)
     assert feed_check.bd_cwd(
         _Reg([Agent(name="a", role="administrator", workspace=str(ws))])) is None
