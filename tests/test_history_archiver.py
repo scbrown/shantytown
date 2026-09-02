@@ -163,3 +163,33 @@ def test_an_unknown_agent_is_not_an_error_and_scrubs_nothing(tmp_path):
     r = _run(SCRUB, "--agent", "nobody", env=env)
     assert r.returncode == 0
     assert not (out / "nobody").exists()
+
+
+def test_the_hook_records_that_it_ran(tmp_path):
+    """The run log is the ONLY thing that separates "the hook is live" from "the
+    interim timer is quietly covering for it" — both leave the same archive
+    behind. Retiring the timer is unsafe without it: removing the timer and
+    watching captures continue would prove nothing.
+
+    Asserted on both a clean run and a failing one, because a log that only
+    records successes cannot answer "did it run" on the night it matters.
+    """
+    raw, out, env = _archive(tmp_path)
+    _run(HOOK, env=env, agent="tester")
+    log = (raw / "hook.log").read_text()
+    assert "\ttester\t" in log and "rc=0" in log
+
+    (out / "tester").mkdir(exist_ok=True)
+    (out / "tester" / "planted.jsonl").write_text('{"t":"%s"}\n' % FAKE_TOKEN)
+    _run(HOOK, env=env, agent="tester")
+    lines = (raw / "hook.log").read_text().strip().splitlines()
+    assert len(lines) == 2 and lines[-1].endswith("rc=1")
+
+
+def test_an_unwritable_log_does_not_change_the_hooks_verdict(tmp_path):
+    """A hook that fails BECAUSE it could not write its own audit line would be
+    a stop-path fault introduced by the thing watching the stop path."""
+    raw, _, env = _archive(tmp_path)
+    (raw / "hook.log").mkdir()          # a directory where the log wants a file
+    r = _run(HOOK, env=env, agent="tester")
+    assert r.returncode == 0, r.stdout + r.stderr

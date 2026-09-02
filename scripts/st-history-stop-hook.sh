@@ -43,4 +43,19 @@ fi
 # The remap. See the warning above — 2 is Claude Code's blocking code and this
 # hook has no business using it.
 [ "$rc" -eq 2 ] && rc=1
+
+# A RUN LOG, and it is not test scaffolding — it is the only thing that can tell
+# "the hook is live" from "the */30 timer is quietly covering for it". Both
+# produce archive entries; only the hook writes here. That distinction is the
+# precondition for retiring the timer at all: without it, removing the timer and
+# watching captures continue would prove nothing, because a working timer and a
+# working hook leave the same archive behind.
+#
+# Failure to log is never allowed to change the hook's verdict — an unwritable
+# log is not a reason to disturb a stop.
+LOG="${ST_HISTORY_DIR:-$HOME/gt/shantytown/.shanty/history}/hook.log"
+{ printf '%s\t%s\t%s\trc=%s\n' \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$AGENT" "${SHANTY_ROLE:-?}" "$rc" \
+    >> "$LOG" && chmod 600 "$LOG"; } 2>/dev/null || true
+
 exit "$rc"
