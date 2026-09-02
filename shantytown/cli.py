@@ -4563,6 +4563,7 @@ def _check_alert_keepers(a, rules: list[Path]) -> int:
         return CANNOT_TELL
 
     findings = []
+    unowned: list[str] = []
     seen = 0
     for rule_path in rules:
         try:
@@ -4572,14 +4573,37 @@ def _check_alert_keepers(a, rules: list[Path]) -> int:
             return CANNOT_TELL
 
         active = None
+
+        def _flush(alert):
+            """Record one parsed stanza's findings, and count a declared absence.
+
+            The count is kept HONEST on purpose (kelly's recommendation): an
+            explicitly unowned alert is reported as such rather than quietly
+            making the owned total one smaller, which would read as if the
+            fleet had one fewer alert instead of one deliberately unowned.
+            """
+            findings.extend(_keeper_findings(agents, rule_path, alert))
+            if alert.get("keeper") == _KEEPER_NONE and alert.get("reason"):
+                unowned.append(alert["name"] or "unnamed alert")
+
         for lineno, line in enumerate(lines, start=1):
             stripped = line.lstrip()
             if not stripped or stripped.startswith("#"):
+                # A comment inside a stanza may carry the declared-absence
+                # sentinel. It MUST be a comment: see _keeper_findings for why a
+                # real `keeper` label cannot express this.
+                if active is not None and active.get("keeper") is None:
+                    body = stripped.lstrip("#").strip()
+                    if body.startswith("keeper:"):
+                        rest = body.removeprefix("keeper:").strip()
+                        if rest.split(" ", 1)[0].strip().strip("\"'") == _KEEPER_NONE:
+                            active["keeper"] = _KEEPER_NONE
+                            active["reason"] = rest[len(_KEEPER_NONE):].strip(" -—:#")
                 continue
             indent = len(line) - len(stripped)
             if stripped.startswith("- alert:") or stripped.startswith("alert:"):
                 if active is not None:
-                    findings.extend(_keeper_findings(agents, rule_path, active))
+                    _flush(active)
                 name = (stripped.removeprefix("- ").removeprefix("alert:")
                         .strip().strip("\"'"))
                 active = {"name": name, "line": lineno, "indent": indent,
@@ -4587,12 +4611,22 @@ def _check_alert_keepers(a, rules: list[Path]) -> int:
                 seen += 1
                 continue
             if active is not None and indent <= active["indent"]:
-                findings.extend(_keeper_findings(agents, rule_path, active))
+                _flush(active)
                 active = None
             if active is not None and stripped.startswith("keeper:"):
-                active["keeper"] = stripped.removeprefix("keeper:").strip().strip("\"'")
+                value = stripped.removeprefix("keeper:")
+                # Split the trailing `# …` off. For an ordinary keeper it is a
+                # normal YAML comment that was previously being parsed INTO the
+                # name (and so failing as "not on the roster"); for the `none`
+                # sentinel it is the required justification.
+                value, _, reason = value.partition("#")
+                active["keeper"] = value.strip().strip("\"'")
+                active["reason"] = reason.strip()
+                # Remember this came from a LABEL: the sentinel is only valid as
+                # a comment, and the two must be distinguishable.
+                active["labelled_none"] = active["keeper"] == _KEEPER_NONE
         if active is not None:
-            findings.extend(_keeper_findings(agents, rule_path, active))
+            _flush(active)
 
     if not seen:
         print("could not tell: no alert stanzas found in supplied rule files", file=sys.stderr)
@@ -4602,15 +4636,60 @@ def _check_alert_keepers(a, rules: list[Path]) -> int:
             print(f"FAIL: {finding}")
         print("Alert-keeper check FAILED — every alert needs a roster keeper that "
               "can work unattended. Stopped but launchable keepers are permitted.")
+        # THE STEER (aegis-jcr0g). Without this line the obvious repair for
+        # "missing keeper label" is to add a keeper — and for a sink-only canary
+        # that silently turns it into a real page to whoever is named, which is
+        # the bug aegis-fyxsx removed. A diligent reader following the failure
+        # text must land on the right fix, not the damaging one.
+        print(f"If an alert is DELIBERATELY unowned, say so in the rule as a "
+              f"COMMENT: `# keeper: {_KEEPER_NONE} — <why>`. A declared absence "
+              f"is not a missing label. The reason is required, and it must be "
+              f"a comment: a real keeper label is seated as chain[0] by "
+              f"alert-comms-bridge.")
         return REFUSED
-    print(f"OK: {seen} alert rule(s) have roster keepers that can work unattended")
+    if unowned:
+        print(f"OK: {seen - len(unowned)} alert rule(s) have roster keepers that "
+              f"can work unattended; {len(unowned)} explicitly unowned "
+              f"({', '.join(sorted(unowned))})")
+    else:
+        print(f"OK: {seen} alert rule(s) have roster keepers that can work unattended")
     return OK
+
+
+# The declared-absence sentinel (aegis-jcr0g, sattler's ruling 2026-08-30).
+# A DECLARED absence is not a MISSING label — the same principle as the
+# confidence labels, where unset must not read as extracted.
+_KEEPER_NONE = "none"
 
 
 def _keeper_findings(agents, rule_path: Path, alert) -> list[str]:
     """Return the durable ownership defects for one parsed alert stanza."""
     where = f"{rule_path}:{alert['line']} ({alert['name'] or 'unnamed alert'})"
     keeper = alert["keeper"]
+    if keeper == _KEEPER_NONE:
+        if not alert.get("labelled_none"):
+            # WHY A REASON IS REQUIRED. Two correct guards collided here: this
+            # check wants every alert owned, and aegis-fyxsx requires the ladder
+            # canary to carry NO keeper for ever. The sentinel exists to express
+            # that; a bare `none` would express nothing and would just be a
+            # quieter way to skip the check — the unowned-alert hole this whole
+            # function exists to close.
+            if not alert.get("reason"):
+                return [f"{where}: the declared-absence sentinel needs its "
+                        f"reason (`# keeper: {_KEEPER_NONE} — <why this alert "
+                        f"is deliberately unowned>`)"]
+            return []
+        # ⛔ A REAL LABEL IS REFUSED, and this is the whole point of the comment
+        # form. alert-comms-bridge reads `labels["keeper"]` and, finding any
+        # non-empty value, seats it as chain[0]: `["none", *chain]`. So a
+        # `keeper: none` LABEL does not declare an absence — it routes tier zero
+        # to a recipient that does not exist. Measured in
+        # alert-comms-bridge.py::with_keeper, which truthy-tests the value.
+        return [f"{where}: `keeper: {_KEEPER_NONE}` must be a COMMENT, not a "
+                f"label — alert-comms-bridge seats any non-empty keeper as "
+                f"chain[0], so as a label this routes tier zero to a "
+                f"nonexistent recipient. Write `# keeper: {_KEEPER_NONE} — "
+                f"<why>` instead."]
     if not keeper:
         return [f"{where}: missing keeper label"]
     agent = agents.get(keeper)
