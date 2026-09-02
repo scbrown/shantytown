@@ -11,7 +11,11 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "st-history-corpus.sh"
 
 
-def _run(tmp_path: Path, files: dict[str, list[dict]]) -> dict[str, str]:
+def _run(
+    tmp_path: Path,
+    files: dict[str, list[dict]],
+    extra_env: dict[str, str] | None = None,
+) -> dict[str, str]:
     source = tmp_path / "scrubbed"
     output = tmp_path / "corpus"
     for relative, rows in files.items():
@@ -22,6 +26,7 @@ def _run(tmp_path: Path, files: dict[str, list[dict]]) -> dict[str, str]:
         "ST_HISTORY_SCRUBBED_DIR": str(source),
         "ST_HISTORY_CORPUS_DIR": str(output),
     }
+    env.update(extra_env or {})
     done = subprocess.run([str(SCRIPT)], env=env, capture_output=True, text=True)
     assert done.returncode == 0, done.stderr
     return {str(p.relative_to(output)): p.read_text() for p in output.rglob("*.md")}
@@ -101,3 +106,29 @@ def test_v3_replaces_the_legacy_txt_derivative(tmp_path):
     ]})
     assert "agent/session.md" in corpus
     assert not output.exists()
+
+
+def test_optional_sync_publishes_only_after_projection(tmp_path):
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    calls = tmp_path / "rsync-calls"
+    rsync = bindir / "rsync"
+    rsync.write_text(
+        "#!/bin/sh\n"
+        f"printf '%s\\n' \"$@\" > {calls}\n"
+        "test -f \"${4}agent/session.md\"\n"
+    )
+    rsync.chmod(0o755)
+    _run(
+        tmp_path,
+        {"agent/session.jsonl": [
+            {"type": "user", "message": {"content": "kept dialogue"}},
+        ]},
+        {
+            "PATH": f"{bindir}:{os.environ['PATH']}",
+            "ST_HISTORY_CORPUS_SYNC_DEST": "sync-target",
+        },
+    )
+    args = calls.read_text()
+    assert "--delete" in args
+    assert "sync-target/" in args

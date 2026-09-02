@@ -132,4 +132,14 @@ for f in sorted(src.rglob("*.jsonl")):
 print(f"corpus: {files} transcripts scanned, {kept} projected -> {out}")
 PY
 chmod -R go-rwx "$OUT" 2>/dev/null || true
+
+# Optional durable publication path for the isolated Bobbin transcript store.
+# The default remains local-only.  The host timer opts in with an explicit
+# destination after the scrubbed projection has completed, so raw harness JSONL
+# and tool results can never enter the published corpus.
+if [ -n "${ST_HISTORY_CORPUS_SYNC_DEST:-}" ]; then
+    rsync -a --delete --chmod=Du=rwx,Dgo=,Fu=rw,Fgo= \
+        "$OUT/" "$ST_HISTORY_CORPUS_SYNC_DEST/"
+    echo "corpus: synced projected records -> $ST_HISTORY_CORPUS_SYNC_DEST"
+fi
 exit 0
