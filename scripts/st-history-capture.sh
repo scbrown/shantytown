@@ -28,13 +28,27 @@ DEST="${ST_HISTORY_DIR:-$HOME/gt/shantytown/.shanty/history}"
 CODEX_ROOT="${ST_CODEX_ROOT:-/run/user/$(id -u)/shantytown/codex}"
 CLAUDE_ROOT="${ST_CLAUDE_ROOT:-$HOME/.claude/projects}"
 DRY=0
-[ "${1:-}" = "--dry-run" ] && DRY=1
+ONLY_AGENT=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --dry-run) DRY=1 ;;
+    # Scope to ONE agent. This exists for the Stop hook: a hook runs on EVERY
+    # agent's stop, so it must cost that agent only what their own session
+    # costs. A full sweep is 3.1s measured — not ruinous, but paying it on every
+    # stop fleet-wide to re-skip 300+ unchanged files of other people's sessions
+    # is work nobody asked for.
+    --agent) shift; ONLY_AGENT="${1:-}" ;;
+    *) ;;
+  esac
+  shift
+done
 
 copied=0; skipped=0; bytes=0
 say() { echo "$(date -u +%H:%M:%SZ) $*"; }
 
 capture() {   # <agent> <harness> <src>
   local agent="$1" harness="$2" src="$3"
+  [ -n "$ONLY_AGENT" ] && [ "$agent" != "$ONLY_AGENT" ] && return
   local base; base="$(basename "$src")"
   local dir="$DEST/$agent"; local dst="$dir/$base"
   if [ -f "$dst" ] && [ "$(stat -c %s "$dst" 2>/dev/null)" -ge "$(stat -c %s "$src" 2>/dev/null)" ]; then
@@ -89,6 +103,6 @@ if [ -d "$CLAUDE_ROOT" ]; then
   done < <(find "$CLAUDE_ROOT" -maxdepth 2 -path '*crew-*' -name '*.jsonl' -type f 2>/dev/null)
 fi
 
-say "captured=$copied skipped_unchanged=$skipped bytes=$bytes dest=$DEST"
+say "captured=$copied skipped_unchanged=$skipped bytes=$bytes${ONLY_AGENT:+ agent=$ONLY_AGENT} dest=$DEST"
 [ "$DRY" = 1 ] && say "(dry run — nothing written)"
 exit 0
