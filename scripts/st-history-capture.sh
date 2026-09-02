@@ -42,7 +42,14 @@ capture() {   # <agent> <harness> <src>
   fi
   [ "$DRY" = 1 ] && { say "WOULD capture $agent/$harness/$base"; copied=$((copied+1)); return; }
   mkdir -p "$dir" || return
+  # 0700/0600 is a RULING, not a preference (aegis-ra6hvt): the raw archive holds
+  # credential-shaped strings pasted into transcripts in error, so it stays
+  # owner-only and un-indexed while a scrubbed derivative is what gets indexed.
+  # Enforced HERE rather than by a one-shot chmod, because every future capture
+  # would otherwise land at the default umask and silently undo the lock.
+  chmod 700 "$DEST" "$dir" 2>/dev/null || true
   cp -p "$src" "$dst.part" 2>/dev/null || { say "FAILED $src"; return; }
+  chmod 600 "$dst.part" 2>/dev/null || true
   mv -f "$dst.part" "$dst"
   local sz; sz="$(stat -c %s "$dst" 2>/dev/null || echo 0)"
   bytes=$((bytes+sz)); copied=$((copied+1))
@@ -51,6 +58,7 @@ capture() {   # <agent> <harness> <src>
   printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
     "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$agent" "$harness" "$base" "$sz" "$src" \
     >> "$DEST/manifest.tsv"
+  chmod 600 "$DEST/manifest.tsv" 2>/dev/null || true
 }
 
 [ "$DRY" = 1 ] || mkdir -p "$DEST"
