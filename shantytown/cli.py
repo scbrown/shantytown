@@ -1848,6 +1848,47 @@ def _launch(a, card, panes, runtime, *, dry_run: bool = False,
     return CANNOT_TELL
 
 
+# The startup prompt goes out in ONE send and is acknowledged only when its end
+# marker is read back, so an oversized backlog fails verification -- correctly,
+# because a truncated block must never be acknowledged as complete. The defect
+# (aegis-t876k) was what happened NEXT: an unbounded batch failed IDENTICALLY on
+# every subsequent launch, so the bigger a backlog grew the more certainly it
+# stayed. The condition was self-reinforcing and the only recovery was manual,
+# per message. Bounding the batch does not make delivery more likely -- it makes
+# PROGRESS possible, which is what an unwedgeable queue needs.
+_STARTUP_INBOX_MAX_CHARS = 8000
+# Room for the end marker and the held-back notice, both appended after the
+# budget loop. Charging for them afterwards would let a full batch push the
+# finished prompt past the bound it was built to respect.
+_STARTUP_INBOX_RESERVE = 300
+
+
+def _startup_inbox_batch(unread, budget: int = _STARTUP_INBOX_MAX_CHARS):
+    """Split unread mail into (deliver now, hold back) on a character budget.
+
+    WHOLE messages only. Half a message under a marker asserting the block is
+    complete is precisely the false acknowledgement the marker exists to
+    prevent, so the bound may never fall inside one.
+
+    The head message is ALWAYS included, even when it alone exceeds the budget.
+    Dropping it would relocate the very defect this fixes rather than fix it: a
+    single oversized message would block everything queued behind it, on every
+    launch, for ever. Sent alone it may still fail the marker check -- but that
+    is then reported as head-of-line blocking against a named id, instead of a
+    queue that stalls in silence.
+    """
+    batch: list = []
+    used = 0
+    for msg in unread:
+        # "\n[<id>]\n" framing plus the body, matching what is built below.
+        cost = len(msg.body or "") + len(msg.id) + 4
+        if batch and used + cost > budget - _STARTUP_INBOX_RESERVE:
+            break
+        batch.append(msg)
+        used += cost
+    return batch, list(unread[len(batch):])
+
+
 def _deliver_startup_inbox(a, card, panes, session: str) -> None:
     """Inject unread durable mail into a verified new session, then acknowledge it.
 
@@ -1871,12 +1912,22 @@ def _deliver_startup_inbox(a, card, panes, session: str) -> None:
     if not unread:
         return
 
-    ids = [m.id for m in unread]
+    batch, held = _startup_inbox_batch(unread)
+    ids = [m.id for m in batch]
     marker = f"ST-STARTUP-INBOX-COMPLETE:{','.join(ids)}"
     lines = ["[startup inbox] Durable messages received while you were offline:"]
-    for msg in unread:
+    for msg in batch:
         lines.append(f"\n[{msg.id}]")
         lines.extend((msg.body or "").splitlines() or [""])
+    if held:
+        # sattler's condition on the bounded-batch ruling: the remainder is
+        # VISIBLE to the agent who received the batch. A silent remainder would
+        # trade a loud permanent wedge for a quiet partial one, and an inbox
+        # refilling faster than it drains has to read as a FINDING, not as an
+        # ordinary delivery.
+        lines += ["", f"[startup inbox] {len(held)} more message(s) held and still "
+                      f"unread; they arrive on your next launch. To read them now: "
+                      f"`st inbox {card.name}`."]
     lines += ["", marker]
     prompt = "\n".join(lines)
 
@@ -1888,13 +1939,24 @@ def _deliver_startup_inbox(a, card, panes, session: str) -> None:
         screen = panes.capture(session, history=200)
     except Exception as e:  # noqa: BLE001 -- keep the pointers as the recovery
         print(f"  ⚠ startup inbox delivery failed for {card.name} "
-              f"({type(e).__name__}: {str(e)[:100]}); {len(ids)} pointer(s) remain open.",
-              file=sys.stderr)
+              f"({type(e).__name__}: {str(e)[:100]}); {len(unread)} pointer(s) "
+              f"remain open.", file=sys.stderr)
         return
     if marker not in screen or input_stranded(screen):
         print(f"  ⚠ startup inbox delivery not verified for {card.name} "
-              f"(complete marker absent or input stranded); {len(ids)} pointer(s) "
-              f"remain open.", file=sys.stderr)
+              f"(complete marker absent or input stranded); {len(unread)} "
+              f"pointer(s) remain open.", file=sys.stderr)
+        if len(batch) == 1 and held:
+            # The batch could not be made smaller, so retrying changes nothing:
+            # this one message blocks the queue behind it on every launch. Name
+            # it and the per-message escape, rather than letting the agent read
+            # a generic failure and wait for a self-healing that cannot come.
+            print(f"  ⚠ {card.name}: [{batch[0].id}] is "
+                  f"{len(batch[0].body or '')} chars and did not land ALONE, so "
+                  f"it is blocking {len(held)} message(s) behind it on every "
+                  f"launch. Read past it with "
+                  f"`st inbox --read-id {batch[0].id} {card.name}`.",
+                  file=sys.stderr)
         return
 
     try:
@@ -1909,8 +1971,9 @@ def _deliver_startup_inbox(a, card, panes, session: str) -> None:
               f"{len(marked)}/{len(ids)} pointer(s) closed; inspect with `st inbox`.",
               file=sys.stderr)
         return
+    held_note = f"; {len(held)} held for the next launch" if held else ""
     print(f"  startup inbox: delivered and closed {len(marked)} verified "
-          f"pointer(s) for {card.name}.")
+          f"pointer(s) for {card.name}{held_note}.")
 
 
 def _verify_live_hooks(a, card, runtime, panes, session: str) -> int:

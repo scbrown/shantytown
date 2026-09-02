@@ -460,3 +460,156 @@ def test_new_falls_back_to_an_st_prefixed_session_when_the_card_names_no_pane(
     rc = cli._cmd_new(_Args(root=root, dry_run=True))
     assert rc == cli.OK
     assert "st-ellie" in capsys.readouterr().out
+
+
+# --- bounded startup inbox: a large backlog must DRAIN (aegis-t876k) ---------
+#
+# The unbounded batch was SAFE and unrecoverable at the same time: the end
+# marker correctly refused to acknowledge a block too large to land, and then
+# refused identically on every subsequent launch. Nothing was ever lost and
+# nothing ever drained. These tests pin the property the ruling actually asked
+# for, which is PROGRESS -- not a higher chance of delivery.
+
+from shantytown.protocols import Agent   # noqa: E402
+
+
+def _deliver(a, panes, session="crew-ellie", name="ellie"):
+    cli._deliver_startup_inbox(a, Agent(name=name, pane=session,
+                                        workspace="/ws/ellie"), panes, session)
+
+
+@pytest.fixture(autouse=True)
+def _no_delivery_sleep(monkeypatch):
+    # _deliver_startup_inbox sleeps 0.35s between send and capture to let a real
+    # pane paint. Across a multi-launch drain that is seconds of nothing.
+    monkeypatch.setattr(cli.time, "sleep", lambda _s: None)
+
+
+def test_a_backlog_too_large_for_one_prompt_drains_across_launches(
+        tmp_path, monkeypatch, capsys):
+    """THE DEFECT, stated as a test: an oversized backlog used to fail
+    verification identically for ever. Draining is the whole point."""
+    root = _world(tmp_path)
+    box = FilesInbox(root / "inbox")
+    sent = [box.deliver("ellie", "x" * 2000, frm="arnold") for _ in range(10)]
+    a = _Args(root=root)
+
+    launches, seen = 0, len(box.unread("ellie"))
+    assert seen == 10
+    while box.unread("ellie") and launches < 20:
+        panes = NullPanes(screen=READY, live=set())
+        before = len(box.unread("ellie"))
+        _deliver(a, panes)
+        after = len(box.unread("ellie"))
+        assert after < before, "a launch that closes no pointer cannot drain"
+        launches += 1
+
+    assert box.unread("ellie") == [], "the backlog never drained"
+    # It genuinely batched -- one launch would mean the bound never engaged and
+    # this test would be proving nothing about the fix.
+    assert launches > 1, f"expected several bounded batches, took {launches}"
+    # FIFO: the oldest message drained, rather than being skipped over.
+    assert sent[0].id not in {m.id for m in box.unread("ellie")}
+
+
+def test_the_held_remainder_is_named_in_the_delivered_prompt(tmp_path, capsys):
+    """sattler's condition on the ruling: the remainder is VISIBLE to the agent
+    that received the batch, so an inbox refilling faster than it drains reads
+    as a finding instead of an ordinary delivery."""
+    root = _world(tmp_path)
+    box = FilesInbox(root / "inbox")
+    for _ in range(10):
+        box.deliver("ellie", "y" * 2000, frm="arnold")
+    panes = NullPanes(screen=READY, live=set())
+
+    _deliver(_Args(root=root), panes)
+
+    prompt = panes.sent[-1][1]
+    held = len(box.unread("ellie"))
+    assert held, "this test needs a remainder to be held back"
+    assert f"{held} more message(s) held" in prompt
+    assert "next launch" in prompt
+    assert "st inbox ellie" in prompt
+    # and the operator sees it too
+    assert f"{held} held for the next launch" in capsys.readouterr().out
+
+
+def test_the_bound_never_splits_a_message(tmp_path):
+    """A partial body under a marker asserting the block is COMPLETE is exactly
+    the false acknowledgement the marker exists to prevent."""
+    root = _world(tmp_path)
+    box = FilesInbox(root / "inbox")
+    bodies = [f"MSG{i}-" + ("z" * 1500) for i in range(8)]
+    for b in bodies:
+        box.deliver("ellie", b, frm="arnold")
+    panes = NullPanes(screen=READY, live=set())
+
+    _deliver(_Args(root=root), panes)
+
+    prompt = panes.sent[-1][1]
+    delivered = [b for b in bodies if b[:8] in prompt]
+    assert delivered, "nothing was delivered"
+    for b in delivered:
+        assert b in prompt, "a message was split by the character bound"
+
+
+def test_the_marker_lists_exactly_the_batch_not_the_whole_backlog(tmp_path):
+    """The per-batch id list became load-bearing when the batch stopped being
+    everything: the marker now proves THIS batch, so it must name only it."""
+    root = _world(tmp_path)
+    box = FilesInbox(root / "inbox")
+    for _ in range(10):
+        box.deliver("ellie", "w" * 2000, frm="arnold")
+    panes = NullPanes(screen=READY, live=set())
+
+    _deliver(_Args(root=root), panes)
+
+    prompt = panes.sent[-1][1]
+    marker = [ln for ln in prompt.splitlines()
+              if ln.startswith("ST-STARTUP-INBOX-COMPLETE:")][0]
+    named = set(marker.split(":", 1)[1].split(","))
+    still_open = {m.id for m in box.unread("ellie")}
+    assert named, "the marker named no messages"
+    assert not (named & still_open), "the marker claimed a message it left open"
+
+
+def test_one_oversized_message_is_still_attempted_and_named_when_it_blocks(
+        tmp_path, capsys):
+    """Head-of-line blocking. Dropping a message bigger than the bound would
+    relocate the original defect rather than fix it: it would stall everything
+    behind it on every launch, silently. It is sent ALONE, and if it does not
+    land it is named against the per-message escape hatch."""
+    root = _world(tmp_path)
+    box = FilesInbox(root / "inbox")
+    huge = box.deliver("ellie", "H" * 20000, frm="arnold")
+    box.deliver("ellie", "behind it", frm="arnold")
+    # drops=True models the prompt not landing: the marker never appears.
+    panes = NullPanes(screen=READY, drops=True, live=set())
+
+    _deliver(_Args(root=root), panes)
+
+    # It was attempted -- alone, and whole.
+    assert panes.sent, "an oversized head message was silently skipped"
+    prompt = panes.sent[-1][1]
+    assert huge.body in prompt
+    # Nothing acknowledged, and the block is named rather than left to silence.
+    assert len(box.unread("ellie")) == 2, "an unverified pointer was closed"
+    err = capsys.readouterr().err
+    assert "did not land ALONE" in err and huge.id in err
+    assert f"st inbox --read-id {huge.id}" in err
+
+
+def test_the_splitter_takes_whole_messages_within_the_budget(tmp_path):
+    """The bound itself, away from tmux and pointers."""
+    class _M:
+        def __init__(self, i, n): self.id, self.body = f"id{i}", "q" * n
+    msgs = [_M(i, 100) for i in range(10)]
+    batch, held = cli._startup_inbox_batch(msgs, budget=cli._STARTUP_INBOX_RESERVE + 350)
+    assert [m.id for m in batch] == ["id0", "id1", "id2"]
+    assert [m.id for m in held] == [f"id{i}" for i in range(3, 10)]
+    # a budget smaller than the head message still yields it, never an empty batch
+    solo, rest = cli._startup_inbox_batch(msgs, budget=1)
+    assert [m.id for m in solo] == ["id0"] and len(rest) == 9
+    # everything fits -> nothing held
+    all_in, none = cli._startup_inbox_batch(msgs, budget=100000)
+    assert len(all_in) == 10 and none == []
