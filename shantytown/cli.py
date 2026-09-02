@@ -135,6 +135,7 @@ from .dispatch import (Dispatcher, TriageRefused, SendUnverified,
 from . import forgejo as forgejo_mod
 from . import governor as gov_mod
 from . import governor_utilization as util_mod
+from . import governor_metrics as gov_metrics_mod
 from . import guard as guard_mod
 from . import attribution as attribution_mod
 from .attribution import attribute
@@ -4862,6 +4863,65 @@ def _live_by_governor(cards, panes, cfg, governors, root):
     return live
 
 
+def _agent_counts(a, agents, panes, runtime):
+    """Agent counts for the Prometheus export, or None for COULD NOT LOOK.
+
+    Stiwi's directive (aegis-ycqgyx) asks to "tell ... the number of Agents either
+    codex or Claude through our Prometheus metrics", so the harness is the label
+    that matters and it is resolved through `harness.name_for` — the same function
+    `st anchor --harness` and the dispatch gate use, so the dashboard and the gate
+    cannot disagree about whose harness a card is.
+
+    THREE MAPPINGS, NOT ONE, because they answer different questions and folding
+    them into a single `state` label produces a set that sums to nothing:
+
+      state    the PANE state (up/down/no_pane/cycling/cycle_blocked). MECE, so
+               `sum by (harness) (st_agents)` is the roster size.
+      work     the busy/idle verdict, which ONLY a live pane has. Folding `busy`
+               into the state label would double-count it against `up`, and would
+               make an agent that is down indistinguishable from one nobody looked
+               at — the distinction `_crew_states` exists to preserve.
+      stopped  the deliberate-stop record. An `st stop`ped agent is genuinely
+               `down`; that it was somebody's DECISION is a second fact about the
+               same agent, not a third state (aegis-k9068 — tend used to explain
+               every deliberate stop as a fault).
+
+    The verdicts come from `_crew_states`, never a second computation, for the
+    reason `_crew_count` gives about `--count`: reimplementing the judgment is how
+    the number a dashboard shows drifts from the roster a human just read. One
+    pass over it, so this costs the pane captures once.
+
+    None, not empty, when the read fails. Empty publishes zero agents, and zero
+    agents is a real and alarming fleet state that must never be manufactured by an
+    unreadable registry.
+    """
+    try:
+        rows = list(_crew_states(agents, panes, runtime))
+    except Exception:
+        return None
+    try:
+        stopped_now = set((_stops(a).all().exact() or {}))
+    except Exception:
+        stopped_now = set()
+    state: dict[tuple[str, str], int] = {}
+    work_c: dict[tuple[str, str], int] = {}
+    stopped: dict[str, int] = {}
+    for ag, pane_state, work, _posture in rows:
+        try:
+            harness = harness_mod.name_for(ag, root=a.root)
+        except Exception:
+            harness = "unknown"
+        key = pane_state.replace(" ", "_").replace("-", "_")
+        state[(harness, key)] = state.get((harness, key), 0) + 1
+        if pane_state == "up":
+            w = ("unknown" if work in ("?", "—", "") else
+                 work.replace(" ", "_").replace("-", "_"))
+            work_c[(harness, w)] = work_c.get((harness, w), 0) + 1
+        if ag.name in stopped_now:
+            stopped[harness] = stopped.get(harness, 0) + 1
+    return {"state": state, "work": work_c, "stopped": stopped}
+
+
 def _ready_count(root, reg):
     """How many beads are ready to work, or None for COULD NOT LOOK.
 
@@ -7171,6 +7231,13 @@ def _tend_once(a, quiet: bool = False) -> int:
                 for name, gov in governors.items()}
     setpoint_advisories = {}
     utilization_advisories = {}
+    # THE PROMETHEUS EXPORT (aegis-ycqgyx, Stiwi directive 2026-09-01). Collected
+    # in the loop below, where the decision and every input that produced it are
+    # in hand, and pushed once at the end of it. Before this, tonight's decisions
+    # — a cap hold, a -1 setpoint, a 1.02x pace hold, an unrated window — existed
+    # ONLY as stderr in a journal: invisible to Grafana, to alerting, and to any
+    # question about last week.
+    gov_metric_lanes = []
     util_clock = time.time()
     live_by_gov = _live_by_governor(agents, panes, cfg, governors, a.root)
     from . import codex_daemon
@@ -7204,6 +7271,7 @@ def _tend_once(a, quiet: bool = False) -> int:
         # size; this answers whether the fleet we are already allowed is being
         # used. A blind governor is skipped entirely: recommending growth while
         # the usage signal is lost is the one direction the fail-safe forbids.
+        seen = None
         if not verdicts[name].signal_lost:
             seen = _utilization(name, readings=readings, policy=gov.policy,
                                 verdict=verdicts[name], live=running,
@@ -7223,6 +7291,31 @@ def _tend_once(a, quiet: bool = False) -> int:
                 line=seen.render(), key=seen.key(), actionable=False)
             print(f"  governor utilization [{name}]: {seen.render()}",
                   file=sys.stderr)
+        # A BLIND LANE IS STILL EXPORTED, with `seen` None and
+        # st_governor_signal_lost=1. Skipping it would make a governor that
+        # cannot see the number look exactly like a governor that was never
+        # configured — the failure this whole module exists to make impossible,
+        # and the one the fail-safe cares most about.
+        gov_metric_lanes.append({
+            "lane": name, "verdict": verdicts[name], "utilization": seen,
+            "readings": readings, "live": running,
+            "blocked": blocked_by_gov.get(name, 0),
+            "setpoint_delta": creel_advisory_mod.recommended_delta(line)})
+    # PUBLISH, before the sweeps and therefore before the pass budget can shed
+    # anything (aegis-qwadc). Deliberate: the sweeps are best-effort notification,
+    # while this is the RECORD of the decision this pass just made, and a record
+    # that is dropped under load is missing exactly when it is most interesting.
+    # It costs one bounded HTTP PUT to a LAN gateway, it cannot raise, and it is
+    # a no-op with ST_GOVERNOR_PUSHGATEWAY unset.
+    #
+    # A DRY RUN PUBLISHES NOTHING. It evaluates and prints, like everything else
+    # on a dry run — and its counters must not move, or `st tend --dry-run` would
+    # silently inflate st_governor_decisions_total for a decision nobody applied.
+    if not a.dry_run and gov_metric_lanes:
+        gov_metrics_mod.publish(
+            Path(a.root), gov_metric_lanes,
+            agents=_agent_counts(a, agents, panes, runtime),
+            log=lambda msg: print(f"  ⚠ {msg}", file=sys.stderr))
     # Preserve the byte-for-byte single-governor path.  A mixed fleet has no
     # meaningful global verdict: every decision below resolves from the card.
     verdict = verdicts.get("base") if not cfg.governor.by_harness else None
