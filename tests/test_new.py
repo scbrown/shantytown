@@ -613,3 +613,62 @@ def test_the_splitter_takes_whole_messages_within_the_budget(tmp_path):
     # everything fits -> nothing held
     all_in, none = cli._startup_inbox_batch(msgs, budget=100000)
     assert len(all_in) == 10 and none == []
+
+
+# --- why message-level chunking is NOT built (aegis-1dtg3f) ------------------
+
+def test_the_delivery_bound_can_never_be_smaller_than_a_message(tmp_path):
+    """aegis-t876k left one case named but unfixed: a message larger than the
+    startup delivery bound is sent ALONE, and if it still does not land it
+    blocks the queue behind it on every launch. aegis-1dtg3f was filed to design
+    message-level chunking for it.
+
+    IT IS UNREACHABLE, and this test is what keeps it that way.
+
+    A durable message cannot exceed the tracker's title cap. That is enforced
+    TWICE, independently: `inbox._deliver` refuses an over-cap body, and the
+    store itself refuses the write (measured against the real `br`:
+    "Validation failed: title: exceeds 500 characters", nothing created). So the
+    largest message that can exist is ~493 bytes and the smallest batch budget
+    is 7,700 — a factor of fifteen.
+
+    But that safety is a RELATIONSHIP BETWEEN TWO CONSTANTS IN DIFFERENT
+    MODULES, and nothing asserted it. Lower `_STARTUP_INBOX_MAX_CHARS` to a few
+    hundred and the wedge becomes reachable again, with no test failing and no
+    reviewer likely to connect the two numbers. A chunking protocol -- partial
+    delivery state, per-chunk receipts, crash semantics, reassembly -- is a
+    large amount of machinery to make an unreachable case safe. This assertion
+    is the cheap thing that does the same job.
+    """
+    from shantytown import inbox as inbox_mod
+    from shantytown.beads import BeadsTracker
+
+    cap = BeadsTracker._TITLE_MAX
+    largest_body = cap - len(inbox_mod.PREFIX) - 1
+    # the per-message cost _startup_inbox_batch charges, with a generous id
+    largest_cost = largest_body + 32 + 4
+    smallest_budget = cli._STARTUP_INBOX_MAX_CHARS - cli._STARTUP_INBOX_RESERVE
+
+    assert largest_cost < smallest_budget, (
+        f"a single durable message ({largest_cost} chars at the {cap}-byte title "
+        f"cap) no longer fits the startup batch budget ({smallest_budget}). The "
+        f"head-of-line wedge aegis-t876k names is now REACHABLE: raise "
+        f"_STARTUP_INBOX_MAX_CHARS, or build the chunking of aegis-1dtg3f.")
+
+
+def test_a_message_at_the_cap_is_delivered_whole_in_one_batch(tmp_path, capsys):
+    """The invariant above, exercised rather than computed: a body at the
+    largest size the tracker permits still lands in a single batch."""
+    from shantytown import inbox as inbox_mod
+    from shantytown.beads import BeadsTracker
+
+    root = _world(tmp_path)
+    box = FilesInbox(root / "inbox")
+    body = "z" * (BeadsTracker._TITLE_MAX - len(inbox_mod.PREFIX) - 1)
+    msg = box.deliver("ellie", body, frm="arnold")
+    panes = NullPanes(screen=READY, live=set())
+
+    _deliver(_Args(root=root), panes)
+
+    assert box.unread("ellie") == [], "the largest legal message did not land"
+    assert body in panes.sent[-1][1], "it was split or dropped"
