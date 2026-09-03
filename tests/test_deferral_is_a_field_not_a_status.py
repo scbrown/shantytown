@@ -36,9 +36,19 @@ def _iso(delta):
 # --- the predicate ----------------------------------------------------------
 
 def test_a_future_defer_until_is_deferred_even_when_status_is_open():
-    """The regression, in the shape br actually stores."""
+    """The regression, in the shape br actually stores.
+
+    The stamp is RELATIVE, not the measured literal. It was
+    `2026-09-03T13:00:00Z` — copied from the live row above, which reads as
+    faithful — and at 13:00Z on 2026-09-03 the future became the past and this
+    test began failing for everyone, permanently. A test asserting "deferred"
+    may not hold a fixed date: the property is that the stamp is AHEAD OF NOW,
+    and the only honest way to write that is against the clock the code reads.
+    The measured literal is preserved in the module docstring, where it is
+    provenance rather than an assertion.
+    """
     row = {"id": "aegis-f46wu", "status": "open",
-           "defer_until": "2026-09-03T13:00:00Z"}
+           "defer_until": _iso(timedelta(days=1))}
     assert inbox.is_deferred(row) is True
     assert inbox.is_unworkable(row) is True
 
