@@ -32,7 +32,9 @@ the guard is the part that must be testable without a live fleet, because it is 
 part whose failure destroys work.
 """
 from __future__ import annotations
+import fnmatch
 import json
+import posixpath
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -41,6 +43,85 @@ from pathlib import Path
 # The stop reason prefix that marks a deliberate cycle, so a drain can tell one
 # from a crash or a retirement. `st tend` matches on it.
 CYCLE_REASON = "cycle-requested"
+
+
+# Untracked names that may carry a credential. Deliberately OVER-broad: a false
+# positive costs one line of output, a false negative costs a live bearer token in
+# public history. This list does not decide anything — nothing is ever blocked or
+# hidden on it — it only chooses which line gets the "do NOT add this" marker.
+SECRET_NAME_PATTERNS = (
+    # `*mcp.json*`, not `.mcp.json*`: the leading dot is not reliably there. The
+    # file that started this was `.mcp.json.bak-mcpfix` at a clone root, but the
+    # same kit gets copied to `mcp.json.bak` and dropped inside an untracked
+    # directory, where the basename has no dot at all.
+    "*mcp.json*", "*.env", ".env*", "*token*", "*secret*", "*credential*",
+    "*.pem", "*.key", "id_rsa*", "id_ed25519*", ".netrc", "*.p12", "*.kdbx",
+)
+
+
+def looks_secret(path: str) -> str:
+    """The pattern `path` matches, or "". Matched on the BASENAME and on the whole
+    path, so `.playwright-mcp/mcp.json.bak` is caught as well as a stray at the
+    root, and case-insensitively, because `.MCP.json.BAK` leaks exactly as well."""
+    whole = path.strip("/").lower()
+    name = posixpath.basename(whole)
+    for pattern in SECRET_NAME_PATTERNS:
+        if fnmatch.fnmatch(name, pattern) or fnmatch.fnmatch(whole, pattern):
+            return pattern
+    return ""
+
+
+@dataclass
+class TreeUntracked:
+    """Untracked files in one tree — REPORTED, never blocking, and never with an
+    instruction to commit them (aegis-4hwpdb).
+
+    This is a separate type from TreeRisk on purpose. A cycle stops the session
+    and relaunches into the SAME clone, so untracked files are not touched by it
+    and are at risk from nothing it does; folding them into TreeRisk is what made
+    the guard refuse on strays. The refusal was survivable. Its stated remedy was
+    not: "commit and `st push` first" answered with `git add .` commits whatever
+    the stray happened to be, and on the night this was filed one agent's stray
+    was a `.mcp.json.bak-mcpfix` holding a live bearer token (aegis-3v10dt) — the
+    guard's own exit path was the leak.
+
+    So this type may state a count and name files, and may say what NOT to do
+    with them. It has no wording for committing them at all.
+    """
+    path: str
+    files: list = field(default_factory=list)
+    total: int = 0
+
+    #: How many ordinary files to name before summarising. Every secret-pattern
+    #: match is named regardless of this cap — the cap exists to keep an
+    #: untracked build directory from burying the one line that matters.
+    SAMPLE = 6
+
+    def secrets(self) -> list:
+        """[(path, pattern)] for the files whose NAME says do not commit them."""
+        out = []
+        for f in self.files:
+            pattern = looks_secret(f)
+            if pattern:
+                out.append((f, pattern))
+        return out
+
+    def render(self) -> list:
+        """Lines for the report. Plural, because the secret markers each need one."""
+        secrets = self.secrets()
+        head = (f"{self.path}: {self.total} untracked file(s) — NOT blocking; a "
+                f"cycle relaunches this same clone and leaves them untouched")
+        lines = [head]
+        for f, pattern in secrets:
+            lines.append(f"    {f}  ⚠ do NOT `git add` this — it matches "
+                         f"{pattern} and may hold a live credential")
+        plain = [f for f in self.files if not looks_secret(f)]
+        for f in plain[:self.SAMPLE]:
+            lines.append(f"    {f}")
+        hidden = self.total - len(secrets) - min(len(plain), self.SAMPLE)
+        if hidden > 0:
+            lines.append(f"    (+{hidden} more)")
+        return lines
 
 
 @dataclass
@@ -75,12 +156,26 @@ class Verdict:
     reason: str = ""
     risks: list = field(default_factory=list)
     checkpoint: str = ""
+    #: Untracked files found while judging. NOT risks and never a reason to
+    #: refuse — see TreeUntracked. Carried on the verdict so the report is the
+    #: same whether the cycle went ahead or was refused for something else.
+    untracked: list = field(default_factory=list)
+
+    def notice_lines(self) -> list:
+        """The non-blocking untracked report, or []."""
+        lines = []
+        for u in self.untracked:
+            lines += u.render()
+        return lines
 
     def render(self) -> str:
+        notice = self.notice_lines()
         if self.ok:
-            return f"{self.agent}: safe to cycle"
-        lines = [f"{self.agent}: REFUSED — {self.reason}"]
-        lines += [f"    {r.render()}" for r in self.risks]
+            lines = [f"{self.agent}: safe to cycle"]
+        else:
+            lines = [f"{self.agent}: REFUSED — {self.reason}"]
+            lines += [f"    {r.render()}" for r in self.risks]
+        lines += [f"    {n}" for n in notice]
         return "\n".join(lines)
 
 
@@ -109,6 +204,17 @@ def assess(agent: str, trees, checkpoint: str, staleness,
     closes the opposite and worse error — a deleted upstream ref laundering an
     orphaned commit into "safe".
 
+    **UNTRACKED FILES ARE NOT A GATE AT ALL** (aegis-4hwpdb). They were, until
+    2026-09-03, because `Staleness.dirty` folded them in with tracked
+    modifications. Three cycles were refused in one night on strays — a
+    `.playwright-mcp/` directory, a stale png, a `server.pid` — and the refusal
+    handed each agent "commit and `st push` first" as the way out. An agent that
+    does that with `git add .` commits the stray, and one of those strays was a
+    `.mcp.json.bak-mcpfix` carrying a live bearer token. A guard whose exit path
+    is "commit everything" is a leak mechanism when the dirt is a secret backup.
+    They are REPORTED instead, as a `TreeUntracked` notice that names anything
+    matching a credential pattern and never mentions committing.
+
     `allow_loss` is a SEPARATE, NAMED override and deliberately not folded into a
     general --force. arnold's ruling on the roles guard (aegis-ftmfn) is the
     precedent and the argument is the same: when --force is the only gate, the
@@ -124,6 +230,7 @@ def assess(agent: str, trees, checkpoint: str, staleness,
             "decisions already made, the exact next step>'.")
 
     risks: list[TreeRisk] = []
+    notices: list[TreeUntracked] = []
     for tree in trees:
         s = staleness(tree)
         if getattr(s, "error", None):
@@ -133,6 +240,14 @@ def assess(agent: str, trees, checkpoint: str, staleness,
             # precisely that case.
             risks.append(TreeRisk(str(tree), note=f"could not read: {s.error}"))
             continue
+        # getattr, not attribute access: `staleness` is an injected callable and
+        # older stand-ins predate these fields. A reporting nicety may not be the
+        # thing that makes the loss gate raise.
+        count = int(getattr(s, "untracked_count", 0) or 0)
+        if count:
+            notices.append(TreeUntracked(
+                str(tree), files=list(getattr(s, "untracked", ()) or ()),
+                total=count))
         if s.dirty or s.unpushed:
             risks.append(TreeRisk(str(tree), dirty=s.dirty, unpushed=s.unpushed))
 
@@ -143,9 +258,10 @@ def assess(agent: str, trees, checkpoint: str, staleness,
             "--allow-loss if you have decided it is expendable (NOT --dry-run and "
             "NOT a general --force: this override is named on its own so that "
             "reaching past some other refusal cannot disarm it).",
-            risks=risks, checkpoint=checkpoint)
+            risks=risks, checkpoint=checkpoint, untracked=notices)
 
-    return Verdict(agent, True, risks=risks, checkpoint=checkpoint)
+    return Verdict(agent, True, risks=risks, checkpoint=checkpoint,
+                   untracked=notices)
 
 
 class Requests:

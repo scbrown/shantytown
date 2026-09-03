@@ -703,13 +703,34 @@ class Staleness:
                 the question we actually mean — "does this exist anywhere but
                 here" — instead of a proxy for it.
 
-    `dirty` is uncommitted work — the reason a refresh must REPORT rather than
-    act. `note` carries a remote divergence or a refusal from upstream_ref.
+    `dirty` is uncommitted work in TRACKED files — the reason a refresh must
+    REPORT rather than act. `note` carries a remote divergence or a refusal from
+    upstream_ref.
+
+    UNTRACKED FILES ARE A SEPARATE FIELD AND NOT PART OF `dirty` (aegis-4hwpdb).
+    They were folded in until 2026-09-03, and the collapse was not merely
+    imprecise — it made the cycle guard refuse on strays and then hand the agent
+    "commit and push this tree" as the way out. An agent following that with
+    `git add .` commits whatever the stray was, and on the night this was filed
+    the stray was a `.mcp.json.bak-mcpfix` holding a live bearer token. So the
+    two are kept apart at the measurement, where the distinction is cheap, rather
+    than at each consumer, where one of them will forget.
+
+      dirty       TRACKED modifications (staged, unstaged or conflicted), or a
+                  `git status` we could not read. Dies with the session.
+      untracked   paths git does not track. A relaunch of the same clone leaves
+                  them exactly where they are, so they are at risk from nothing
+                  a cycle does — reportable, never blocking.
     """
     ref: str | None = None
     behind: int = 0
     unpushed: int = 0
     dirty: bool = False
+    # Capped SAMPLE plus the true total: an untracked build directory can hold
+    # thousands of paths and no report wants them all, but a count that lies
+    # about how many there are is worse than a long list.
+    untracked: tuple = ()
+    untracked_count: int = 0
     note: str | None = None
     error: str | None = None
 
@@ -731,14 +752,63 @@ class Staleness:
             bits.append(f"{self.unpushed} on no remote ref KNOWN LOCALLY "
                         f"(as of the last fetch — fetch before treating as lost)")
         if self.dirty:
-            bits.append("uncommitted changes")
+            bits.append("uncommitted changes to tracked files")
+        # `untracked` is deliberately ABSENT from this line. It is not staleness
+        # and it is not loss — a relaunch leaves those files alone — so putting it
+        # here would add a bit to a one-line staleness report that no reader can
+        # act on. The place it IS actionable is the cycle guard's report, which
+        # says both that it is not blocking and that it must not be committed.
         if not bits:
             return f"current with {self.ref}"
         return "; ".join(bits)
 
 
+# A sample, not the truth: `Staleness.untracked_count` carries the real number.
+# 200 is far past what any report prints and far short of what an untracked
+# node_modules would cost to hold.
+UNTRACKED_SAMPLE_CAP = 200
+
+
+def unquote_status_path(path: str) -> str:
+    """git C-quotes a porcelain path containing specials. Undo that, or return
+    it unchanged — a path we cannot decode is still worth REPORTING, so this
+    never raises."""
+    p = path.strip()
+    if len(p) >= 2 and p.startswith('"') and p.endswith('"'):
+        try:
+            return p[1:-1].encode("utf-8").decode("unicode_escape")
+        except (UnicodeDecodeError, UnicodeEncodeError):
+            return p[1:-1]
+    return p
+
+
+def split_porcelain(porcelain: str) -> tuple[bool, list[str]]:
+    """(any TRACKED modification, untracked paths) from `git status --porcelain`.
+
+    The split is here, at the measurement, and not at each consumer — see
+    Staleness. A rename line is `R  old -> new` and a conflict is `UU path`;
+    neither starts with `?? `, so both land on the tracked side, which is where
+    they belong. `!! ` (ignored) is only emitted under --ignored, which nothing
+    here passes, but it is excluded explicitly rather than counted as a
+    modification if some future caller adds the flag.
+    """
+    tracked = False
+    untracked: list[str] = []
+    for line in porcelain.splitlines():
+        if not line.strip():
+            continue
+        if line.startswith("?? "):
+            untracked.append(unquote_status_path(line[3:]))
+        elif line.startswith("!! "):
+            continue
+        else:
+            tracked = True
+    return tracked, untracked
+
+
 def tree_staleness(dest: Path | str, run: GitRunner = _git,
-                   fetch: bool = False) -> Staleness:
+                   fetch: bool = False,
+                   untracked_all: bool = False) -> Staleness:
     """Measure a tree against its resolved upstream. NEVER writes, never pulls.
 
     `fetch` is OFF by default and that is a design constraint, not laziness: this
@@ -781,14 +851,32 @@ def tree_staleness(dest: Path | str, run: GitRunner = _git,
     if rc != 0 or rc2 != 0:
         return Staleness(ref=ref, note=note,
                          error=f"could not count commits against {ref}")
-    rc3, porcelain = run(dest, "status", "--porcelain")
+    status_args = ["status", "--porcelain"]
+    if untracked_all:
+        # Directory-collapsed output (`?? .playwright-mcp/`) is enough to COUNT
+        # untracked work but not to name a credential inside it, and naming it is
+        # the whole job on the cycle path. Off by default because the edit-time
+        # hook calls this on every edit and must not walk an untracked tree.
+        status_args.append("--untracked-files=all")
+    rc3, porcelain = run(dest, *status_args)
+    if rc3 != 0:
+        # CANNOT TELL IS NOT CLEAN. A failed status must not read as a tidy tree,
+        # because the whole point of the flag is to stop a refresh from acting.
+        return Staleness(
+            ref=ref,
+            behind=int(behind) if behind.isdigit() else 0,
+            unpushed=int(unpushed) if unpushed.isdigit() else 0,
+            dirty=True,
+            note=note,
+        )
+    tracked_dirty, untracked = split_porcelain(porcelain)
     return Staleness(
         ref=ref,
         behind=int(behind) if behind.isdigit() else 0,
         unpushed=int(unpushed) if unpushed.isdigit() else 0,
-        # CANNOT TELL IS NOT CLEAN. A failed status must not read as a tidy tree,
-        # because the whole point of the flag is to stop a refresh from acting.
-        dirty=bool(porcelain.strip()) if rc3 == 0 else True,
+        dirty=tracked_dirty,
+        untracked=tuple(untracked[:UNTRACKED_SAMPLE_CAP]),
+        untracked_count=len(untracked),
         note=note,
     )
 

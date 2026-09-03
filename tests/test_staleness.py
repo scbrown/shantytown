@@ -173,11 +173,46 @@ def test_a_current_tree_says_so_and_dirt_alone_is_not_staleness(tmp_path: Path):
     why a refresh must report instead of act."""
     up = _repo(tmp_path / "up")
     wt = _clone(up, tmp_path / "wt")
-    (wt / "scratch.txt").write_text("wip")
+    (wt / "seed.txt").write_text("modified, tracked, uncommitted\n")
 
     s = tree_staleness(wt)
     assert s.current(), "uncommitted work was counted as staleness"
     assert s.dirty and "uncommitted" in s.render()
+
+
+def test_untracked_files_are_not_dirty_and_are_reported_separately(tmp_path: Path):
+    """aegis-4hwpdb. A stray file is not a tracked modification and must not be
+    reported as one: `dirty` gates the cycle guard, whose remedy is "commit and
+    push", and following that instruction on an untracked `.mcp.json.bak` commits
+    a live bearer token."""
+    up = _repo(tmp_path / "up")
+    wt = _clone(up, tmp_path / "wt")
+    (wt / "scratch.txt").write_text("wip")
+    (wt / ".mcp.json.bak-mcpfix").write_text("{}")
+
+    s = tree_staleness(wt)
+    assert not s.dirty, "an untracked stray was counted as a tracked modification"
+    assert s.current()
+    assert s.untracked_count == 2
+    assert set(s.untracked) == {"scratch.txt", ".mcp.json.bak-mcpfix"}
+    assert "uncommitted" not in s.render()
+
+
+def test_untracked_all_names_files_inside_an_untracked_directory(tmp_path: Path):
+    """The default porcelain collapses `dir/` to one entry, which is enough to
+    count untracked work and NOT enough to name a credential inside it. The
+    cycle path asks for the expansion; the edit-time hook must not, so it is a
+    parameter rather than the default."""
+    up = _repo(tmp_path / "up")
+    wt = _clone(up, tmp_path / "wt")
+    (wt / ".playwright-mcp").mkdir()
+    (wt / ".playwright-mcp" / "mcp.json.bak").write_text("{}")
+
+    collapsed = tree_staleness(wt)
+    assert collapsed.untracked == (".playwright-mcp/",)
+
+    expanded = tree_staleness(wt, untracked_all=True)
+    assert expanded.untracked == (".playwright-mcp/mcp.json.bak",)
 
 
 def test_it_NEVER_writes(tmp_path: Path):
@@ -367,3 +402,30 @@ def test_the_prune_does_not_invent_risk_for_a_live_branch(tmp_path):
     _commit(wt, "pushed_and_kept")
     _run(wt, "push", "-q", "origin", "alive")
     assert tree_staleness(wt, fetch=True).unpushed == 0
+
+
+def test_the_cycle_guard_passes_a_real_clone_holding_only_a_secret_stray(tmp_path: Path):
+    """END TO END on real git, aegis-4hwpdb. The unit tests inject a stand-in for
+    Staleness; this one proves the two halves agree — that a real clone with wu's
+    actual stray in it reaches the guard as untracked-not-dirty, cycles, and is
+    reported with the do-not-commit marker.
+
+    Both halves were correct in isolation before this bead: `git status
+    --porcelain` reported the stray accurately and the guard refused accurately
+    on what it was handed. The defect lived in the seam."""
+    from shantytown.cycle import assess
+
+    up = _repo(tmp_path / "up")
+    wt = _clone(up, tmp_path / "wt")
+    (wt / ".mcp.json.bak-mcpfix").write_text('{"token": "REDACTED"}')
+
+    v = assess("wu", [wt], "mid-way through the mcp fix",
+               staleness=lambda t: tree_staleness(t, untracked_all=True))
+    assert v.ok, v.render()
+    assert ".mcp.json.bak-mcpfix" in v.render()
+    assert "do NOT `git add` this" in v.render()
+
+    (wt / "seed.txt").write_text("a tracked modification\n")
+    v2 = assess("wu", [wt], "mid-way through the mcp fix",
+                staleness=lambda t: tree_staleness(t, untracked_all=True))
+    assert not v2.ok and "would be lost" in v2.reason

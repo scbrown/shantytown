@@ -28,10 +28,16 @@ from shantytown.protocols import WorkItem
 
 @dataclass
 class _Stale:
-    """Stands in for workspace.Staleness — the three fields the guard reads."""
+    """Stands in for workspace.Staleness — the fields the guard reads.
+
+    `dirty` is TRACKED modifications only. Untracked paths are their own field
+    because they are their own risk — which is to say, none (aegis-4hwpdb).
+    """
     dirty: bool = False
     unpushed: int = 0
     error: str | None = None
+    untracked: tuple = ()
+    untracked_count: int = 0
 
 
 def _clean(_tree):
@@ -281,3 +287,101 @@ def test_requests_are_written_atomically(tmp_path):
         "a": {"checkpoint": "one", "checkpoint_bead": "", "quipu_nodes": [], "refused": None},
         "b": {"checkpoint": "two", "checkpoint_bead": "", "quipu_nodes": [], "refused": None},
     }
+
+
+# --- untracked files are NOT a gate (aegis-4hwpdb) ----------------------------
+#
+# The three acceptance cases from the bead, plus the one that is the whole reason
+# it was filed: the guard's own exit path used to be a leak mechanism.
+
+def _untracked(*files, dirty: bool = False):
+    return lambda _t: _Stale(dirty=dirty, untracked=tuple(files),
+                             untracked_count=len(files))
+
+
+def test_a_clone_with_only_untracked_files_cycles():
+    """Acceptance (a). A cycle relaunches the SAME clone; untracked files survive
+    it untouched, so they are at risk from nothing the cycle does. Three cycles
+    were refused in one night on strays this shape — a .playwright-mcp/, a png, a
+    server.pid."""
+    v = assess("kelly", ["/w/kelly"], CHECKPOINT,
+               _untracked(".playwright-mcp/x.json", "shot.png", "server.pid"))
+    assert v.ok, "untracked strays refused a cycle"
+    assert v.risks == []
+
+
+def test_a_modified_tracked_file_is_still_refused_with_the_same_message():
+    """Acceptance (c). The loss gate is not being weakened — a tracked
+    modification dies with the session and still stops the cycle, with the
+    wording (and the named override) unchanged."""
+    v = assess("ian", ["/w/ian"], CHECKPOINT, _untracked("stray.txt", dirty=True))
+    assert not v.ok
+    assert "would be lost" in v.reason and "--allow-loss" in v.reason
+    assert "uncommitted changes" in v.render()
+
+
+def test_an_untracked_mcp_backup_cycles_and_is_named_as_not_to_commit():
+    """Acceptance (b), and THE case. wu's `.mcp.json.bak-mcpfix` greps positive
+    for a live bearer token (aegis-3v10dt). The old guard refused the cycle and
+    told him to commit the tree; `git add .` on that instruction publishes the
+    token."""
+    v = assess("wu", ["/w/wu"], CHECKPOINT, _untracked(".mcp.json.bak-mcpfix"))
+    assert v.ok
+    report = v.render()
+    assert ".mcp.json.bak-mcpfix" in report
+    assert "do NOT `git add` this" in report
+    assert "may hold a live credential" in report
+
+
+def test_the_untracked_report_never_says_to_commit_anything():
+    """The defect was not the refusal, it was the REMEDY. This asserts the
+    property directly rather than the wording of one message: no line of the
+    untracked notice may propose committing, adding, or pushing."""
+    v = assess("wu", ["/w/wu"], CHECKPOINT,
+               _untracked(".mcp.json.bak", "notes.md", "shot.png"))
+    for line in v.notice_lines():
+        low = line.lower()
+        assert "commit" not in low, line
+        assert "st push" not in low, line
+        assert "git add ." not in low, line
+
+
+def test_a_secret_inside_an_untracked_directory_is_still_named():
+    """Why the cycle path asks git for --untracked-files=all: the collapsed form
+    reports `.playwright-mcp/` and the credential inside it goes unnamed."""
+    v = assess("kelly", ["/w/kelly"], CHECKPOINT,
+               _untracked(".playwright-mcp/mcp.json.bak"))
+    assert v.ok
+    assert "do NOT `git add` this" in v.render()
+
+
+def test_every_secret_is_named_even_past_the_sample_cap():
+    """An untracked build directory must not bury the one line that matters."""
+    files = [f"build/f{i}.o" for i in range(40)] + [".env.local"]
+    v = assess("kelly", ["/w/kelly"], CHECKPOINT, _untracked(*files))
+    report = v.render()
+    assert ".env.local" in report and "do NOT `git add`" in report
+    assert "41 untracked file(s)" in report
+    assert "more)" in report, "the sample cap did not summarise the remainder"
+
+
+def test_untracked_files_are_reported_on_a_refusal_too():
+    """A refusal for tracked dirt is exactly when an agent is about to reach for
+    `git add .`, so that is the moment the do-not-commit line must be visible."""
+    v = assess("ian", ["/w/ian"], CHECKPOINT,
+               _untracked(".mcp.json.bak", dirty=True))
+    assert not v.ok
+    assert "do NOT `git add` this" in v.render()
+
+
+def test_a_staleness_reading_without_the_untracked_fields_still_judges():
+    """`staleness` is injected. A stand-in predating these fields must not raise
+    inside the LOSS gate — a reporting nicety may not break the guard."""
+    @dataclass
+    class _Old:
+        dirty: bool = False
+        unpushed: int = 0
+        error: str | None = None
+
+    v = assess("ellie", ["/w/e"], CHECKPOINT, lambda _t: _Old(dirty=True))
+    assert not v.ok and v.untracked == []

@@ -6104,7 +6104,11 @@ def _cmd_cycle(a) -> int:
     trees = _agent_trees(a, card, sweep=True)
     verdict = cycle_mod.assess(
         agent_name, trees, a.reason,
-        staleness=lambda t: tree_staleness(t, fetch=True),
+        # untracked_all: the default porcelain collapses `?? .playwright-mcp/` to
+        # the directory, and the report has to be able to NAME a `.mcp.json.bak`
+        # inside one. This path already fetches over the network; one extra walk
+        # is not what makes it slow.
+        staleness=lambda t: tree_staleness(t, fetch=True, untracked_all=True),
         allow_loss=a.allow_loss)
     if not verdict.ok:
         print(f"  refused: {verdict.render()}", file=sys.stderr)
@@ -6124,6 +6128,12 @@ def _cmd_cycle(a) -> int:
               file=sys.stderr)
         for r in verdict.risks:
             print(f"      {r.render()}", file=sys.stderr)
+    # The untracked notice prints on the PROCEEDING path too, and that is the
+    # only path it usually has: untracked files no longer refuse a cycle, so
+    # without this the report would exist solely inside a refusal nobody gets
+    # (aegis-4hwpdb).
+    for line in verdict.notice_lines():
+        print(f"      {line}", file=sys.stderr)
 
     if a.dry_run:
         print(f"  would: stop {agent_name} (reason: {verdict.checkpoint})")
