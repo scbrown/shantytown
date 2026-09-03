@@ -115,6 +115,7 @@ USAGE_METRIC = "claude:usage_utilization_pct:max"
 # account.
 ACCOUNT_USAGE_METRIC = "claude_usage_utilization_pct"
 PROBE_OK_METRIC = "claude_usage_probe_success"
+PROBE_HTTP_STATUS_METRIC = "claude_usage_probe_http_status"
 PROBE_TS_METRIC = "claude_usage_probe_timestamp_seconds"
 # How old the PUBLISHED percentage is. Distinct from the probe timestamp and worth
 # reading separately: when the probe fails the producer RETAINS the last good
@@ -179,6 +180,7 @@ ACTIONS = (DRAIN,)
 # open for an hour. Overridable — it is a property of the producer's cadence, and
 # the producer is a different bead.
 DEFAULT_MAX_AGE_S = 900
+OAUTH_ROTATION_GRACE_S = 600
 
 # Leaving a tier requires falling this far BELOW its threshold. Without it a
 # reading oscillating around 70 flips the whole fleet between "P0 only" and "P1+"
@@ -683,6 +685,10 @@ class Reading:
     # be minutes old while everything else about the exposition looks current.
     # None = not published; the timestamp check below still applies.
     cache_age: float | None = None
+    # Exact status from THIS probe run. A 401 at access-token expiry has a
+    # bounded rotation grace; 429 and transport failures remain immediately
+    # actionable and must never inherit that grace.
+    probe_http_status: int | None = None
     # WHEN THIS WINDOW'S BUDGET REFILLS, epoch seconds (aegis-9mehy). Unlike
     # everything else on this record it is per-WINDOW, because it describes a
     # budget rather than the probe.
@@ -717,13 +723,19 @@ class Reading:
         """
         if self.error:
             return self.error
-        if not self.ok:
+        if not self.ok and not (
+                self.probe_http_status == 401
+                and self.cache_age is not None
+                and self.cache_age <= OAUTH_ROTATION_GRACE_S):
             # FLYING BLIND, not low usage. The producer RETAINS the last good
             # percentages when a probe fails and flags them here, so the number
             # still present alongside this flag is history, not a measurement —
             # and it is the direction that spends: a retained 11% holds the fleet
             # wide open for as long as the probe stays down.
-            return (f"{PROBE_OK_METRIC} is 0 — a probe FAILED, so the published "
+            status = (self.probe_http_status
+                      if self.probe_http_status is not None else "unknown")
+            return (f"{PROBE_OK_METRIC} is 0 (HTTP {status})"
+                    " — a probe FAILED, so the published "
                     f"percentage is the last good one, not a measurement. This "
                     f"is flying blind, never low usage")
         if self.pct is None:
@@ -850,6 +862,8 @@ def _readings_by_window(samples, source: str, *,
     and hold the tier — correct behaviour reached by an avoidably wrong route.
     """
     at = cache_age = None
+    probe_http_status: int | None = None
+    mixed_probe_status = False
     ok = True
     saw_ok = False
     pct: dict[str, float] = {}
@@ -867,6 +881,11 @@ def _readings_by_window(samples, source: str, *,
             pct[w] = value if w not in pct else max(pct[w], value)
         elif name == PROBE_OK_METRIC:
             ok, saw_ok = (ok and bool(value)), True
+        elif name == PROBE_HTTP_STATUS_METRIC:
+            status = int(value)
+            if probe_http_status is not None and status != probe_http_status:
+                mixed_probe_status = True
+            probe_http_status = status
         elif name == PROBE_TS_METRIC:
             at = value if at is None else min(at, value)
         elif name == CACHE_AGE_METRIC:
@@ -884,12 +903,16 @@ def _readings_by_window(samples, source: str, *,
             # assumption the flag exists to remove.
             out[w] = Reading(pct=v, at=at, ok=True, source=source,
                              cache_age=cache_age, reset_at=reset.get(w),
+                             probe_http_status=(None if mixed_probe_status
+                                                else probe_http_status),
                              error=f"no {PROBE_OK_METRIC} series — the value "
                                    f"cannot be vouched for, so it is not read "
                                    f"as a measurement")
         else:
             out[w] = Reading(pct=v, at=at, ok=ok, source=source,
-                             cache_age=cache_age, reset_at=reset.get(w))
+                             cache_age=cache_age, reset_at=reset.get(w),
+                             probe_http_status=(None if mixed_probe_status
+                                                else probe_http_status))
     return out
 
 
@@ -1377,6 +1400,7 @@ class PrometheusReader:
         from urllib.parse import quote
         import re as _re
         names = (self.metric, self.account_metric, PROBE_OK_METRIC,
+                 PROBE_HTTP_STATUS_METRIC,
                  PROBE_TS_METRIC, CACHE_AGE_METRIC, RESET_TS_METRIC)
         query = '{__name__=~"' + "|".join(_re.escape(n) for n in names) + '"}'
         url = f"{self.url}/api/v1/query?query={quote(query)}"

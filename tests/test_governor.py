@@ -340,6 +340,23 @@ def test_probe_success_zero_is_signal_lost(tmp_path):
     assert v.signal_lost
 
 
+def test_rotation_401_reuses_a_recent_cached_reading_only_within_grace():
+    recent = gov.Reading(pct=44, at=999_700, ok=False, cache_age=300,
+                         probe_http_status=401)
+    assert recent.lost(1_000_000, 900) == ""
+
+    expired = gov.Reading(pct=44, at=999_300, ok=False, cache_age=700,
+                          probe_http_status=401)
+    assert "probe FAILED" in expired.lost(1_000_000, 900)
+
+
+@pytest.mark.parametrize("status", [0, 403, 429, 500])
+def test_non_rotation_probe_failures_are_immediately_signal_lost(status):
+    reading = gov.Reading(pct=44, at=999_700, ok=False, cache_age=300,
+                          probe_http_status=status)
+    assert "probe FAILED" in reading.lost(1_000_000, 900)
+
+
 def test_warn_runs_the_fleet_and_alarms_every_pass(tmp_path):
     """warn is the DEFAULT because an idled fleet from a broken probe is its own
     outage — but it must never go quiet about it."""
@@ -474,6 +491,7 @@ TEXTFILE = """# HELP claude_usage_utilization_pct utilization
 claude_usage_utilization_pct{account="acct-a",window="five_hour"} 82.5
 claude_usage_utilization_pct{account="acct-a",window="seven_day"} 41
 claude_usage_probe_success{account="acct-a"} 1
+claude_usage_probe_http_status{account="acct-a"} 200
 claude_usage_probe_timestamp_seconds{account="acct-a"} 1000000
 claude_usage_cache_age_seconds{account="acct-a"} 0
 """
@@ -524,6 +542,25 @@ def test_a_retained_percentage_with_a_climbing_cache_age_is_STALE(tmp_path):
         "a 4000s-old cached percentage read as a current measurement")
 
 
+def test_textfile_rotation_401_is_bounded_but_429_is_not(tmp_path):
+    p = tmp_path / "claude.prom"
+    rotation = (TEXTFILE
+                .replace('claude_usage_probe_success{account="acct-a"} 1',
+                         'claude_usage_probe_success{account="acct-a"} 0')
+                .replace('claude_usage_probe_http_status{account="acct-a"} 200',
+                         'claude_usage_probe_http_status{account="acct-a"} 401')
+                .replace('claude_usage_cache_age_seconds{account="acct-a"} 0',
+                         'claude_usage_cache_age_seconds{account="acct-a"} 300'))
+    p.write_text(rotation)
+    assert gov.TextfileReader(p, gov.FIVE_HOUR).read().lost(1_000_000, 900) == ""
+
+    p.write_text(rotation.replace(
+        'claude_usage_probe_http_status{account="acct-a"} 401',
+        'claude_usage_probe_http_status{account="acct-a"} 429'))
+    assert "HTTP 429" in gov.TextfileReader(
+        p, gov.FIVE_HOUR).read().lost(1_000_000, 900)
+
+
 def test_a_value_with_no_success_flag_is_not_vouched_for(tmp_path):
     """Inferring "it must have worked" from the presence of a number is exactly
     the assumption the success flag exists to remove."""
@@ -550,6 +587,8 @@ def test_the_prometheus_reader_parses_an_instant_vector(tmp_path):
          "value": [1_000_000, "11"]},
         {"metric": {"__name__": "claude_usage_probe_success",
                     "account": "acct-a"}, "value": [1_000_000, "1"]},
+        {"metric": {"__name__": "claude_usage_probe_http_status",
+                    "account": "acct-a"}, "value": [1_000_000, "200"]},
         {"metric": {"__name__": "claude_usage_probe_timestamp_seconds",
                     "account": "acct-a"}, "value": [1_000_000, "1000000"]},
     ]}})
@@ -557,6 +596,7 @@ def test_the_prometheus_reader_parses_an_instant_vector(tmp_path):
                              fetch=lambda url: body).read()
     assert r.pct == 63.25, "governed by a per-account series over the rule"
     assert r.ok and r.at == 1_000_000
+    assert r.probe_http_status == 200
     assert r.lost(1_000_000.0, 900) == ""
 
 
@@ -568,6 +608,7 @@ def test_the_prometheus_query_actually_MATCHES_the_recording_rule():
     pattern = _re.search(r'=~"([^"]+)"', gov.PrometheusReader.QUERY).group(1)
     assert _re.fullmatch(pattern, gov.USAGE_METRIC)
     assert _re.fullmatch(pattern, gov.PROBE_OK_METRIC)
+    assert _re.fullmatch(pattern, gov.PROBE_HTTP_STATUS_METRIC)
 
 
 def test_an_unreachable_prometheus_is_a_reading_not_an_exception(tmp_path):
