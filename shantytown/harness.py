@@ -711,6 +711,24 @@ def codex_standalone_binary(home: Path) -> Path:
     return managed
 
 
+def codex_path_shim_setup(managed: Path, bin_dir: Path | None = None) -> str:
+    """Shell that keeps the operator's ``codex`` command on durable storage.
+
+    app-server-updater rewrites ``~/.local/bin/codex`` to the executable path it
+    sees through the per-card CODEX_HOME.  That path lives under
+    XDG_RUNTIME_DIR and disappears when the card stops, taking Codex off PATH
+    for every shell and for the governor's app-server reader.  Reassert the
+    role-owned standalone path both before and after updater runs.
+
+    Returned as shell for the same reason as :func:`codex_sessions_setup`:
+    rendering a dry-run must have no filesystem side effects.
+    """
+    destination = (bin_dir or (Path.home() / ".local" / "bin")) / "codex"
+    return (f"mkdir -p {shlex.quote(str(destination.parent))} && "
+            f"ln -sfn {shlex.quote(str(managed))} "
+            f"{shlex.quote(str(destination))}")
+
+
 class CodexHarness:
     """OpenAI's Codex CLI. The second implementation — and, per docs/adapters.md,
     the thing that proves the first did not leak.
@@ -866,6 +884,7 @@ class CodexHarness:
                     "start the Remote Control app-server daemon."
                 )
             current = managed.parent
+            path_shim_setup = codex_path_shim_setup(managed)
             repair_after_start = ""
             daemon_current_target = str(current)
             if current.is_symlink():
@@ -916,6 +935,7 @@ class CodexHarness:
             durable_sessions = (state_base / "shantytown" / "codex"
                                 / card.name / "sessions")
             bootstrap = " && ".join((
+                path_shim_setup,
                 f"mkdir -p {shlex.quote(str(daemon_home))}",
                 f"ln -sfn {shlex.quote(str(home / codex_mod().CONFIG_FILE))} "
                 f"{shlex.quote(str(daemon_home / codex_mod().CONFIG_FILE))}",
@@ -980,7 +1000,8 @@ class CodexHarness:
             # nothing to show anything was wrong. Hence the explicit migrate.
             sessions_setup = codex_sessions_setup(daemon_home, durable_sessions)
             daemon_start = (f"{bootstrap} && {stop} && {sessions_setup} && "
-                            f"({start} || {start}){repair_after_start} && ")
+                            f"({start} || {start}){repair_after_start} && "
+                            f"{path_shim_setup} && ")
             flags += f" --remote unix://{socket}"
             if card.workspace:
                 flags += f" --cd {shlex.quote(str(card.workspace))}"

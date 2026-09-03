@@ -26,6 +26,8 @@ from __future__ import annotations
 
 import os
 import json
+import shutil
+import subprocess
 import tomllib
 from pathlib import Path
 
@@ -249,6 +251,53 @@ def test_codex_remote_control_repairs_stale_current_pointer(tmp_path, stale_targ
     assert f"ln -sfn {standalone / 'releases'} {daemon_standalone / 'releases'}" in launch
     assert f"ln -sfn {expected} {daemon_standalone / 'current'}" in launch
     assert f"{cfg.parent / 'packages'} {daemon_standalone.parent}" not in launch
+
+
+def test_codex_path_shim_survives_card_runtime_cleanup(tmp_path):
+    """xhdizm: updater-owned /run targets must not remain on the fleet PATH."""
+    role_home = tmp_path / "role"
+    managed = role_home / "packages/standalone/current/codex"
+    managed.parent.mkdir(parents=True)
+    managed.write_text("role-owned")
+    user_bin = tmp_path / "home/.local/bin"
+    setup = harness_mod.codex_path_shim_setup(managed, user_bin)
+
+    subprocess.run(setup, shell=True, check=True)
+    shim = user_bin / "codex"
+    assert shim.readlink() == managed
+
+    # Reproduce app-server-updater replacing the shim through one card's view.
+    runtime = tmp_path / "run/shantytown/codex/ellie"
+    runtime_binary = runtime / "packages/standalone/current/bin/codex"
+    runtime_binary.parent.mkdir(parents=True)
+    runtime_binary.write_text("per-card")
+    shim.unlink()
+    shim.symlink_to(runtime_binary)
+
+    subprocess.run(setup, shell=True, check=True)
+    assert shim.readlink() == managed
+    shutil.rmtree(runtime)
+    assert shim.resolve(strict=True) == managed
+
+
+def test_codex_remote_control_repairs_path_shim_before_and_after_updater(tmp_path):
+    root = tmp_path / ".shanty"
+    root.mkdir()
+    (root / "shantytown.toml").write_text(
+        '[env]\nSHANTY_REMOTE_CONTROL = "true"\n')
+    cfg = root / "settings/codex/worker/config.toml"
+    managed = cfg.parent / "packages/standalone/current/codex"
+    managed.parent.mkdir(parents=True)
+    managed.write_text("")
+
+    launch = CODEX.launch(Agent(name="ellie", role="worker"), str(cfg), root=root)
+    setup = harness_mod.codex_path_shim_setup(managed)
+    stop = "codex remote-control stop"
+    start = "codex remote-control start"
+
+    assert launch.count(setup) == 2
+    assert launch.index(setup) < launch.index(stop)
+    assert launch.rindex(setup) > launch.rindex(start)
 
 
 def test_codex_role_config_disables_tui_startup_updates():
