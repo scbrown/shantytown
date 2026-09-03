@@ -240,6 +240,14 @@ def test_codex_remote_control_repairs_stale_current_pointer(tmp_path, stale_targ
     assert current.readlink() == expected
     assert (current / "codex").is_file()
     assert "codex remote-control start" in launch
+    assert f"ln -sfn {expected} {current}" in launch
+
+
+def test_codex_role_config_disables_tui_startup_updates():
+    """z50a0z: every generated role config carries the interim update brake."""
+    settings = codex.settings_for_role("worker", root="/tmp/r")
+    assert settings["check_for_update_on_startup"] is False
+    assert "check_for_update_on_startup = false" in codex.render(settings)
 
 
 def test_the_launch_carries_the_same_identity_env_as_claude():

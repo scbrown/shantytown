@@ -865,6 +865,19 @@ class CodexHarness:
                     f"standalone installer under CODEX_HOME={home}; npm Codex cannot "
                     "start the Remote Control app-server daemon."
                 )
+            current = managed.parent
+            repair_after_start = ""
+            if current.is_symlink():
+                target = os.readlink(current)
+                if not os.path.isabs(target):
+                    # `remote-control start` launches app-server-updater through
+                    # the per-card packages view.  Codex rewrites the shared
+                    # pointer to that absolute /run path even without a version
+                    # change, so restore the role-relative pointer after start.
+                    repair_after_start = (
+                        f" && ln -sfn {shlex.quote(target)} "
+                        f"{shlex.quote(str(current))}"
+                    )
             # A role-shared daemon cannot carry a truthful card identity: tool
             # shells and hooks inherit the app-server's environment, not the
             # attached TUI's. Give each card its own daemon state/socket while
@@ -954,7 +967,7 @@ class CodexHarness:
             # nothing to show anything was wrong. Hence the explicit migrate.
             sessions_setup = codex_sessions_setup(daemon_home, durable_sessions)
             daemon_start = (f"{bootstrap} && {stop} && {sessions_setup} && "
-                            f"({start} || {start}) && ")
+                            f"({start} || {start}){repair_after_start} && ")
             flags += f" --remote unix://{socket}"
             if card.workspace:
                 flags += f" --cd {shlex.quote(str(card.workspace))}"

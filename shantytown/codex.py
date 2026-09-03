@@ -215,6 +215,11 @@ def settings_for_role(role: str, root=None) -> dict:
         # Root scalars first: TOML puts bare keys before any [table] header, and
         # dumps() emits scalars ahead of children for exactly that reason.
         "project_doc_max_bytes": PROJECT_DOC_MAX_BYTES,
+        # Keep the interactive client from independently checking for and
+        # swapping a managed binary while role peers share one packages tree.
+        # Remote Control has its own updater, so harness.py also normalizes the
+        # shared pointer after daemon start (aegis-z50a0z).
+        "check_for_update_on_startup": False,
         "hooks": hooks,
     }
 
