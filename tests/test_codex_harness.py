@@ -213,6 +213,35 @@ def test_codex_remote_control_refuses_when_standalone_payload_is_missing(tmp_pat
                      str(root / "settings/codex/worker/config.toml"), root=root)
 
 
+@pytest.mark.parametrize("stale_target", [
+    "releases/0.151.0-x86_64-unknown-linux-musl",
+    "/run/user/1000/shantytown/codex/old-card/packages/standalone/"
+    "releases/0.151.0-x86_64-unknown-linux-musl",
+])
+def test_codex_remote_control_repairs_stale_current_pointer(tmp_path, stale_target):
+    """z50a0z: one card's updater must not break every role peer's launch."""
+    root = tmp_path / ".shanty"
+    root.mkdir()
+    (root / "shantytown.toml").write_text(
+        '[env]\nSHANTY_REMOTE_CONTROL = "true"\n')
+    cfg = root / "settings" / "codex" / "worker" / "config.toml"
+    standalone = cfg.parent / "packages" / "standalone"
+    for version in ("0.152.0", "0.152.1"):
+        binary = (standalone / "releases" /
+                  f"{version}-x86_64-unknown-linux-musl" / "codex")
+        binary.parent.mkdir(parents=True)
+        binary.write_text("")
+    current = standalone / "current"
+    current.symlink_to(stale_target)
+
+    launch = CODEX.launch(Agent(name="ellie", role="worker"), str(cfg), root=root)
+
+    expected = Path("releases/0.152.1-x86_64-unknown-linux-musl")
+    assert current.readlink() == expected
+    assert (current / "codex").is_file()
+    assert "codex remote-control start" in launch
+
+
 def test_the_launch_carries_the_same_identity_env_as_claude():
     """SHANTY_AGENT/BOBBIN_ROLE/BEADS_ACTOR/ST_ROLES are not Claude Code's — they
     are how a shantytown agent knows who it is, and dropping one on a second

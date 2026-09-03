@@ -658,6 +658,59 @@ def codex_sessions_setup(daemon_home: Path, durable: Path) -> str:
             f"ln -sfn {dur} {dh}; }} || true")
 
 
+def codex_standalone_binary(home: Path) -> Path:
+    """Return the managed Codex binary, repairing a stale ``current`` link.
+
+    Codex's updater can reach the role-owned packages directory through a
+    per-card CODEX_HOME symlink and rewrite ``current`` to the absolute path it
+    saw there.  That pointer dies with the runtime directory and takes every
+    card sharing the role home with it.  A relative pointer is valid through
+    both views, so normalize it before the launch prerequisite is checked.
+
+    Only directories containing a ``codex`` payload are candidates.  The
+    replace is atomic because multiple cards can repair the shared pointer at
+    the same time.
+    """
+    standalone = home / "packages" / "standalone"
+    current = standalone / "current"
+    managed = current / "codex"
+    releases = standalone / "releases"
+
+    def version_key(path: Path) -> tuple[int, ...]:
+        version = path.name.split("-", 1)[0]
+        try:
+            return tuple(int(part) for part in version.split("."))
+        except ValueError:
+            return ()
+
+    candidates = sorted(
+        (path for path in releases.iterdir()
+         if path.is_dir() and (path / "codex").is_file()),
+        key=version_key,
+    ) if releases.is_dir() else []
+    if not candidates:
+        return managed
+
+    target = Path("releases") / candidates[-1].name
+    # Even a currently-valid absolute link is unsafe: the next cleanup can
+    # remove the per-card path it names.  A real directory at `current` is not
+    # updater pointer state and must never be removed here.
+    if current.is_symlink():
+        if os.readlink(current) == str(target) and managed.is_file():
+            return managed
+    elif current.exists():
+        return managed
+
+    temporary = current.with_name(f".current.shantytown-{os.getpid()}")
+    try:
+        temporary.unlink(missing_ok=True)
+        temporary.symlink_to(target)
+        os.replace(temporary, current)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return managed
+
+
 class CodexHarness:
     """OpenAI's Codex CLI. The second implementation — and, per docs/adapters.md,
     the thing that proves the first did not leak.
@@ -804,7 +857,7 @@ class CodexHarness:
         flags = "--dangerously-bypass-hook-trust"
         daemon_start = ""
         if self._remote_control(root):
-            managed = home / "packages" / "standalone" / "current" / "codex"
+            managed = codex_standalone_binary(home)
             if not managed.is_file():
                 raise Unsupported(
                     f"Codex Remote Control is enabled, but the managed standalone "
