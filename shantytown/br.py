@@ -215,6 +215,29 @@ def blocked(tracker: BrTracker) -> list[dict]:
     return payload.get("issues", []) if isinstance(payload, dict) else payload
 
 
+def deferred(tracker: BrTracker) -> list[dict]:
+    """Every row a deferral sweep must judge — BOTH representations (aegis-boj8a2).
+
+    The clbx2 cutover (aegis-vyc3aa) moved deferral from `status = 'deferred'` to
+    a `defer_until` FIELD with status left `open`, and BOTH shapes are live:
+    measured 2026-09-03, 115 rows still carry `status = deferred` and 2 `open`
+    rows carry a defer_until. So this reads the deferred set AND the open set and
+    hands both over; the caller keys off the field, never the status. Reading one
+    shape would be blind to most of the board — the same migration-kills-READERS
+    error the cutover already produced once (aegis-vyc3aa).
+    """
+    out: list[dict] = []
+    for status in ("deferred", "open"):
+        r = tracker._bd("list", "--status", status, "--json", "--limit", "0")
+        if r.returncode != 0:
+            raise RuntimeError(
+                f"br list --status {status} failed: {r.stderr.strip()[:120]}")
+        payload = json.loads(r.stdout) if r.stdout.strip() else {}
+        out.extend(payload.get("issues", []) if isinstance(payload, dict)
+                   else payload)
+    return out
+
+
 def show(tracker: BrTracker, bead_id: str) -> dict:
     """One full item including dependency rows.
 

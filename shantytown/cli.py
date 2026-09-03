@@ -7970,6 +7970,21 @@ def _tend_once(a, quiet: bool = False) -> int:
             print(f"  ⚠ re-surfaced {len(stale_blocked)} bead(s) blocked "
                   f"long enough to be forgotten: {', '.join(stale_blocked)}",
                   file=sys.stderr)
+        # DEFERRED (aegis-boj8a2): one step further out of sight than blocked.
+        # A blocked bead at least appears in `br list --status blocked`; a
+        # deferred one is excluded from `br ready` BY DESIGN, so hauls,
+        # stop_event, feed_check and the stop policy are all structurally blind
+        # to it and NOTHING re-asks. A resume condition written as prose — "until
+        # franklin's converge lands" — has no mechanism behind it but the
+        # author's memory: that one landed the same day and the bead sat nine
+        # days. Reports only; it never un-defers, and it reports each bead once
+        # per state (wu: transitions, not state).
+        deferred_due = _sweep("deferral-sweep", lambda: notify_mod.DeferralAlerter(
+            Path(a.root), _registry(a), panes, log=_log).sweep())
+        if deferred_due:
+            print(f"  ⚠ surfaced {len(deferred_due)} deferral(s) whose date has "
+                  f"LAPSED or whose condition is MET (nothing un-deferred): "
+                  f"{', '.join(deferred_due)}", file=sys.stderr)
         # A DIFFERENT condition and a DIFFERENT action from age: these beads do
         # not need their blocker chased; every issue blocker is already closed
         # and the stale status itself is what hides them (aegis-mwc5j).

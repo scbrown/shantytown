@@ -639,6 +639,21 @@ class TrackerAdapter:
                                  "--json", "--limit", "0")
         return Answer.complete_read(value, how=f"{self.kind} list blocked --limit 0")
 
+    def deferred(self) -> Answer[list[dict]]:
+        """Deferred AND open rows — the deferral sweep keys off `defer_until`,
+        which lives under both statuses since the cutover (aegis-boj8a2)."""
+        if self.tracker is not None:
+            from .br import deferred
+            value = deferred(self.tracker)
+        else:
+            value = []
+            for status in ("deferred", "open"):
+                got = self._legacy("bd", "list", "--status", status,
+                                   "--json", "--limit", "0")
+                value.extend(got or [])
+        return Answer.complete_read(
+            value, how=f"{self.kind} list deferred+open --limit 0")
+
     def show(self, item: str) -> Answer[dict]:
         if self.tracker is not None:
             from .br import show

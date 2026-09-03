@@ -1292,6 +1292,99 @@ def _blocked_kind(detail: dict) -> tuple[str, list[str]]:
     return ("work", open_ids) if open_ids else ("human", [])
 
 
+class DeferralAlerter:
+    """Surface a deferral whose DATE has lapsed or whose CONDITION has been met.
+
+    The sibling of BlockedStaleAlerter, for the population one step further out of
+    sight. Blocked beads at least appear in `br list --status blocked`; a deferred
+    bead is excluded from `br ready` BY DESIGN, so hauls, stop_event, feed_check
+    and the stop policy are all structurally blind to it. Nothing on this fleet
+    re-asks. Measured 2026-09-03: 115 deferred, 12 LAPSED, three of those P1 and
+    lapsed 26 days — and aegis-o2w6v, the campaign bead to burn the queue down, is
+    itself deferred.
+
+    IT NEVER UN-DEFERS. A lapsed deferral may still be the right call and only the
+    person who deferred it knows; this reports and the admin rules (item 3 of
+    aegis-boj8a2). The policy — what counts as lapsed, what a condition is, and
+    what has already been said — is `deferrals`, kept separate so it is testable
+    without a fleet.
+
+    TRANSITIONS, NOT STATE (wu's constraint on the bead). 115 lapsed lines every
+    tend cycle is a channel the admin mutes within a day — the failure grant fixed
+    in dfllto. Each bead is reported once per state and stays silent until that
+    state changes.
+
+    FAIL OPEN, like every alerter here: any error returns [] and pushes nothing.
+    """
+
+    def __init__(self, root, reg, panes, *, push=push_to_admin,
+                 read=None, is_closed=None, now=None, log=None):
+        self._root = root
+        self._reg = reg
+        self._panes = panes
+        self._push = push
+        self._read = read
+        self._is_closed = is_closed
+        self._now = now
+        self._log = log or (lambda msg: None)
+
+    def sweep(self) -> list:
+        """One pass. Returns the bead ids actually reported (usually none)."""
+        from datetime import datetime, timezone
+        from . import deferrals as pol
+        from .feed_check import backend_adapter, bd_cwd
+
+        try:
+            if self._read is not None:
+                rows = self._read()
+            else:
+                rows = backend_adapter(self._root, self._reg).deferred().exact()
+        except Exception as e:                       # FAIL OPEN
+            self._log(f"deferral-sweep: could not read the store ({e!r})")
+            return []
+
+        now = self._now() if callable(self._now) else self._now
+        if now is None:
+            now = datetime.now(timezone.utc)
+
+        # CANNOT TELL, not False. A show() that raises must leave the condition
+        # UNTESTABLE — reporting it unmet would be a silent wrong answer, and
+        # reporting it met would send the admin to un-defer live work.
+        cache: dict = {}
+        def is_closed(bead: str):
+            if self._is_closed is not None:
+                return self._is_closed(bead)
+            if bead not in cache:
+                try:
+                    detail = backend_adapter(
+                        self._root, self._reg).show(bead).exact()
+                    cache[bead] = (str((detail or {}).get("status") or "")
+                                   == "closed")
+                except Exception as e:
+                    self._log(f"deferral-sweep: could not read {bead} ({e!r})")
+                    cache[bead] = None
+            return cache[bead]
+
+        findings = pol.evaluate(rows, now, is_closed=is_closed)
+        seen = pol.Reported(self._root)
+        fresh = seen.unreported(findings)
+        if fresh:
+            lines = pol.report(fresh)
+            # RECORD ONLY ON A DELIVERED PUSH. Marking these said when the admin's
+            # pane was unreachable would lose them permanently — the state does not
+            # change again, so nothing would ever re-report it. Same rule
+            # push_to_admin keeps by returning None rather than a silent success.
+            if self._push(self._reg, self._panes, "\n".join(lines)) is None:
+                self._log("deferral-sweep: no admin pane — nothing recorded, "
+                          "these re-report next pass")
+                return []
+        # Record the FULL current state, not just what was pushed: a bead that
+        # stopped being lapsed must drop out of the ledger so it can report again
+        # if it lapses anew.
+        seen.record(findings)
+        return [f.bead for f in fresh]
+
+
 class BlockedStaleAlerter:
     """RE-SURFACE beads that have been BLOCKED long enough to be forgotten.
 
