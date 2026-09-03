@@ -521,14 +521,119 @@ if [ "${1:-}" = "--selftest" ]; then
     rm -rf "$r"
   fi
 
+  # ── THE CHAIN (aegis-tnpf6h) ───────────────────────────────────────────────
+  # This guard is the only writable seam on .git/hooks/pre-push (the hook itself
+  # is a re-asserted symlink), so every other push-time guard on this host hangs
+  # off the pre-push.d chain below. Four properties, each of which has a real
+  # failure behind it:
+  #
+  #   ran        — a chain nobody invokes is the state quipu was actually in for
+  #                6 weeks after the by-reference re-arm clobbered its dispatcher
+  #   got stdin  — the FIRST reader consumes the ref list; a chained hook that
+  #                sees an empty list concludes the push touches nothing and
+  #                allows it. This disarms in the ALLOW direction, silently.
+  #   refuses    — a chained refusal must refuse the push
+  #   unconfigured — the scrub's own fail-open path must still run the chain, or
+  #                deleting a config file disarms every guard hanging off it
+  if command -v git >/dev/null 2>&1; then
+    r=$(mktemp -d)
+    git init -q "$r/w"
+    cf="$r/scrub.conf"
+    printf 'internal_host_re=forge\\.invalid\npatterns=[a-z0-9-]+\\.invalid\\b\n' > "$cf"
+    ( cd "$r/w"
+      git config user.email t@t; git config user.name t
+      echo seed > f.txt; git add f.txt; git commit -qm seed
+      d="$(git rev-parse --git-path hooks)"; case "$d" in /*) ;; *) d="$r/w/$d" ;; esac
+      mkdir -p "$d/pre-push.d"
+      cat > "$d/pre-push.d/99-probe" <<'PROBE'
+#!/usr/bin/env bash
+read -r line || true
+[ -n "$line" ] && echo "CHAIN-SAW-REFS"
+echo "CHAIN-RAN"
+[ "${PROBE_REFUSE:-0}" = 1 ] && exit 1
+exit 0
+PROBE
+      chmod +x "$d/pre-push.d/99-probe"
+      sha="$(git rev-parse HEAD)"
+      refline="refs/heads/main $sha refs/heads/main $sha"
+
+      # sound config, clean push: chain runs, sees refs, push allowed
+      out=$(printf '%s\n' "$refline" | SCRUB_PATTERNS_FILE="$cf" \
+              bash "$SELF" origin https://example.com/x.git 2>&1); rc=$?
+      case "$out" in *CHAIN-RAN*) echo "ok   chained hook ran";;
+        *) echo "FAIL chained hook did not run"; exit 1;; esac
+      case "$out" in *CHAIN-SAW-REFS*) echo "ok   chained hook received the ref list";;
+        *) echo "FAIL chained hook got an EMPTY ref list (disarms toward allow)"; exit 1;; esac
+      [ "$rc" = 0 ] && echo "ok   clean push + allowing chain is allowed" \
+                    || { echo "FAIL clean push refused, rc=$rc"; exit 1; }
+
+      # chained refusal must refuse the push
+      out=$(printf '%s\n' "$refline" | PROBE_REFUSE=1 SCRUB_PATTERNS_FILE="$cf" \
+              bash "$SELF" origin https://example.com/x.git 2>&1); rc=$?
+      [ "$rc" != 0 ] && echo "ok   chained refusal refuses the push" \
+                     || { echo "FAIL chained refusal was swallowed (rc=0)"; exit 1; }
+
+      # the scrub's UNCONFIGURED fail-open path must still run the chain
+      out=$(printf '%s\n' "$refline" | SCRUB_PATTERNS_FILE="$r/does-not-exist" \
+              bash "$SELF" origin https://example.com/x.git 2>&1)
+      case "$out" in *CHAIN-RAN*) echo "ok   chain runs even when the scrub is unconfigured";;
+        *) echo "FAIL unconfigured scrub skipped the chain"; exit 1;; esac
+    ) || fail=1
+    rm -rf "$r"
+  fi
+
   [ "$fail" -eq 0 ] && echo "selftest PASSED" || echo "selftest FAILED"
   exit "$fail"
 fi
 
+# ── CHAINING: this guard is a DISPATCHER as well as a check (aegis-tnpf6h) ──
+# install-scrub-guard.sh arms every public repo BY REFERENCE — `.git/hooks/pre-push`
+# is an absolute symlink to one read-only source, re-asserted twice an hour by cron.
+# That is deliberate and good, and it means .git/hooks/pre-push IS NOT AVAILABLE to
+# any other guard: anything installed there is silently replaced within 30 minutes.
+#
+# Measured 2026-09-03 on quipu: a `pre-push.d/` chain installed 2026-08-05 by
+# install-cd-push-notice.sh was clobbered by the by-reference re-arm on 2026-08-23
+# and had not run since — the directory was still there, fully populated, executing
+# nothing. Nothing reported it, because each installer's own --check only ever
+# looked at its own artifact.
+#
+# So the chain point has to live INSIDE the referenced guard, which is here. Every
+# executable in `pre-push.d/` runs after the scrub decision, in sorted order, each
+# receiving the FULL ref list on stdin, and ANY refusal refuses the push.
+#
+# stdin is the subtle part and it is why a naive loop is wrong: git feeds the hook
+# one line per ref and the first reader consumes all of it, so hook 2 would see an
+# EMPTY ref list and conclude the push touches nothing — disarming it in the
+# "allow" direction, silently. The list is read ONCE here and replayed into the
+# scrub loop and every chained hook alike.
+SCRUB_REFS=""
+case "${1:-}" in
+  --*) ;;                      # a manual probe (--selftest etc.) has no ref list
+  *)   SCRUB_REFS="$(cat)" ;;
+esac
+
+# Run the chain, then exit with the SCRUB verdict if it refused, else the chain's.
+# A refusal anywhere wins; nothing here can turn a refusal into an allow.
+chain_exit() {
+  local scrub_rc="$1"; shift
+  local d rc=0 h
+  d="$(git rev-parse --git-path hooks 2>/dev/null)" || d=""
+  case "$d" in ""|/*) ;; *) d="$(git rev-parse --show-toplevel 2>/dev/null)/$d" ;; esac
+  if [ -n "$d" ] && [ -d "$d/pre-push.d" ]; then
+    for h in "$d"/pre-push.d/*; do
+      [ -x "$h" ] || continue
+      printf '%s\n' "$SCRUB_REFS" | "$h" "${PUSH_REMOTE:-}" "${REMOTE_URL:-}" || rc=$?
+    done
+  fi
+  [ "$scrub_rc" -ne 0 ] && exit "$scrub_rc"
+  exit "$rc"
+}
+
 if [ -z "$PATTERNS" ]; then
   echo "⚠ pre-push-scrub-guard: NOT CONFIGURED ($CONF missing) — this push was" >&2
   echo "  NOT checked for internal names. Failing open on purpose; see aegis-mqnl." >&2
-  exit 0
+  chain_exit 0
 fi
 [ "${1:-}" = "--check-unconfigured" ] && exit 0
 
@@ -563,7 +668,7 @@ fi
 # the key was missing: the whole guard off, nothing scanned, nothing printed. Same
 # choice as the ticket scope above — an unset field enforces MORE and never less.
 if [ -n "$INTERNAL_HOST_RE" ] && printf '%s' "$REMOTE_URL" | grep -qE "$INTERNAL_HOST_RE"; then
-  exit 0   # internal forge — internal names belong there
+  chain_exit 0   # internal forge — internal names belong there (chain still runs)
 fi
 if [ -z "$INTERNAL_HOST_RE" ]; then
   echo "⚠ pre-push-scrub-guard: $CONF names no internal_host_re, so every push is" >&2
@@ -600,7 +705,10 @@ already_elsewhere() {
   return 1
 }
 
-# stdin: <local ref> <local sha> <remote ref> <remote sha>
+# The ref list arrives on stdin as "<local ref> <local sha> <remote ref> <remote sha>",
+# and was consumed ONCE into $SCRUB_REFS above so the chained hooks can be replayed
+# the same list. Blank lines are dropped: a herestring on an empty capture would
+# otherwise feed this loop one empty record.
 violations=0
 offenders=""       # one line per offending commit: "<sha> <subject>\t<remote|>"
 offenders_mine=0   # how many of them this push actually introduces
@@ -760,7 +868,7 @@ while read -r _lref lsha _rref rsha; do
       done
     fi
   fi
-done
+done < <(printf '%s\n' "$SCRUB_REFS" | grep -v '^[[:space:]]*$' || true)
 
 if [ "$violations" -ne 0 ] && [ -n "$offenders" ] && [ "$offenders_mine" -eq 0 ]; then
   # EVERY offending commit is already on another remote. Say so first and plainly:
@@ -782,7 +890,7 @@ if [ "$violations" -ne 0 ] && [ -n "$offenders" ] && [ "$offenders_mine" -eq 0 ]
   The remedy is a rewrite of the named commit, which is a decision about shared
   history — file it and get authority rather than improvising it under a push.
 EOM
-  exit 1
+  chain_exit 1
 fi
 
 if [ "$violations" -ne 0 ]; then
@@ -807,6 +915,6 @@ if [ "$violations" -ne 0 ]; then
   the push ADDS, so it stays quiet enough to stay installed.
   Override for a deliberate, reviewed publish:  git push --no-verify
 EOM
-  exit 1
+  chain_exit 1
 fi
-exit 0
+chain_exit 0
