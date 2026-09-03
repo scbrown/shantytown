@@ -89,3 +89,23 @@ def test_old_lock_with_recorded_dead_control_server_is_repaired(tmp_path):
 
     codex_daemon.repair("kelly", runtime_dir=runtime, proc=proc, now=1000)
     assert not lock.exists()
+
+
+def test_stop_owned_reaps_server_and_updater_for_only_one_card(tmp_path):
+    proc = tmp_path / "proc"
+    proc.mkdir()
+    server = "codex app-server --remote-control --listen unix://"
+    updater = "codex app-server daemon pid-update-loop"
+    _proc(proc, 101, cmd=server, env={"SHANTY_AGENT": "kelly"})
+    _proc(proc, 102, cmd=updater, env={"SHANTY_AGENT": "kelly"})
+    _proc(proc, 201, cmd=server, env={"SHANTY_AGENT": "ian"})
+    _proc(proc, 202, cmd=updater, env={"SHANTY_AGENT": "ian"})
+    _proc(proc, 301, cmd="codex", env={"SHANTY_AGENT": "kelly"})
+
+    killed = []
+    stopped = codex_daemon.stop_owned(
+        "kelly", proc=proc,
+        kill=lambda pid, sig: killed.append((pid, sig)))
+
+    assert stopped == (101, 102)
+    assert killed == [(101, signal.SIGTERM), (102, signal.SIGTERM)]

@@ -88,6 +88,35 @@ def _is_control_server(cmd: str) -> bool:
     )
 
 
+def _is_updater(cmd: str) -> bool:
+    words = cmd.split()
+    return "app-server" in words and "daemon" in words and "pid-update-loop" in words
+
+
+def stop_owned(agent: str, *, proc: Path = Path("/proc"), kill=os.kill) -> tuple[int, ...]:
+    """Terminate every Remote Control process proven to belong to ``agent``.
+
+    Codex's updater is a sibling daemon, not a child of the tmux-hosted TUI, so
+    killing the pane leaves both it and app-server alive.  Environment identity
+    plus a known daemon argv is the ownership proof; a PID record alone is not.
+    """
+    stopped: list[int] = []
+    try:
+        pids = sorted(int(p.name) for p in proc.iterdir() if p.name.isdigit())
+    except OSError:
+        pids = []
+    for pid in pids:
+        cmd = _cmdline(pid, proc)
+        if (_environ(pid, proc).get("SHANTY_AGENT") == agent
+                and (_is_control_server(cmd) or _is_updater(cmd))):
+            try:
+                kill(pid, signal.SIGTERM)
+                stopped.append(pid)
+            except ProcessLookupError:
+                pass
+    return tuple(sorted(stopped))
+
+
 def inspect(agent: str, *, runtime_dir: Path | None = None,
             proc: Path = Path("/proc"), now: float | None = None) -> Health:
     """Return the named card's launch blocker; report only proven facts."""

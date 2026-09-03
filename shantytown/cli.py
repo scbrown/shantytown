@@ -2459,6 +2459,7 @@ def _cmd_stop(a) -> int:
             if fixed.blocked:
                 print(f"  repaired {codex_daemon.FLAG} for {agent.name}: "
                       f"{fixed.reason()}", file=sys.stderr)
+            codex_daemon.stop_owned(agent.name)
         print(f"  {a.agent} was not running.")
         return OK
     # OWNERSHIP GUARD. The session is live — but st only reaps what
@@ -2509,6 +2510,12 @@ def _cmd_stop(a) -> int:
         print(f"  could not tell: killed {session} but it is still there",
               file=sys.stderr)
         return CANNOT_TELL
+    if harness_mod.name_for(agent, root=a.root) == "codex":
+        # The app-server and its updater are daemonized siblings of the TUI;
+        # tmux cannot reap them.  Stop only processes whose environment proves
+        # this card owns them (aegis-z50a0z).
+        from . import codex_daemon
+        codex_daemon.stop_owned(agent.name)
     # The stamp described a LIVE launch; that launch is now gone. Leaving it would
     # let `st crew` report `current` for the settings of a process that no longer
     # exists — a clean bill of health for nobody.
