@@ -493,7 +493,10 @@ class QuipuRegistry:
         """
         req = urllib.request.Request(
             self.server + "/query",
-            data=json.dumps({"query": sparql}).encode(),
+            # Registry projections consume namespace-expanded identities. Quipu
+            # returns CURIEs by default, which makes `_local` preserve `aegis:`
+            # and silently corrupts crew names and hierarchy edges.
+            data=json.dumps({"query": sparql, "verbose": True}).encode(),
             headers=request_headers(),
         )
         try:

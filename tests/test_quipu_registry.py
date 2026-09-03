@@ -109,6 +109,24 @@ def test_query_truncation_is_a_partial_answer(monkeypatch):
         answer.exact()
 
 
+def test_query_requests_expanded_iris_for_registry_projection(monkeypatch):
+    seen = []
+
+    class Response:
+        def __enter__(self): return self
+        def __exit__(self, *_args): return False
+        def read(self): return b'{"rows":[]}'
+
+    def urlopen(req, **_kwargs):
+        seen.append(json.loads(req.data))
+        return Response()
+
+    import json
+    monkeypatch.setattr("urllib.request.urlopen", urlopen)
+    QuipuRegistry(server="http://test.invalid")._query("SELECT ?s {}")
+    assert seen == [{"query": "SELECT ?s {}", "verbose": True}]
+
+
 def test_roster_survives_failed_role_enrichment_but_is_marked_partial():
     reg = QuipuRegistry(server="http://test.invalid")
     calls = 0
