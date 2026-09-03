@@ -95,7 +95,10 @@ def test_codex_remote_control_is_explicit_and_attaches_to_managed_daemon(tmp_pat
     assert "--cd '/work with space'" in launch
     assert f"ln -sfn {cfg} {daemon_home / 'config.toml'}" in launch
     assert f"ln -sfn {cfg.parent / 'auth.json'} {daemon_home / 'auth.json'}" in launch
-    assert f"ln -sfn {cfg.parent / 'packages'} {daemon_home / 'packages'}" in launch
+    daemon_standalone = daemon_home / "packages" / "standalone"
+    assert f"ln -sfn {cfg.parent / 'packages' / 'standalone' / 'releases'} " \
+           f"{daemon_standalone / 'releases'}" in launch
+    assert f"{cfg.parent / 'packages'} {daemon_home / 'packages'}" not in launch
     # The daemon home precedes the TUI home; readers must report the TUI's role
     # settings rather than mistaking daemon state for a second config artifact.
     assert CODEX.settings_in_cmdline(launch) == str(cfg)
@@ -119,7 +122,7 @@ def test_codex_remote_control_bootstraps_a_first_launch_before_stop(tmp_path):
     bootstrap = f"mkdir -p {daemon_home}"
     stop = f"CODEX_HOME={daemon_home} codex remote-control stop"
     assert launch.index(bootstrap) < launch.index(stop)
-    assert launch.count(bootstrap) == 1
+    assert launch.count(bootstrap + " &&") == 1
 
 
 def test_codex_remote_control_daemon_identity_and_socket_are_per_card(tmp_path):
@@ -241,6 +244,11 @@ def test_codex_remote_control_repairs_stale_current_pointer(tmp_path, stale_targ
     assert (current / "codex").is_file()
     assert "codex remote-control start" in launch
     assert f"ln -sfn {expected} {current}" in launch
+    daemon_standalone = (Path(os.environ.get("XDG_RUNTIME_DIR", Path.home() / ".cache")) /
+                         "shantytown/codex/ellie/packages/standalone")
+    assert f"ln -sfn {standalone / 'releases'} {daemon_standalone / 'releases'}" in launch
+    assert f"ln -sfn {expected} {daemon_standalone / 'current'}" in launch
+    assert f"{cfg.parent / 'packages'} {daemon_standalone.parent}" not in launch
 
 
 def test_codex_role_config_disables_tui_startup_updates():

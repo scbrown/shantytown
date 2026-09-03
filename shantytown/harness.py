@@ -867,8 +867,10 @@ class CodexHarness:
                 )
             current = managed.parent
             repair_after_start = ""
+            daemon_current_target = str(current)
             if current.is_symlink():
                 target = os.readlink(current)
+                daemon_current_target = target
                 if not os.path.isabs(target):
                     # `remote-control start` launches app-server-updater through
                     # the per-card packages view.  Codex rewrites the shared
@@ -878,6 +880,7 @@ class CodexHarness:
                         f" && ln -sfn {shlex.quote(target)} "
                         f"{shlex.quote(str(current))}"
                     )
+            standalone = current.parent
             # A role-shared daemon cannot carry a truthful card identity: tool
             # shells and hooks inherit the app-server's environment, not the
             # attached TUI's. Give each card its own daemon state/socket while
@@ -918,8 +921,18 @@ class CodexHarness:
                 f"{shlex.quote(str(daemon_home / codex_mod().CONFIG_FILE))}",
                 f"ln -sfn {shlex.quote(str(home / 'auth.json'))} "
                 f"{shlex.quote(str(daemon_home / 'auth.json'))}",
-                f"ln -sfn {shlex.quote(str(home / 'packages'))} "
-                f"{shlex.quote(str(daemon_home / 'packages'))}",
+                # Do not expose the role-shared `standalone/current` pointer to
+                # app-server-updater.  Releases remain shared (one ~330 MiB
+                # payload per role), while updater-owned current/install.lock
+                # live in this card's disposable daemon home.  Remove only the
+                # legacy packages symlink emitted by older Shantytown builds.
+                f"if [ -L {shlex.quote(str(daemon_home / 'packages'))} ]; then "
+                f"unlink {shlex.quote(str(daemon_home / 'packages'))}; fi",
+                f"mkdir -p {shlex.quote(str(daemon_home / 'packages' / 'standalone'))}",
+                f"ln -sfn {shlex.quote(str(standalone / 'releases'))} "
+                f"{shlex.quote(str(daemon_home / 'packages' / 'standalone' / 'releases'))}",
+                f"ln -sfn {shlex.quote(daemon_current_target)} "
+                f"{shlex.quote(str(daemon_home / 'packages' / 'standalone' / 'current'))}",
             ))
             # Start is idempotent for THIS card, then attach its TUI to its Unix
             # socket. The per-card identity prefix is load-bearing: it is the
