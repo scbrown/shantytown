@@ -104,6 +104,10 @@ def parse_condition(text: str) -> Condition | None:
 # gets forgotten and therefore precisely what must still be reported.
 PARKED_LABEL = "parked:by-design"
 
+# Just the LABEL, with no opinion about what follows it. Used only to tell
+# "no marker was written" apart from "a marker was written and is wrong".
+_MARKER_PRESENT = re.compile(r"resume_when\s*:", re.I)
+
 
 @dataclass
 class Finding:
@@ -187,7 +191,15 @@ def evaluate(rows, now: datetime, is_closed=None) -> list:
         # looking for a field that is already there (aegis-hm8994).
         malformed = raw_when is not None and when is None
         lapsed = when is not None and when <= now
-        cond = parse_condition(str(row.get("notes") or ""))
+        notes_text = str(row.get("notes") or "")
+        cond = parse_condition(notes_text)
+        # A `resume_when:` that was WRITTEN but does not parse into <kind>:<arg>.
+        # Measured on the live store: aegis-902vnu carries `resume_when: st`,
+        # which has no colon and so yields no condition at all. Reporting that as
+        # "NO RESUME CONDITION" sends its author to ADD one when the fix is to
+        # CORRECT the one already there — the same wrong-remedy trap as a
+        # malformed defer_until, one level down (aegis-hm8994).
+        botched = cond is None and _MARKER_PRESENT.search(notes_text) is not None
 
         met, untestable = False, ""
         if cond is not None:
@@ -215,6 +227,14 @@ def evaluate(rows, now: datetime, is_closed=None) -> list:
             else:
                 untestable = cond.render()
 
+        if botched and when is None:
+            out.append(Finding(
+                bead=bead, title=str(row.get("title") or "")[:70],
+                assignee=str(row.get("assignee") or ""),
+                priority=row.get("priority"),
+                untestable="a `resume_when:` marker is present but does not parse "
+                           "as <kind>:<arg> — correct the marker, do not add one"))
+            continue
         if malformed and cond is None:
             out.append(Finding(
                 bead=bead, title=str(row.get("title") or "")[:70],

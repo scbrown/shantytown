@@ -426,3 +426,33 @@ def test_blocked_on_a_HUMAN_is_still_reported_because_that_is_what_gets_forgotte
     for lab in ("blocked:human", "blocked:external", "parked", "parked:by-design-ish"):
         out = deferrals.evaluate([_row("aegis-b", labels=[lab])], NOW)
         assert len(out) == 1 and out[0].conditionless, f"{lab} must still report"
+
+
+def test_a_marker_that_was_WRITTEN_but_does_not_parse_says_CORRECT_not_ADD():
+    """Found on the live store: aegis-902vnu carries `resume_when: st`.
+
+    No colon, so it yields no Condition at all and fell into the conditionless
+    bucket — which tells its author to ADD a marker when one is already there and
+    merely wrong. Same wrong-remedy trap as a malformed defer_until, one level
+    down, and it is the reason a loose `resume_when:\\s*\\S+` census disagreed with
+    the evaluator by exactly one bead.
+    """
+    out = deferrals.evaluate([_row("aegis-botched", notes="resume_when: st")], NOW)
+    assert len(out) == 1
+    assert out[0].conditionless is False, "a marker IS present; it is malformed"
+    assert "does not parse" in out[0].untestable
+    assert "correct the marker" in out[0].untestable
+
+
+def test_a_WELL_FORMED_marker_is_still_parsed_normally():
+    """Negative control: the botched-detector must not shadow the working path."""
+    out = deferrals.evaluate(
+        [_row("aegis-ok", notes="resume_when: date:2026-01-01T00:00:00Z")], NOW)
+    assert len(out) == 1 and out[0].met is True
+    assert not out[0].untestable and out[0].conditionless is False
+
+
+def test_prose_containing_no_marker_at_all_is_conditionless_not_botched():
+    """The other side of the same line: absent must not read as malformed."""
+    out = deferrals.evaluate([_row("aegis-plain", notes="we will pick this up later")], NOW)
+    assert len(out) == 1 and out[0].conditionless is True and not out[0].untestable
