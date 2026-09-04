@@ -336,9 +336,11 @@ def resolve_pane_scope(
     if seen is None:
         return None, (f"pid {pane_pid} is not in a .scope after {timeout_s:g}s "
                       "— tmux systemd integration may be unavailable")
+    # The tracker id for this refusal stays in the module docstring, not in the
+    # message: this string is printed, and a public reader cannot resolve it.
     return None, (f"pid {pane_pid} still reports the LAUNCHER's own scope {seen} "
                   f"after {timeout_s:g}s — refusing to bound the caller's own "
-                  "pane (aegis-0j0n1n)")
+                  "pane")
 
 
 def current_bytes(scope: str) -> int | None:
@@ -436,12 +438,12 @@ def bound_pane(pane_pid: int | str, launcher: str | None = None) -> Applied:
             return Applied(False, scope,
                            f"refusing MemoryMax={lim.max} on {scope}: it already "
                            f"holds {cur} bytes, so that ceiling is an immediate "
-                           "memcg OOM kill, not a limit (aegis-0j0n1n)")
+                           "memcg OOM kill, not a limit")
         if cur >= lim.high:
             return Applied(False, scope,
                            f"refusing MemoryHigh={lim.high} on {scope}: it already "
                            f"holds {cur} bytes, so that throttle is reclaim thrash "
-                           "from the first instant (aegis-0j0n1n)")
+                           "from the first instant")
     try:
         return apply_to_scope(scope, lim)
     except Exception as e:                                  # pragma: no cover

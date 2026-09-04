@@ -633,15 +633,15 @@ class Tmux:
         from . import panemem
         pid = self.pane_pid(name)
         if pid is None:
-            print(f"  ⚠ {name}: no pane pid — memory ceiling NOT applied "
-                  f"(aegis-0j0n1n)", file=sys.stderr)
+            print(f"  ⚠ {name}: no pane pid — memory ceiling NOT applied",
+                  file=sys.stderr)
             return
         applied = panemem.bound_pane(pid)
         if not applied:
             if applied.reason.startswith("disabled"):
                 return          # switched off on purpose; not a warning
-            print(f"  ⚠ {name}: memory ceiling NOT applied — {applied.reason} "
-                  f"(aegis-0j0n1n)", file=sys.stderr)
+            print(f"  ⚠ {name}: memory ceiling NOT applied — {applied.reason}",
+                  file=sys.stderr)
 
     def pane_pid(self, name: str) -> str | None:
         """The pid of the pane's shell, or None when it cannot be read."""
