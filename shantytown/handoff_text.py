@@ -104,3 +104,48 @@ def refusal_note() -> str:
     """
     return ("If the cycle is REFUSED (dirty/unpushed tree): the request stays "
             "PENDING and tend retries it. Commit or push. Do not /clear.")
+
+
+def coordinator_self_handoff(depth_k: float | int, threshold_k: float | int) -> str:
+    """The ROOT's own context-high line (aegis-902vnu item 3).
+
+    Every surface above tells a WORKER what to do. Nothing told the coordinator,
+    and the coordinator is the one agent whose stop hook is a block payload it
+    reads every turn — so it enforced the handoff rule on the fleet while having
+    no channel that applied it to itself. Stiwi's directive is explicit that it
+    covers "all st agents"; a root exempted by omission is the loudest possible
+    counter-example to the rule it is delivering.
+
+    ADMINISTRATORS NEED `--checkpoint-bead`, which workers do not (cycle
+    .requires_checkpoint_bead). Naming it here is the difference between a
+    pointer and a pointer that works: a root that follows the worker recipe is
+    refused, at the moment it is least able to debug a refusal.
+    """
+    return (f"⚠ YOUR OWN CONTEXT: {int(depth_k)}k, past the {int(threshold_k)}k "
+            f"line. You enforce this on the crew — same rule. CHECKPOINT, then "
+            f"cycle:\n"
+            f"  br comments add <bead> --file <notes>  &&  {CYCLE_CMD} "
+            f"--checkpoint-bead <bead> --checkpoint-file <notes>\n"
+            f"{NO_CLEAR} {HELP_POINTER}")
+
+
+def write_your_handoff_now(depth_k: float | int, cycle_k: float | int) -> str:
+    """ONE STEP BEFORE the cycle prompt (aegis-902vnu item 3, codex arm).
+
+    Not a cycle instruction — deliberately. The agent is not being asked to stop;
+    it is being asked to write down, while it still has room to think, the thing
+    a cycle or a compaction would otherwise destroy. Telling it to cycle here
+    would be the fleet's older mistake in a new place: the remedy arriving at the
+    same moment as the problem.
+
+    Codex has no PreCompact hook, so on that harness this sweep is the ONLY
+    warning that precedes the boundary. On Claude the hook writes a checkpoint
+    regardless — but a machine's tail-scrape is evidence, not a handoff, and this
+    line is the ask for the real one.
+    """
+    return (f"⚠ HANDOFF SOON ({int(depth_k)}k; the cycle line is {int(cycle_k)}k). "
+            f"Keep working — but write your handoff NOW, while you still have the "
+            f"reasoning:\n"
+            f"  br comments add <bead> --file <notes>   "
+            f"(state · landed-vs-local · exact next step · rollback)\n"
+            f"Do it before the cycle prompt, not after. {HELP_POINTER}")

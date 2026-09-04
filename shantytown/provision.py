@@ -563,6 +563,44 @@ def _with_stale_hook(text: str, role: str, root) -> str:
     return json.dumps(cfg, indent=2) + "\n"
 
 
+def _with_precompact_hook(text: str, role: str, root) -> str:
+    """Inject the PreCompact checkpoint (aegis-902vnu — Stiwi: "you should be
+    handing off before compaction same with all st agents").
+
+    HERE for the third time and the same measured reason: this consent file is
+    re-applied on every launch and therefore self-heals, while --settings is
+    emitted once at `role set` and never reaches a running agent. This one has
+    the sharpest version of that argument — the population it must reach is
+    precisely the long-lived sessions, i.e. the ones that have been running
+    since before any settings regeneration.
+
+    EVERY ROLE, administrators included, and that is the directive's own word:
+    "all st agents", coordinator included. The untracked nudge exempts admins
+    because being scolded for dispatching is role-specific; losing your
+    reasoning to a summary is not.
+
+    APPENDS and is idempotent — any previous entry is dropped first, so
+    re-provisioning cannot stack it and fire two checkpoints per boundary.
+
+    NOTE for the codex half of the bead: codex has no PreCompact event, so this
+    injector is Claude-only by construction. Codex is covered by the pre-cycle
+    gate in cycle.py instead, not by a second copy of this.
+    """
+    from .runtime import _precompact_hook     # lazy: provision<->runtime hygiene
+    try:
+        cfg = json.loads(text)
+    except ValueError:
+        return text
+    if not isinstance(cfg, dict):
+        return text
+    hooks = cfg.setdefault("hooks", {})
+    kept = [e for e in hooks.get("PreCompact", [])
+            if not any("shantytown.precompact" in h.get("command", "")
+                       for h in e.get("hooks", []))]
+    hooks["PreCompact"] = kept + [_precompact_hook(root)]
+    return json.dumps(cfg, indent=2) + "\n"
+
+
 def provision(card: Agent, root, *, secrets=None) -> list[str]:
     """Equip the agent's workspace. Returns the server names it can now reach.
 
@@ -643,9 +681,11 @@ def provision(card: Agent, root, *, secrets=None) -> list[str]:
         out.mkdir(parents=True, exist_ok=True)
         text = (render(consent.read_text(), {"SERVERS": ""}) if "${SERVERS}"
                 in consent.read_text() else consent.read_text())
-        final = _with_stale_hook(
-            _with_untracked_hook(
-                _with_capture_hook(_consent_for_role(text, card.role), root),
+        final = _with_precompact_hook(
+            _with_stale_hook(
+                _with_untracked_hook(
+                    _with_capture_hook(_consent_for_role(text, card.role), root),
+                    card.role, root),
                 card.role, root),
             card.role, root)
         (out / CONSENT_TEMPLATE).write_text(final)

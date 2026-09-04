@@ -264,6 +264,110 @@ def assess(agent: str, trees, checkpoint: str, staleness,
                    untracked=notices)
 
 
+def _parse_ts(value):
+    """An ISO-8601 timestamp, or None. `Z` accepted (br writes it)."""
+    from datetime import datetime
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        return datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def checkpoint_since(comments, who: str, since) -> bool:
+    """Has `who` written anything on this bead since `since`?
+
+    THE ONE PREDICATE, shared by the two mechanisms that need it — the codex-side
+    `st cycle` gate below and the Claude-side PreCompact hook (precompact.py).
+    Two spellings of "is there a checkpoint" would be two answers, and the one
+    that decides is whichever ran; keeping it here also means the Claude hook
+    borrows the harness-neutral policy rather than inventing a parallel one.
+
+    ANY comment by the agent counts, not only a marked one. The directive
+    (Stiwi 2026-09-03) asks for a handoff written by the agent; a gate that
+    accepted only its own machine-written marker would refuse the exact behaviour
+    it exists to produce.
+
+    `since` unparseable or absent -> False = "no checkpoint found". The two
+    callers take that in OPPOSITE directions on purpose, and both are right:
+    the hook WRITES one (a duplicate costs a comment), the gate REFUSES with the
+    remedy printed (an unnecessary refusal costs a sentence). Neither silently
+    proceeds as though a checkpoint had been seen.
+    """
+    floor = _parse_ts(since)
+    if floor is None:
+        return False
+    for c in comments or []:
+        if not isinstance(c, dict):
+            continue
+        if who and (c.get("author") or "") != who:
+            continue
+        at = _parse_ts(c.get("created_at"))
+        if at is not None and at >= floor:
+            return True
+    return False
+
+
+@dataclass
+class DurableGate:
+    """Is there a DURABLE handoff on the held bead, written since the last
+    relaunch? (aegis-902vnu, Stiwi 2026-09-03: "you should be handing off before
+    compaction same with all st agents".)
+
+    Separate from `assess`'s checkpoint gate, and the difference is the whole
+    point. `assess` requires a checkpoint STRING — a `--reason` line, which dies
+    with the operator's terminal. This requires a comment ON THE BEAD, which is
+    what a fresh session can actually read. The reason line was never intended to
+    be the handoff; it is the stop record's label.
+
+    THREE STATES. `ok=True` (a checkpoint is there), `ok=False` (there is none —
+    refuse and say how), and `ok=None` = COULD NOT TELL, which does NOT refuse.
+    A tracker that will not answer must not be able to strand a saturated agent:
+    an agent that cannot cycle keeps filling, and the failure this bead is about
+    is precisely context that fills past a boundary. Cannot-tell is reported out
+    loud instead — the launched.py rule, one module over.
+    """
+    agent: str
+    bead: str = ""
+    since: str = ""
+    ok: "bool | None" = None
+    note: str = ""
+
+    def render(self) -> str:
+        if self.ok:
+            return f"{self.agent}: durable checkpoint on {self.bead} ✓"
+        if self.ok is None:
+            return f"{self.agent}: durable checkpoint COULD NOT BE CHECKED — {self.note}"
+        return (
+            f"no durable handoff on {self.bead} since this session launched "
+            f"({self.since or 'unknown'}). The --reason line dies with this "
+            f"terminal; the next session reads the BEAD. Write one first:\n"
+            f"    br comments add {self.bead} --file <notes>\n"
+            f"  (state, landed-vs-local, exact next step, rollback). Or "
+            f"`st cycle --self --checkpoint-file <notes>`, which posts it for "
+            f"you. --allow-loss overrides, and spends the reasoning.")
+
+
+def durable_gate(agent: str, bead: str, since, comments, error: str = "") -> DurableGate:
+    """The policy half — no I/O, so it is testable without a fleet or a store.
+
+    The CLI supplies `comments` (br.comments) and `since` (the launch stamp's
+    mtime); an `error` from either read produces the could-not-tell verdict
+    rather than a refusal.
+    """
+    if error:
+        return DurableGate(agent, bead, str(since or ""), None, error)
+    if not bead:
+        return DurableGate(agent, bead, str(since or ""), None,
+                           "no held bead — nothing to checkpoint onto")
+    if not since:
+        return DurableGate(agent, bead, "", None,
+                           "no launch stamp — cannot date 'since the last relaunch'")
+    ok = checkpoint_since(comments, agent, since)
+    return DurableGate(agent, bead, str(since), ok, "")
+
+
 class Requests:
     """Durable cycle REQUESTS — the `--self` half, and the important one.
 

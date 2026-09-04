@@ -298,6 +298,35 @@ at being the wrong thing.
 | model flag | `--model` | `--model` |
 | browser | `--chrome` / `--no-chrome` | none — `chrome: true` is refused |
 | pane-reading (is it live?) | measured | **not measured** — see the gaps above |
+| compaction hook (`PreCompact`) | **yes** — `shantytown.precompact` writes a checkpoint at the boundary | **none exists** |
+| so: handoff-before-compaction | automatic backstop + the st lines | the st lines ONLY, plus the `st cycle` durable gate |
+
+### Handoff before compaction (aegis-902vnu)
+
+Stiwi, 2026-09-03: *"you should be handing off before compaction same with all st agents"*.
+
+st's existing handoff lines (400k idle, 600k mid-haul) are "before compaction" only if the harness
+compacts LATER than they fire — and st reads no harness's compaction threshold. The asymmetry in
+the table above is the whole design constraint:
+
+* **Claude Code** fires `PreCompact` at the true boundary. `shantytown.precompact` runs there,
+  MEASURES the depth into `<root>/compaction.jsonl`, and writes a checkpoint onto the held bead if
+  the agent has not written one since the last boundary. Its stdout becomes the compaction's
+  `newCustomInstructions` (read out of the 2.1.260 binary's `executePreCompactHooks`), so it also
+  tells the summariser to keep landed-vs-local, the next step and the rollback. **It never blocks**:
+  a blocked compaction leaves the session `continuing uncompacted`, walking into the hard context
+  wall, so a refusal removes the relief valve rather than buying time.
+* **Codex** has no such event, so it gets the two things that do not need one — a nudge at the
+  pre-handoff line (`triage.PRE_CYCLE_THRESHOLD_K`, one step before the cycle prompt) and a gate in
+  `st cycle` that refuses a relaunch when the held bead carries no comment from the agent since its
+  last launch. The gate has THREE states: a tracker it cannot read is *could not tell*, which warns
+  and proceeds — an agent that cannot cycle keeps filling, which is the failure being fixed.
+
+Why the thresholds are not constants in one place: Claude's auto-compact fires at
+`window - min(maxOutputTokens, 20000) - 13000`, so ~967k on a 1M-window model (far above both st
+lines) and ~167k on a 200k-window one (**below both** — that agent compacts before st says
+anything). The line moves with the MODEL, not the harness. `compaction.jsonl` is what will answer it
+per agent; codex has produced no points yet.
 
 Everything in the codex column was read out of `openai/codex` `main` on 2026-08-06, with the source
 file named beside each fact in [`shantytown/codex.py`](../shantytown/codex.py). There was no codex

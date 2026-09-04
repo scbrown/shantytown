@@ -5944,6 +5944,48 @@ def _cycle_anchor_bead(a, agent: str) -> str:
     return str(iid) if iid else ""
 
 
+def _durable_checkpoint_gate(a, agent_name: str):
+    """The I/O half of cycle.durable_gate — read the held bead, its comments, and
+    when this agent last launched. Policy stays in cycle.py, testable without a
+    fleet; only the reads live here.
+
+    "Since the last relaunch" is the LAUNCH STAMP'S mtime. launched.FilesLaunches
+    writes it atomically at the moment of launch and `st stop` forgets it, so at
+    gate time it dates the session that is running right now — which is exactly
+    the window a handoff has to be newer than. It carries no timestamp FIELD, and
+    adding one would be a schema change to a store `st crew` reads on every
+    refresh; the file's own mtime already answers the question.
+
+    EVERY failure becomes could-not-tell (ok=None), never a refusal and never a
+    pass: this is a gate on a saturated agent's only relief valve.
+    """
+    from datetime import datetime, timezone
+    from . import cycle as cycle_mod
+    try:
+        stamp = Path(a.root) / "launched" / f"{agent_name}.json"
+        since = (datetime.fromtimestamp(stamp.stat().st_mtime, tz=timezone.utc)
+                 .isoformat() if stamp.is_file() else "")
+    except OSError as e:
+        return cycle_mod.durable_gate(agent_name, "", "", [], error=f"launch stamp unreadable ({e})")
+    try:
+        bead = _cycle_anchor_bead(a, agent_name)
+    except Exception as e:
+        return cycle_mod.durable_gate(agent_name, "", since, [], error=f"plate unreadable ({e})")
+    if not bead:
+        return cycle_mod.durable_gate(agent_name, "", since, [])
+    if _backend(a, "files") not in ("beads", "br"):
+        return cycle_mod.durable_gate(
+            agent_name, bead, since, [],
+            error=f"backend {_backend(a, 'files')!r} has no comments to read")
+    try:
+        from .br import comments as br_comments
+        got = br_comments(_tracker(a), bead)
+    except Exception as e:
+        return cycle_mod.durable_gate(agent_name, bead, since, [],
+                                      error=f"comments unreadable on {bead} ({e})")
+    return cycle_mod.durable_gate(agent_name, bead, since, got)
+
+
 def _cmd_cycle(a) -> int:
     """cycle <agent> — clear context WITHOUT destroying the runtime (aegis-3laza).
 
@@ -6134,6 +6176,26 @@ def _cmd_cycle(a) -> int:
     # (aegis-4hwpdb).
     for line in verdict.notice_lines():
         print(f"      {line}", file=sys.stderr)
+
+    # THE DURABLE GATE (aegis-902vnu). assess() above accepted a --reason STRING;
+    # this asks the different and harder question the directive actually names —
+    # is the handoff somewhere the NEXT session can read it? A reason line lives
+    # on the stop record and in this terminal; a bead comment is what a relaunched
+    # agent opens. Codex has no PreCompact hook, so for half the fleet this gate
+    # is the only thing standing between a cycle and a lost session.
+    gate = _durable_checkpoint_gate(a, agent_name)
+    if gate.ok is False and not a.allow_loss:
+        print(f"  refused: {gate.render()}", file=sys.stderr)
+        cycle_mod.Requests(a.root).mark_refused(agent_name, gate.render(), [])
+        return REFUSED
+    if gate.ok is None:
+        # COULD NOT TELL never refuses — an agent that cannot cycle keeps filling,
+        # which is the failure this whole bead is about. Said out loud instead.
+        print(f"  ⚠ {gate.render()}", file=sys.stderr)
+    elif gate.ok is False:
+        print(f"  ⚠ cycling over a missing durable handoff (--allow-loss): "
+              f"{gate.bead} has no comment from {agent_name} since "
+              f"{gate.since}. That reasoning is being spent.", file=sys.stderr)
 
     if a.dry_run:
         print(f"  would: stop {agent_name} (reason: {verdict.checkpoint})")

@@ -392,6 +392,13 @@ def run(root, me: str, **kw) -> int:
     # being woken should see everything waiting for it in the same turn.
     payload = _drain_payload(root, me, kw)
     reason = verdict.reason if not payload else f"{verdict.reason}\n\n{payload}"
+    # THE ROOT ENFORCES THIS RULE ON THE CREW AND HAD NO CHANNEL FOR ITSELF
+    # (aegis-902vnu item 3, Stiwi: "same with all st agents"). This block payload
+    # is the one message a coordinator reads every turn, so it is where its own
+    # depth belongs. Prepended, not appended — the drain below it is long, and a
+    # handoff line at the bottom of a workflow digest is a line nobody reaches.
+    if (own := _own_context_line(root, me, kw)):
+        reason = f"{own}\n\n{reason}"
     print(json.dumps({"decision": "block", "reason": reason}))
     if (log := kw.get("wake_log")) is not None or True:
         try:
@@ -399,6 +406,30 @@ def run(root, me: str, **kw) -> int:
         except Exception:  # noqa: BLE001 — a ledger must never fail a wake
             pass
     return 0
+
+
+def _own_context_line(root, me: str, kw) -> str:
+    """The coordinator's own context-high line, or '' — ONLY past the line.
+
+    SILENT BELOW THE THRESHOLD, deliberately. handoff_text's own rule is that a
+    message re-pushed every few minutes is read once and skipped forever after,
+    so a depth report on every stop would train the root to skip the block
+    payload — the channel that also carries its wakes and its Rule Zero verdict.
+
+    None (a stop taken mid-turn, no footer to read) is NOT over the line, exactly
+    as _my_context_k documents: unknown is not a number.
+    """
+    from . import handoff_text
+    from .triage import CYCLE_THRESHOLD_K
+    try:
+        reg = kw.get("reg") or FilesRegistry(root / "crew")
+        panes = kw.get("panes") or Tmux()
+        depth = stop_event._my_context_k(reg, panes, me)
+    except Exception:      # noqa: BLE001 — a report must never fail a wake
+        return ""
+    if depth is None or depth < CYCLE_THRESHOLD_K:
+        return ""
+    return handoff_text.coordinator_self_handoff(depth, CYCLE_THRESHOLD_K)
 
 
 def _drain_payload(root, me: str, kw) -> str:

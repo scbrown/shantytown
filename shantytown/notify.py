@@ -237,6 +237,15 @@ def _cycle_message() -> str:
         "past the cycle line", f"past the {int(CYCLE_THRESHOLD_K)}k cycle line")
 
 
+def _pre_handoff_message(depth_k) -> str:
+    """The nudge one step before the cycle prompt. handoff_text owns the wording
+    — the whole point of that module is that this fleet once shipped six
+    different answers to "your context is high"."""
+    from . import handoff_text
+    from .triage import CYCLE_THRESHOLD_K
+    return handoff_text.write_your_handoff_now(depth_k, CYCLE_THRESHOLD_K)
+
+
 def push_to_own_pane(reg, panes, agent: str, message: str) -> str | None:
     """Deliver `message` into the AGENT'S OWN pane (aegis-bik9) — the cycle remedy
     goes to the saturated agent itself, not to a coordinator. Returns the agent
@@ -309,6 +318,16 @@ class CycleDriver:
         states = agent_states(agents, self._panes, runtime)
         saturated = {n for n, r in states.items()
                      if r.state == triage_mod.SATURATED}
+        # THE PRE-HANDOFF SET (aegis-902vnu): idle, MEASURED between the
+        # pre-handoff line and the cycle line. Disjoint from `saturated` by
+        # construction — an agent past the cycle line gets the cycle prompt, not
+        # a warning about one. Depth must be a NUMBER: None is unreadable, and
+        # this file has now been burned twice by promoting cannot-tell to a
+        # verdict (see the two re-arm notes below).
+        nearing = {n for n, r in states.items()
+                   if n not in saturated and r.depth_k is not None
+                   and triage_mod.PRE_CYCLE_THRESHOLD_K <= r.depth_k
+                   < triage_mod.CYCLE_THRESHOLD_K}
         ledger = self._load()
         prompted = []
 
@@ -353,12 +372,40 @@ class CycleDriver:
         # `depth_k is None` therefore means CANNOT TELL and must leave the ledger
         # exactly as it is. Only a number we actually read, and read below the
         # threshold, retires an episode.
+        #
+        # RE-ARM AT THE LINE THAT PROMPTED, NOT AT ONE FIXED LINE (aegis-902vnu).
+        # There are now two prompts at two depths, and a single re-arm threshold
+        # would recreate the exact bug the paragraphs above are about: a
+        # `prehandoff` entry is BY CONSTRUCTION below the cycle line, so
+        # retiring every entry under CYCLE_THRESHOLD_K would delete it on the
+        # very next sweep and re-nudge that agent every 30s forever.
         for agent in list(ledger):
             read = states.get(agent)
             if read is None or read.depth_k is None:
                 continue                       # no pane, or depth unreadable
-            if read.depth_k < triage_mod.CYCLE_THRESHOLD_K:
+            line = (triage_mod.PRE_CYCLE_THRESHOLD_K
+                    if ledger.get(agent) == "prehandoff"
+                    else triage_mod.CYCLE_THRESHOLD_K)
+            if read.depth_k < line:
                 del ledger[agent]
+
+        # THE PRE-HANDOFF NUDGE, before the saturated loop so an agent that
+        # crosses both lines between two sweeps still gets the ask to write
+        # first. Ledgered under its own key: reaching the cycle line later must
+        # still deliver the cycle prompt, so this state cannot be allowed to
+        # look like "already handled".
+        for agent in sorted(nearing):
+            if ledger.get(agent) in ("prehandoff", "saturated"):
+                continue
+            wiring = self._wiring_fn(agent)
+            if wiring is None or not wiring.directions:
+                continue                       # dark — not st's to drive
+            if self._push(self._reg, self._panes, agent,
+                          _pre_handoff_message(states[agent].depth_k)) is None:
+                continue                       # unreachable pane: retry next sweep
+            ledger[agent] = "prehandoff"
+            self._log(f"cycle: nudged {agent} to write its handoff at "
+                      f"{int(states[agent].depth_k)}k (pre-handoff line)")
 
         for agent in sorted(saturated):
             if ledger.get(agent) == "saturated":

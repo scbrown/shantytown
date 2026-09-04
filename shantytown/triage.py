@@ -484,6 +484,25 @@ CONTEXT_HIGH_TOKENS_K = 400.0
 # context limit (~1M) — it is the point at which cycling is cheaper than carrying
 # on, so displaying depth as "% of limit" against 400k was a lie and was removed.
 CYCLE_THRESHOLD_K = 400.0
+# THE PRE-HANDOFF LINE (aegis-902vnu, Stiwi 2026-09-03: "you should be handing
+# off before compaction same with all st agents"). One step BELOW the cycle line,
+# and it exists for the harness that has no PreCompact hook.
+#
+# Claude Code fires a PreCompact hook at the true boundary, so a Claude agent's
+# checkpoint is written by shantytown.precompact whatever its depth. CODEX HAS NO
+# SUCH EVENT. Its only warning is this sweep, and a nudge that arrives AT the
+# cycle line arrives when the agent is already being told to stop — which is one
+# step too late to write anything considered.
+#
+# 320k = 80% of the cycle line. The margin is a JUDGEMENT, not a measurement, and
+# it is deliberately labelled as one: codex's own compaction threshold has never
+# been measured on this fleet (that is why compaction.jsonl exists). What is
+# measured is the Claude side — `window - min(maxOut, 20000) - 13000`, so ~967k
+# on a 1M window and ~167k on a 200k one. Note the second number: it is BELOW
+# both st lines, so on a small-window model the harness compacts before st says
+# anything at all. Set this from the log once codex has produced points; do not
+# harden the guess into a fact in the meantime.
+PRE_CYCLE_THRESHOLD_K = 320.0
 
 
 def context_tokens_k(screen: str) -> float | None:

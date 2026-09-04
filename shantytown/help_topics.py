@@ -48,6 +48,29 @@ HANDOFF / CYCLE — what to do when st tend says your context is high
     uncommitted or unpushed work; commit or push it and the pending request is
     honoured on a later pass.
 
+  BEFORE COMPACTION, NOT AFTER (Stiwi, 2026-09-03)
+    "you should be handing off before compaction same with all st agents".
+    Compaction keeps a SUMMARY and drops the reasoning, so a handoff written
+    after it is a handoff written from the summary. Three surfaces now fire in
+    this order, and only the last is automatic:
+
+      ~320k  st tend nudges you to WRITE your handoff. You keep working. This is
+             the one that matters on codex, which has no compaction hook at all.
+      ~400k  the cycle prompt (idle) — checkpoint, then `st cycle --self`.
+      ~600k  the haul handoff (mid-haul). Do not start the next item.
+      at the harness boundary, on CLAUDE ONLY: a PreCompact hook writes a
+             checkpoint onto your held bead from the transcript tail, and tells
+             the summariser to keep landed-vs-local, next step and rollback.
+
+    THE HOOK IS A BACKSTOP, NOT YOUR HANDOFF. It scrapes what you last said; it
+    cannot know which of your changes are pushed or what you had decided to do
+    next. If you already wrote one, it stays out of the way. Write yours.
+
+    ON CODEX there is no such event, which is why `st cycle` REFUSES a relaunch
+    when your held bead carries no comment from you since this session launched.
+    That refusal is not a bug and not a reason to reach for /clear — write the
+    comment and it clears. (`--allow-loss` overrides and spends the reasoning.)
+
   WHY THIS PAGE EXISTS
     Until 2026-08-29 the fleet shipped six different answers to "your context is
     high", and half prescribed /clear. Which one you got depended on which surface

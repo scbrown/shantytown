@@ -443,6 +443,34 @@ def _stale_hook(root=None) -> dict:
             "hooks": [{"type": "command", "command": cmd, "timeout": 10}]}
 
 
+def _precompact_hook(root=None) -> dict:
+    """The PreCompact checkpoint (aegis-902vnu, Stiwi 2026-09-03).
+
+    MATCHER-FREE. PreCompact matches on its TRIGGER ("auto"|"manual"), not on a
+    tool name, and both triggers want this hook: a `/compact` typed by hand
+    destroys the same reasoning an automatic one does. A matcher here would be
+    the aegis-ac5x failure in a new event — a registration that looks specific
+    and fires half the time.
+
+    DELIVERED VIA PROVISION, not via claude_settings_for_role, for the reason
+    _untracked_hook and _stale_hook both record and this deployment has measured
+    twice: the consent file is re-applied on EVERY launch and self-heals, while
+    --settings is emitted only on `role set` and never reaches a running agent.
+    A handoff hook that reaches nobody is the bug it was built to fix.
+
+    TIMEOUT is generous by this codebase's standards because the work is a
+    tracker WRITE at a moment that will not come again — but it IS bounded:
+    compaction is what stands between the agent and the hard context wall, so a
+    hook that hangs here costs the session everything. precompact.main returns 0
+    on every path, so an expiry degrades to "compacted without a checkpoint",
+    never to a blocked compaction.
+    """
+    cmd = f"{_hook_interpreter()} -m shantytown.precompact"
+    if root is not None:
+        cmd += f" --root {Path(root).resolve()}"
+    return {"hooks": [{"type": "command", "command": cmd, "timeout": 30}]}
+
+
 def _policy_cmd(root=None) -> dict:
     """The unified Stop decision, with the store's location BAKED IN (same reason
     as _stop_cmd: the agent runs in its own workspace, which has no .shanty)."""

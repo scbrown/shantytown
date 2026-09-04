@@ -267,6 +267,30 @@ def claim(tracker: BrTracker, bead_id: str) -> None:
         raise RuntimeError(f"br update {bead_id} failed: {r.stderr.strip()[:120]}")
 
 
+def comments(tracker: BrTracker, bead_id: str) -> list[dict]:
+    """Every comment on an item, oldest-first, each with `author` and `created_at`.
+
+    The READ half of append_comment, and it exists for one question: has this
+    agent already written a handoff on the bead it holds? (aegis-902vnu). That
+    question cannot be answered from `show` — the detail read carries the item,
+    not the comment timestamps a gate has to compare against a boundary.
+
+    An EMPTY list and an unreadable store must never render the same, so this
+    RAISES rather than returning [] on failure. A caller that swallows the
+    exception is choosing to treat cannot-tell as absent; the two callers here
+    both choose to WRITE in that case, which is the safe direction for a
+    checkpoint (a duplicate costs a comment, a miss costs the reasoning).
+    """
+    r = tracker._bd_for(bead_id, "comments", bead_id, "--json")
+    if r.returncode != 0:
+        raise RuntimeError(
+            f"br comments {bead_id} failed: {_failure_reason(r)[:160]}")
+    value = json.loads(r.stdout) if r.stdout.strip() else []
+    if isinstance(value, dict):
+        value = value.get("comments", [])
+    return [c for c in value if isinstance(c, dict)] if isinstance(value, list) else []
+
+
 def append_comment(tracker: BrTracker, bead_id: str, body: str) -> None:
     """Append a comment through br's file-safe comments subcommand."""
     path = None
