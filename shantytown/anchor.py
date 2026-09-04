@@ -71,6 +71,11 @@ class Anchoring:
     # bool; never invented, because a fabricated cause on this line is what the
     # tier's own alerts were already burned by.
     lead_detail: str = ""
+    # Which PROGRAM this agent is. Codex refuses every MCP WRITE tool under
+    # approval_policy=never, and the refusal reads like lost permissions rather
+    # than a policy — so the card says otherwise, for codex only. "" = unknown,
+    # and an unknown harness says nothing rather than guessing (aegis-h3zyq0).
+    harness: str = ""
 
     def render(self) -> str:
         L: list[str] = []
@@ -98,6 +103,28 @@ class Anchoring:
             # Say it plainly. An empty plate is an answer, not a blank section.
             L.append("    nothing. `st go <item> <you>` or ask your lead.")
         L.append("")
+
+        if self.harness == "codex":
+            # MEASURED on a worker's pane 2026-09-04: every MCP write returned
+            #   Error: MCP tool call requires approval, but approval policy is never
+            # and the agent concluded "the launcher permissions must be restored
+            # before I can push", then sat IDLE on a P1 whose fix it had already
+            # written. Nothing was broken and nothing needed restoring; it had
+            # every CLI path the whole time. A refusal that names its own cause
+            # is still misread when the reader has no model of it, so the model
+            # goes on the card rather than in a bead nobody reads mid-task
+            # (aegis-h3zyq0).
+            L += [
+                "  YOUR TOOLS (codex)",
+                "    MCP WRITE tools are refused here: \"MCP tool call requires",
+                "    approval, but approval policy is never\". That is POLICY, not a",
+                "    lost permission — nothing is broken and nothing needs restoring.",
+                "    MCP READS work. Every CLI path works: git, gh, br, st.",
+                "    So: push with git, merge with gh, write beads with br. Do NOT",
+                "    stop and wait for permissions to be granted — there is nobody",
+                "    granting them and you are not blocked.",
+                "",
+            ]
 
         L.append("  YOUR LEAD")
         if self.lead is None:
@@ -173,6 +200,7 @@ def anchor(
     context: list[str] | None = None,
     knowledge: list[str] | None = None,
     lead_status: Callable[[str], object] | None = None,
+    harness: str = "",
 ) -> Anchoring:
     """Resolve the four things. Reads only.
 
@@ -235,4 +263,5 @@ def anchor(
         knowledge=list(knowledge or []),
         admin=admin,
         lead_detail=lead_detail,
+        harness=harness,
     )

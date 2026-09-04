@@ -3617,8 +3617,18 @@ def _cmd_anchor(a) -> int:
         return _anchor_harness(a, me)
     registry, panes = _registry(a), _panes(a)
     try:
+        # Which program this agent runs. Resolved HERE, not inside anchor(),
+        # whose docstring makes "reads only" a promise — and resolved
+        # defensively: an unknown harness must render nothing rather than
+        # assert the wrong tooling advice (aegis-h3zyq0).
+        try:
+            from . import harness as _harness_mod
+            _hn = _harness_mod.name_for(registry.get(me), root=a.root) or ""
+        except Exception:
+            _hn = ""
         p = do_anchor(me, registry, panes, plate=_plate(a),
-                      lead_status=_lead_status(registry, panes))
+                      lead_status=_lead_status(registry, panes),
+                      harness=_hn)
     except LookupError as e:
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED
