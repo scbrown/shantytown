@@ -600,7 +600,12 @@ class Tmux:
             # worse outcome than a session in the wrong cwd (ensure_workspace
             # runs before this and reports the real problem).
             argv += ["-c", str(Path(cwd).expanduser().resolve())]
-        subprocess.run(self._cmd(*argv), check=True)
+        # env: a stale D-Bus guid in the inherited address makes tmux fail to
+        # create the pane's scope, SILENTLY, which switches per-pane containment
+        # off without a single error anywhere (aegis-ihl7ie). Strip it here, at
+        # the one call that starts a tmux server.
+        from . import panemem
+        subprocess.run(self._cmd(*argv), check=True, env=panemem.launch_env())
         # Provenance marker: st launched this session, so st may stop
         # it. Set immediately; if it fails, tear the session down rather than
         # leave an un-owned session st created (which its own guard could never

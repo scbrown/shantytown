@@ -239,6 +239,50 @@ def scope_of_pid(pid: int | str) -> str | None:
     return None
 
 
+def launch_env() -> dict[str, str]:
+    """os.environ with a STALE D-BUS GUID STRIPPED — the thing that silently
+    switched this whole module off fleet-wide (aegis-ihl7ie, dearing).
+
+    tmux does not create a pane scope by itself. It registers a `JobRemoved`
+    signal match on the session bus, asks systemd for a transient scope, and
+    only then moves the pane. If that match cannot be registered it gives up and
+    leaves the pane in the launcher's cgroup — with NO error on a normal
+    invocation, no journal line, and a perfectly healthy-looking pane. Every
+    ceiling this module would have set simply does not exist.
+
+    DBUS_SESSION_BUS_ADDRESS carries an optional `guid=` naming the daemon that
+    was listening when the variable was set. When the session bus is replaced —
+    on 2026-09-04 because systemd-oomd killed the graphical session — every
+    process still holding the old string keeps a guid that no longer matches, and
+    sd-bus REJECTS the connection at AUTH. That is inherited by everything those
+    processes launch, so it outlives the restart indefinitely.
+
+    Two things made it hard to see, both worth knowing:
+      * `busctl --user status` still ANSWERS, which reads as a healthy bus. Every
+        call that matters returns "Access denied".
+      * `tmux set-environment -g` does not repair a tmux server that is already
+        running; the server's own environment is what its panes inherit.
+
+    The guid is an OPTIMISATION, not an identifier we need — the socket path is
+    the address. Dropping it costs nothing and makes a launch survive a bus that
+    has been replaced since this process started. Measured: with the guid the
+    match is refused and the pane lands in the launcher's cgroup; with it
+    stripped, the identical launch produces a real tmux-spawn-<uuid>.scope.
+
+    This is a LAUNCHER fix and reaches only tmux servers st starts from now on.
+    A server already running with a stale address keeps failing until it is
+    restarted — which is why the host condition still needs fixing (aegis-ihl7ie)
+    and this is hardening, not a substitute for it.
+    """
+    env = dict(os.environ)
+    addr = env.get("DBUS_SESSION_BUS_ADDRESS")
+    if addr and "guid=" in addr:
+        kept = [p for p in addr.split(",") if not p.startswith("guid=")]
+        if kept:
+            env["DBUS_SESSION_BUS_ADDRESS"] = ",".join(kept)
+    return env
+
+
 def own_scope() -> str | None:
     """The scope THIS process is running in — i.e. the LAUNCHER'S OWN PANE.
 
