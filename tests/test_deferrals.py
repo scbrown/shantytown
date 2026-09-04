@@ -60,9 +60,30 @@ def test_a_naive_stamp_is_read_as_UTC_and_never_crashes_the_sweep():
     assert deferrals.evaluate([_row(defer_until=naive)], NOW)[0].lapsed_days == 2
 
 
-def test_an_unparseable_or_absent_stamp_is_silent_not_a_crash():
-    for bad in ("", None, "soon", "not-a-date", 0, [], {}):
-        assert deferrals.evaluate([_row(defer_until=bad)], NOW) == []
+def test_an_unparseable_or_absent_stamp_never_crashes_the_sweep():
+    """SUPERSEDED IN PART by aegis-hm8994, deliberately, and this is why.
+
+    This case used to assert SILENCE for all of these. Silence was the bug: a
+    stamp that cannot be parsed can never lapse, so the bead was dropped on every
+    pass forever while looking deferred-on-purpose. 101 of 112 live deferrals sat
+    in the sibling `absent` state for exactly this reason.
+
+    What survives unchanged is the property the test was really defending — none
+    of these may raise. What changed is that being unreadable is now REPORTED
+    rather than swallowed, and the two shapes are told apart: an ABSENT stamp
+    needs a condition, a MALFORMED one needs its existing field corrected.
+    """
+    for bad in ("", "soon", "not-a-date", 0, [], {}):
+        out = deferrals.evaluate([_row(defer_until=bad)], NOW)
+        assert len(out) == 1, f"{bad!r} must be reported, not dropped"
+        assert out[0].untestable, f"{bad!r} should read as untestable"
+        assert "unparseable" in out[0].untestable
+        assert out[0].conditionless is False, "it HAS a stamp; it is malformed"
+        assert out[0].met is False, "unreadable must never read as met"
+    # the absent case is the conditionless one, and says so differently
+    absent = deferrals.evaluate([_row(defer_until=None)], NOW)
+    assert len(absent) == 1 and absent[0].conditionless is True
+    assert not absent[0].untestable
 
 
 def test_a_row_that_is_not_a_dict_or_has_no_id_is_skipped():
@@ -303,3 +324,83 @@ def test_a_future_deferral_produces_no_push_at_all(tmp_path):
     a = _alerter(tmp_path, [_row(defer_until=_iso(timedelta(days=+9)))],
                  push=lambda _r, _p, m: sent.append(m) or "sattler")
     assert a.sweep() == [] and sent == []
+
+
+# --- condition-less deferrals: invisible to BOTH paths (aegis-hm8994) ----------
+
+def test_a_deferral_with_NO_condition_at_all_is_reported_not_dropped():
+    """101 of 112 live deferrals were in this state, silently, forever.
+
+    No defer_until and no marker means nothing can ever make it lapse or be met,
+    so the two `continue` guards could never fire for it — it fell through on
+    every pass. Feeders skip status=deferred, so it was on no automated path at
+    all. That is the aegis-ozqtz stall with a mechanism behind it.
+    """
+    out = deferrals.evaluate([_row("aegis-blind")], NOW)
+    assert [f.bead for f in out] == ["aegis-blind"]
+    assert out[0].conditionless is True
+    assert out[0].lapsed_at is None and out[0].met is False
+
+
+def test_the_conditionless_report_says_what_is_wrong_and_what_fixes_it():
+    out = deferrals.evaluate([_row("aegis-blind")], NOW)
+    text = "\n".join(deferrals.report(out))
+    assert "NO RESUME CONDITION" in text
+    assert "resume_when" in text          # names the remedy, not just the fault
+
+
+def test_a_conditionless_deferral_reports_ONCE_like_every_other_finding(tmp_path):
+    """The whole reason report-once exists: 101 of these would otherwise print
+    every tend cycle and the admin would mute the channel inside a day."""
+    seen = deferrals.Reported(tmp_path)
+    first = deferrals.evaluate([_row("aegis-blind")], NOW)
+    assert seen.unreported(first)
+    seen.record(first)
+    assert not seen.unreported(deferrals.evaluate([_row("aegis-blind")], NOW))
+
+
+def test_attaching_a_condition_changes_the_state_so_it_reports_again(tmp_path):
+    seen = deferrals.Reported(tmp_path)
+    seen.record(deferrals.evaluate([_row("aegis-blind")], NOW))
+    fixed = deferrals.evaluate(
+        [_row("aegis-blind", defer_until=_iso(timedelta(days=-1)))], NOW)
+    assert seen.unreported(fixed), "repairing it must not stay silent"
+    assert fixed[0].conditionless is False and fixed[0].lapsed_at is not None
+
+
+def test_a_FUTURE_defer_until_with_no_marker_is_NOT_conditionless():
+    """The negative control that stops this becoming an always-firing channel.
+
+    A bead deferred to next week has a perfectly good condition — the date. If
+    the check keyed on the missing MARKER alone it would drag every ordinary
+    future deferral into the blind set and the block would never be empty.
+    """
+    out = deferrals.evaluate(
+        [_row("aegis-future", defer_until=_iso(timedelta(days=7)))], NOW)
+    assert out == []
+
+
+def test_the_blind_set_is_reported_SEPARATELY_and_never_buries_the_actionable():
+    """aegis-1gy64 reproduced inside its own fix, if these were interleaved.
+
+    With 101 blind against 1 lapsed, a merged most-lapsed-first list would push
+    the one bead that needs a ruling below a wall of parked ones.
+    """
+    rows = [_row(f"aegis-blind{i}") for i in range(101)]
+    rows.append(_row("aegis-lapsed", defer_until=_iso(timedelta(days=-3))))
+    lines = deferrals.report(deferrals.evaluate(rows, NOW))
+    text = "\n".join(lines)
+    # the actionable one is named in full, above the blind block
+    assert "aegis-lapsed" in text
+    assert text.index("aegis-lapsed") < text.index("NO RESUME CONDITION")
+    assert "1 deferral(s) need a ruling" in text
+    assert "101 deferral(s) have NO RESUME CONDITION" in text
+    # and the blind block is BOUNDED — the count is the information, not 101 lines
+    assert len(lines) < 20
+    assert "and 95 more" in text
+
+
+def test_the_blind_block_leads_with_the_worst_priority():
+    rows = [_row("aegis-p3", priority=3), _row("aegis-p1", priority=1)]
+    text = "\n".join(deferrals.report(deferrals.evaluate(rows, NOW)))
+    assert text.index("aegis-p1") < text.index("aegis-p3")

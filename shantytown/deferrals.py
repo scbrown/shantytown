@@ -116,6 +116,12 @@ class Finding:
     condition: Condition | None = None
     met: bool = False
     untestable: str = ""
+    # NO defer_until AND no `resume_when:` marker. Such a bead is invisible to
+    # BOTH paths at once — feeders skip status=deferred, and the two guards in
+    # evaluate() used to drop it here — so it is not "waiting", it is off every
+    # automated path there is. 101 of 112 deferrals were in this state when the
+    # check was added (aegis-hm8994).
+    conditionless: bool = False
 
     def key(self) -> str:
         """The transition key: bead + the STATE being reported.
@@ -125,7 +131,8 @@ class Finding:
         deferral stays silent however many passes run over it.
         """
         cond = self.condition.render() if self.condition else ""
-        raw = f"{self.bead}|{cond}|{int(bool(self.lapsed_at))}|{int(self.met)}|{self.untestable}"
+        raw = (f"{self.bead}|{cond}|{int(bool(self.lapsed_at))}|{int(self.met)}"
+               f"|{self.untestable}|{int(self.conditionless)}")
         return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
     def render(self) -> str:
@@ -138,6 +145,9 @@ class Finding:
         elif self.untestable:
             bits.append(f"condition UNTESTABLE [{self.untestable}] — "
                         f"not evaluated, NOT unmet")
+        if self.conditionless:
+            bits.append("NO RESUME CONDITION — invisible to feeders AND to this "
+                        "sweeper; needs a resume_when:/defer_until or a close")
         who = self.assignee or "unassigned"
         pri = "" if self.priority is None else f"P{self.priority} "
         return (f"{self.bead} {pri}({who}): {'; '.join(bits)}"
@@ -160,7 +170,15 @@ def evaluate(rows, now: datetime, is_closed=None) -> list:
         bead = str(row.get("id") or "").strip()
         if not bead:
             continue
-        when = parse_stamp(row.get("defer_until"))
+        raw_when = row.get("defer_until")
+        when = parse_stamp(raw_when)
+        # A stamp that was WRITTEN but cannot be parsed is not the same as no
+        # stamp at all. Both are invisible — nothing will ever make either lapse
+        # — but the remedies differ and so must the wording: one needs a
+        # condition, the other needs its existing one CORRECTED. Reporting
+        # `defer_until: "soon"` as "no resume condition" would send the reader
+        # looking for a field that is already there (aegis-hm8994).
+        malformed = raw_when is not None and when is None
         lapsed = when is not None and when <= now
         cond = parse_condition(str(row.get("notes") or ""))
 
@@ -190,10 +208,28 @@ def evaluate(rows, now: datetime, is_closed=None) -> list:
             else:
                 untestable = cond.render()
 
+        if malformed and cond is None:
+            out.append(Finding(
+                bead=bead, title=str(row.get("title") or "")[:70],
+                assignee=str(row.get("assignee") or ""),
+                priority=row.get("priority"),
+                untestable=f"defer_until {raw_when!r} is unparseable — "
+                           f"nothing will ever make it lapse"))
+            continue
+        if not lapsed and cond is None and when is None:
+            # NOT "nothing to say at all" — that was the bug (aegis-hm8994).
+            # No date and no condition means nothing will EVER make this lapse or
+            # be met, so the two `continue`s below could never fire for it and it
+            # was dropped on every pass forever. Report it as its own kind.
+            out.append(Finding(
+                bead=bead, title=str(row.get("title") or "")[:70],
+                assignee=str(row.get("assignee") or ""),
+                priority=row.get("priority"), conditionless=True))
+            continue
         if not lapsed and not met and not untestable:
             continue        # deferred, on time, condition genuinely unmet — quiet
         if not lapsed and cond is None:
-            continue        # nothing to say at all
+            continue        # a future defer_until with no marker: on time, quiet
         out.append(Finding(
             bead=bead, title=str(row.get("title") or "")[:70],
             assignee=str(row.get("assignee") or ""),
@@ -250,20 +286,41 @@ class Reported:
         write_json_atomic(self.path, {f.bead: f.key() for f in findings})
 
 
-def report(findings, cap: int = 12) -> list:
+def report(findings, cap: int = 12, blind_cap: int = 6) -> list:
     """Lines for the admin, most-lapsed first, capped.
 
     The cap is a display bound, and the tail is COUNTED rather than dropped
     silently — "and 40 more" is information; a quietly truncated list is the
     aegis-bro88 defect (an instrument reporting its own blindness as a clean
     answer).
+
+    CONDITION-LESS deferrals are reported in their OWN block, not merged into the
+    list above, and that separation is load-bearing (aegis-hm8994). There were 101
+    of them against 11 actionable findings when this was written; interleaving them
+    would have buried every lapsed date and met condition under a wall of beads
+    that are merely parked — which is precisely the aegis-1gy64 mechanism this
+    sweeper's own design notes refuse, reproduced inside the fix for it. They are
+    a BACKLOG (drive it down once), not a queue of rulings (act on each), so they
+    are summarised by count and shown worst-priority-first.
     """
-    if not findings:
-        return []
-    lines = [f"{len(findings)} deferral(s) need a ruling "
-             f"(REPORT ONLY — nothing was un-deferred):"]
-    lines += [f"    {f.render()}" for f in findings[:cap]]
-    if len(findings) > cap:
-        lines.append(f"    ... and {len(findings) - cap} more — "
-                     f"`br list --status deferred --limit 0`")
+    actionable = [f for f in findings if not f.conditionless]
+    blind = [f for f in findings if f.conditionless]
+    lines = []
+    if actionable:
+        lines.append(f"{len(actionable)} deferral(s) need a ruling "
+                     f"(REPORT ONLY — nothing was un-deferred):")
+        lines += [f"    {f.render()}" for f in actionable[:cap]]
+        if len(actionable) > cap:
+            lines.append(f"    ... and {len(actionable) - cap} more — "
+                         f"`br list --status deferred --limit 0`")
+    if blind:
+        worst = sorted(blind, key=lambda f: (f.priority if f.priority is not None
+                                             else 99, f.bead))
+        lines.append(f"{len(blind)} deferral(s) have NO RESUME CONDITION — no "
+                     f"defer_until and no `resume_when:`. Nothing will ever "
+                     f"surface these; they need a condition or a close:")
+        lines += [f"    {f.render()}" for f in worst[:blind_cap]]
+        if len(blind) > blind_cap:
+            lines.append(f"    ... and {len(blind) - blind_cap} more — "
+                         f"`br list --status deferred --limit 0`")
     return lines
