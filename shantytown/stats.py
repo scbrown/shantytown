@@ -885,6 +885,84 @@ def main(argv=None) -> int:
 WIRING_OK, WIRING_BROKEN, WIRING_UNKNOWN = "ok", "BROKEN", "unknown"
 
 
+def _hook_census(agents, event: str, needle: str):
+    """(wired, missing, unknown) — which agents' LIVE consent files register
+    `needle` on `event`.
+
+    Factored out of capture_wiring when a SECOND provision-delivered hook needed
+    the identical question asked of it (the PreCompact checkpoint, aegis-902vnu).
+    The argument for reading the artifact rather than asking the emitter is in
+    capture_wiring's docstring and is unchanged; what is new is only that it is
+    now asked twice, and asking it twice in two spellings is how one of the two
+    answers silently stops meaning what it says.
+
+    UNKNOWN IS NOT OK, in both callers: a workspace we could not read is not a
+    workspace that is wired.
+    """
+    wired, missing, unknown = [], [], []
+    for ag in agents:
+        ws = getattr(ag, "workspace", None)
+        name = getattr(ag, "name", "?")
+        if not ws:
+            unknown.append(name)
+            continue
+        path = Path(ws) / ".claude" / "settings.local.json"
+        try:
+            cfg = json.loads(path.read_text(encoding="utf-8"))
+            groups = cfg.get("hooks", {}).get(event) or []
+            cmds = [h.get("command", "") for b in groups for h in b.get("hooks", [])]
+        except Exception:      # noqa: BLE001 — unreadable is UNKNOWN, never ok
+            unknown.append(name)
+            continue
+        (wired if any(needle in c for c in cmds) else missing).append(name)
+    return wired, missing, unknown
+
+
+def precompact_wiring(agents) -> tuple[str, str]:
+    """(verdict, why) — do the agents' LIVE consent files register the
+    handoff-before-compaction hook? (aegis-902vnu, Stiwi 2026-09-03.)
+
+    SAME NON-RETROACTIVITY as capture_wiring, and here it bites harder. The
+    population this hook must reach is precisely the LONG-LIVED sessions — the
+    ones deep enough to be near a compaction boundary — and those are exactly the
+    agents that have not relaunched since the deploy. So the interval where the
+    code is right and the fleet is unprotected is not a footnote, it is the
+    normal state for hours after landing, and it is invisible from the repo.
+
+    CLAUDE ONLY, by construction: codex has no PreCompact event. A codex card
+    counted as `missing` here would be a permanent false alarm about a hook that
+    cannot exist, so cards declaring another harness are skipped rather than
+    failed — their arm is the pre-handoff nudge and the `st cycle` durable gate.
+    """
+    claude = [ag for ag in agents
+              if (getattr(ag, "harness", "claude") or "claude") == "claude"]
+    if not claude:
+        return WIRING_UNKNOWN, "no claude agents to check"
+    wired, missing, unknown = _hook_census(claude, "PreCompact",
+                                           "shantytown.precompact")
+    if not wired and not missing and not unknown:
+        return WIRING_UNKNOWN, "no agent workspaces to check"
+    bits = []
+    if missing:
+        bits.append(
+            f"{len(missing)} of {len(wired) + len(missing)} readable claude agents "
+            f"have NO PreCompact checkpoint, so a compaction would summarise their "
+            f"reasoning away unrecorded: {', '.join(sorted(missing)[:8])}. "
+            f"provision writes it at LAUNCH — these pick it up when they next "
+            f"relaunch")
+    elif wired:
+        bits.append(f"all {len(wired)} readable claude agents checkpoint before "
+                    f"compaction")
+    if unknown:
+        bits.append(f"could not read the consent file for {len(unknown)}: "
+                    f"{', '.join(sorted(unknown)[:6])}")
+    if unknown:
+        return WIRING_UNKNOWN, "; ".join(bits)
+    if missing:
+        return WIRING_BROKEN, bits[0]
+    return WIRING_OK, bits[0]
+
+
 def capture_wiring(agents) -> tuple[str, str]:
     """(verdict, why) — do the agents' LIVE consent files register capture on Stop?
 
@@ -904,23 +982,7 @@ def capture_wiring(agents) -> tuple[str, str]:
     wired — same rule the hooks leg of `roles --check` follows, and the one this
     module's own report now follows for a token count it never measured.
     """
-    wired, missing, unknown = [], [], []
-    for ag in agents:
-        ws = getattr(ag, "workspace", None)
-        name = getattr(ag, "name", "?")
-        if not ws:
-            unknown.append(name)
-            continue
-        p = Path(ws) / ".claude" / "settings.local.json"
-        try:
-            cfg = json.loads(p.read_text(encoding="utf-8"))
-            stop = cfg.get("hooks", {}).get("Stop") or []
-            cmds = [h.get("command", "") for b in stop for h in b.get("hooks", [])]
-        except Exception:      # noqa: BLE001 — unreadable is UNKNOWN, never ok
-            unknown.append(name)
-            continue
-        (wired if any("shantytown.stats capture" in c for c in cmds)
-         else missing).append(name)
+    wired, missing, unknown = _hook_census(agents, "Stop", "shantytown.stats capture")
 
     if not wired and not missing and not unknown:
         return WIRING_UNKNOWN, "no agent workspaces to check"
@@ -952,9 +1014,9 @@ def capture_wiring(agents) -> tuple[str, str]:
     return WIRING_OK, bits[0]
 
 
-def render_wiring(verdict: str, why: str) -> str:
+def render_wiring(verdict: str, why: str, label: str = "capture") -> str:
     mark = {WIRING_OK: "✓", WIRING_BROKEN: "✗", WIRING_UNKNOWN: "?"}[verdict]
-    return f"  {mark} capture   {why}"
+    return f"  {mark} {label:<9} {why}"
 
 
 if __name__ == "__main__":

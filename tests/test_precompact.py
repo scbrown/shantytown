@@ -321,3 +321,58 @@ def test_an_unreadable_tracker_WRITES_rather_than_assuming_a_checkpoint_exists(
         {"trigger": "auto", "session_id": "s1", "transcript_path": str(t)})))
     assert P.main(["--root", str(tmp_path)]) == 0
     assert len(hooked.written) == 1
+
+
+# ----------------------------------------- has it REACHED the running fleet?
+
+class _Card:
+    def __init__(self, name, workspace, harness="claude"):
+        self.name, self.workspace, self.harness = name, workspace, harness
+
+
+def _agent_with(tmp_path, name, hooks):
+    ws = tmp_path / name; (ws / ".claude").mkdir(parents=True)
+    (ws / ".claude" / "settings.local.json").write_text(json.dumps({"hooks": hooks}))
+    return _Card(name, str(ws))
+
+
+def _wired_ws(tmp_path, name):
+    return _agent_with(tmp_path, name, {"PreCompact": [{"hooks": [
+        {"type": "command", "command": "python -m shantytown.precompact --root /x"}]}]})
+
+
+def test_doctor_reports_agents_still_UNPROTECTED_after_the_deploy(tmp_path):
+    """The fix is NOT retroactive and this is the population that matters most:
+    the hook reaches an agent at LAUNCH, so the sessions deep enough to be near a
+    boundary are exactly the ones that have not relaunched since it landed. That
+    interval is invisible from the repo, which is the whole reason for the row."""
+    from shantytown import stats as S
+    agents = [_wired_ws(tmp_path, "arnold"), _agent_with(tmp_path, "muldoon", {})]
+    verdict, why = S.precompact_wiring(agents)
+    assert verdict == S.WIRING_BROKEN
+    assert "muldoon" in why and "relaunch" in why
+
+
+def test_all_wired_reads_green(tmp_path):
+    from shantytown import stats as S
+    verdict, why = S.precompact_wiring([_wired_ws(tmp_path, "arnold")])
+    assert verdict == S.WIRING_OK and "1" in why
+
+
+def test_an_unreadable_workspace_is_UNKNOWN_never_ok(tmp_path):
+    from shantytown import stats as S
+    verdict, _ = S.precompact_wiring(
+        [_wired_ws(tmp_path, "arnold"), _Card("ghost", str(tmp_path / "nope"))])
+    assert verdict == S.WIRING_UNKNOWN
+
+
+def test_a_codex_card_is_SKIPPED_not_counted_as_broken(tmp_path):
+    """codex has no PreCompact event at all. Counting one as missing would be a
+    permanent false alarm about a hook that cannot exist — and an alarm that can
+    never clear is an alarm that gets ignored, including the day it is real."""
+    from shantytown import stats as S
+    codex = _agent_with(tmp_path, "gennaro", {})
+    codex.harness = "codex"
+    verdict, why = S.precompact_wiring([_wired_ws(tmp_path, "arnold"), codex])
+    assert verdict == S.WIRING_OK, why
+    assert "gennaro" not in why

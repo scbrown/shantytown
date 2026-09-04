@@ -2683,9 +2683,19 @@ def _cmd_doctor(a) -> int:
     # registry we cannot read is a `?` row, not a crash in the command an operator
     # reaches for when things are already going wrong.
     try:
-        wire_v, wire_why = stats_mod.capture_wiring(_registry(a).all().exact())
+        _cards = _registry(a).all().exact()
+        wire_v, wire_why = stats_mod.capture_wiring(_cards)
     except Exception:          # noqa: BLE001 — doctor never fails on this leg
+        _cards = []
         wire_v, wire_why = stats_mod.WIRING_UNKNOWN, "registry unreadable"
+    # THE SAME QUESTION, of the handoff hook (aegis-902vnu). Separate row, not a
+    # fold into the one above: the two hooks reach the fleet by the same
+    # non-retroactive route but have different remedies and different blast
+    # radii, and a single verdict would let the quieter one hide the other.
+    try:
+        pre_v, pre_why = stats_mod.precompact_wiring(_cards)
+    except Exception:          # noqa: BLE001 — same rule
+        pre_v, pre_why = stats_mod.WIRING_UNKNOWN, "registry unreadable"
 
     # Stray stashes in SHARED repos (aegis-pxzi4). `refs/stash` is shared across
     # every linked worktree and there is no stash hook, so DISCOVERY is the only
@@ -2701,6 +2711,7 @@ def _cmd_doctor(a) -> int:
         if self_h is not None:
             print(selfcheck.render(self_h))
         print(stats_mod.render_wiring(wire_v, wire_why))
+        print(stats_mod.render_wiring(pre_v, pre_why, label="handoff"))
         print(doc.render_stashes(stash_found, stash_n))
         print(_render_socket(sock_v, sock_why))
         code = _fold_socket(_doctor_exit(doc, healths, self_h), sock_v, doc)
