@@ -74,3 +74,41 @@ def test_the_rest_of_the_environment_is_carried_through(monkeypatch):
     env = panemem.launch_env()
     assert env["SHANTY_TEST_CANARY"] == "kept"
     assert "PATH" in env
+
+
+# --- D-Bus address GRAMMAR, not string surgery -------------------------------
+#
+# The first implementation split the WHOLE variable on "," and dropped any piece
+# beginning with "guid=". That is right for the one shape this host produces and
+# wrong for the grammar: an address is `transport:key=value,...`, and the variable
+# may hold SEVERAL separated by ";". These pin the two shapes that flaw got wrong.
+# Neither occurs for a user session bus here — which is the reason to pin them,
+# since the failure is silent and what it silently disables is a containment
+# guarantee.
+
+def test_a_second_alternative_survives_intact(monkeypatch):
+    """`;` separates whole addresses. Splitting the variable on "," instead made
+    `guid=A;tcp:host=h` a single piece, so dropping it DELETED the tcp transport
+    and left its `port=1` spliced onto the unix address — an address naming a
+    socket it cannot reach. Corrupting the value is worse than missing a guid."""
+    out = _env(monkeypatch, f"{ADDR},{GUID};tcp:host=h,port=1,{GUID}")
+    assert out == f"{ADDR};tcp:host=h,port=1"
+
+
+def test_a_guid_is_stripped_even_when_it_leads_the_parameters(monkeypatch):
+    """Parameter order is not fixed by the spec. With the guid first it sits
+    behind the `unix:` transport prefix, so it does not START its comma-separated
+    piece and a prefix match never sees it."""
+    assert _env(monkeypatch, "unix:guid=abc,path=/run/user/1000/bus") == ADDR
+
+
+def test_an_alternative_that_is_only_a_guid_is_dropped_not_mangled(monkeypatch):
+    """It carries no way to connect, so it goes — but the alternative beside it
+    is untouched. Contrast test_an_address_that_is_ONLY_a_guid_is_left_alone:
+    emptying the WHOLE variable is the case we refuse to make worse."""
+    assert _env(monkeypatch, f"unix:{GUID};{ADDR}") == ADDR
+
+
+def test_an_unparseable_alternative_is_left_alone(monkeypatch):
+    """No `transport:` means we do not understand it, so we do not rewrite it."""
+    assert _env(monkeypatch, f"nonsense;{ADDR},{GUID}") == f"nonsense;{ADDR}"

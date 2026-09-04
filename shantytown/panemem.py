@@ -239,6 +239,46 @@ def scope_of_pid(pid: int | str) -> str | None:
     return None
 
 
+def _strip_guid(address: str) -> str:
+    """Every `guid=` parameter removed, respecting D-Bus address GRAMMAR.
+
+    A D-Bus address is `transport:key=value,key=value`, and the variable may hold
+    SEVERAL of them separated by `;` — alternatives to try in order. Splitting the
+    whole string on `,` therefore does not merely miss a guid; it corrupts the
+    value. Measured against the first implementation of this function:
+
+        in   unix:path=/run/user/1000/bus,guid=A;tcp:host=h,port=1,guid=B
+        out  unix:path=/run/user/1000/bus,port=1
+
+    The `guid=A;tcp:host=h` fragment is one comma-separated piece, so dropping it
+    deleted the tcp transport and left its `port=1` spliced onto the unix address
+    — a malformed address that names a socket it cannot reach. The same flaw runs
+    the other way too: `unix:guid=A,path=/x` keeps its guid, because that guid sits
+    behind the `unix:` transport prefix and so does not start the piece.
+
+    Neither shape occurs for a user session bus on this host, which is exactly why
+    it is worth fixing now rather than when it does: the failure is silent, and the
+    thing it silently disables is a containment guarantee.
+
+    Alternatives that consist of nothing BUT a guid are dropped — they carry no way
+    to connect. If that empties the whole address, the caller keeps the original.
+    """
+    alts: list[str] = []
+    for one in address.split(";"):
+        if not one:
+            continue
+        transport, sep, params = one.partition(":")
+        if not sep:
+            # Not `transport:params` at all; we do not understand it, so we do not
+            # get to rewrite it.
+            alts.append(one)
+            continue
+        kept = [p for p in params.split(",") if not p.startswith("guid=")]
+        if kept:
+            alts.append(f"{transport}:{','.join(kept)}")
+    return ";".join(alts)
+
+
 def launch_env() -> dict[str, str]:
     """os.environ with a STALE D-BUS GUID STRIPPED — the thing that silently
     switched this whole module off fleet-wide (aegis-ihl7ie, dearing).
@@ -277,9 +317,12 @@ def launch_env() -> dict[str, str]:
     env = dict(os.environ)
     addr = env.get("DBUS_SESSION_BUS_ADDRESS")
     if addr and "guid=" in addr:
-        kept = [p for p in addr.split(",") if not p.startswith("guid=")]
-        if kept:
-            env["DBUS_SESSION_BUS_ADDRESS"] = ",".join(kept)
+        stripped = _strip_guid(addr)
+        # Empty means every alternative was nothing but a guid. Emptying the
+        # variable would turn a broken address into a MISSING one, which is a
+        # different failure rather than a fix, so leave it exactly as found.
+        if stripped:
+            env["DBUS_SESSION_BUS_ADDRESS"] = stripped
     return env
 
 
