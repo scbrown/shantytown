@@ -44,6 +44,64 @@ fi
 MY_MAX_BEFORE="$(prop "$MY_SCOPE" MemoryMax)"
 
 echo
+echo "=== arm 0: a scope must be THIS PANE'S ALONE before it may be capped ==="
+# Deliberately first: it needs no tmux, so it still runs on a host where per-pane
+# scope creation is broken and arm 1 exits UNAVAILABLE. That is not a convenience
+# — it is the condition under which this guard's absence did damage
+# (aegis-ihl7ie): with tmux making no per-pane scope, a launched pane inherited
+# the crew tmux SERVER's cgroup, which is not the launcher's, so the
+# "not-my-own-scope" refusal passed and panemem capped a scope holding two live
+# agents and 46 processes.
+excl_probe() {  # <desc> <want: yes|no> <pane_pid> <cgroup-path>
+  local desc="$1" want="$2" pid="$3" path="$4" out
+  out=$(cd "$REPO" && python3 - "$pid" "$path" <<'PY'
+import sys
+sys.path.insert(0, ".")
+from shantytown import panemem
+ok, why = panemem.scope_is_exclusive_to(sys.argv[1], sys.argv[2])
+print(("yes" if ok else "no") + " " + why)
+PY
+  )
+  case "$out $want" in
+    "yes "*" yes"|yes*yes) pass "$desc" ;;
+    no*no) pass "$desc — $(printf '%s' "$out" | cut -c1-95)" ;;
+    *) fail "$desc (got: $(printf '%s' "$out" | head -c 110))" ;;
+  esac
+}
+sunit="panemem-excl-$$"
+systemd-run --user --scope -q --unit="$sunit" -- sleep 40 &
+sleep 2
+spid=$(systemctl --user show "$sunit.scope" -p ControlGroup --value 2>/dev/null | \
+       xargs -I{} sh -c 'cat /sys/fs/cgroup{}/cgroup.procs 2>/dev/null | head -1')
+spath=$(systemctl --user show "$sunit.scope" -p ControlGroup --value 2>/dev/null)
+if [ -n "$spid" ] && [ -n "$spath" ]; then
+  excl_probe "a scope holding only that process IS exclusive"  yes "$spid" "$spath"
+  # A SECOND, INDEPENDENT scope gives the shared-scope shape honestly: scope A's
+  # process is not below scope B's pid, so A is not B's alone.
+  #
+  # The first version of this arm asked whether A was exclusive to `$$` — the
+  # test script itself — and it PASSED-AS-EXCLUSIVE, correctly: systemd-run was
+  # launched from this script, so A's `sleep` really is a descendant of $$. The
+  # fixture was wrong, not the guard. Worth leaving written down, because a
+  # descendant check is exactly the kind of predicate whose test can be true for
+  # a reason the author did not intend.
+  sunit2="panemem-excl2-$$"
+  systemd-run --user --scope -q --unit="$sunit2" -- sleep 40 &
+  sleep 2
+  spath2=$(systemctl --user show "$sunit2.scope" -p ControlGroup --value 2>/dev/null)
+  spid2=$(cat "/sys/fs/cgroup$spath2/cgroup.procs" 2>/dev/null | head -1)
+  if [ -n "$spid2" ]; then
+    excl_probe "a DIFFERENT process's scope is not this pid's own" no "$spid2" "$spath"
+  else
+    echo "  ⚠ second control scope unavailable — arm SKIPPED (not passed)"
+  fi
+  systemctl --user stop "$sunit2.scope" 2>/dev/null
+else
+  echo "  ⚠ could not build a control scope — exclusivity arms SKIPPED (not passed)"
+fi
+excl_probe "an unreadable cgroup path refuses, never allows" no "$$" "/nonexistent-cgroup-$$"
+systemctl --user stop "$sunit.scope" 2>/dev/null
+
 echo "=== arm 1: the LAUNCHED pane is bounded, the LAUNCHER is not ==="
 export SHANTY_PANE_HIGH_GIB=3 SHANTY_PANE_MAX_GIB=3   # shipped shape: no throttle band
 LAUNCH_OUT="$(python3 - "$SOCK" <<'PY'

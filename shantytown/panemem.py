@@ -339,6 +339,78 @@ def own_scope() -> str | None:
     return scope_of_pid(os.getpid())
 
 
+def _cgroup_path_of_pid(pid: int | str) -> str | None:
+    """The full cgroup v2 path for `pid` (e.g. /user.slice/.../x.scope), or None."""
+    try:
+        text = Path(f"/proc/{pid}/cgroup").read_text()
+    except OSError:
+        return None
+    for line in text.splitlines():
+        _, _, path = line.partition("::")
+        if path:
+            return path.rstrip("/")
+    return None
+
+
+def _is_descendant(pid: int, ancestor: int, limit: int = 64) -> bool:
+    """True if `pid` is `ancestor` or below it. A vanished pid reads True — it is
+    gone, so it is not evidence of a foreign tenant."""
+    seen = 0
+    cur = pid
+    while cur > 1 and seen < limit:
+        if cur == ancestor:
+            return True
+        try:
+            stat_line = Path(f"/proc/{cur}/stat").read_text()
+        except OSError:
+            return True                      # exited mid-check; not a tenant
+        # comm can contain spaces AND parentheses, so ppid is the 2nd field
+        # AFTER the final ") " — the same trap the tmux audit shim documents.
+        try:
+            cur = int(stat_line.rsplit(") ", 1)[1].split()[1])
+        except (IndexError, ValueError):
+            return False
+        seen += 1
+    return False
+
+
+def scope_is_exclusive_to(pane_pid: int | str, cgroup_path: str) -> tuple[bool, str]:
+    """Does this cgroup hold ONLY the pane we just launched? -> (ok, why).
+
+    THE GUARD THAT WAS MISSING, and its absence bound a live agent's cgroup
+    (aegis-ihl7ie, found by dearing). `resolve_pane_scope` refuses the CALLER's
+    own cgroup, which is the lesson from the first incident — and "not mine" is
+    not the property this needs. It is structurally blind to a THIRD PARTY's
+    scope.
+
+    Measured: with tmux's per-pane scope creation broken, `st new malcolm`
+    resolved the new pane to `ptyxis-spawn-<uuid>.scope` — the long-running crew
+    tmux server's own cgroup, inherited because no per-pane scope was made. That
+    is not the launcher's scope, so the refusal passed, and panemem put
+    MemoryHigh=MemoryMax=20G / MemorySwapMax=0 on a cgroup holding dearing's live
+    agent, malcolm's, and 46 processes including the terminal. Nothing had fired
+    (memory.events all zero at 4.6G) but the cap bought NOTHING — it isolates no
+    pane — while risking a memcg OOM that prefers `claude` at oom_score_adj=200,
+    i.e. an agent.
+
+    So the question is not "whose cgroup is this" but "is this cgroup THIS PANE'S
+    ALONE". Anything else is a shared scope and must never be bound: a ceiling on
+    a cgroup you do not exclusively own is a limit somebody else pays for.
+    """
+    procs = Path(f"/sys/fs/cgroup{cgroup_path}/cgroup.procs")
+    try:
+        pids = [int(x) for x in procs.read_text().split()]
+    except (OSError, ValueError) as e:
+        return False, f"cannot read {procs} ({e}) — refusing to bound a scope we cannot inspect"
+    pane = int(pane_pid)
+    foreign = [q for q in pids if not _is_descendant(q, pane)]
+    if foreign:
+        return False, (f"scope holds {len(pids)} process(es), {len(foreign)} outside the "
+                       f"pane's tree (e.g. pid {foreign[0]}) — it is SHARED, not this "
+                       "pane's own; refusing to cap somebody else's processes")
+    return True, "ok"
+
+
 def resolve_pane_scope(
     pane_pid: int | str,
     timeout_s: float = SCOPE_SETTLE_TIMEOUT_S,
@@ -372,6 +444,12 @@ def resolve_pane_scope(
     while True:
         seen = scope_of_pid(pane_pid)
         if seen and seen != mine:
+            path = _cgroup_path_of_pid(pane_pid)
+            if not path:
+                return None, f"pid {pane_pid} left no readable cgroup path"
+            ok, why = scope_is_exclusive_to(pane_pid, path)
+            if not ok:
+                return None, why
             return seen, "ok"
         if time.monotonic() >= deadline:
             break
