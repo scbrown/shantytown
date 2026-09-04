@@ -456,3 +456,60 @@ def test_prose_containing_no_marker_at_all_is_conditionless_not_botched():
     """The other side of the same line: absent must not read as malformed."""
     out = deferrals.evaluate([_row("aegis-plain", notes="we will pick this up later")], NOW)
     assert len(out) == 1 and out[0].conditionless is True and not out[0].untestable
+
+
+# --- false positives in the blind set (sattler, 2026-09-04) -------------------
+
+def test_an_OPEN_bead_with_no_condition_is_NOT_a_strand():
+    """`deferred()` feeds this deferred AND open rows, by design (boj8a2).
+
+    That is right for the lapsed-date leg and wrong for this one: an open bead
+    with no defer_until is not parked, it is in the ready pool where every feeder
+    serves it. Flagging them claimed "nothing will ever surface this" about 42
+    beads — 100% of the open rows on the board.
+    """
+    assert deferrals.evaluate([_row("aegis-open", status="open")], NOW) == []
+
+
+def test_an_OPEN_bead_with_a_LAPSED_defer_until_STILL_reports():
+    """THE REGRESSION THIS MUST NOT CAUSE, and the whole reason open rows are fed.
+
+    aegis-f46wu was status=open carrying a defer_until and is invisible to any
+    status-based sweep — it is the case boj8a2 exists to catch. The exclusion
+    above keys on being condition-LESS, never on status alone.
+    """
+    out = deferrals.evaluate(
+        [_row("aegis-f46wu", status="open",
+              defer_until=_iso(timedelta(days=-2)))], NOW)
+    assert len(out) == 1 and out[0].lapsed_at is not None
+    assert out[0].conditionless is False
+
+
+def test_an_OPEN_bead_with_a_MET_condition_still_reports():
+    out = deferrals.evaluate(
+        [_row("aegis-o", status="open", notes="resume_when: closed:aegis-x")],
+        NOW, is_closed=lambda b: True)
+    assert len(out) == 1 and out[0].met is True
+
+
+def test_an_inbox_pointer_is_not_a_strand_because_startup_redelivers_it():
+    """Its recipient being down is WHY it is sitting there, not proof it is lost.
+
+    Excluded by reason rather than as a subset of the open-status rule: all 11
+    live instances were open, so the status fix already removed them, but the two
+    are independent and a deferred pointer would still not be blind.
+    """
+    row = _row("aegis-ptr", status="deferred",
+               title="inbox: [from wu] some report")
+    assert deferrals.evaluate([row], NOW) == []
+
+
+def test_a_deferred_bead_merely_MENTIONING_inbox_is_still_a_strand():
+    """Negative control: the exclusion is a title PREFIX, not a substring.
+
+    Otherwise any bead whose title happens to contain the word would vanish from
+    the report, which is the silent-exclusion failure this whole bead is about.
+    """
+    row = _row("aegis-real", title="fix the inbox: pointer lifecycle")
+    out = deferrals.evaluate([row], NOW)
+    assert len(out) == 1 and out[0].conditionless is True

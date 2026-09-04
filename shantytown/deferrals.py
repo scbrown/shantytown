@@ -104,6 +104,21 @@ def parse_condition(text: str) -> Condition | None:
 # gets forgotten and therefore precisely what must still be reported.
 PARKED_LABEL = "parked:by-design"
 
+# `backend_adapter.deferred()` returns deferred AND OPEN rows on purpose, because
+# `defer_until` lives under both statuses since the cutover (aegis-boj8a2). That is
+# right for the lapsed-date leg and WRONG for the condition-less leg: an OPEN bead
+# with no defer_until is not parked at all, it is in the ready pool where feeders
+# serve it. Flagging those said "nothing will ever surface this" about 42 beads
+# that every feeder was already serving — 100% of the open rows.
+_DEFERRED_STATUS = "deferred"
+
+# An `inbox:` pointer has its OWN resurface path: it is redelivered in the startup
+# inbox on the recipient's next launch. Its recipient being down is why it is still
+# sitting there, not evidence that nothing can reach it. Excluded by REASON rather
+# than as a subset of the status rule above, because the two are independent — the
+# day a deferred pointer exists, it is still not blind.
+_INBOX_PREFIX = "inbox:"
+
 # Just the LABEL, with no opinion about what follows it. Used only to tell
 # "no marker was written" apart from "a marker was written and is wrong".
 _MARKER_PRESENT = re.compile(r"resume_when\s*:", re.I)
@@ -243,7 +258,12 @@ def evaluate(rows, now: datetime, is_closed=None) -> list:
                 untestable=f"defer_until {raw_when!r} is unparseable — "
                            f"nothing will ever make it lapse"))
             continue
-        if (not lapsed and cond is None and when is None
+        conditionless = not lapsed and cond is None and when is None
+        if conditionless and str(row.get("status") or "") != _DEFERRED_STATUS:
+            continue        # OPEN: visible to every feeder, so never a strand
+        if conditionless and str(row.get("title") or "").startswith(_INBOX_PREFIX):
+            continue        # redelivered by the startup inbox on next launch
+        if (conditionless
                 and PARKED_LABEL in {str(x) for x in (row.get("labels") or ())}):
             # DELIBERATELY parked, and the label says so. Reporting these as
             # missing a condition would be crying wolf on the 12 beads whose
@@ -252,7 +272,7 @@ def evaluate(rows, now: datetime, is_closed=None) -> list:
             # failure this sweeper exists to avoid. Measured on the live store:
             # 12 of 100 blind deferrals carry it (aegis-hm8994).
             continue
-        if not lapsed and cond is None and when is None:
+        if conditionless:
             # NOT "nothing to say at all" — that was the bug (aegis-hm8994).
             # No date and no condition means nothing will EVER make this lapse or
             # be met, so the two `continue`s below could never fire for it and it
