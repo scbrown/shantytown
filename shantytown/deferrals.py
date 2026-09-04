@@ -98,6 +98,13 @@ def parse_condition(text: str) -> Condition | None:
     return Condition(m.group(1).lower(), m.group(2).rstrip(".,;)"))
 
 
+# The one label that makes "no resume condition" a DECISION rather than a strand.
+# Deliberately a single exact label, not a prefix match: `blocked:human` and
+# `blocked:external` mean "waiting on someone", which is precisely the state that
+# gets forgotten and therefore precisely what must still be reported.
+PARKED_LABEL = "parked:by-design"
+
+
 @dataclass
 class Finding:
     """One deferral worth the admin's attention, and WHY.
@@ -215,6 +222,15 @@ def evaluate(rows, now: datetime, is_closed=None) -> list:
                 priority=row.get("priority"),
                 untestable=f"defer_until {raw_when!r} is unparseable — "
                            f"nothing will ever make it lapse"))
+            continue
+        if (not lapsed and cond is None and when is None
+                and PARKED_LABEL in {str(x) for x in (row.get("labels") or ())}):
+            # DELIBERATELY parked, and the label says so. Reporting these as
+            # missing a condition would be crying wolf on the 12 beads whose
+            # owners made an explicit decision — and a blind-set block that is
+            # never empty is one the admin stops reading, which is the whole
+            # failure this sweeper exists to avoid. Measured on the live store:
+            # 12 of 100 blind deferrals carry it (aegis-hm8994).
             continue
         if not lapsed and cond is None and when is None:
             # NOT "nothing to say at all" — that was the bug (aegis-hm8994).

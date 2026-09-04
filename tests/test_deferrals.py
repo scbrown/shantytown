@@ -404,3 +404,25 @@ def test_the_blind_block_leads_with_the_worst_priority():
     rows = [_row("aegis-p3", priority=3), _row("aegis-p1", priority=1)]
     text = "\n".join(deferrals.report(deferrals.evaluate(rows, NOW)))
     assert text.index("aegis-p1") < text.index("aegis-p3")
+
+
+def test_parked_by_design_is_a_DECISION_and_is_not_reported_as_a_strand():
+    """12 of 100 live blind deferrals carry this label. Their owners chose it.
+
+    A blind-set block that can never be empty is one the admin stops reading —
+    the exact aegis-1gy64 mechanism, arriving through the fix rather than the bug.
+    """
+    row = _row("aegis-parked", labels=["crash-stability", "parked:by-design"])
+    assert deferrals.evaluate([row], NOW) == []
+
+
+def test_blocked_on_a_HUMAN_is_still_reported_because_that_is_what_gets_forgotten():
+    """The negative control for the label above, and the more important half.
+
+    `blocked:human` is not a decision to stop looking — it is a bead waiting on a
+    person, which is the state this whole mechanism exists to resurface. If the
+    suppression were a `blocked:`/`parked:` prefix match it would swallow these.
+    """
+    for lab in ("blocked:human", "blocked:external", "parked", "parked:by-design-ish"):
+        out = deferrals.evaluate([_row("aegis-b", labels=[lab])], NOW)
+        assert len(out) == 1 and out[0].conditionless, f"{lab} must still report"
