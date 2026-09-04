@@ -612,7 +612,42 @@ class Tmux:
             subprocess.run(self._cmd("kill-session", "-t", name),
                            capture_output=True, text=True)
             raise
+        self._bound_memory(name)
         return name
+
+    def _bound_memory(self, name: str) -> None:
+        """Put a MemoryMax around the new pane (aegis-0j0n1n). Never fatal.
+
+        Deliberately AFTER the ownership marker and outside its all-or-nothing
+        block: an unbounded pane is a hazard, an un-owned pane is a leak, and
+        only the second is worth tearing a launch down for. A pane we could not
+        bound still gets to run — but it says so, because the failure this
+        module exists to prevent is precisely a limit everyone believes is
+        there and is not.
+        """
+        from . import panemem
+        pid = self.pane_pid(name)
+        if pid is None:
+            print(f"  ⚠ {name}: no pane pid — memory ceiling NOT applied "
+                  f"(aegis-0j0n1n)", file=sys.stderr)
+            return
+        applied = panemem.bound_pane(pid)
+        if not applied:
+            if applied.reason.startswith("disabled"):
+                return          # switched off on purpose; not a warning
+            print(f"  ⚠ {name}: memory ceiling NOT applied — {applied.reason} "
+                  f"(aegis-0j0n1n)", file=sys.stderr)
+
+    def pane_pid(self, name: str) -> str | None:
+        """The pid of the pane's shell, or None when it cannot be read."""
+        r = subprocess.run(
+            self._cmd("list-panes", "-t", name, "-F", "#{pane_pid}"),
+            capture_output=True, text=True,
+        )
+        if r.returncode != 0:
+            return None
+        first = r.stdout.split()
+        return first[0] if first else None
 
     def sessions(self) -> list[str] | None:
         """EVERY session on this socket — ours and not. None if we cannot ask.
