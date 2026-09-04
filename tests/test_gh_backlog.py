@@ -528,7 +528,14 @@ def _tender(crashes, now=1000.0, retired=None, spawned=None):
         panes, _RT(), None, spawn=lambda c, p: None, refresh=None,
         ensure=lambda card: card.workspace, crashes=crashes,
         retire=(retired.append if retired is not None else None),
-        now=lambda: now, log=lambda m: None)
+        now=lambda: now, log=lambda m: None,
+        # Keep the LIVE HOST out of a constructed test. Without this the tender
+        # reads /run/user/<uid>/shantytown/codex/<name>/ for the fixture's agent
+        # name, and these fixtures are called "kelly" — so a real kelly with a
+        # stale startup lock made every one of these fail locally while CI, which
+        # has no such path, passed. The verdict under test was never reached
+        # (aegis-9zhk2q).
+        codex_block=lambda card: None)
 
 
 def test_gh12_a_second_death_inside_the_window_BACKS_OFF():
@@ -583,7 +590,9 @@ def test_gh12_seeing_an_agent_ALIVE_clears_the_episode():
             return True
 
     tend_mod.Tender(panes, _RT(), None, crashes=crashes, now=lambda: 1000.0,
-                    log=lambda m: None).pass_over([Agent(name="kelly", pane="p-kelly")])
+                    log=lambda m: None,
+                    codex_block=lambda card: None,   # keep the live host out (aegis-9zhk2q)
+                    ).pass_over([Agent(name="kelly", pane="p-kelly")])
     assert crashes.get("kelly") == (0, 0.0)
 
 

@@ -316,10 +316,21 @@ class Tender:
                  ensure=ensure_workspace, log=None, gaps=None, crashes=None,
                  retire=None, now=None, target=None, target_src=None,
                  governed=None,
-                 catalog=None, stops=None):
+                 catalog=None, stops=None, codex_block=None):
         self._panes = panes
         self._runtime = runtime
         self._launches = launches
+        # codex_block(card) -> blocker | None. Injected for the same reason
+        # `spawn` is, and it was the ONE dependency here that was not — it read
+        # /run/user/<uid>/shantytown/codex/<name>/ off the live host from inside
+        # a staticmethod, so a fully-constructed test (NullPanes, fake crashes,
+        # injected clock) still consulted the real filesystem. Its fixtures use
+        # the literal name "kelly", and a real agent called kelly with a stale
+        # startup lock turned six hermetic backoff tests red on every developer
+        # box while CI — which has no such path — stayed green. A suite that is
+        # green in CI and red on every desk teaches people to ignore a local red
+        # (aegis-9zhk2q).
+        self._codex_block_fn = codex_block
         # spawn(card, session) -> None. The launcher. Injected because a test
         # that cannot spawn cannot test the only branch that matters.
         self._spawn = spawn
@@ -418,9 +429,17 @@ class Tender:
 
     # --- one agent -----------------------------------------------------------
 
-    @staticmethod
-    def _codex_block(card: Agent):
-        """A proven per-card daemon blocker, or None. Inspection is read-only."""
+    def _codex_block(self, card: Agent):
+        """A proven per-card daemon blocker, or None. Inspection is read-only.
+
+        Defaults to the live probe, so production behaviour is unchanged; a test
+        passes `codex_block=lambda card: None` to keep the host out of it.
+        """
+        if self._codex_block_fn is not None:
+            try:
+                return self._codex_block_fn(card)
+            except Exception:  # noqa: BLE001 — same cannot-prove rule as below
+                return None
         try:
             from . import codex_daemon
             found = codex_daemon.inspect(card.name)
