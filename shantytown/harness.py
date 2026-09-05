@@ -1417,6 +1417,30 @@ def name_for(card: Agent, root=None) -> str:
     return _deployment_harness(card.role, root) or DEFAULT
 
 
+def running_name(cmdline: str | None) -> str | None:
+    """Which harness the process on this command line IS, or `None` — cannot tell.
+
+    The counterpart to [`name_for`], and the distinction is the point.
+    `name_for` reads the CARD and answers what an agent WILL launch as; this
+    reads a live launch line and answers what one IS. They are the same for a
+    settled fleet and differ for exactly as long as a conversion is un-relaunched
+    (aegis-93fajy) — a window `st harness` made routine.
+
+    Asked of each harness in turn via its own `settings_in_cmdline`, the same
+    format-anchored, first-match discipline `runtime.settings_path_in_cmdline`
+    uses. Each implementation answers `None` rather than guessing, so a line that
+    matches nothing yields `None` and NOT the default: "I could not tell which
+    program this is" must never render as "claude", which is the reading that
+    would quietly reintroduce the card's answer under a new name.
+    """
+    if not cmdline:
+        return None
+    for program in all_harnesses():
+        if program.settings_in_cmdline(cmdline) is not None:
+            return program.name
+    return None
+
+
 def resolve_model(card, root=None) -> str | None:
     """Which MODEL this card runs, or None to let the harness choose its own.
 

@@ -5389,7 +5389,29 @@ def _live_by_governor(cards, panes, cfg, governors, root):
         harness, _governor, unconfigured = _governor_for(cfg, governors, card, root)
         if unconfigured is not None:
             continue
-        name = harness if harness in governors else "base"
+        # ACCOUNTING FOLLOWS THE PROCESS, NOT THE CARD (aegis-93fajy).
+        #
+        # `_governor_for` resolves through `harness.name_for`, which reads the
+        # CARD — correct for ADMISSION, because the gate decides what a launch
+        # WILL be. It is wrong for spend: between `st harness <agent> <target>`
+        # and that agent's relaunch, the card says one program and the process is
+        # still the other, so the budget being consumed belongs to the lane the
+        # count just left. `st harness` made that window routine rather than the
+        # by-hand rarity it used to be.
+        #
+        # A cmdline we cannot read yields None and we KEEP the card's answer:
+        # "I could not tell what is running" must degrade to the previous
+        # behaviour, never to dropping the agent out of both lanes, which would
+        # under-count every lane whenever tmux is slow.
+        actual = None
+        reader = getattr(panes, "cmdline", None)
+        if callable(reader):
+            try:
+                actual = harness_mod.running_name(reader(card.pane))
+            except Exception:
+                actual = None
+        spending = actual or harness
+        name = spending if spending in governors else "base"
         live[name] = live.get(name, 0) + 1
     return live
 
@@ -7904,6 +7926,32 @@ def _tend_once(a, quiet: bool = False) -> int:
             "readings": readings, "live": running,
             "blocked": blocked_by_gov.get(name, 0),
             "setpoint_delta": creel_advisory_mod.recommended_delta(line)})
+    # CONVERTED-BUT-NOT-RELAUNCHED, made observable (aegis-93fajy). The lane
+    # counts above now follow the PROCESS, so a card that has been converted and
+    # not yet relaunched is charged to the lane it is still spending — correct,
+    # and silently at odds with what `st crew` shows for that agent. Naming the
+    # disagreement is the difference between a number an operator can trust and
+    # one they have to reconcile by hand during exactly the sweep this makes easy.
+    _pending = []
+    for _card in agents:
+        if getattr(_card, "retired", False):
+            continue
+        if not (_card.pane and panes is not None and panes.exists(_card.pane)):
+            continue
+        _declared = harness_mod.name_for(_card, root=a.root)
+        _actual = None
+        _reader = getattr(panes, "cmdline", None)
+        if callable(_reader):
+            try:
+                _actual = harness_mod.running_name(_reader(_card.pane))
+            except Exception:
+                _actual = None
+        if _actual and _actual != _declared:
+            _pending.append(f"{_card.name} {_actual}->{_declared}")
+    if _pending:
+        print(f"  harness conversions pending relaunch ({len(_pending)}): "
+              f"{', '.join(sorted(_pending))}", file=sys.stderr)
+
     # THE CROSS-LANE RECOMMENDATION (aegis-6glmer, Stiwi 2026-09-04: "it should
     # be easy for you to convert crew to claude and governor should recommend").
     #
