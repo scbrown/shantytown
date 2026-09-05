@@ -315,3 +315,47 @@ def test_wired_agents_are_reported_even_when_some_are_unreadable(tmp_path):
     v, why = stats.capture_wiring(ags)
     assert v == stats.WIRING_UNKNOWN
     assert "all 1 readable" in why and "goldblum" in why
+
+
+def test_the_action_outcome_hook_is_wired_on_BOTH_success_and_failure(tmp_path):
+    """THE test for aegis-368cu.10's wiring.
+
+    `PostToolUse` fires on success and `PostToolUseFailure` on failure, so the
+    EVENT NAME is how the outcome is observed — `tool_response` carries no exit
+    code. Wiring only the success event would record every failed command as
+    `unknown`: a trace that looks complete and cannot answer the one question it
+    exists for. That omission is invisible in the spool, because the rows that
+    are missing are exactly the ones nobody thinks to count.
+    """
+    hooks = json.loads(provision._with_capture_hook("{}", tmp_path))["hooks"]
+    for event in ("PostToolUse", "PostToolUseFailure"):
+        assert any(
+            "yupana hook post-bash" in h["command"]
+            for b in hooks.get(event, [])
+            for h in b["hooks"]
+        ), f"the action-outcome record is not registered on {event}"
+
+
+def test_the_action_outcome_hook_is_scoped_to_Bash(tmp_path):
+    """Only the Bash pre-hook writes an `action` record, so an outcome for a
+    Read or an Edit would be permanently unjoinable — noise in the denominator
+    the replay ladder counts. A `.*` matcher here would look more thorough and
+    be strictly worse."""
+    hooks = json.loads(provision._with_capture_hook("{}", tmp_path))["hooks"]
+    for event in ("PostToolUse", "PostToolUseFailure"):
+        for b in hooks.get(event, []):
+            if any("post-bash" in h["command"] for h in b["hooks"]):
+                assert b.get("matcher") == "Bash", (
+                    f"{event} outcome hook matcher is {b.get('matcher')!r}, not 'Bash'")
+
+
+def test_wiring_the_outcome_did_not_displace_capture_or_the_advisory(tmp_path):
+    """The PostToolUse assignment REPLACES the key wholesale, so adding an entry
+    is exactly where the existing two would be lost. Claude Code runs every
+    matching hook, so these coexist — a recorder that displaced the advisory
+    would trade a user-facing signal for bookkeeping."""
+    hooks = json.loads(provision._with_capture_hook("{}", tmp_path))["hooks"]
+    post = [h["command"] for b in hooks["PostToolUse"] for h in b["hooks"]]
+    assert any("shantytown.stats capture" in c for c in post), "capture lost"
+    assert any("yupana hook post-edit" in c for c in post), "advisory lost"
+    assert any("yupana hook post-bash" in c for c in post), "outcome missing"

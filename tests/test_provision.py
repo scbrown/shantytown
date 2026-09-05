@@ -56,12 +56,22 @@ def test_capture_hook_injected_with_real_interpreter_and_root(root, ws):
     P.provision(_card(ws), root)
     d = json.loads((ws / ".claude" / P.CONSENT_TEMPLATE).read_text())
     post = d["hooks"]["PostToolUse"]
-    assert len(post) == 1 and post[0]["matcher"] == ".*"
-    cmd = post[0]["hooks"][0]["command"]
+    # The count was pinned at 1 when capture was the only PostToolUse block. The
+    # property it was really protecting is that CAPTURE is registered exactly
+    # once — Claude Code fires every matching hook, so a second capture
+    # registration double-counts every tool call. That is asserted directly now,
+    # so an additional block for a DIFFERENT command (the aegis-368cu.10 action
+    # outcome, matcher `Bash`) does not read as a regression it is not.
+    captures = [h for b in post for h in b["hooks"]
+                if "shantytown.stats capture" in h["command"]]
+    assert len(captures) == 1, f"capture must register exactly once: {captures}"
+    ambient = [b for b in post if b.get("matcher") == ".*"]
+    assert len(ambient) == 1, "one ambient block"
+    cmd = ambient[0]["hooks"][0]["command"]
     assert "shantytown.stats capture" in cmd
     assert f"--root {Path(root).resolve()}" in cmd
     assert not cmd.startswith("python "), "bare 'python' is not on PATH (tim)"
-    advisory = post[0]["hooks"][1]
+    advisory = ambient[0]["hooks"][1]
     assert "yupana hook post-edit" in advisory["command"]
     assert advisory["timeout"] == 5
     assert "|| exit 0" in advisory["command"], "advisory must fail open"

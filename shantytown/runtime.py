@@ -391,6 +391,35 @@ def _yupana_post_tool_cmd() -> dict:
     }
 
 
+def _yupana_action_outcome_cmd() -> dict:
+    """The PostToolUse / PostToolUseFailure ACTION OUTCOME record
+    (`yupana hook post-bash`, aegis-368cu.10).
+
+    The counterpart to `_yupana_trace_cmd`'s PreToolUse action record. A
+    PreToolUse hook fires BEFORE the command runs and structurally cannot know
+    whether it succeeded, so the pre-record alone says what was ATTEMPTED and
+    never what happened. The two are joined by the harness's `tool_use_id`,
+    which is present on both events and identical across a matched pair.
+
+    RECORD-ONLY, like the trace: never denies, prints nothing, always exits 0.
+
+    WIRED ON BOTH EVENTS, and that is not belt-and-braces — it is how the
+    outcome is OBSERVED rather than inferred. Claude Code fires `PostToolUse` on
+    success and `PostToolUseFailure` on failure, so the event name IS the
+    verdict; `tool_response` carries no exit code, and parsing stderr for the
+    word "error" would manufacture a verdict the hook cannot see. Wiring only
+    the success event would silently record every failed command as `unknown`,
+    which is the shape of a trace that looks complete and describes nothing.
+
+    MATCHED ON `Bash`, not `.*`: only the Bash pre-hook writes an `action`
+    record, so an outcome for a Read or an Edit would be permanently unjoinable
+    — a row that cannot be matched to anything is noise in the denominator the
+    replay ladder counts."""
+    return {"type": "command",
+            "command": "yupana hook post-bash || exit 0",
+            "timeout": 5}
+
+
 def _untracked_hook(root=None) -> dict:
     """The PreToolUse untracked-work nudge (aegis-fv2zc). The COMMAND lives here
     with the other hook composers — the interpreter and root resolution are this

@@ -463,7 +463,11 @@ def _with_capture_hook(text: str, root) -> str:
     the reason provisioning fails: a non-JSON / non-dict template passes through
     verbatim.
     """
-    from .runtime import _capture_cmd, _yupana_post_tool_cmd  # lazy import hygiene
+    from .runtime import (  # lazy import hygiene
+        _capture_cmd,
+        _yupana_action_outcome_cmd,
+        _yupana_post_tool_cmd,
+    )
     try:
         cfg = json.loads(text)
     except ValueError:
@@ -471,10 +475,24 @@ def _with_capture_hook(text: str, root) -> str:
     if not isinstance(cfg, dict):
         return text
     hooks = cfg.setdefault("hooks", {})
-    hooks["PostToolUse"] = [{
-        "matcher": ".*",
-        "hooks": [_capture_cmd(root), _yupana_post_tool_cmd()],
-    }]
+    hooks["PostToolUse"] = [
+        {"matcher": ".*", "hooks": [_capture_cmd(root), _yupana_post_tool_cmd()]},
+        # The ACTION OUTCOME record (aegis-368cu.10), Bash only — see
+        # runtime._yupana_action_outcome_cmd for why the matcher is not `.*`.
+        # Assigned HERE, in the same statement, because this assignment REPLACES
+        # `PostToolUse` wholesale: a separate injector running before it would be
+        # silently discarded, and one running after would have to append and get
+        # the ordering right. One home, one assignment.
+        {"matcher": "Bash", "hooks": [_yupana_action_outcome_cmd()]},
+    ]
+    # THE FAILURE EVENT IS NOT OPTIONAL. `PostToolUse` fires on success and
+    # `PostToolUseFailure` on failure, so the event name is how the outcome is
+    # OBSERVED. Wiring only the success event would record every failed command
+    # as `unknown` — a trace that looks complete and cannot answer the one
+    # question it exists for.
+    hooks["PostToolUseFailure"] = [
+        {"matcher": "Bash", "hooks": [_yupana_action_outcome_cmd()]},
+    ]
     # NO MATCHER on Stop: Stop carries no tool name, and a matcher on an event
     # that has nothing to match is the aegis-ac5x failure — a registration that
     # looks specific and fires zero times.
