@@ -178,3 +178,128 @@ def test_the_source_is_selectable_from_config(tmp_path):
     reader = gov.reader_for(policy, now=0.0)
     assert isinstance(reader, gov.CodexAppServerReader)
     assert reader.limit_id == "codex_bengalfox"
+
+
+# --- the reader's error must survive read_all (aegis-tq8um5) ------------------
+#
+# THE INCIDENT. 2026-09-03 10:47-11:17 EDT, one 33.75-minute episode: OpenAI's
+# `GET /backend-api/wham/usage` answered 404 (reproduced by hand on BOTH
+# codex 0.147.0 and 0.153.0, so not a client-version fault). `_rpc` caught that
+# and wrote it down exactly:
+#
+#     account/rateLimits/read failed: GET https://chatgpt.com/backend-api/wham/
+#     usage failed: 404 Not Found
+#
+# and `read_all` THREW THE STRING AWAY, returning `{}`. `Governor.evaluate`
+# then synthesised the only thing an empty dict can mean to it —
+# `no usage series for window 'seven_day'` — which is the message for a MISSING
+# PROMETHEUS SERIES. Two agents spent an hour reconstructing an upstream outage
+# the producer had already diagnosed in one line, and one of them (correctly
+# labelled, still wrong) blamed a local binary swap.
+#
+# The distinction is not cosmetic: "the provider 404'd" is not actionable on
+# this host and "nothing is publishing a series" is.
+
+
+def _erroring_server(tmp_path, message, *, name="erroring"):
+    """A fake app-server that answers id 2 with a JSON-RPC ERROR, as the real
+    one did throughout the outage."""
+    return _fake_server(tmp_path, {
+        "jsonrpc": "2.0", "id": 2,
+        "error": {"code": -32603, "message": message},
+    }, name=name)
+
+
+UPSTREAM_404 = ("failed to fetch codex rate limits: "
+                "GET https://chatgpt.com/backend-api/wham/usage failed: "
+                "404 Not Found")
+
+
+def test_read_all_carries_the_reader_error_rather_than_an_empty_dict(tmp_path):
+    """`read()` has always reported this; `read_all()` dropped it, and
+    `evaluate` prefers `read_all()` when the reader has one."""
+    reader = gov.CodexAppServerReader(
+        command=_erroring_server(tmp_path, UPSTREAM_404), timeout=20)
+
+    assert "404 Not Found" in reader.read().error          # the path that worked
+    readings, error, fault = reader.read_all_detailed()    # the path evaluate takes
+    assert readings == {}
+    assert "404 Not Found" in error
+    # It ran, it spoke the protocol, it was told no — that is UPSTREAM, decided
+    # structurally and NOT by looking for "404" in someone else's wording.
+    assert fault == gov.UPSTREAM
+
+
+def test_the_governor_reports_the_upstream_error_not_a_missing_series(tmp_path):
+    """End to end, through the seam `evaluate` actually uses."""
+    (tmp_path / "shantytown.toml").write_text(
+        '[governor]\nsource = "stub"\nwindow = "seven_day"\n'
+        '[[governor.tier]]\nat = 50\nwindow = "seven_day"\nmax_agents = 4\n')
+    from shantytown import config
+    policy = config.load(tmp_path).governor
+    reader = gov.CodexAppServerReader(
+        command=_erroring_server(tmp_path, UPSTREAM_404, name="e2e"),
+        window=gov.SEVEN_DAY, timeout=20)
+
+    v = gov.Governor(policy, reader, gov.FilesGovernorState(tmp_path),
+                     now=lambda: 1_000_000.0).evaluate(persist=False)
+
+    assert v.signal_lost
+    assert "404 Not Found" in v.why, v.why
+    # ...and it must NOT claim the series is missing, which sends the responder
+    # to a Prometheus config for a fault that is off this host entirely.
+    assert "no usage series" not in v.why, v.why
+
+
+def test_the_fault_label_is_upstream_when_the_provider_answered_an_error(tmp_path):
+    (tmp_path / "shantytown.toml").write_text(
+        '[governor]\nsource = "stub"\nwindow = "seven_day"\n'
+        '[[governor.tier]]\nat = 50\nwindow = "seven_day"\nmax_agents = 4\n')
+    from shantytown import config
+    reader = gov.CodexAppServerReader(
+        command=_erroring_server(tmp_path, UPSTREAM_404, name="fault-up"),
+        window=gov.SEVEN_DAY, timeout=20)
+
+    v = gov.Governor(config.load(tmp_path).governor, reader,
+                     gov.FilesGovernorState(tmp_path),
+                     now=lambda: 1_000_000.0).evaluate(persist=False)
+
+    assert v.signal_lost and v.fault == gov.UPSTREAM
+
+
+def test_a_missing_codex_binary_is_a_LOCAL_fault_not_an_upstream_one(tmp_path):
+    """The other arm, and the one that makes the label worth having: same
+    alert, same lane, opposite remedy. Nobody on this host can fix a provider
+    404; a codex that is not on PATH is nothing BUT this host."""
+    (tmp_path / "shantytown.toml").write_text(
+        '[governor]\nsource = "stub"\nwindow = "seven_day"\n'
+        '[[governor.tier]]\nat = 50\nwindow = "seven_day"\nmax_agents = 4\n')
+    from shantytown import config
+    reader = gov.CodexAppServerReader(
+        command=[str(tmp_path / "definitely-not-a-real-binary")],
+        window=gov.SEVEN_DAY, timeout=20)
+
+    v = gov.Governor(config.load(tmp_path).governor, reader,
+                     gov.FilesGovernorState(tmp_path),
+                     now=lambda: 1_000_000.0).evaluate(persist=False)
+
+    assert v.signal_lost and v.fault == gov.LOCAL
+    assert "not on PATH" in v.why, v.why
+
+
+def test_a_stale_reading_reports_UNKNOWN_rather_than_guessing(tmp_path):
+    """A staleness verdict is computed by `Reading.lost`, not by a reader that
+    watched something fail, so nothing on this path knows whose fault it is.
+    Reporting `local` here would be a guess wearing a label's authority."""
+    (tmp_path / "shantytown.toml").write_text(
+        '[governor]\nsource = "stub"\nstub_pct = 12\n'
+        '[[governor.tier]]\nat = 50\nmax_agents = 4\n')
+    from shantytown import config
+    stale = gov.StubReader(pct=12, at=1_000_000.0 - 10_000, now=lambda: 1_000_000.0)
+
+    v = gov.Governor(config.load(tmp_path).governor, stale,
+                     gov.FilesGovernorState(tmp_path),
+                     now=lambda: 1_000_000.0).evaluate(persist=False)
+
+    assert v.signal_lost and "STALE" in v.why
+    assert v.fault == gov.UNKNOWN_FAULT

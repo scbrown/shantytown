@@ -440,3 +440,110 @@ def test_a_window_that_has_relaxed_keeps_its_total_after_the_event_passes():
                        relaxations={("base", "five_hour"): 4})
     s = _samples(gm.render([_lane()], now=NOW, totals=totals))
     assert s['st_governor_relaxations_total{lane="base",window="five_hour"}'] == 4
+
+
+# --- whose fault, and the reader's own words (aegis-tq8um5) -------------------
+
+
+def _lost(why, fault):
+    return gov_mod.Verdict(reading=gov_mod.Reading(error=why),
+                           signal_lost=True, why=why, fault=fault)
+
+
+def test_the_fault_is_a_closed_vocabulary_every_value_exported():
+    """Same discipline as `st_governor_cause`: a class that happens to be
+    inactive reads 0, not no-data, so a transition is graphable and "no data"
+    keeps its one meaning — the producer is gone."""
+    s = _samples(gm.render([_lane(verdict=_lost("provider said 404",
+                                                gov_mod.UPSTREAM),
+                                  utilization=None, readings={})], now=NOW))
+    assert s['st_governor_signal_lost_fault{lane="base",fault="upstream"}'] == 1
+    assert s['st_governor_signal_lost_fault{lane="base",fault="local"}'] == 0
+    assert s['st_governor_signal_lost_fault{lane="base",fault="unknown"}'] == 0
+    # The load-bearing series is left untouched — an existing alert and
+    # dashboard select on it, and widening its labels would change what
+    # `max by (lane)` sums over at the moment the fleet is already blind.
+    assert s['st_governor_signal_lost{lane="base"}'] == 1
+
+
+def test_a_healthy_lane_publishes_every_fault_at_zero_and_no_info_series():
+    s = _samples(gm.render([_lane(verdict=gov_mod.Verdict(
+        reading=gov_mod.Reading(pct=10), pct=10), utilization=None,
+        readings={})], now=NOW))
+    for fault in gov_mod.FAULTS:
+        assert s[f'st_governor_signal_lost_fault{{lane="base",fault="{fault}"}}'] == 0
+    # THE PROSE SERIES IS STILL PUBLISHED, at 0, with fault="none" and no why.
+    # A series that appears only on failure cannot be verified to exist while
+    # things are fine — which is both this module's own rule and the reason
+    # goldblum's check-alert-metrics refuses an alert whose metric has no
+    # series (it cannot fire, and that is indistinguishable from healthy).
+    info = [k for k in s if k.startswith("st_governor_signal_lost_info")]
+    assert len(info) == 1, info
+    assert 'fault="none"' in info[0] and 'why=""' in info[0], info[0]
+    assert s[info[0]] == 0
+
+
+def test_the_reader_error_reaches_the_label_a_page_can_render():
+    why = ("seven_day: account/rateLimits/read failed: GET "
+           "https://chatgpt.com/backend-api/wham/usage failed: 404 Not Found")
+    s = _samples(gm.render([_lane(verdict=_lost(why, gov_mod.UPSTREAM),
+                                  utilization=None, readings={})], now=NOW))
+    info = [k for k in s if k.startswith("st_governor_signal_lost_info")]
+    assert len(info) == 1, info          # exactly one per lane -> group_left is safe
+    assert "404 Not Found" in info[0]
+    assert 'fault="upstream"' in info[0]
+
+
+def test_a_churning_number_in_the_why_does_NOT_churn_the_label():
+    """THE PROPERTY THE `for:` TIMER DEPENDS ON.
+
+    A label that changes value restarts an alert's `for:` clock. The staleness
+    message re-renders its age EVERY pass — "last succeeded 1834s ago", then
+    1839, then 2139 — so an un-normalized `why` would hand
+    `GovernorSignalLost` a `for: 30m` it could never reach, silently disarming
+    the governor's only decision-side alert in the exact fault class it exists
+    to catch. Digits collapse to N; the label is then stable for as long as the
+    FAULT is, which is the window the timer is measuring.
+    """
+    first = gm.stable_why("the probe last succeeded 1834s ago (limit 900s)")
+    later = gm.stable_why("the probe last succeeded 2139s ago (limit 900s)")
+    assert first == later
+    # ...and it must still be a sentence a human can act on.
+    assert "probe last succeeded" in first and "limit" in first
+    # Epochs and pids churn the same way and are read by nobody.
+    assert (gm.stable_why("timestamp is 1788573475 in the FUTURE")
+            == gm.stable_why("timestamp is 1788573999 in the FUTURE"))
+
+
+def test_normalizing_for_the_timer_must_NOT_eat_the_http_status():
+    """THE COUNTERWEIGHT, and the first cut of this function failed it.
+
+    Eliding every digit run made the timer safe and turned `404 Not Found` into
+    `N Not Found` — deleting the one token that says UPSTREAM at a glance, in
+    the very message this whole bead exists to put in front of a responder. A
+    status is 3 digits with no unit after it; an age is a number introducing a
+    time unit. Only the second is volatile, so only the second is elided.
+    """
+    for status in ("404 Not Found", "401 Unauthorized", "429 Too Many Requests",
+                   "500 Internal Server Error"):
+        assert status in gm.stable_why(f"usage endpoint failed: {status}")
+    assert "(HTTP 401)" in gm.stable_why(
+        "claude_usage_probe_success is 0 (HTTP 401) — a probe FAILED")
+
+
+def test_a_long_why_is_truncated_VISIBLY_rather_than_silently():
+    out = gm.stable_why("x" * 400)
+    assert len(out) == gm.WHY_MAX and out.endswith("…")
+
+
+def test_two_different_faults_stay_two_different_labels():
+    """The whole point of the label: same alert, same lane, opposite remedy."""
+    up = _samples(gm.render([_lane(verdict=_lost("provider 404",
+                                                 gov_mod.UPSTREAM),
+                                   utilization=None, readings={})], now=NOW))
+    loc = _samples(gm.render([_lane(verdict=_lost("codex is not on PATH",
+                                                  gov_mod.LOCAL),
+                                    utilization=None, readings={})], now=NOW))
+    assert up['st_governor_signal_lost_fault{lane="base",fault="upstream"}'] == 1
+    assert loc['st_governor_signal_lost_fault{lane="base",fault="local"}'] == 1
+    assert loc['st_governor_signal_lost_fault{lane="base",fault="upstream"}'] == 0

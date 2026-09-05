@@ -124,6 +124,60 @@ OK, PUSH_FAILED, NOTHING_TO_SAY, COULD_NOT_RENDER = 0, 1, 2, 3
 CAUSES = ("fill", "hold", "at-cap", "over-pace", "no-ready", "ready-unknown",
           "budget-shrinking", "uncapped", "unratable", "launch-blocked")
 
+#: The reason a lost signal is lost, as PROSE, made safe to carry as a Prometheus
+#: LABEL (aegis-tq8um5).
+#:
+#: WHY PROSE IS EXPORTED HERE AT ALL, against this module's own rule that the
+#: prose explaining a verdict is not a series.  The rule is about DASHBOARDS, and
+#: it still holds: nothing here graphs a string.  This is for the PAGE.  An alert
+#: annotation can only render what is on the alert's own labels, so a responder
+#: gets the reader's diagnosis in one read or they do not get it at all — and
+#: measured 2026-09-03, not getting it cost two agents an hour reconstructing an
+#: upstream 404 the producer had already written down.
+#:
+#: WHY IT IS NORMALIZED, which is the load-bearing part.  A label that changes
+#: value RESTARTS an alert's `for:` timer, so a `why` carrying "the probe last
+#: succeeded 1834s ago" — which every pass re-renders with a new number — would
+#: give `GovernorSignalLost` a `for: 30m` it could NEVER reach.  That is not a
+#: cosmetic regression: it would silently disarm the one decision-side alert the
+#: governor has, in the exact fault class (staleness) it exists to catch.  So
+#: the VOLATILE numbers collapse to `N`.
+#:
+#: WHICH NUMBERS, and why this is narrow rather than "all of them".  The first
+#: cut here elided every digit run and turned
+#:
+#:     ...wham/usage failed: 404 Not Found   ->   ...wham/usage failed: N Not Found
+#:
+#: destroying the single most diagnostic token in the message — the one that says
+#: UPSTREAM at a glance — in the name of protecting a timer.  Caught by the test
+#: below, which is why it asserts on the 404 and not merely on stability.
+#:
+#: So exactly two shapes are elided, and both are volatile BY CONSTRUCTION:
+#:   * a number introducing a time unit (`1834s ago`, `900s`, `30s`) — every one
+#:     of these is an age or a configured limit re-rendered each pass;
+#:   * a run of 6+ digits — epochs, pids, byte counts; nothing an operator reads
+#:     as a diagnosis and everything that changes between passes.
+#: HTTP statuses (3 digits, no unit) survive, which is the whole point.
+_re = __import__("re")
+_VOLATILE = (
+    _re.compile(r"\d+(?=\s*(?:ms|s|m|h)\b)"),   # ages, timeouts, limits
+    _re.compile(r"\d{6,}"),                       # epochs, pids
+)
+
+#: Bounded, because a label is a series. 180 chars holds every message
+#: `Reading.lost` and the readers can produce, with room to be truncated
+#: VISIBLY (the ellipsis) rather than silently.
+WHY_MAX = 180
+
+
+def stable_why(why: str) -> str:
+    """`Verdict.why` as a label value: digit-runs elided, bounded, one line."""
+    text = " ".join((why or "").split())
+    for pattern in _VOLATILE:
+        text = pattern.sub("N", text)
+    return text if len(text) <= WHY_MAX else text[:WHY_MAX - 1] + "\u2026"
+
+
 #: Directions the decision counter buckets into.  `unknown` is a first-class
 #: bucket for the same reason `advice=None` is a first-class answer.
 DIRECTIONS = ("grow", "hold", "shrink", "unknown")
@@ -355,6 +409,43 @@ def _lane_rows(out: _Out, lane: str, *, verdict, utilization, readings,
     lb = dict(lane=lane)
     if verdict is not None:
         out.add("st_governor_signal_lost", bool(verdict.signal_lost), **lb)
+        # WHOSE FAULT, in the closed-vocabulary style `st_governor_cause` uses:
+        # EVERY value 0 or 1, never only the active one, so a dashboard asking
+        # about a fault class that happens to be inactive gets `0` rather than an
+        # empty vector — and "no data" keeps its single meaning, that the
+        # producer is gone.  `st_governor_signal_lost` itself is left EXACTLY as
+        # it was, no new labels: it is the series an existing alert and dashboard
+        # already select on, and widening its label set would change what
+        # `max by (lane)` sums over at the moment the fleet is already blind.
+        fault = getattr(verdict, "fault", "") or ""
+        for name in gov_mod.FAULTS:
+            out.add("st_governor_signal_lost_fault",
+                    bool(verdict.signal_lost) and name == fault,
+                    lane=lane, fault=name)
+        # The prose, for the PAGE.  Exactly one series per lane, which is what
+        # lets an alert `group_left` it without risking a many-to-one match.
+        #
+        # EMITTED ON EVERY PASS, healthy or not — `fault="none"`, `why=""`, value
+        # 0 — and the first cut of this emitted it only while the signal was
+        # lost.  That was wrong twice over, and the second reason is the one that
+        # bites:
+        #
+        #   * it contradicts this module's own rule, three commits old here (`a
+        #     counter that appears only on failure is a panel that reads green`);
+        #   * goldblum's check-alert-metrics REFUSES an alert whose metric has no
+        #     series, because a rule referencing a metric nobody publishes cannot
+        #     fire and is indistinguishable from a healthy one.  A fault-only
+        #     series has no series in the steady state BY DESIGN, so the alerts
+        #     that join it would have been permanently unverifiable.
+        #
+        # The join stays correct because the LEFT side already filters to lanes
+        # where `st_governor_signal_lost == 1`; a healthy lane's row is never
+        # reached.
+        out.add("st_governor_signal_lost_info", bool(verdict.signal_lost),
+                lane=lane,
+                fault=(fault or gov_mod.UNKNOWN_FAULT) if verdict.signal_lost
+                      else "none",
+                why=stable_why(verdict.why) if verdict.signal_lost else "")
         out.add("st_governor_frozen", bool(verdict.frozen), **lb)
         out.add("st_governor_drains", bool(verdict.drains), **lb)
         out.add("st_governor_engaged_tiers", len(verdict.engaged or ()), **lb)

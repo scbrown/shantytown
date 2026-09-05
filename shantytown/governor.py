@@ -662,6 +662,26 @@ class Policy:
         return tuple(t for t in self.tiers_for(top.window) if t.at <= top.at)
 
 
+# --- why the signal was lost, as a CLOSED vocabulary (aegis-tq8um5) -----------
+#
+# An upstream provider outage and a broken local probe are the SAME alert today
+# and have OPPOSITE remedies: nobody on this host can fix the first, and the
+# second is the whole reason the governor exists.  So the class is carried as a
+# label, not left to be inferred from prose.
+#
+# STRUCTURAL, NEVER PARSED FROM THE ERROR TEXT.  `UPSTREAM` is set only where the
+# local side demonstrably WORKED — `codex app-server` started, spoke the
+# protocol, and returned a JSON-RPC *error* — so the fault is in what it was told
+# by the provider.  `LOCAL` is a failure to run or reach our own thing at all.
+# Matching on "404" in a message would be a guess about someone else's wording;
+# "the server answered, and its answer was an error" is a fact about our own
+# call.  UNKNOWN is a first-class value, not a default to be embarrassed by: a
+# stale reading genuinely does not say whose fault it is, and claiming otherwise
+# would send a responder somewhere on no evidence.
+UPSTREAM, LOCAL, UNKNOWN_FAULT = "upstream", "local", "unknown"
+FAULTS = (UPSTREAM, LOCAL, UNKNOWN_FAULT)
+
+
 # --- the reading --------------------------------------------------------------
 
 @dataclass(frozen=True)
@@ -707,6 +727,10 @@ class Reading:
     # one limit under the window of another, and nothing downstream can tell.
     # None = the source does not distinguish limits (Prometheus, textfile, stub).
     limit_id: str | None = None
+    # WHOSE FAULT, from `FAULTS` above — "" when this reading is fine or the
+    # source cannot tell.  Set by the reader, which is the only layer that knows
+    # whether its own side worked; never derived from the error text downstream.
+    fault: str = ""
 
     def resets_in(self, now: float) -> float | None:
         """Seconds until this budget refills, or None if nothing published one.
@@ -983,16 +1007,42 @@ class TextfileReader:
         return _from_samples(parse_prom(body), self.window, "textfile",
                              metric=self.metric, account_metric=self.account_metric)
 
-    def read_all(self) -> dict[str, Reading]:
-        """Every window the file carries. The read was always whole-file; only
-        the filter was single-window (aegis-59hao)."""
+    def read_all_detailed(self) -> "tuple[dict[str, Reading], str, str]":
+        """(readings, error, fault) — the seam `Governor.evaluate` PREFERS
+        (aegis-tq8um5).
+
+        THE DEFECT THIS METHOD EXISTS TO CLOSE, and it was in every reader here.
+        `read_all` returns a bare dict, so a reader that failed WITHOUT RAISING
+        had no channel to say why: it returned `{}`, `evaluate` saw an empty map
+        and synthesised the only sentence an empty map means to it — "no usage
+        series for window X" — which is the message for a MISSING PROMETHEUS
+        SERIES. So an error the reader had already diagnosed, in one line, was
+        replaced by a different diagnosis pointing at a different subsystem.
+
+        Measured 2026-09-03 (the codex lane, 33.75 min): OpenAI's usage endpoint
+        answered 404, `CodexAppServerReader._rpc` wrote that down exactly, and
+        the page said `seven_day: no usage series for window 'seven_day'`. Two
+        agents then reconstructed an upstream outage the producer had already
+        identified, and the first cause proposed was a local binary swap.
+
+        `read_all` remains, delegating, because the seam in `evaluate` must keep
+        working for a reader written before this and for any injected double.
+        """
         try:
             body = self.path.read_text()
         except OSError as e:
-            return {}
+            # OUR file, on OUR disk. Nothing about a missing textfile is
+            # upstream, and saying so would send a responder to a provider
+            # status page for a probe that stopped writing here.
+            return {}, f"cannot read {self.path}: {e}", LOCAL
         return _readings_by_window(parse_prom(body), "textfile",
                                    metric=self.metric,
-                                   account_metric=self.account_metric)
+                                   account_metric=self.account_metric), "", ""
+
+    def read_all(self) -> dict[str, Reading]:
+        """Every window the file carries. The read was always whole-file; only
+        the filter was single-window (aegis-59hao)."""
+        return self.read_all_detailed()[0]
 
 
 class CodexAppServerReader:
@@ -1043,9 +1093,18 @@ class CodexAppServerReader:
         self.command = list(command) if command else ["codex", "app-server"]
         self.timeout = timeout
 
-    def _rpc(self) -> "tuple[dict, str]":
-        """(result, error). Never raises: a governor source that throws takes the
-        fleet's dispatch decision with it."""
+    def _rpc(self) -> "tuple[dict, str, str]":
+        """(result, error, fault). Never raises: a governor source that throws
+        takes the fleet's dispatch decision with it.
+
+        `fault` is `UPSTREAM` on ONE path only — the app-server started, spoke
+        the protocol, and answered our request with a JSON-RPC error. That is
+        the structural test for "our side worked and the provider's did not";
+        every other exit here is a failure to run or to be answered at all, and
+        is `LOCAL`. Measured 2026-09-03: the provider's usage endpoint 404'd
+        identically on codex 0.147.0 AND 0.153.0, which is what a fault on the
+        far side of a working local binary looks like.
+        """
         request = "".join(json.dumps(m) + "\n" for m in (
             {"jsonrpc": "2.0", "id": 1, "method": "initialize",
              "params": {"clientInfo": {"name": "shantytown-governor",
@@ -1066,15 +1125,16 @@ class CodexAppServerReader:
                                     stderr=subprocess.PIPE, text=True, bufsize=1)
         except FileNotFoundError:
             return {}, (f"{self.command[0]} is not on PATH — this host has no "
-                        f"codex CLI to ask")
+                        f"codex CLI to ask"), LOCAL
         except OSError as e:
-            return {}, f"cannot run {' '.join(self.command)}: {e}"
+            return {}, f"cannot run {' '.join(self.command)}: {e}", LOCAL
         try:
             try:
                 proc.stdin.write(request)
                 proc.stdin.flush()
             except OSError as e:
-                return {}, f"{' '.join(self.command)} closed its input: {e}"
+                return ({}, f"{' '.join(self.command)} closed its input: {e}",
+                        LOCAL)
             deadline = time.monotonic() + self.timeout
             while time.monotonic() < deadline:
                 line = proc.stdout.readline()
@@ -1087,13 +1147,16 @@ class CodexAppServerReader:
                 if message.get("id") != 2:
                     continue
                 if "error" in message:
-                    return {}, f"account/rateLimits/read failed: {message['error']}"
+                    # THE ONE UPSTREAM PATH: it ran, it spoke, it was told no.
+                    return ({}, f"account/rateLimits/read failed: "
+                            f"{message['error']}", UPSTREAM)
                 result = message.get("result")
                 if isinstance(result, dict):
-                    return result, ""
-                return {}, f"account/rateLimits/read returned {result!r}"
+                    return result, "", ""
+                return ({}, f"account/rateLimits/read returned {result!r}",
+                        UPSTREAM)
             return {}, (f"no account/rateLimits/read response from "
-                        f"{' '.join(self.command)} within {self.timeout:g}s")
+                        f"{' '.join(self.command)} within {self.timeout:g}s"), LOCAL
         finally:
             # ALWAYS reap it. This runs on every governor pass; a leaked
             # app-server per pass is a slow-motion outage of its own.
@@ -1131,10 +1194,10 @@ class CodexAppServerReader:
                                        reset_at=reset_at, limit_id=limit_id)
         return readings, unmapped
 
-    def _latest(self) -> "tuple[dict[str, Reading], str, str]":
-        result, error = self._rpc()
+    def _latest(self) -> "tuple[dict[str, Reading], str, str, str]":
+        result, error, fault = self._rpc()
         if error:
-            return {}, error, ""
+            return {}, error, "", fault
         # `at` is NOW, and that is the whole point of this source: the answer is
         # produced on demand, so its age is the age of this call. The scrape
         # could only ever report when somebody else last wrote a file.
@@ -1152,8 +1215,10 @@ class CodexAppServerReader:
                 snapshot = single
         if not isinstance(snapshot, dict):
             available = sorted(buckets) if isinstance(buckets, dict) else []
+            # The account answered and simply does not meter what we pinned —
+            # a fact about the account, not about this host.
             return {}, (f"no rate-limit bucket {self.limit_id!r} in the account's "
-                        f"response; available: {available or 'none'}"), ""
+                        f"response; available: {available or 'none'}"), "", UPSTREAM
         readings, unmapped = self._snapshot_readings(snapshot, at)
         note = ""
         if unmapped:
@@ -1162,19 +1227,25 @@ class CodexAppServerReader:
                     f"map; they are NOT reported")
         if not readings:
             return {}, (f"limit {self.limit_id!r} published no window this source "
-                        f"maps ({sorted(self.WINDOWS)})"), note
-        return readings, "", note
+                        f"maps ({sorted(self.WINDOWS)})"), note, UPSTREAM
+        return readings, "", note, ""
+
+    def read_all_detailed(self) -> "tuple[dict[str, Reading], str, str]":
+        """(readings, error, fault). See `TextfileReader.read_all_detailed` — this is
+        the reader the aegis-tq8um5 incident was measured on, and `_rpc` had the
+        404 in hand the whole time."""
+        readings, error, _note, fault = self._latest()
+        return readings, error, fault
 
     def read_all(self) -> "dict[str, Reading]":
-        readings, _error, _note = self._latest()
-        return readings
+        return self.read_all_detailed()[0]
 
     def note(self) -> str:
-        _readings, _error, note = self._latest()
+        _readings, _error, note, _fault = self._latest()
         return note
 
     def read(self) -> Reading:
-        readings, error, note = self._latest()
+        readings, error, note, fault = self._latest()
         if self.window in readings:
             return readings[self.window]
         detail = (error or
@@ -1182,7 +1253,8 @@ class CodexAppServerReader:
                   f"available: {sorted(readings) or 'none'}")
         if note:
             detail = f"{detail} ({note})"
-        return Reading(source="codex_app_server", error=detail)
+        return Reading(source="codex_app_server", error=detail,
+                       fault=fault or UPSTREAM)
 
 
 class CodexSessionReader:
@@ -1305,9 +1377,16 @@ class CodexSessionReader:
                         "300/10080-minute window"), ""
         return {}, f"no Codex rate-limit snapshot under {self.path}", ""
 
+    def read_all_detailed(self) -> "tuple[dict[str, Reading], str, str]":
+        """(readings, error, fault). See `TextfileReader.read_all_detailed`.
+
+        A session scrape reads files this host wrote, so a failure here is
+        always LOCAL — there is no remote call to blame."""
+        readings, error, _note = self._latest()
+        return readings, error, (LOCAL if error else "")
+
     def read_all(self) -> dict[str, Reading]:
-        readings, _error, _note = self._latest()
-        return readings
+        return self.read_all_detailed()[0]
 
     def note(self) -> str:
         """What the scan saw and could NOT report — empty when nothing was
@@ -1382,18 +1461,31 @@ class PrometheusReader:
         return _from_samples(samples, self.window, "prometheus",
                              metric=self.metric, account_metric=self.account_metric)
 
+    def read_all_detailed(self) -> "tuple[dict[str, Reading], str, str]":
+        """(readings, error, fault). See `TextfileReader.read_all_detailed`.
+
+        The comment below stated the intended behaviour — "give every window the
+        SAME error rather than an empty map" — directly above a `return {}` that
+        did the opposite, for as long as this method has existed. The error had
+        nowhere to go until this seam; now it does.
+        """
+        samples, err = self._samples()
+        if err is not None:
+            # One transport failure is not per-window news, so it is reported
+            # ONCE, here, and `evaluate` gives it to every window it was asked
+            # about — rather than synthesising a missing-series message per
+            # window and sending an operator to hunt a metric for a dead
+            # endpoint.
+            # OUR Prometheus, on OUR network.
+            return {}, err.error, LOCAL
+        return _readings_by_window(samples, "prometheus", metric=self.metric,
+                                   account_metric=self.account_metric), "", ""
+
     def read_all(self) -> dict[str, Reading]:
         """Every window the query returned. QUERY is a regex over the whole
         `claude_usage_*` family, so both windows were always in this response —
         the single-window filter was the only thing hiding one (aegis-59hao)."""
-        samples, err = self._samples()
-        if err is not None:
-            # One transport failure is not per-window news. Give every window the
-            # SAME error rather than an empty map, so the caller reports "cannot
-            # see" for each budget instead of silently governing on none of them.
-            return {}
-        return _readings_by_window(samples, "prometheus", metric=self.metric,
-                                   account_metric=self.account_metric)
+        return self.read_all_detailed()[0]
 
     def _samples(self):
         """(samples, error_reading) — exactly one is not None."""
@@ -1774,6 +1866,11 @@ class Verdict:
     signal_lost: bool = False
     frozen: bool = False             # signal lost AND on_signal_lost = "freeze"
     why: str = ""
+    # WHOSE FAULT the lost signal is, from `FAULTS` — "" when the signal is fine.
+    # `unknown` is reported as `unknown` and never quietly as `local`: a stale
+    # reading does not say who broke it, and a page that guesses sends a
+    # responder to the wrong system with a false air of certainty.
+    fault: str = ""
     alarm: str = ""                  # non-empty -> say it LOUDLY, EVERY pass
     # EVERY engaged tier, not just the top one. Restriction is CUMULATIVE and
     # must be monotone in usage — see Policy.engaged for the bug that proves it.
@@ -2364,7 +2461,17 @@ class Governor:
         # missing metric instead of a dead endpoint.
         transport_error: Reading | None = None
         try:
-            if hasattr(self.reader, "read_all"):
+            if hasattr(self.reader, "read_all_detailed"):
+                # PREFERRED (aegis-tq8um5): the only variant that can report a
+                # reader which failed WITHOUT raising. `read_all` returning `{}`
+                # is indistinguishable from a source that simply carries no
+                # windows, and the synthesised message for that case names a
+                # missing series — a different subsystem from the actual fault.
+                readings, reader_error, fault = self.reader.read_all_detailed()
+                if reader_error and not readings:
+                    transport_error = Reading(source=pol.source,
+                                              error=reader_error, fault=fault)
+            elif hasattr(self.reader, "read_all"):
                 readings = self.reader.read_all()
             else:
                 # A reader from before aegis-59hao, or any injected test double
@@ -2391,6 +2498,10 @@ class Governor:
         # the entire bug. Restriction is the union of what every budget says.
         decided: dict[str, tuple] = {}     # window -> (chosen, held, since, pct)
         blind: list[tuple[str, str]] = []  # (window, why) — seen but unreadable
+        # Parallel to `blind`, deliberately NOT folded into it: `blind` is
+        # rendered into operator prose in three places, and widening that tuple
+        # would touch every one of them for a value none of them print.
+        blind_faults: list[str] = []
         resets: dict[str, float] = {}      # window -> epoch the budget refills
         relaxed: list[Relaxed] = []        # windows that LEFT a tier this pass
         prior = self.state.get() if self.state is not None else Engaged()
@@ -2401,6 +2512,7 @@ class Governor:
             why_lost = r.lost(now, pol.max_age_seconds)
             if why_lost:
                 blind.append((w, why_lost))
+                blind_faults.append(r.fault or UNKNOWN_FAULT)
                 continue
             # RECORDED FROM A READING WE ACCEPTED, never from a blind one. A
             # reset timestamp carried alongside a stale percentage is as stale as
@@ -2454,6 +2566,16 @@ class Governor:
         else:
             lost = ""
 
+        # ONE fault for the lane, and only when every blind window AGREES.
+        # Windows that disagree are not averaged into a majority: "the seven-day
+        # read is an upstream 404 and the five-hour probe is also dead" is two
+        # faults, and labelling that pair with either one hides the other from
+        # the responder who is about to act on the label.
+        fault = ""
+        if lost:
+            distinct = set(blind_faults)
+            fault = (distinct.pop() if len(distinct) == 1 else UNKNOWN_FAULT)
+
         if lost:
             frozen = pol.on_signal_lost == FREEZE
             # DO NOT clear the engaged tier here. Losing sight of the number is
@@ -2464,6 +2586,7 @@ class Governor:
             # number failure wearing the other hat.
             return Verdict(
                 reading=reading, pct=reading.pct, signal_lost=True, frozen=frozen,
+                fault=fault,
                 # THE BASELINE CAP SURVIVES A LOST SIGNAL (aegis-tzpo1). Every
                 # tier is dropped here because a remembered tier must not be
                 # applied to an unmeasured present — but `cap` was never measured
