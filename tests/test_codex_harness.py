@@ -1183,14 +1183,15 @@ args = ["-y", "playwright-mcp"]
 """
 
 
-def _render_mcp(monkeypatch, value):
+def _render_mcp(monkeypatch, value, existing=None):
     import tomllib
     from shantytown import codex
     if value is None:
         monkeypatch.delenv("SHANTY_CODEX_MCP_APPROVE", raising=False)
     else:
         monkeypatch.setenv("SHANTY_CODEX_MCP_APPROVE", value)
-    return tomllib.loads(codex.render({"project_doc_max_bytes": 1}, _MCP_EXISTING))
+    return tomllib.loads(codex.render({"project_doc_max_bytes": 1},
+                                      _MCP_EXISTING if existing is None else existing))
 
 
 def test_a_named_server_is_pre_approved(monkeypatch):
@@ -1230,4 +1231,64 @@ def test_unset_emits_nothing_and_changes_nothing(monkeypatch):
 
 def test_commas_and_spaces_both_separate(monkeypatch):
     d = _render_mcp(monkeypatch, "homelab,bobbin, forgejo")
+    assert d["mcp_servers"]["homelab"]["default_tools_approval_mode"] == "approve"
+
+
+# --- THE SETTING MUST REVOKE, NOT ONLY GRANT (aegis-n549ii) -------------------
+#
+# This shipped add-only: the loop set the key for listed servers and an early
+# return skipped everything when the list was empty. Nothing ever REMOVED the
+# key, and `render` merges with the existing file — so a server dropped from
+# SHANTY_CODEX_MCP_APPROVE kept the approval it had already been written, and
+# emptying the list revoked nothing.
+#
+# The tests above could not see it because they all render from _MCP_EXISTING,
+# which has no approval keys in it. The stale key only exists on the SECOND
+# emission, which is the only emission that ever happens in production.
+#
+# Measured 2026-09-05 narrowing homelab to annotation-governed: the deployment
+# setting read back as narrowed and the re-rendered config still said
+# `homelab ... = "approve"`. Every check short of re-rendering agreed.
+
+_MCP_ALREADY_APPROVED = """
+[mcp_servers.homelab]
+command = "npx"
+args = ["-y", "homelab-mcp"]
+default_tools_approval_mode = "approve"
+
+[mcp_servers.playwright]
+command = "npx"
+args = ["-y", "playwright-mcp"]
+"""
+
+
+def test_dropping_a_server_from_the_list_REVOKES_its_approval(monkeypatch):
+    """The narrowing case. Re-emitting with homelab absent must remove the key
+    it was previously granted, or the setting is a one-way latch."""
+    d = _render_mcp(monkeypatch, "bobbin forgejo", existing=_MCP_ALREADY_APPROVED)
+    assert "default_tools_approval_mode" not in d["mcp_servers"]["homelab"]
+
+
+def test_emptying_the_list_revokes_everything(monkeypatch):
+    """The early return made an empty list a no-op, which is the opposite of
+    what an operator clearing the setting means."""
+    d = _render_mcp(monkeypatch, "", existing=_MCP_ALREADY_APPROVED)
+    assert "default_tools_approval_mode" not in d["mcp_servers"]["homelab"]
+
+
+def test_unsetting_the_variable_also_revokes(monkeypatch):
+    d = _render_mcp(monkeypatch, None, existing=_MCP_ALREADY_APPROVED)
+    assert "default_tools_approval_mode" not in d["mcp_servers"]["homelab"]
+
+
+def test_revocation_does_NOT_clobber_the_server_definition(monkeypatch):
+    """Same arm that matters for granting: only the key we manage is touched."""
+    hl = _render_mcp(monkeypatch, "", existing=_MCP_ALREADY_APPROVED)["mcp_servers"]["homelab"]
+    assert hl["command"] == "npx"
+    assert hl["args"] == ["-y", "homelab-mcp"]
+
+
+def test_a_still_listed_server_keeps_its_approval_across_a_re_emit(monkeypatch):
+    """Revoking must not become a stampede: what is still declared stays."""
+    d = _render_mcp(monkeypatch, "homelab", existing=_MCP_ALREADY_APPROVED)
     assert d["mcp_servers"]["homelab"]["default_tools_approval_mode"] == "approve"

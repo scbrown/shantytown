@@ -238,18 +238,44 @@ def _apply_mcp_approval(config: dict, root=None) -> dict:
     A SERVER THAT IS NOT IN THE CONFIG IS SKIPPED, not created. An approval mode
     for a server nobody defined configures nothing and would read, in the file,
     as though that server existed.
+
+    AUTHORITATIVE, NOT ADDITIVE — IT REVOKES TOO (aegis-n549ii). This first
+    shipped as add-only, with an early return when the list was empty. Both
+    halves made the setting a ONE-WAY RATCHET: removing a server from
+    SHANTY_CODEX_MCP_APPROVE left the key it had already written sitting in the
+    merged config, so the server stayed pre-approved forever and emptying the
+    list revoked nothing at all.
+
+    That fails in the worst available direction. The operator edits the
+    deployment setting, `codex_mcp_approve_servers` reads back the new list, and
+    every check short of re-rendering the file agrees the narrowing happened —
+    while the emitted config is unchanged and the tools stay unattended-callable.
+    Measured 2026-09-05 while narrowing homelab from blanket approve to
+    annotation-governed: the resolver reported the new list and the re-render
+    still carried `homelab ... = "approve"`.
+
+    THE COST, stated because it is real: this key is now ST'S, and an operator's
+    hand-set `default_tools_approval_mode` for a server st knows about is removed
+    on the next emission. That is the deliberate trade. A grant that cannot be
+    withdrawn through the mechanism that made it is not a setting, it is a
+    latch — and this one governs whether an agent may call destructive tools
+    with nobody watching. Operators express the intent through the deployment
+    setting, which is the thing that was built for it.
     """
     from .runtime import codex_mcp_approve_servers
-    names = codex_mcp_approve_servers(root)
-    if not names:
-        return config
+    names = set(codex_mcp_approve_servers(root))
     servers = config.get("mcp_servers")
     if not isinstance(servers, dict):
         return config
-    for name in names:
-        entry = servers.get(name)
-        if isinstance(entry, dict):
+    for name, entry in servers.items():
+        if not isinstance(entry, dict):
+            continue
+        if name in names:
             entry["default_tools_approval_mode"] = "approve"
+        else:
+            # Only the key WE manage. Everything else in the sub-table is the
+            # operator's and survives untouched.
+            entry.pop("default_tools_approval_mode", None)
     return config
 
 
