@@ -24,15 +24,35 @@
 #
 # Usage:
 #   install-scrub-guard.sh [--root DIR]... [--check] [--selftest]
-#     (no args)   arm every public-remote repo under EVERY default root:
-#                 ~/gt (or $GT_ROOT), ~/workspace and ~/src. All three, because a
-#                 single default root left ~/workspace dark and reported green
-#                 while doing it, and the hourly --check — the arm that ESCALATES
-#                 — saw neither ~/workspace nor ~/src (aegis-v7joru).
-#     --root DIR  repeatable; REPLACES the defaults rather than adding to them
+#     (no args)   arm every public-remote checkout under $HOME, at ANY depth
+#     --root DIR  repeatable; REPLACES the default root rather than adding to it
 #     --check     report armed / unarmed / not-public, change nothing; exit 1 if
 #                 any public repo is unarmed
 #     --selftest  prove the discovery + arm logic on throwaway repos, no network
+#
+# WHY THE SWEEP IS HOST-WIDE AND UNBOUNDED IN DEPTH (aegis-yi7o93). This walked
+# `<root>/*/.git` — ONE level — so a repo whose only checkout is a worktree at
+# `~/gt/<repo>-wt/<agent>` was INVISIBLE. On 2026-09-04 that put six public
+# checkouts (five under ~/gt/camayoc-wt, one under ~/gt/desire-path-wt) outside
+# the sweep entirely, while it reported `repos seen: 51 ... unarmed: 0`. A commit
+# carrying .svc hostnames reached camayoc's own pre-commit and would have reached
+# a PUBLIC remote unguarded.
+#
+# `unarmed: 0` was TRUE and meaningless: it is computed over what the sweep
+# FOUND, so a checkout it cannot see is not a gap — it is absent from the
+# denominator. That is the same shape as a coverage check that passes while zero
+# guards compile (aegis-cd7rw) and a collector reading green over blind hosts
+# (aegis-dg9ckz). The fix is therefore NOT another named root — a root list you
+# must remember to extend is the thing that failed twice (aegis-v7joru, then
+# this) — it is to make the default root $HOME and the depth unbounded, so a new
+# tree cannot appear outside the sweep's scope without leaving $HOME.
+#
+# COVERAGE IS PUBLISHED, NOT JUST LOGGED. Every run writes
+# scrub_guard_*.prom (see emit_metrics) with ABSOLUTE counts, not a ratio: a
+# ratio would have read 32/32 = 100% while five repos were invisible, i.e. it
+# would have reproduced the bug it exists to catch. A drop in
+# scrub_guard_repos_total is itself the alertable event, because a tree going
+# invisible shows up as a smaller denominator and nothing else.
 set -uo pipefail
 
 CONF="${SCRUB_PATTERNS_FILE:-$HOME/.config/aegis/scrub-patterns.conf}"
@@ -80,6 +100,97 @@ hook_path() {
   printf '%s/hooks/pre-push\n' "$common"
 }
 
+# Trees never walked into: dependency and build caches hold no checkout we push.
+# Pruning them is what makes a $HOME-wide sweep cost ~0.3s rather than minutes.
+PRUNE_NAMES=(node_modules target .venv venv __pycache__ .cargo .rustup .terraform .tox .mypy_cache)
+
+# Third-party upstreams this host never pushes to: a plugin manager's clones and
+# pre-commit's hook cache. These are EXCLUDED BY NAME, COUNTED, and reported —
+# never silently dropped. An uncounted skip is the exact defect this file is
+# about, so the exclusion is two literal path prefixes rather than a wildcard
+# over ~/.local/share (which would also swallow ~/.local/share/creel-src, a repo
+# that does need arming).
+EXCLUDE_PREFIXES=("$HOME/.local/share/nvim/lazy/" "$HOME/.cache/pre-commit/")
+
+find_checkouts() {
+  # Every .git under $1, at ANY depth, dir or file (a linked worktree's .git is a
+  # FILE). Prints one working-tree path per line.
+  local root="$1" prune=() n
+  for n in "${PRUNE_NAMES[@]}"; do prune+=(-name "$n" -o); done
+  unset 'prune[${#prune[@]}-1]'
+  find "$root" -xdev \( "${prune[@]}" \) -prune -o -name .git -print -prune 2>/dev/null \
+    | while IFS= read -r g; do dirname "$g"; done
+}
+
+is_excluded() {
+  local dir="$1/" p
+  for p in ${EXCLUDE_PREFIXES[@]+"${EXCLUDE_PREFIXES[@]}"}; do
+    case "$dir" in "$p"*) return 0 ;; esac
+  done
+  return 1
+}
+
+repo_label() {
+  # A stable, topology-free name for a metric label: the repo name from any
+  # remote URL. Basenames of checkouts are agent names under a *-wt/ tree and
+  # would collide across repos.
+  local url
+  url="$(git -C "$1" config --get-regexp '^remote\..*\.url$' 2>/dev/null | awk 'NR==1{print $2}')"
+  [ -n "$url" ] || { printf 'unknown'; return; }
+  url="${url%.git}"
+  printf '%s' "${url##*[/:]}" | tr -c 'A-Za-z0-9_.-' '_'
+}
+
+emit_metrics() {
+  # Prometheus textfile. ABSOLUTE counts by design — see the header. Written
+  # atomically; a non-writable directory is a note, never a failed sweep.
+  local out="${SCRUB_GUARD_TEXTFILE:-/var/lib/node_exporter/textfile/scrub_guard.prom}"
+  local dir tmp
+  dir="$(dirname "$out")"
+  [ -d "$dir" ] && [ -w "$dir" ] || { echo "  note: $out not writable — coverage not published"; return 0; }
+  tmp="$(mktemp)" || return 0
+  {
+    echo "# HELP scrub_guard_repos_total Distinct public-remote repos the sweep discovered."
+    echo "# TYPE scrub_guard_repos_total gauge"
+    echo "scrub_guard_repos_total $repos"
+    echo "# HELP scrub_guard_armed_total Discovered public repos whose pre-push hook is the current guard."
+    echo "# TYPE scrub_guard_armed_total gauge"
+    echo "scrub_guard_armed_total $armed"
+    echo "# HELP scrub_guard_missing_total Discovered public repos with NO current guard. Alert on > 0."
+    echo "# TYPE scrub_guard_missing_total gauge"
+    echo "scrub_guard_missing_total $unarmed"
+    echo "# HELP scrub_guard_excluded_total Checkouts skipped by a NAMED third-party exclusion, not by blindness."
+    echo "# TYPE scrub_guard_excluded_total gauge"
+    echo "scrub_guard_excluded_total $excluded"
+    echo "# HELP scrub_guard_internal_skipped_total Repos with no remote outside the internal forge."
+    echo "# TYPE scrub_guard_internal_skipped_total gauge"
+    echo "scrub_guard_internal_skipped_total $skipped"
+    echo "# HELP scrub_guard_checkouts_scanned_total Working trees walked, including several sharing one repo."
+    echo "# TYPE scrub_guard_checkouts_scanned_total gauge"
+    echo "scrub_guard_checkouts_scanned_total $checkouts"
+    echo "# HELP scrub_guard_source_current 1 if the neutral guard source matches the reviewed source."
+    echo "# TYPE scrub_guard_source_current gauge"
+    echo "scrub_guard_source_current $source_current"
+    echo "# HELP scrub_guard_last_run_timestamp_seconds Unix time of the last completed sweep."
+    echo "# TYPE scrub_guard_last_run_timestamp_seconds gauge"
+    echo "scrub_guard_last_run_timestamp_seconds $(date +%s)"
+    # COUNT per repo name, not one series per repo. Several distinct checkouts
+    # legitimately share a repo NAME (four independent hank clones, two
+    # desire-path, two tapestry), and node_exporter DISCARDS THE WHOLE FILE on a
+    # duplicate series — so the naive one-line-per-repo form would have silenced
+    # every metric here at exactly the moment it had something to report.
+    # Measured on the first real run: 18 unarmed collapsed to 12 names, 6 dupes.
+    echo "# HELP scrub_guard_repo_unarmed Public repos of this name left without a current guard."
+    echo "# TYPE scrub_guard_repo_unarmed gauge"
+    printf '%s\n' ${unarmed_labels[@]+"${unarmed_labels[@]}"} \
+      | sort | uniq -c \
+      | while read -r n r; do [ -n "$r" ] && echo "scrub_guard_repo_unarmed{repo=\"$r\"} $n"; done
+  } > "$tmp"
+  chmod 0644 "$tmp" 2>/dev/null
+  mv -f "$tmp" "$out" 2>/dev/null || { rm -f "$tmp"; echo "  note: could not publish $out"; return 0; }
+  echo "  coverage published: $out"
+}
+
 arm_one() {
   local dir="$1" hook
   hook="$(hook_path "$dir")" || return 1
@@ -99,6 +210,8 @@ is_armed() {
 
 if [ "${1:-}" = "--selftest" ]; then
   tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+  export SCRUB_GUARD_TEXTFILE="$tmp/metrics/scrub_guard.prom"
+  mkdir -p "$tmp/metrics"
   SOURCE_DIR="$tmp/neutral-source"
   LIVE_GUARD="$SOURCE_DIR/pre-push-scrub-guard.sh"
   re='forge\.invalid'
@@ -162,18 +275,105 @@ if [ "${1:-}" = "--selftest" ]; then
   else
     echo "FAIL a repo outside the first root was not discovered"; fail=1
   fi
-  if printf '%s' "$sweep" | grep -qE 'repos seen: [1-9]'; then
-    echo "ok   sweep reports a nonzero repos-seen (a scan of nothing cannot pass)"
+  if printf '%s' "$sweep" | grep -qE 'public: [1-9]'; then
+    echo "ok   sweep reports a nonzero public-repo count (a scan of nothing cannot pass)"
   else
-    echo "FAIL sweep did not report repos seen"; fail=1
+    echo "FAIL sweep did not report a public-repo count"; fail=1
   fi
-  # And the DEFAULTS must name ~/workspace, or the fix is a flag nobody passes
-  # rather than a behaviour change. Checked against the source text because
-  # DEFAULT_ROOTS is not yet assigned this early in the script.
-  if grep -q '^DEFAULT_ROOTS=(.*workspace' "$SELF/install-scrub-guard.sh"; then
-    echo "ok   default roots include ~/workspace"
+  # The DEFAULT must be $HOME, or the fix is a flag nobody passes rather than a
+  # behaviour change — and $HOME is what subsumes ~/gt, ~/workspace and ~/src,
+  # the three roots aegis-v7joru had to name one at a time. Checked against the
+  # source text because DEFAULT_ROOTS is not assigned this early in the script.
+  if grep -q '^DEFAULT_ROOTS=("\$HOME")$' "$SELF/install-scrub-guard.sh"; then
+    echo "ok   default root is \$HOME (subsumes gt / workspace / src)"
   else
-    echo "FAIL default roots do not include ~/workspace"; fail=1
+    echo "FAIL default root is not \$HOME"; fail=1
+  fi
+
+  # ── DEPTH: A REPO WHOSE ONLY CHECKOUT IS A WORKTREE (aegis-yi7o93) ─────────
+  # THE regression. Every arm above, and every discovery assertion above, uses a
+  # repo sitting one level under its root — which is why a one-level glob passed
+  # this selftest for weeks while five public camayoc checkouts and one
+  # desire-path checkout were invisible to the real sweep. The fixture is the
+  # real shape: the repository lives OUTSIDE the swept root and the only thing
+  # inside it is a linked worktree two levels down, whose .git is a FILE.
+  mkdir -p "$tmp/outside" "$tmp/wtroot"
+  git init -q "$tmp/outside/proj"
+  git -C "$tmp/outside/proj" remote add origin https://example.com/proj.git
+  git -C "$tmp/outside/proj" -c user.email=s@t -c user.name=s commit -q --allow-empty -m seed
+  git -C "$tmp/outside/proj" worktree add -q -b wt/agentx "$tmp/wtroot/proj-wt/agentx" 2>/dev/null
+
+  # NEGATIVE CONTROL: prove the fixture actually reproduces the bug. If a .git
+  # existed one level under the root, the old glob would have found it and this
+  # test would pass for the wrong reason.
+  if [ -e "$tmp/wtroot/proj-wt/.git" ]; then
+    echo "FAIL fixture does not reproduce the depth bug (a depth-1 .git exists)"; fail=1
+  else
+    echo "ok   fixture has no depth-1 .git (the old glob would find nothing here)"
+  fi
+
+  "$SELF/install-scrub-guard.sh" --root "$tmp/wtroot" >/dev/null 2>&1
+  common="$(git -C "$tmp/wtroot/proj-wt/agentx" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"
+  if [ -L "$common/hooks/pre-push" ]; then
+    echo "ok   worktree-only repo two levels deep is DISCOVERED and armed"
+  else
+    echo "FAIL worktree-only repo two levels deep was not armed"; fail=1
+  fi
+
+  # ── THE COVERAGE METRIC ───────────────────────────────────────────────────
+  # It must exist, and it must carry ABSOLUTE counts. A ratio would have read
+  # 32/32 = 100% while those six repos were invisible.
+  m="$SCRUB_GUARD_TEXTFILE"
+  if [ -s "$m" ] && grep -q '^scrub_guard_missing_total ' "$m" \
+     && grep -q '^scrub_guard_repos_total ' "$m" \
+     && grep -q '^scrub_guard_excluded_total ' "$m"; then
+    echo "ok   coverage metric published with absolute counts"
+  else
+    echo "FAIL coverage metric missing or incomplete"; fail=1
+  fi
+  if grep -qE '^scrub_guard_repos_total [1-9]' "$m"; then
+    echo "ok   the worktree-only repo is IN the denominator"
+  else
+    echo "FAIL the worktree-only repo is not counted in scrub_guard_repos_total"; fail=1
+  fi
+
+  # NO DUPLICATE SERIES, EVER. node_exporter discards an entire textfile that
+  # contains one, so a duplicate would blank every metric above at precisely the
+  # moment the sweep had something to report — the metric would fail in the same
+  # reassuring direction as the sweep it exists to watch. Measured on the first
+  # real host run: 18 unarmed repos collapsed to 12 distinct names, 6 duplicates.
+  dupes=$(grep -v '^#' "$m" | awk '{print $1}' | sort | uniq -d)
+  if [ -z "$dupes" ]; then
+    echo "ok   metric file has no duplicate series"
+  else
+    echo "FAIL duplicate series would make node_exporter drop the file: $dupes"; fail=1
+  fi
+
+  # A DENOMINATOR OF ZERO MUST BE PUBLISHED AS ZERO, NOT OMITTED. This is the
+  # whole point of the metric: an absent series is invisible in Prometheus,
+  # whereas scrub_guard_repos_total dropping to 0 — or from 84 to 30 — is the
+  # alertable event that a tree has gone out of the sweep's sight. A metric that
+  # only appears when there is something to report cannot report disappearance.
+  mkdir -p "$tmp/emptyroot"
+  "$SELF/install-scrub-guard.sh" --root "$tmp/emptyroot" >/dev/null 2>&1
+  if grep -q '^scrub_guard_repos_total 0$' "$m"; then
+    echo "ok   an empty sweep publishes repos_total 0 (disappearance is visible)"
+  else
+    echo "FAIL an empty sweep did not publish a zero denominator"; fail=1
+  fi
+
+  # ── NAMED EXCLUSIONS ARE COUNTED, NEVER SILENTLY DROPPED ──────────────────
+  # An uncounted skip is the defect this whole file is about, one layer down.
+  EXCLUDE_PREFIXES=("$tmp/vendorland/")
+  if is_excluded "$tmp/vendorland/plugin" && ! is_excluded "$tmp/outside/proj"; then
+    echo "ok   exclusion matches its prefix and nothing else"
+  else
+    echo "FAIL exclusion prefix matching is wrong"; fail=1
+  fi
+  if printf '%s' "$sweep" | grep -q 'third-party excluded:'; then
+    echo "ok   the summary states the excluded count and the prefixes"
+  else
+    echo "FAIL the summary does not report exclusions"; fail=1
   fi
 
   [ "$fail" -eq 0 ] && echo "selftest PASSED" || echo "selftest FAILED"
@@ -209,7 +409,14 @@ fi
 # location-dependence described above: run from a worktree it appends a tree of
 # worktrees, so the sweep's scope would again depend on which copy you invoked.
 # The list is de-duplicated by real path.
-DEFAULT_ROOTS=("${GT_ROOT:-$HOME/gt}" "$HOME/workspace" "$HOME/src")
+# ONE ROOT, AND IT IS $HOME (aegis-yi7o93). The previous list — ~/gt, ~/workspace,
+# ~/src — was itself the second attempt at naming the right places, and it was
+# wrong again: it named the right TREES and still missed six public checkouts,
+# because the miss was in DEPTH, not in breadth. Naming a fourth root would fix
+# the six we happened to stumble into and nothing else. $HOME plus an unbounded
+# depth is the only scope a new checkout cannot appear outside of without leaving
+# the account. Measured: the full walk costs ~0.3s and finds ~300 checkouts.
+DEFAULT_ROOTS=("$HOME")
 FALLBACK_ROOT="$(dirname "$(dirname "$SELF")")"
 ROOTS=()
 CHECK=0
@@ -260,37 +467,59 @@ else
   source_current=1
 fi
 
-unarmed=0 armed=0 skipped=0 seen=0
+unarmed=0 armed=0 skipped=0 repos=0 checkouts=0 excluded=0
+unarmed_labels=()
+declare -A SEEN_COMMON=()
+
 for ROOT in "${ROOTS[@]}"; do
   printf "  [%s]\n" "$ROOT"
-  for gitdir in "$ROOT"/*/.git; do
-    [ -e "$gitdir" ] || continue
-    seen=$((seen+1))
-    dir="$(dirname "$gitdir")"
-    name="$(basename "$dir")"
+  while IFS= read -r dir; do
+    [ -n "$dir" ] || continue
+    checkouts=$((checkouts+1))
+    if is_excluded "$dir"; then
+      excluded=$((excluded+1)); continue
+    fi
+    # DEDUPE BY REPOSITORY, NOT BY CHECKOUT. Linked worktrees share one hooks
+    # directory, so arming any one of them arms all — but the repo must still be
+    # FOUND, and a repo whose only checkout is a worktree is found only here.
+    common="$(git -C "$dir" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || continue
+    [ -n "${SEEN_COMMON[$common]:-}" ] && continue
+    SEEN_COMMON[$common]=1
+
     if ! is_public "$dir" "$RE"; then
       skipped=$((skipped+1)); continue
     fi
+    repos=$((repos+1))
+    name="${dir#$HOME/}"
     if [ "$source_current" -eq 1 ] && is_armed "$dir"; then
       printf "  armed    %s\n" "$name"; armed=$((armed+1)); continue
     fi
     if [ "$CHECK" -eq 1 ]; then
-      printf "  UNARMED  %s\n" "$name"; unarmed=$((unarmed+1))
+      printf "  UNARMED  %s\n" "$name"
+      unarmed=$((unarmed+1)); unarmed_labels+=("$(repo_label "$dir")")
+    elif arm_one "$dir"; then
+      printf "  armed    %s (installed)\n" "$name"; armed=$((armed+1))
     else
-      arm_one "$dir" && printf "  armed    %s (installed)\n" "$name" && armed=$((armed+1))
+      printf "  UNARMED  %s (arm FAILED)\n" "$name"
+      unarmed=$((unarmed+1)); unarmed_labels+=("$(repo_label "$dir")")
     fi
-  done
+  done < <(find_checkouts "$ROOT")
 done
 
 echo
-# Name the roots in the summary. The old summary reported a count with no scope,
-# so "16 armed, 0 unarmed" read as "the host is covered" when it meant "one tree
-# is covered" — a number that cannot state what it did not look at.
-echo "  roots swept: ${ROOTS[*]}"
-echo "  repos seen: $seen"
-echo "  public armed: $armed   unarmed: $unarmed   internal/none skipped: $skipped"
+# Name the roots AND the depth in the summary. A count with no scope is what
+# made "16 armed, 0 unarmed" read as "the host is covered" (aegis-v7joru) and
+# "51 seen, 0 unarmed" read the same way while six public repos were invisible
+# (aegis-yi7o93). Both numbers were true; neither could state what it did not
+# look at. Print the denominator's provenance next to the denominator.
+echo "  roots swept: ${ROOTS[*]} (any depth)"
+echo "  checkouts scanned: $checkouts   third-party excluded: $excluded (${EXCLUDE_PREFIXES[*]})"
+echo "  distinct repos: $((repos + skipped))   public: $repos   internal/none: $skipped"
+echo "  public armed: $armed   unarmed: $unarmed"
+emit_metrics
 if [ "$CHECK" -eq 1 ] && { [ "$unarmed" -gt 0 ] || [ "$source_current" -eq 0 ]; }; then
   echo "  run without --check to arm them." >&2
   exit 1
 fi
+[ "$unarmed" -eq 0 ] || exit 1
 exit 0
