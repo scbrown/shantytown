@@ -22,6 +22,7 @@ into the harness.
 from __future__ import annotations
 import os
 import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
 import sys
 import time
@@ -633,15 +634,51 @@ class Tmux:
         from . import panemem
         pid = self.pane_pid(name)
         if pid is None:
+            self._panemem_note(name, "-", "no pane pid — memory ceiling NOT applied")
             print(f"  ⚠ {name}: no pane pid — memory ceiling NOT applied",
                   file=sys.stderr)
             return
         applied = panemem.bound_pane(pid)
+        # EVERY OUTCOME IS RECORDED, applied as well as refused. The stderr line
+        # below is the operator's; this is the one that survives them.
+        self._panemem_note(name, applied.scope or "-",
+                           ("applied " if applied else "REFUSED ") + (applied.reason or ""))
         if not applied:
             if applied.reason.startswith("disabled"):
                 return          # switched off on purpose; not a warning
             print(f"  ⚠ {name}: memory ceiling NOT applied — {applied.reason}",
                   file=sys.stderr)
+
+    @staticmethod
+    def _panemem_note(name: str, scope: str, verdict: str) -> None:
+        """Append one line about this pane's memory ceiling. Never raises.
+
+        WHY A FILE AND NOT JUST stderr (aegis-0j0n1n). The refusal above goes to
+        the stream of whoever ran the launch. When that is `st tend` under
+        systemd it reaches the journal and can be read later; when an operator
+        types `st new <agent>` in a pane — which is how a codex agent with a
+        stale startup lock gets repaired — it lands in that pane's scrollback and
+        is gone with it.
+
+        MEASURED: of six live crew panes, one carries a ceiling. Two of the five
+        unbound have a journalled reason; the other three, including one launched
+        at 01:22 today, have none at all, because they were relaunched by hand.
+        So the question "why is this pane unbound" has been unanswerable for the
+        majority of cases, and I have twice reasoned from the two visible ones to
+        a conclusion about all five — wrongly both times.
+
+        The pane this warns into is also the one most likely to die, which is the
+        argument for writing it somewhere that outlives the pane.
+        """
+        try:
+            path = Path(os.environ.get("SHANTY_PANEMEM_LOG")
+                        or Path.home() / ".local/log/panemem.log")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            with path.open("a") as fh:
+                fh.write(f"{stamp} pane={name} scope={scope} {verdict}\n")
+        except Exception:
+            pass                # a launch must never fail because a log could not be written
 
     def pane_pid(self, name: str) -> str | None:
         """The pid of the pane's shell, or None when it cannot be read."""
