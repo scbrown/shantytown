@@ -142,12 +142,29 @@ repo_label() {
 }
 
 emit_metrics() {
-  # Prometheus textfile. ABSOLUTE counts by design — see the header. Written
-  # atomically; a non-writable directory is a note, never a failed sweep.
+  # Prometheus textfile. ABSOLUTE counts by design — see the header.
+  #
+  # TWO PUBLISH PATHS, AND THE SECOND ONE IS NOT OPTIONAL (sattler, 2026-09-05).
+  # The first version gated on `[ -w "$dir" ]` alone. On this host the textfile
+  # directory is root-owned and NOT writable while the .prom file inside it is
+  # braino-owned and IS — the established shape, because collectors render to
+  # /tmp and a `sudo mv` in the crontab does the one privileged step. So a
+  # direct run against the real path found the DIRECTORY unwritable, printed
+  # "not writable — coverage not published", and skipped a file it could have
+  # written. Only runs that went through the render+sudo path published, and a
+  # reader of the log could not tell that from a metric that never publishes at
+  # all — the note said the coverage was absent when the coverage was fine.
+  # That is this bead's own defect wearing a different hat: an instrument
+  # reporting its own inability as the estate's condition.
+  #
+  # Rename first (atomic, needs a writable DIR). Failing that, write in place
+  # when the FILE is writable — one small write of a pre-built buffer, so a
+  # concurrent scrape sees whole content in practice, and node_exporter's own
+  # node_textfile_scrape_error reports it if it ever does not. Only when
+  # NEITHER works is the note true.
   local out="${SCRUB_GUARD_TEXTFILE:-/var/lib/node_exporter/textfile/scrub_guard.prom}"
   local dir tmp
   dir="$(dirname "$out")"
-  [ -d "$dir" ] && [ -w "$dir" ] || { echo "  note: $out not writable — coverage not published"; return 0; }
   tmp="$(mktemp)" || return 0
   {
     echo "# HELP scrub_guard_repos_total Distinct public-remote repos the sweep discovered."
@@ -187,8 +204,15 @@ emit_metrics() {
       | while read -r n r; do [ -n "$r" ] && echo "scrub_guard_repo_unarmed{repo=\"$r\"} $n"; done
   } > "$tmp"
   chmod 0644 "$tmp" 2>/dev/null
-  mv -f "$tmp" "$out" 2>/dev/null || { rm -f "$tmp"; echo "  note: could not publish $out"; return 0; }
-  echo "  coverage published: $out"
+  if [ -d "$dir" ] && [ -w "$dir" ] && mv -f "$tmp" "$out" 2>/dev/null; then
+    echo "  coverage published: $out"
+  elif [ -f "$out" ] && [ -w "$out" ] && cat "$tmp" > "$out" 2>/dev/null; then
+    rm -f "$tmp"
+    echo "  coverage published in place (directory read-only, file writable): $out"
+  else
+    rm -f "$tmp"
+    echo "  note: $out not writable — coverage not published"
+  fi
 }
 
 arm_one() {
@@ -360,6 +384,41 @@ if [ "${1:-}" = "--selftest" ]; then
     echo "ok   an empty sweep publishes repos_total 0 (disappearance is visible)"
   else
     echo "FAIL an empty sweep did not publish a zero denominator"; fail=1
+  fi
+
+  # ── PUBLISHING INTO A ROOT-OWNED DIRECTORY (sattler, 2026-09-05) ──────────
+  # The real textfile directory is root-owned and NOT writable; the .prom file
+  # inside it is braino-owned and IS. The first gate tested the directory only,
+  # so a direct run printed "not writable — coverage not published" over a file
+  # it could have written, and every metric assertion above still PASSED —
+  # because they all run against a tmp dir the selftest itself created writable.
+  # A test that only ever exercises the easy permission shape cannot see this.
+  mkdir -p "$tmp/rodir"
+  : > "$tmp/rodir/scrub_guard.prom"
+  chmod 0644 "$tmp/rodir/scrub_guard.prom"
+  chmod a-w "$tmp/rodir"
+  out=$(SCRUB_GUARD_TEXTFILE="$tmp/rodir/scrub_guard.prom" \
+        "$SELF/install-scrub-guard.sh" --root "$tmp/emptyroot" 2>&1)
+  chmod u+w "$tmp/rodir"
+  if grep -q '^scrub_guard_repos_total ' "$tmp/rodir/scrub_guard.prom" 2>/dev/null; then
+    echo "ok   publishes into an existing writable file inside a read-only dir"
+  else
+    echo "FAIL a writable target file inside a read-only dir was not published"; fail=1
+  fi
+  if printf '%s' "$out" | grep -q 'coverage not published'; then
+    echo "FAIL claimed 'coverage not published' about a file it could write"; fail=1
+  else
+    echo "ok   does not claim 'not published' about a file it can write"
+  fi
+  # And the note must still be TRUE when neither path works.
+  mkdir -p "$tmp/nodir"; chmod a-w "$tmp/nodir"
+  out=$(SCRUB_GUARD_TEXTFILE="$tmp/nodir/absent.prom" \
+        "$SELF/install-scrub-guard.sh" --root "$tmp/emptyroot" 2>&1)
+  chmod u+w "$tmp/nodir"
+  if printf '%s' "$out" | grep -q 'coverage not published'; then
+    echo "ok   the note is still emitted when nothing is writable"
+  else
+    echo "FAIL a genuinely unwritable target was reported as published"; fail=1
   fi
 
   # ── NAMED EXCLUSIONS ARE COUNTED, NEVER SILENTLY DROPPED ──────────────────
