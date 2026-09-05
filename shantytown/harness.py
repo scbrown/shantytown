@@ -158,7 +158,7 @@ class Harness(Protocol):
         are two different questions and a harness may answer them differently."""
         ...
 
-    def render(self, settings: dict, existing: str = "") -> str:
+    def render(self, settings: dict, existing: str = "", root=None) -> str:
         """The BYTES to write, given what is already on disk.
 
         Serialization AND merge together, because they are one decision: st owns
@@ -469,7 +469,7 @@ class ClaudeHarness:
         # nowhere to land.
         return f"agent-{agent}.settings.json"
 
-    def render(self, settings: dict, existing: str = "") -> str:
+    def render(self, settings: dict, existing: str = "", root=None) -> str:
         # indent=2, sort_keys=True and NO trailing newline: the bytes nine live
         # agents' hook files are already written in. This moved here from
         # cli._emit_role_settings unchanged, and changing it would rewrite every
@@ -1055,8 +1055,8 @@ class CodexHarness:
     def agent_settings_name(self, agent: str) -> str:
         return f"codex/agent-{agent}/{codex_mod().CONFIG_FILE}"
 
-    def render(self, settings: dict, existing: str = "") -> str:
-        return codex_mod().render(settings, existing)
+    def render(self, settings: dict, existing: str = "", root=None) -> str:
+        return codex_mod().render(settings, existing, root)
 
     def read_stop_directions(self, text: str) -> "set[str] | None":
         return codex_mod().stop_directions(text)

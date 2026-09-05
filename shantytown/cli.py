@@ -3262,7 +3262,7 @@ def _emit_role_settings(root: Path, roles: set[str],
         # merge AND the serialization are the harness's render() — one call,
         # because they are one decision and this emitter must not learn a second
         # file format to keep the rule.
-        p.write_text(program.render(emitted, _read_text(p)))
+        p.write_text(program.render(emitted, _read_text(p), root=root))
         written.append(p)
     return written
 

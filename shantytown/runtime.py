@@ -654,6 +654,48 @@ def bash_guard_command(root=None) -> str | None:
     return deployment_default(root, "SHANTY_BASH_GUARD")
 
 
+def codex_mcp_approve_servers(root=None) -> list[str]:
+    """MCP servers whose tools a codex worker may call WITHOUT approval.
+
+    THE DEFECT (aegis-h3zyq0). st launches codex workers with
+    `approval_policy = never`, and codex judges an MCP tool as
+    approval-requiring from its ANNOTATIONS:
+
+        codex-rs/core/src/mcp_tool_call.rs:2335   destructive_hint.unwrap_or(true)
+                                                  || open_world_hint.unwrap_or(true)
+
+    Our MCP servers ship no annotations, so under the default `Auto` mode both
+    hints default to TRUE and EVERY unannotated tool — read or write — is judged
+    to need approval, which under `never` is a flat refusal:
+
+        Error: MCP tool call requires approval, but approval policy is never
+
+    It was never about writes as such. It is about missing annotations, and it
+    cost a P1 session: an agent read the refusal as a revoked permission and
+    stopped, which is the correct response to the wrong diagnosis.
+
+    Resolution order (mcp_tool_call.rs:1205-1213):
+        mcp_servers.<server>.tools.<tool>.approval_mode
+          .or(mcp_servers.<server>.default_tools_approval_mode)
+          .unwrap_or_default()                       # Auto
+
+    So naming a server here sets `default_tools_approval_mode = "approve"` on it.
+
+    A DEPLOYMENT'S LIST, NOT SHANTYTOWN'S — same contract as SHANTY_BASH_GUARD
+    above, and for the same reason: which servers a deployment trusts its agents
+    to call unattended is a property of that deployment, not of this tool.
+    Absent, nothing is emitted and every worker keeps today's behaviour.
+
+    `writes` is NOT offered as a value here and that is deliberate: it means
+    `!read_only_hint.unwrap_or(false)`, so with no annotations it still judges
+    everything approval-requiring and would look like a working narrowing while
+    changing nothing. The real narrowing is annotations on the servers
+    themselves (aegis-n549ii); this key is the interim that unblocks workers.
+    """
+    raw = deployment_default(root, "SHANTY_CODEX_MCP_APPROVE") or ""
+    return [s for s in re.split(r"[,\s]+", raw.strip()) if s]
+
+
 def mcp_guard_command(root=None) -> str | None:
     """The deployment's PreToolUse MCP guard command, or None for none.
 

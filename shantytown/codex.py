@@ -224,7 +224,36 @@ def settings_for_role(role: str, root=None) -> dict:
     }
 
 
-def render(settings: dict, existing: str = "") -> str:
+def _apply_mcp_approval(config: dict, root=None) -> dict:
+    """Set `default_tools_approval_mode = "approve"` on the deployment's servers.
+
+    APPLIED HERE, AFTER THE MERGE, AND NOT EMITTED AS SETTINGS — because
+    `merge_one_level` is one level deep and `mcp_servers` is two. Emitting
+    `{"mcp_servers": {"homelab": {"default_tools_approval_mode": ...}}}` would
+    make the merge replace homelab's WHOLE sub-table, destroying its `command`
+    and `args`: every codex worker would lose the server it was being granted
+    access to, and the config would still parse. So the key is written into the
+    already-merged table, preserving whatever is there.
+
+    A SERVER THAT IS NOT IN THE CONFIG IS SKIPPED, not created. An approval mode
+    for a server nobody defined configures nothing and would read, in the file,
+    as though that server existed.
+    """
+    from .runtime import codex_mcp_approve_servers
+    names = codex_mcp_approve_servers(root)
+    if not names:
+        return config
+    servers = config.get("mcp_servers")
+    if not isinstance(servers, dict):
+        return config
+    for name in names:
+        entry = servers.get(name)
+        if isinstance(entry, dict):
+            entry["default_tools_approval_mode"] = "approve"
+    return config
+
+
+def render(settings: dict, existing: str = "", root=None) -> str:
     """The bytes to write, merging what the operator already had.
 
     SAME MERGE RULE AS CLAUDE'S (harness.merge_one_level): st replaces the hook
@@ -247,7 +276,7 @@ def render(settings: dict, existing: str = "") -> str:
         # and let the emission stand: a config we cannot read is a config we
         # cannot honour, and the alternative is refusing to emit hooks at all.
         current = {}
-    return dumps(merge_one_level(current, settings))
+    return dumps(_apply_mcp_approval(merge_one_level(current, settings), root))
 
 
 def with_workspace_hooks(existing: str, role: str, root=None) -> str:

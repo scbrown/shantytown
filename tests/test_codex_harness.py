@@ -1155,3 +1155,79 @@ def test_the_claude_artifact_is_byte_identical_to_what_it_always_was(tmp_path):
     [path] = cli._emit_role_settings(root, {"lead"})
     assert path.read_text() == json.dumps(
         settings_for_role("lead", root=root), indent=2, sort_keys=True)
+
+
+# ── MCP tool approval for codex workers (aegis-h3zyq0) ───────────────────────
+#
+# st launches codex workers with `approval_policy = never`, and codex decides an
+# MCP tool needs approval from its ANNOTATIONS — mcp_tool_call.rs:2335,
+# `destructive_hint.unwrap_or(true) || open_world_hint.unwrap_or(true)`. Our MCP
+# servers ship none, so under the default Auto mode EVERY tool, read or write, is
+# judged approval-requiring and refused outright. That cost a P1 session: the
+# agent read the refusal as a revoked permission and stopped.
+#
+# These are CLAIMS ABOUT CODEX in the sense of this file's header — the key name
+# and its resolution order are read out of openai/codex main
+# (mcp_tool_call.rs:1205-1213, config/src/mcp_types.rs:24-32) and were proven by
+# delivery on a throwaway CODEX_HOME: with the key absent the documented error
+# reproduces; with `approve` a real MCP write LANDED.
+
+_MCP_EXISTING = """
+[mcp_servers.homelab]
+command = "npx"
+args = ["-y", "homelab-mcp"]
+
+[mcp_servers.playwright]
+command = "npx"
+args = ["-y", "playwright-mcp"]
+"""
+
+
+def _render_mcp(monkeypatch, value):
+    import tomllib
+    from shantytown import codex
+    if value is None:
+        monkeypatch.delenv("SHANTY_CODEX_MCP_APPROVE", raising=False)
+    else:
+        monkeypatch.setenv("SHANTY_CODEX_MCP_APPROVE", value)
+    return tomllib.loads(codex.render({"project_doc_max_bytes": 1}, _MCP_EXISTING))
+
+
+def test_a_named_server_is_pre_approved(monkeypatch):
+    d = _render_mcp(monkeypatch, "homelab bobbin forgejo agent")
+    assert d["mcp_servers"]["homelab"]["default_tools_approval_mode"] == "approve"
+
+
+def test_pre_approval_does_NOT_clobber_the_server_definition(monkeypatch):
+    """THE ARM THAT MATTERS. `merge_one_level` is one level deep and
+    `mcp_servers` is two, so emitting this as settings would replace homelab's
+    whole sub-table — every worker would lose the command for the server it was
+    being granted access to, and the file would still parse."""
+    hl = _render_mcp(monkeypatch, "homelab")["mcp_servers"]["homelab"]
+    assert hl["command"] == "npx"
+    assert hl["args"] == ["-y", "homelab-mcp"]
+
+
+def test_an_unnamed_server_is_left_alone(monkeypatch):
+    """playwright drives a real browser and is deliberately not on the fleet's
+    list; the narrowing has to be visible in the rendered file, not just in the
+    deployment's intent."""
+    pw = _render_mcp(monkeypatch, "homelab bobbin forgejo agent")["mcp_servers"]["playwright"]
+    assert "default_tools_approval_mode" not in pw
+
+
+def test_a_named_server_that_does_not_exist_is_not_invented(monkeypatch):
+    """An approval mode for a server nobody defined configures nothing and would
+    read, in the file, as though that server existed."""
+    assert "bobbin" not in _render_mcp(monkeypatch, "homelab bobbin")["mcp_servers"]
+
+
+def test_unset_emits_nothing_and_changes_nothing(monkeypatch):
+    d = _render_mcp(monkeypatch, None)
+    assert "default_tools_approval_mode" not in d["mcp_servers"]["homelab"]
+    assert d["mcp_servers"]["homelab"]["command"] == "npx"
+
+
+def test_commas_and_spaces_both_separate(monkeypatch):
+    d = _render_mcp(monkeypatch, "homelab,bobbin, forgejo")
+    assert d["mcp_servers"]["homelab"]["default_tools_approval_mode"] == "approve"
