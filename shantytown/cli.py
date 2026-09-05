@@ -3807,7 +3807,14 @@ def _cmd_anchor(a) -> int:
     # plate, and writing "unknown" would erase a plate that is probably still
     # correct. Missing-or-stale already reads as UNKNOWN downstream, so silence
     # here costs nothing and a wrong write would cost a record.
-    plate_publish.publish(Path(a.root), me, p.item)
+    # SESSION-SCOPE THE PLATE (aegis-368cu.7). `st anchor` runs inside the agent's
+    # own session, so stamping it here is honest and lets a reader abstain on a
+    # plate left behind by a session that has since died — the dead-session half
+    # of the staleness window plate.rs documents. `st go` deliberately does NOT
+    # do this: a dispatcher stamping its own session would name the wrong one.
+    plate_publish.publish(
+        Path(a.root), me, p.item, session=plate_publish.own_session()
+    )
     if getattr(a, "short", False):
         # The id, or nothing. An empty plate prints an empty line's worth of
         # NOTHING — not "nothing.", not a dash: the consumer renders the segment

@@ -52,11 +52,31 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import os
 import time
 from pathlib import Path
 from typing import Any
 
-__all__ = ["plate_path", "publish", "publish_id", "read"]
+__all__ = ["plate_path", "publish", "publish_id", "read", "own_session"]
+
+
+def own_session() -> str | None:
+    """This process's harness session id, or None if it is not in one.
+
+    ONLY for a publisher writing its OWN plate. `st anchor` runs inside the
+    agent's session, so this is that agent's session and matches the id the
+    pre-edit hook payload carries — verified 2026-09-05: a live guard record
+    for a real Write carried exactly $CLAUDE_CODE_SESSION_ID.
+
+    A DISPATCHER MUST NOT USE THIS. `st go` writes another agent's plate from
+    the dispatcher's own process, so this would stamp the wrong session onto
+    the recipient's plate and make the reader abstain on every dispatched
+    item — turning a staleness guard into a total attribution outage. That
+    caller keeps writing None, which means "not session-scoped" and is checked
+    only against `at`.
+    """
+    value = os.environ.get("CLAUDE_CODE_SESSION_ID", "").strip()
+    return value or None
 
 
 def plate_path(root: Path | str, agent: str) -> Path:
@@ -167,7 +187,14 @@ def read(
         item = data.get("item")
         if not isinstance(item, str) or not item:
             return None
-        if session is not None and data.get("session") != session:
+        # A NULL stored session means "not session-scoped", NOT "belongs to no
+        # session" — a dispatcher writes it that way because it cannot know the
+        # recipient's session. Rejecting those would make every DISPATCHED plate
+        # unreadable the moment a reader supplies a session, converting a
+        # staleness guard into a total attribution outage. Only a stored session
+        # that DISAGREES is a mismatch.
+        stored = data.get("session")
+        if session is not None and stored is not None and stored != session:
             return None
         if newer_than is not None:
             at = data.get("at")

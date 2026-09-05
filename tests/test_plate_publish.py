@@ -14,7 +14,7 @@ from dataclasses import dataclass
 
 import pytest
 
-from shantytown.plate_publish import plate_path, publish, read
+from shantytown.plate_publish import own_session, plate_path, publish, publish_id, read
 
 
 @dataclass
@@ -167,3 +167,49 @@ def test_the_file_in_the_path_case_is_not_vacuous(tmp_path):
     creatable — otherwise it would pass against a publish that had simply
     stopped working."""
     assert publish(tmp_path, "grant", _Item("aegis-6")) is True
+
+
+# --- session scoping (aegis-368cu.7) -------------------------------------
+#
+# `st anchor` stamps its own session so a reader can abstain on a plate left
+# by a session that has since died. `st go` must NOT: a dispatcher cannot know
+# the recipient's session, so it writes null, meaning "not session-scoped".
+#
+# The load-bearing case is `null stored + reader supplies a session`. Rejecting
+# that would make every DISPATCHED plate unreadable the moment yupana starts
+# passing a session — a staleness guard turned into a total attribution outage.
+# It was the pre-existing behaviour and is what this asserts against.
+
+
+def test_own_session_reads_env(monkeypatch):
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-abc")
+    assert own_session() == "sess-abc"
+
+
+def test_own_session_none_outside_a_harness(monkeypatch):
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+    assert own_session() is None
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "   ")
+    assert own_session() is None, "whitespace is not a session"
+
+
+def test_session_scoped_plate_is_read_by_its_own_session(tmp_path):
+    publish_id(tmp_path, "kelly", "aegis-1", session="sess-abc")
+    assert read(tmp_path, "kelly", session="sess-abc") == "aegis-1"
+
+
+def test_session_scoped_plate_abstains_for_a_different_session(tmp_path):
+    publish_id(tmp_path, "kelly", "aegis-1", session="sess-abc")
+    assert read(tmp_path, "kelly", session="sess-dead") is None
+
+
+def test_dispatcher_plate_is_readable_by_any_session(tmp_path):
+    """The regression this whole change turns on."""
+    publish_id(tmp_path, "kelly", "aegis-2", session=None)
+    assert read(tmp_path, "kelly", session="sess-anything") == "aegis-2"
+    assert read(tmp_path, "kelly") == "aegis-2"
+
+
+def test_session_scoped_plate_readable_when_reader_has_no_session(tmp_path):
+    publish_id(tmp_path, "kelly", "aegis-3", session="sess-abc")
+    assert read(tmp_path, "kelly") == "aegis-3"
