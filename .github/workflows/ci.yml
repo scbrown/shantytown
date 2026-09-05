@@ -121,3 +121,12 @@ jobs:
 
       - name: Suite is order-independent
         run: bash scripts/check-test-order-independence.sh
+
+      # The scrub guard is the only thing standing between a public push and an
+      # internal hostname, and its installer's 22 assertions were executed by
+      # NOTHING until now -- not by CI, not by cron, not by a hook (aegis-n5b1rd).
+      # They were run when a human remembered, which is the same coverage as none
+      # on the day nobody does. Wiring it beside the detector selftest above for
+      # the reason that comment already gives.
+      - name: Scrub-guard installer selftest
+        run: bash scripts/install-scrub-guard.sh --selftest

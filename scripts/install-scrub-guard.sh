@@ -236,6 +236,16 @@ if [ "${1:-}" = "--selftest" ]; then
   tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
   export SCRUB_GUARD_TEXTFILE="$tmp/metrics/scrub_guard.prom"
   mkdir -p "$tmp/metrics"
+  # HERMETIC, OR IT IS NOT A TEST YOU CAN WIRE INTO CI (aegis-n5b1rd).
+  # The in-process arms below pass their own `re`, but every SUB-INVOCATION
+  # re-reads the config from $HOME and REFUSES when internal_host_re is absent —
+  # arming nothing and reporting it politely. So this selftest passed on a
+  # developer box purely because ~/.config/aegis/scrub-patterns.conf happened to
+  # exist there, and failed three assertions under `env -i` with a clean HOME.
+  # Measured before wiring it into CI, which is the only reason it was found:
+  # the whole point of adding it to CI is that it runs somewhere I do not control.
+  printf 'internal_host_re=forge\.invalid\n' > "$tmp/scrub-patterns.conf"
+  export SCRUB_PATTERNS_FILE="$tmp/scrub-patterns.conf"
   SOURCE_DIR="$tmp/neutral-source"
   LIVE_GUARD="$SOURCE_DIR/pre-push-scrub-guard.sh"
   re='forge\.invalid'
