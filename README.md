@@ -24,7 +24,7 @@
 *Create a work item. Tell an agent to go get it. That's the whole idea.*
 
 [![dispatch 3.4s](https://img.shields.io/badge/dispatch-3.4s-brightgreen)](#-measured-against-gas-town)
-[![30 commands](https://img.shields.io/badge/commands-30-blue)](#-the-whole-surface)
+[![31 commands](https://img.shields.io/badge/commands-31-blue)](#-the-whole-surface)
 [![tests](https://img.shields.io/badge/tests-2670%20passing-blue)](#-principles)
 [![python](https://img.shields.io/badge/python-3.11%2B-blue)](#-install)
 [![dependencies none](https://img.shields.io/badge/dependencies-none-blue)](#-install)
@@ -197,7 +197,7 @@ stop.* Here is what the gate measured.
 
 | | `gt sling` | `st go` | |
 |---|---:|---:|---|
-| Commands | ~110 | **30** | *a small, deliberate fraction of the surface, by measured use* |
+| Commands | ~110 | **31** | *a small, deliberate fraction of the surface, by measured use* |
 | dispatch (dry-run) | 51.54 s | **0.15 s** | **~344× faster** |
 | dispatch (real) | > 120 s ⏱️ | **3.40 s** | **≥35× faster** |
 | Dolt connections | 63 | **3** | **21× fewer** |
@@ -301,6 +301,8 @@ st answer <agent> <N>             select option N. refuses unless a picker is re
 st roles [--check|set|sync]       the hierarchy: show it, verify it, write it, import it
 st init                           scaffold a NEW deployment: asks, then writes store+cards+config
 st new <agent>                    create an agent from a card
+st harness <agent> [claude|codex] convert one agent to another harness. Prints the card's
+                                  harness when the target is omitted
 st start [--mode lite|heavy]      BOOT the town: the admin alone, or every card. idempotent.
 st stop <agent>                   stop it
 st window plan <id>               snapshot + acquire one maintenance transaction

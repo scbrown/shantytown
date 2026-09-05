@@ -1,13 +1,20 @@
-"""st — the CLI. Thirty commands, and the count is load-bearing: each earns its slot.
+"""st — the CLI. Thirty-one commands, and the count is load-bearing: each earns its slot.
 
     anchor [--short|--events|--harness] · go · repool · defer · inbox [--count] · task
     · crew [--count|--governor] · input [--show|--clear|--dismiss] · ask · answer
-    · roles [--check|set|band|sync] · init · new · start [--mode]
+    · roles [--check|set|band|sync] · init · new · harness · start [--mode]
     · stop · log · context · doctor [--install] · dream [--run]
     · tend [--install|--status|--reauth|--target] · attach [-r|--no-start]
     · dashboard [admin] · subscribe · cycle [--self|--allow-loss] · worktree [--gc]
     · push [--branch] · window {plan|drain|clear|release|abort} · stats · help <topic>
     · history <agent>
+
+`harness <agent> [claude|codex]` earned the thirty-first slot (aegis-6glmer, Stiwi
+2026-09-04: "it should be easy for you to convert crew to claude"). It is a command
+and not a flag on `new` because it is a WRITE to identity that `new` does not do —
+`new` launches what the card says, this decides what the card says — and because the
+alternative it replaces was five hand edits of `.shanty/crew/<agent>.json` in one
+evening, one of them reverted and one briefly wrong.
 
 `help` earned the twenty-eighth slot in aegis-x6yoq. The recurring pane messages
 were essays because the WHY had nowhere else to live, so every reason anyone might
@@ -865,6 +872,23 @@ def build_parser() -> argparse.ArgumentParser:
     nw.add_argument("agent")
     nw.add_argument("-n", "--dry-run", action="store_true")
 
+    hz = sub.add_parser(
+        "harness",
+        help="convert an agent to another harness (claude|codex), one command")
+    hz.add_argument("agent")
+    hz.add_argument("target", nargs="?", default=None,
+                    help="claude | codex. Omitted: report what this card runs")
+    hz.add_argument("--model", default=None,
+                    help="also set the model this agent runs")
+    hz.add_argument("--now", action="store_true",
+                    help="relaunch immediately. Default: the card takes effect "
+                         "at the agent's next relaunch, so a working session is "
+                         "never restarted out from under it")
+    hz.add_argument("--force", action="store_true",
+                    help="override a role pin or a held target lane. Logged, and "
+                         "the refusal it overrides is printed anyway")
+    hz.add_argument("-n", "--dry-run", action="store_true")
+
     it = sub.add_parser("init",
                         help="scaffold a NEW deployment: asks a few questions, "
                              "then writes the store, the crew cards, their hooks "
@@ -1366,6 +1390,8 @@ def main(argv: list[str] | None = None) -> int:
         return stats_mod.stats_report(a.root, a.agent, since_h=a.since)
     if a.cmd == "new":
         return _cmd_new(a)
+    if a.cmd == "harness":
+        return _cmd_harness(a)
     if a.cmd == "init":
         return _cmd_init(a)
     if a.cmd == "start":
@@ -1719,6 +1745,130 @@ def _cmd_new(a) -> int:
         return REFUSED
     runtime = _runtime(a, panes)
     return _launch(a, card, panes, runtime, dry_run=a.dry_run)
+
+
+def _harness_lane_held(a, cfg, target: str) -> bool:
+    """Is the governor for `target` restricting right now?
+
+    A PURE READ (`persist=False`), like `st crew --governor`: merely asking
+    whether a conversion is advisable must not extend a hysteresis hold. A lane
+    we cannot evaluate reports False and the refusal never fires — the gate is
+    an advisory courtesy, and a blind governor must not become a way to block
+    every conversion on the host.
+    """
+    try:
+        _cfg, governors = _governors(a)
+        gov = governors.get(target)
+        if gov is None:
+            return False
+        verdict = gov.evaluate(persist=False)
+        return bool(verdict.held) and not verdict.signal_lost
+    except Exception:
+        return False
+
+
+def _cmd_harness(a) -> int:
+    """`st harness <agent> [claude|codex]` — convert one agent, in one command.
+
+    Replaces the five hand edits of `.shanty/crew/<agent>.json` that produced
+    this bead (one of them reverted, one briefly wrong). The conversion IS the
+    card — `harness.name_for` reads it at launch — so this writes the card, takes
+    a `.bak`, and tells the operator WHEN it becomes true of the running agent.
+
+    It does not restart by default. A verb that silently restarts a working
+    session is the more dangerous default, and the operator asking for a
+    conversion usually wants the next cycle rather than an interruption now.
+    """
+    from . import harness_switch
+    try:
+        card = _registry(a).get(a.agent)
+    except LookupError as e:
+        print(f"  refused: {e}", file=sys.stderr)
+        return REFUSED
+
+    current = harness_mod.name_for(card, root=a.root)
+    if not a.target:
+        # The read-only form. Reports the RESOLVED harness, which may come from a
+        # deployment rule rather than the card, and says which.
+        source = "card" if card.harness else "deployment default"
+        print(f"{a.agent}: {current} (from the {source})")
+        return OK
+
+    cfg, _err = config.load_or_default(a.root)
+    plan = harness_switch.plan_switch(
+        agent=a.agent, current=current, target=a.target, role=card.role,
+        required_by_role=cfg.harness_required_by_role,
+        known=tuple(h.name for h in harness_mod.all_harnesses()),
+        model=a.model,
+        current_model=card.model,
+        lane_held=_harness_lane_held(a, cfg, a.target),
+        restart_now=a.now, force=a.force)
+
+    if isinstance(plan, harness_switch.Refusal):
+        print(f"  refused: {plan.reason}", file=sys.stderr)
+        if plan.remedy:
+            print(f"           {plan.remedy}", file=sys.stderr)
+        return REFUSED
+    if isinstance(plan, harness_switch.NoChange):
+        print(f"{a.agent}: already {plan.harness} — nothing to do")
+        return OK
+
+    for note in plan.warnings:
+        print(f"  ⚠ {note}", file=sys.stderr)
+    if a.dry_run:
+        print(f"would convert {a.agent}: {plan.from_harness} -> "
+              f"{plan.to_harness}"
+              + (f", model {plan.model}" if plan.model else ""))
+        return OK
+
+    # BACK UP THE CARD FIRST. The five manual conversions this replaces had no
+    # backups, and one had to be reverted from memory.
+    import shutil
+    from datetime import datetime, timezone
+    reg = _registry(a)
+    src = Path(getattr(reg, "root", Path(a.root) / "crew")) / f"{a.agent}.json"
+    if src.is_file():
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+        backup = src.with_name(f"{a.agent}.json.bak-harness-{stamp}")
+        shutil.copy2(src, backup)
+        print(f"  card backed up: {backup.name}", file=sys.stderr)
+
+    import dataclasses
+    updated = dataclasses.replace(
+        card, harness=plan.to_harness,
+        model=plan.model if plan.model else card.model)
+    reg.set(updated)
+    print(f"{a.agent}: {plan.from_harness} -> {plan.to_harness}"
+          + (f", model {plan.model}" if plan.model else ""))
+    print(f"  takes effect {plan.takes_effect}")
+
+    if not plan.restart_now:
+        # THE GOVERNOR MOVES NOW, THE PROCESS MOVES LATER, and an operator who
+        # does not know that will read the next lane count as wrong. Measured:
+        # `_live_by_governor` buckets by `_governor_for` -> `harness.name_for`,
+        # which reads the CARD; liveness comes from the pane. So between this
+        # write and the relaunch the agent counts against the lane it is going
+        # to, while still spending the budget of the lane it is on.
+        print(f"  note: the governor counts {a.agent} against {plan.to_harness} "
+              f"from now, but it is still spending {plan.from_harness} budget "
+              "until it relaunches")
+        print(f"  relaunch when ready:  st harness {a.agent} {plan.to_harness} --now")
+        return OK
+
+    # VERIFY BY THE PANE, NOT THE CARD (sattler). The card is what we just wrote,
+    # so reading it back proves only that the write landed — it cannot show which
+    # program the agent is actually running.
+    panes = _panes(a)
+    runtime = _runtime(a, panes)
+    session = _session_for(updated)
+    try:
+        panes.kill_session(session)
+    except Exception:
+        pass
+    rc = _launch(a, updated, panes, runtime)
+    if rc == OK:
+        print(f"  relaunched {a.agent} on {plan.to_harness}")
+    return rc
 
 
 def _launch(a, card, panes, runtime, *, dry_run: bool = False,
@@ -7754,6 +7904,51 @@ def _tend_once(a, quiet: bool = False) -> int:
             "readings": readings, "live": running,
             "blocked": blocked_by_gov.get(name, 0),
             "setpoint_delta": creel_advisory_mod.recommended_delta(line)})
+    # THE CROSS-LANE RECOMMENDATION (aegis-6glmer, Stiwi 2026-09-04: "it should
+    # be easy for you to convert crew to claude and governor should recommend").
+    #
+    # Each lane's setpoint advisory above speaks only for its OWN budget, so a
+    # fleet with one lane held and another with room prints two unrelated facts —
+    # "codex -1" and "base +3" — when it is one actionable move. The evening this
+    # came from ran three Claude leads while nine codex workers sat held and base
+    # read +3/+4 for hours; nothing was wrong with either number, and the sentence
+    # joining them did not exist.
+    #
+    # Candidates are the agents on the donor lane whose ROLE is not pinned to it:
+    # a lead pinned to claude cannot be converted, so offering one as a candidate
+    # would be advice that `st harness` then refuses.
+    from . import harness_switch as _hswitch
+    _pinned = cfg.harness_required_by_role
+    _by_lane: dict = {}
+    for _card in agents:
+        if getattr(_card, "retired", False):
+            continue
+        _h = harness_mod.name_for(_card, root=a.root)
+        _lane = _h if _h in governors else "base"
+        if _pinned.get(_card.role) == _h:
+            continue          # pinned here; not convertible
+        _by_lane.setdefault(_lane, []).append(_card.name)
+    _lanes = [
+        _hswitch.Lane(
+            name=_n,
+            delta=creel_advisory_mod.recommended_delta(setpoint_advisories[_n]),
+            held=bool(verdicts[_n].held) and not verdicts[_n].signal_lost,
+            live=live_by_gov.get(_n, 0),
+            candidates=tuple(sorted(_by_lane.get(_n, []))),
+            # The compatibility lane is named `base` and runs `claude`; the
+            # recommendation must name the program, since that is what
+            # `st harness` takes.
+            harness=(harness_mod.DEFAULT if _n == "base" else _n))
+        for _n in sorted(governors)
+        # A BLIND LANE IS EXCLUDED, not defaulted. Recommending a fleet move on a
+        # budget nobody can read is the one direction the governor's fail-safe
+        # forbids, and it is the same rule the utilization advisory follows.
+        if not verdicts[_n].signal_lost
+    ]
+    _convert = _hswitch.cross_harness_advice(_lanes)
+    if _convert:
+        print(f"  governor cross-harness: {_convert}", file=sys.stderr)
+
     # PUBLISH, before the sweeps and therefore before the pass budget can shed
     # anything (aegis-qwadc). Deliberate: the sweeps are best-effort notification,
     # while this is the RECORD of the decision this pass just made, and a record

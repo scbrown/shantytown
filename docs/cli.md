@@ -38,6 +38,10 @@ st roles [--check|set|band|sync]
                               SURVIVAL band — which agents a usage throttle spares.
 st init                       scaffold a NEW deployment (wizard): store, cards, hooks, config
 st new <agent>                create an agent from a card
+st harness <agent> [claude|codex]
+                              convert one agent to another harness: writes the card (with a
+                              .bak), refuses a role the deployment pins, and relaunches with
+                              `--now`. Omit the target to report what the card runs
 st start [--mode lite|heavy]  BOOT the town by mode: the admin alone, or every card. idempotent
 st start <agent>...           bring up exactly these agents (already-up is a SUCCESS, not a refusal)
 st stop <agent> [--reason]    stop it, and RECORD that it was deliberate
@@ -86,7 +90,7 @@ Codex input already includes its cached subset. This makes
 `cache_read / usage_in` a provider-independent prompt-cache hit rate. The fields
 are omitted—not zeroed—when every matching transcript is unknown.
 
-Thirty. `--dry-run` is on every command that writes, from commit one. The surface grew past the
+Thirty-one. `--dry-run` is on every command that writes, from commit one. The surface grew past the
 original eight, each slot on a specific ask — not drift: **inbox**/**task** (the dispatch/tracker
 pair, owner-directed), **context** (the bobbin Context protocol), **doctor**
 (out-of-box detect/install, Stiwi's direct ask), **subscribe** (the quipu events adapter,
