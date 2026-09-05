@@ -53,6 +53,11 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e .
           python -m pip install pytest
+          python -m pip install pre-commit==4.6.1
+
+      # Prove refusal before treating the tracked-file scan as evidence.
+      - name: Private-key refusal controls and tracked-file scan
+        run: python3 scripts/check-private-keys.py
 
       # The version string is a hand-maintained constant in two files
       # (pyproject.toml and shantytown/__init__.py). They are kept in sync by
