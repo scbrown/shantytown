@@ -441,19 +441,48 @@ def resolve_pane_scope(
     mine = launcher if launcher is not None else own_scope()
     deadline = time.monotonic() + timeout_s
     seen: str | None = None
+    last_why = ""
     while True:
         seen = scope_of_pid(pane_pid)
         if seen and seen != mine:
             path = _cgroup_path_of_pid(pane_pid)
             if not path:
                 return None, f"pid {pane_pid} left no readable cgroup path"
-            ok, why = scope_is_exclusive_to(pane_pid, path)
-            if not ok:
-                return None, why
-            return seen, "ok"
+            ok, last_why = scope_is_exclusive_to(pane_pid, path)
+            if ok:
+                return seen, "ok"
+            # WAIT FOR EXCLUSIVITY, DO NOT GIVE UP ON THE FIRST LOOK.
+            #
+            # THE BUG THIS FIXES (aegis-0j0n1n): the loop waited for the pane to
+            # leave the CALLER's cgroup and then checked exclusivity ONCE. When a
+            # session is created on an ALREADY-RUNNING tmux server the pane is
+            # forked by the SERVER, so its first cgroup is the server's — which is
+            # not the caller's, so the wait ended immediately and the exclusivity
+            # check ran against the server's shared scope, before tmux had moved
+            # the pane into one of its own.
+            #
+            # That is why only the pane whose launch STARTED the server was ever
+            # bound: there, and only there, the pane's first cgroup IS the
+            # caller's, so the loop waited and tmux got its 20ms.
+            #
+            # REPRODUCED on the live crew server 2026-09-05T06:15:38Z, from the
+            # log this module now writes: the probe pane landed in
+            # `ptyxis-spawn-…scope` with 18 processes, 17 outside its tree, and
+            # was refused — while a scratch server created by the same code bound
+            # first AND second session. One measurement, both arms, and it took
+            # writing the refusals to a file to see it.
+            #
+            # The refusal is unchanged when the scope never becomes exclusive:
+            # capping a cgroup somebody else is in stays forbidden. What changes
+            # is that "not yet" no longer reads as "never".
+            pass
         if time.monotonic() >= deadline:
             break
         time.sleep(poll_s)
+    if seen and seen != mine and last_why:
+        # It left the caller's scope but never became its own — the shared-scope
+        # case, now reported after the full settle window rather than instantly.
+        return None, last_why
     if seen is None:
         return None, (f"pid {pane_pid} is not in a .scope after {timeout_s:g}s "
                       "— tmux systemd integration may be unavailable")
