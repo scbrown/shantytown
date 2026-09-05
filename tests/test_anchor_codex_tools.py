@@ -21,11 +21,11 @@ from shantytown.anchor import Anchoring
 from shantytown.protocols import Agent
 
 
-def _card(harness):
+def _card(harness, mcp_preapproved=()):
     return Anchoring(
         me=Agent(name="malcolm", role="worker", reports_to="wu", pane="p"),
         item=None, lead=None, lead_up=None, context=[], knowledge=[],
-        admin="sattler", harness=harness,
+        admin="sattler", harness=harness, mcp_preapproved=mcp_preapproved,
     )
 
 
@@ -56,3 +56,53 @@ def test_an_UNKNOWN_harness_says_nothing_rather_than_guessing():
     on any error. Guessing there would put false tooling advice on some future
     harness's card."""
     assert "YOUR TOOLS" not in _card("").render()
+
+
+# --- The card must describe the DEPLOYMENT's world, not the pre-fix one -------
+#
+# aegis-n549ii. The card above was written when nothing was pre-approved, and it
+# said flatly that MCP WRITE tools are refused. Then aegis-h3zyq0 landed
+# `default_tools_approval_mode = "approve"` on the deployment's servers and the
+# card was not updated — so for months a codex worker was told it lacked tools
+# it demonstrably had. A card that is confidently WRONG about tooling is the
+# exact failure this file exists to prevent, and it had grown one.
+
+
+def test_a_preapproved_deployment_names_its_servers():
+    """"Some servers are pre-approved" sends the reader looking for which."""
+    out = _card("codex", ("homelab", "bobbin")).render()
+    assert "Pre-approved" in out
+    assert "homelab" in out and "bobbin" in out
+
+
+def test_a_preapproved_card_does_not_claim_writes_are_refused():
+    """The regression that motivated this: the flat claim must be gone when the
+    deployment has pre-approved servers, or the card contradicts the config."""
+    out = _card("codex", ("homelab",)).render()
+    assert "MCP WRITE tools are refused" not in out
+
+
+def test_with_nothing_preapproved_the_card_states_the_annotation_rule():
+    """A deployment that never declared anything still needs the model: an
+    UNANNOTATED tool counts as destructive, which is the whole h3zyq0 cause."""
+    out = _card("codex").render()
+    assert "read-only" in out
+    assert "Pre-approved" not in out, "nothing was declared; claiming otherwise is false"
+
+
+def test_a_narrowed_server_is_absent_from_the_preapproved_line():
+    """The n549ii flip: homelab leaves the list so its annotations govern. The
+    card must stop naming it, or it promises tools that are now refused."""
+    out = _card("codex", ("bobbin", "forgejo", "agent")).render()
+    assert "Pre-approved" in out
+    assert "homelab" not in out
+
+
+def test_the_tooling_model_survives_in_both_branches():
+    """Whatever the deployment declared, the CLI paths and the do-not-stop
+    instruction are the part that actually unblocked the agent."""
+    for pre in ((), ("homelab",)):
+        out = _card("codex", pre).render()
+        assert "Do NOT" in out and "stop and wait" in out
+        for cli in ("git", "gh", "br"):
+            assert cli in out

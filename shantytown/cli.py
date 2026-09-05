@@ -3776,9 +3776,19 @@ def _cmd_anchor(a) -> int:
             _hn = _harness_mod.name_for(registry.get(me), root=a.root) or ""
         except Exception:
             _hn = ""
+        # The deployment's pre-approved MCP servers, resolved HERE for the same
+        # reason `harness` is: anchor() promises reads-only and does not know a
+        # root. Without this the card described the pre-h3zyq0 world — it said
+        # every MCP write was refused while the deployment had pre-approved the
+        # servers, so a codex worker was told it lacked tools it actually had.
+        try:
+            from .runtime import codex_mcp_approve_servers
+            _mcp = tuple(codex_mcp_approve_servers(a.root))
+        except Exception:
+            _mcp = ()
         p = do_anchor(me, registry, panes, plate=_plate(a),
                       lead_status=_lead_status(registry, panes),
-                      harness=_hn)
+                      harness=_hn, mcp_preapproved=_mcp)
     except LookupError as e:
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED

@@ -71,11 +71,18 @@ class Anchoring:
     # bool; never invented, because a fabricated cause on this line is what the
     # tier's own alerts were already burned by.
     lead_detail: str = ""
-    # Which PROGRAM this agent is. Codex refuses every MCP WRITE tool under
-    # approval_policy=never, and the refusal reads like lost permissions rather
-    # than a policy — so the card says otherwise, for codex only. "" = unknown,
-    # and an unknown harness says nothing rather than guessing (aegis-h3zyq0).
+    # Which PROGRAM this agent is. Codex refuses an MCP tool it judges
+    # approval-requiring under approval_policy=never, and the refusal reads like
+    # lost permissions rather than a policy — so the card says otherwise, for
+    # codex only. "" = unknown, and an unknown harness says nothing rather than
+    # guessing (aegis-h3zyq0).
     harness: str = ""
+    # Which MCP servers this DEPLOYMENT pre-approved, so the card can describe
+    # the tooling the agent actually has rather than the tooling it had before
+    # the deployment said otherwise. Resolved by the CLI (which knows the root),
+    # never here — `anchor` promises reads-only. Empty = none declared, which is
+    # also the honest default for a deployment that never said (aegis-n549ii).
+    mcp_preapproved: tuple[str, ...] = ()
 
     def render(self) -> str:
         L: list[str] = []
@@ -116,10 +123,24 @@ class Anchoring:
             # (aegis-h3zyq0).
             L += [
                 "  YOUR TOOLS (codex)",
-                "    MCP WRITE tools are refused here: \"MCP tool call requires",
+                "    An MCP tool can be refused here: \"MCP tool call requires",
                 "    approval, but approval policy is never\". That is POLICY, not a",
                 "    lost permission — nothing is broken and nothing needs restoring.",
-                "    MCP READS work. Every CLI path works: git, gh, br, st.",
+            ]
+            if self.mcp_preapproved:
+                # NAME them. "Some servers are pre-approved" sends the reader
+                # looking for which; the list is short and already known here.
+                L.append("    Pre-approved, every tool callable: "
+                         + ", ".join(self.mcp_preapproved) + ".")
+                L.append("    On any OTHER server a tool is callable only if it")
+                L.append("    declares itself read-only; one annotated destructive or")
+                L.append("    open-world is refused BY DESIGN, and that refusal is the")
+                L.append("    policy working, not a fault to report or route around.")
+            else:
+                L.append("    A tool is callable only if it declares itself read-only;")
+                L.append("    an unannotated tool counts as destructive and is refused.")
+            L += [
+                "    Every CLI path works: git, gh, br, st.",
                 "    So: push with git, merge with gh, write beads with br. Do NOT",
                 "    stop and wait for permissions to be granted — there is nobody",
                 "    granting them and you are not blocked.",
@@ -201,6 +222,7 @@ def anchor(
     knowledge: list[str] | None = None,
     lead_status: Callable[[str], object] | None = None,
     harness: str = "",
+    mcp_preapproved: tuple[str, ...] = (),
 ) -> Anchoring:
     """Resolve the four things. Reads only.
 
@@ -264,4 +286,5 @@ def anchor(
         admin=admin,
         lead_detail=lead_detail,
         harness=harness,
+        mcp_preapproved=tuple(mcp_preapproved),
     )
