@@ -547,3 +547,52 @@ def test_two_different_faults_stay_two_different_labels():
     assert up['st_governor_signal_lost_fault{lane="base",fault="upstream"}'] == 1
     assert loc['st_governor_signal_lost_fault{lane="base",fault="local"}'] == 1
     assert loc['st_governor_signal_lost_fault{lane="base",fault="upstream"}'] == 0
+
+
+def test_a_400_surfaces_the_gateways_own_explanation(monkeypatch):
+    """The STATUS is not the diagnosis (aegis-8dqzc6, 2026-09-06).
+
+    The pushgateway puts the reason in the RESPONSE BODY; `repr(HTTPError)`
+    discards it, so every malformed exposition reported identically as
+    `<HTTPError 400: 'Bad Request'>`. Measured: st_governor 400ed on six
+    consecutive passes and the log could not say which line it objected to.
+    """
+    import io
+    import urllib.error
+
+    def _raise(req, timeout=None):
+        raise urllib.error.HTTPError(
+            req.full_url, 400, "Bad Request", {},
+            io.BytesIO(b"text format parsing error in line 7: "
+                       b"second HELP line for metric name"))
+
+    monkeypatch.setattr(gm.urllib.request, "urlopen", _raise)
+
+    with pytest.raises(RuntimeError) as caught:
+        gm._push("http://gw.invalid", "st_governor", "host-a", "x 1\n")
+
+    message = str(caught.value)
+    assert "400" in message
+    assert "st_governor" in message, "name the job that failed"
+    # The load-bearing assertion: the gateway's own words reach the operator.
+    assert "line 7" in message
+    assert "second HELP line" in message
+
+
+def test_a_400_with_an_unreadable_body_still_raises(monkeypatch):
+    """A diagnosis must never mask the error it explains."""
+    import urllib.error
+
+    class _Unreadable(urllib.error.HTTPError):
+        def read(self, *a, **k):
+            raise OSError("socket went away")
+
+    def _raise(req, timeout=None):
+        raise _Unreadable(req.full_url, 400, "Bad Request", {}, None)
+
+    monkeypatch.setattr(gm.urllib.request, "urlopen", _raise)
+
+    with pytest.raises(RuntimeError) as caught:
+        gm._push("http://gw.invalid", "st_governor", "host-a", "x 1\n")
+    assert "400" in str(caught.value)
+    assert "no explanation" in str(caught.value)

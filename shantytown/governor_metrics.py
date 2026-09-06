@@ -72,6 +72,7 @@ import base64
 import json
 import os
 import time
+import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -614,7 +615,33 @@ def _push(url: str, job: str, instance: str, body: str,
     target = f"{base}/metrics/job/{job}/instance/{instance}"
     req = urllib.request.Request(target, data=body.encode(), headers=headers,
                                  method="PUT")
-    urllib.request.urlopen(req, timeout=timeout).read()
+    try:
+        urllib.request.urlopen(req, timeout=timeout).read()
+    except urllib.error.HTTPError as exc:
+        # THE STATUS IS NOT THE DIAGNOSIS (aegis-8dqzc6, 2026-09-06). The
+        # pushgateway puts the reason in the RESPONSE BODY — "text format
+        # parsing error in line N: ..." — and `repr(HTTPError)` discards it, so
+        # every malformed exposition reports identically as
+        # `<HTTPError 400: 'Bad Request'>`.
+        #
+        # Measured: st_governor 400ed on six consecutive passes and the log
+        # could not say which line the gateway objected to, while the SAME
+        # credential and URL pushed a probe body at 200 — so the one thing the
+        # operator needed (it is the body, and here is where) was the one thing
+        # thrown away. `HTTPError` IS a response; reading it costs nothing.
+        #
+        # Bounded and best-effort: a diagnosis must never mask the error it
+        # explains, so a failure to read the body still raises the original.
+        detail = ""
+        try:
+            detail = exc.read().decode("utf-8", "replace").strip()
+        except Exception:                        # noqa: BLE001 — see above
+            detail = ""
+        raise RuntimeError(
+            f"HTTP {exc.code} {exc.reason} pushing job={job}"
+            + (f" — gateway said: {detail[:400]}" if detail else
+               " — gateway sent no explanation")
+        ) from exc
 
 
 def publish(root, lanes, *, agents=None, now=None, url=None, instance=None,
