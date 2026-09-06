@@ -306,9 +306,12 @@ def _send(reg: FilesRegistry, events: FilesEvents, panes, me: str,
     context_k = _my_context_k(reg, panes, me)
     item, item_status, plate_notes = (
         _plate_of(root, me) if root is not None else (None, "?", []))
+    # Carry WHY the rise happened, not just that it did (aegis-jms5s8). route_stop
+    # already computed it from tier.LeadStatus; dropping it here is what made five
+    # rises in one evening indistinguishable from each other and from a real one.
     ev = events.persist(to=routing.to, frm=me, reason=reason, rose=routing.rose,
                         shells=shells, item=item, item_status=item_status,
-                        context_k=context_k)
+                        context_k=context_k, detail=routing.detail or None)
     over = context_k is not None and context_k >= CYCLE_THRESHOLD_K
     # Silent on stdout (a non-blocking Stop hook's stdout is discarded anyway);
     # a terse stderr line is useful when a human runs it by hand.

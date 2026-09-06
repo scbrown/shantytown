@@ -8,6 +8,8 @@ so it can idle. A drain that re-returns delivered events wedges the tier.
 """
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from shantytown.events import FilesEvents, NullEvents, StopEvent
@@ -141,3 +143,55 @@ def test_persist_is_atomic_no_tmp_left_behind(tmp_path):
     store.persist(to="maldoon", frm="ellie", reason=None, rose=False)
     left = list((tmp_path / "events").glob("*.tmp"))
     assert left == [], f"tmp files leaked: {left}"
+
+
+# --- aegis-jms5s8: the rise's CAUSE must survive persistence ------------------
+# route_stop computes WHICH of four unreachable causes fired (restart a lead with
+# no pane / RELAUNCH one that cannot drain / UNVERIFIED when the process could not
+# be read) and carries it as Routing.detail. persist() used to drop it, so every
+# rise reached the coordinator as an anonymous "lead-unreachable". Measured
+# 2026-09-06: five rises in one evening, detail=None on all five, and the cause
+# had to be guessed across six rounds because the channel discarded it.
+
+def test_persisted_event_carries_the_cause_detail(tmp_path):
+    """NOT the guard — it reads the RETURNED object, so it passes even with the
+    original bug (which dropped detail only on the way to disk). Verified by
+    mutation: removing the JSON write leaves this test green and fails the two
+    below. Kept as a constructor check, marked so nobody mistakes it for cover."""
+    ev = FilesEvents(tmp_path / "events").persist(
+        to="sattler", frm="malcolm", reason="lead-unreachable", rose=True,
+        detail="wu is UP but CANNOT DRAIN: carries no `stop_event` hook")
+    assert "CANNOT DRAIN" in (ev.detail or "")
+
+
+def test_the_cause_survives_a_write_and_read_back(tmp_path):
+    """The write is the easy half. It is the READ that the coordinator does."""
+    store = FilesEvents(tmp_path / "events")
+    store.persist(to="sattler", frm="malcolm", reason="lead-unreachable", rose=True,
+                  detail="wu is DOWN (no pane 'shanty-wu') — restart it")
+    back = store.pending("sattler")
+    assert len(back) == 1
+    assert back[0].detail == "wu is DOWN (no pane 'shanty-wu') — restart it"
+
+
+def test_two_rises_with_the_same_reason_stay_distinguishable(tmp_path):
+    """The whole point. Same `reason`, OPPOSITE remedies — restart vs relaunch.
+    Collapsing them is what trained the coordinator to read the channel as noise."""
+    store = FilesEvents(tmp_path / "events")
+    store.persist(to="sattler", frm="a", reason="lead-unreachable", rose=True,
+                  detail="wu is DOWN (no pane) — restart it")
+    store.persist(to="sattler", frm="b", reason="lead-unreachable", rose=True,
+                  detail="wu is UP but CANNOT DRAIN — RELAUNCH it")
+    details = sorted((e.detail or "") for e in store.pending("sattler"))
+    assert len(set(details)) == 2, "two causes collapsed into one indistinguishable string"
+
+
+def test_an_event_written_before_jms5s8_reads_as_no_detail(tmp_path):
+    """Absent key is NOT an empty string and NOT a fabricated cause: an old event
+    genuinely carried none, so None is the correct reading rather than a default."""
+    root = tmp_path / "events"
+    root.mkdir(parents=True)
+    (root / "ev-1.json").write_text(json.dumps({
+        "to": "sattler", "frm": "malcolm", "reason": "lead-unreachable",
+        "rose": True, "delivered": False, "ts": 1.0}))
+    assert FilesEvents(root).pending("sattler")[0].detail is None

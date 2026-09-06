@@ -88,6 +88,22 @@ class StopEvent:
                                  # until it cycles. None = NOT REPORTED (a turn was
                                  # in flight so the footer was gone), never "fine".
     item: str | None = None      # what `frm` held at its stop, if anything
+    detail: str | None = None    # WHY the reason holds, in the words of whoever
+                                 # decided it (aegis-jms5s8). `reason` says
+                                 # `lead-unreachable`; `detail` says which of the
+                                 # four causes, and they want OPPOSITE remedies —
+                                 # RESTART a lead with no pane, RELAUNCH one that
+                                 # is up but carries no `drain`, and treat an
+                                 # unreadable one as UNVERIFIED rather than broken.
+                                 # tier.LeadStatus computes exactly that and
+                                 # route_stop carries it out as Routing.detail;
+                                 # until now persist DROPPED it, so every rise
+                                 # reached the coordinator as an anonymous string.
+                                 # Measured 2026-09-06: 5 rises in one evening,
+                                 # detail=None on all five, and the mechanism had
+                                 # to be GUESSED across six rounds because the
+                                 # channel discarded its own cause. None = the
+                                 # decider supplied none, never "no reason".
     item_status: str | None = None
                                  # its status, or "?" meaning COULD NOT LOOK.
                                  # item=None + status=None is "plate was empty";
@@ -106,7 +122,8 @@ class Events(Protocol):
     def persist(self, to: str, frm: str, reason: str | None, rose: bool,
                 shells: int | None = None, item: str | None = None,
                 item_status: str | None = None,
-                context_k: float | None = None) -> StopEvent:
+                context_k: float | None = None,
+                detail: str | None = None) -> StopEvent:
         """SEND: durably record an event addressed to `to`. Survival guarantee —
         it is on the store before it is read, so it cannot vanish if `to` is down.
 
@@ -171,11 +188,13 @@ class FilesEvents:
     def persist(self, to: str, frm: str, reason: str | None, rose: bool,
                 shells: int | None = None, item: str | None = None,
                 item_status: str | None = None,
-                context_k: float | None = None) -> StopEvent:
+                context_k: float | None = None,
+                detail: str | None = None) -> StopEvent:
         self.root.mkdir(parents=True, exist_ok=True)
         ev = StopEvent(id=self._next_id(), to=to, frm=frm, reason=reason, rose=rose,
                        shells=shells, ts=time.time(), item=item,
-                       item_status=item_status, context_k=context_k)
+                       item_status=item_status, context_k=context_k,
+                       detail=detail)
         # ATOMIC: tmp + rename. write_text() straight to the final name is how
         # the empty ev-172.json happened — a writer killed between open() and
         # write left a 0-byte file that every pending() then choked on. rename
@@ -185,7 +204,7 @@ class FilesEvents:
             "to": ev.to, "frm": ev.frm, "reason": ev.reason,
             "rose": ev.rose, "delivered": ev.delivered, "shells": ev.shells,
             "ts": ev.ts, "item": ev.item, "item_status": ev.item_status,
-            "context_k": ev.context_k,
+            "context_k": ev.context_k, "detail": ev.detail,
         })
         return ev
 
@@ -204,7 +223,8 @@ class FilesEvents:
                          shells=d.get("shells"),
                          ts=float(d.get("ts") or 0.0), item=d.get("item"),
                          item_status=d.get("item_status"),
-                         context_k=d.get("context_k"))
+                         context_k=d.get("context_k"),
+                         detail=d.get("detail"))
 
     def pending(self, me: str) -> list[StopEvent]:
         """PURE READ — no mkdir, no rewrite, nothing marked.
@@ -280,11 +300,13 @@ class NullEvents:
     def persist(self, to: str, frm: str, reason: str | None, rose: bool,
                 shells: int | None = None, item: str | None = None,
                 item_status: str | None = None,
-                context_k: float | None = None) -> StopEvent:
+                context_k: float | None = None,
+                detail: str | None = None) -> StopEvent:
         self._n += 1
         ev = StopEvent(id=f"ev-{self._n}", to=to, frm=frm, reason=reason, rose=rose,
                        shells=shells, ts=time.time(), item=item,
-                       item_status=item_status, context_k=context_k)
+                       item_status=item_status, context_k=context_k,
+                       detail=detail)
         self._events.append(ev)
         return ev
 
@@ -299,5 +321,6 @@ class NullEvents:
             self._events[self._events.index(e)] = StopEvent(
                 id=e.id, to=e.to, frm=e.frm, reason=e.reason, rose=e.rose,
                 delivered=True, shells=e.shells, ts=e.ts, item=e.item,
-                item_status=e.item_status, context_k=e.context_k)
+                item_status=e.item_status, context_k=e.context_k,
+                detail=e.detail)
         return mine
