@@ -140,6 +140,23 @@ def _root(argv: list[str]) -> Path:
     return resolve_root()[0]
 
 
+# A cannot-read of the lead's wiring is RE-PROBED before it is believed
+# (aegis-jms5s8 item 2, approved by sattler). `live_wiring` returns None for two
+# genuinely transient reasons — the tmux cmdline read came back empty, or the
+# settings file could not be read at that instant — and a single sample of either
+# raised a `lead-unreachable` rise on a healthy lead. Measured 2026-09-06: five
+# such rises in one evening, malcolm -> wu, wu up and drain-carrying throughout.
+#
+# THIS DOES NOT WEAKEN THE FAIL-TOWARD-RISING RULE, and must not be read as doing
+# so. A wiring read that is STILL unreadable after these attempts is a genuine
+# cannot-tell and rises exactly as before (aegis-0v97: a live-but-deaf lead
+# swallowing events silently is worse than a noisy rise). All this removes is the
+# single-sample artefact — the case where one read failed and the next succeeds.
+#
+# Cost is paid ONLY on the failing path: a healthy lead reads once and returns.
+_WIRING_ATTEMPTS = 3
+_WIRING_RETRY_S = 0.15
+
 def _lead_is_up(reg: FilesRegistry, panes) -> "callable":
     """route_stop asks 'is this lead reachable?' — and REACHABLE MEANS IT WILL
     DRAIN, not that something answers to its name (dearing, aegis-0v97).
@@ -180,14 +197,24 @@ def _lead_is_up(reg: FilesRegistry, panes) -> "callable":
         if not panes.exists(lead.pane):
             return LeadStatus(False, f"{name} is DOWN (no pane {lead.pane!r}) "
                                      f"— restart it")
+        # Re-probe rather than believe one failed read (see _WIRING_ATTEMPTS).
         wiring = live_wiring(lead.pane, panes.cmdline)
+        attempts = 1
+        while wiring is None and attempts < _WIRING_ATTEMPTS:
+            time.sleep(_WIRING_RETRY_S)
+            wiring = live_wiring(lead.pane, panes.cmdline)
+            attempts += 1
         if wiring is None:
             # Cannot-tell still rises (see docstring), but it must not be
             # reported as "cannot drain" — that would be a claim we did not
             # measure, on the same alert that already cost credibility once.
+            # Say how many times we looked. With detail now persisted (item 1),
+            # "UNVERIFIED after 3 attempts" is a DIFFERENT and actionable fact
+            # from a first-sample miss, which is what this rise used to be.
             return LeadStatus(False, f"{name} is UP but its stop wiring could "
-                                     f"NOT be read from the running process — "
-                                     f"UNVERIFIED, not confirmed broken")
+                                     f"NOT be read from the running process "
+                                     f"after {attempts} attempts — UNVERIFIED, "
+                                     f"not confirmed broken")
         if "drain" not in wiring.directions:
             carries = (f"carries {sorted(wiring.directions)}"
                        if wiring.directions else "carries no `stop_event` hook")

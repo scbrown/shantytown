@@ -653,3 +653,61 @@ def test_the_held_back_line_names_the_sender_and_the_ceiling(tmp_path, capsys):
     err = capsys.readouterr().err
     assert "ellie" in err, "the held-back line must name WHO"
     assert "delivered regardless after" in err, "must say the hold is bounded"
+
+
+# --- aegis-jms5s8 item 2: re-probe a cannot-read before believing it -----------
+# live_wiring returns None for two transient reasons (the tmux cmdline read came
+# back empty; the settings file could not be read at that instant). A single
+# sample of either raised `lead-unreachable` on a healthy lead — measured
+# 2026-09-06, five times in one evening, malcolm -> wu, wu up and draining
+# throughout. The retry removes the single-sample artefact and NOTHING else.
+
+class _FlakyPanes(_Panes):
+    """cmdline() fails the first `fail_n` times, then answers normally."""
+    def __init__(self, up, fail_n, **kw):
+        super().__init__(up, **kw)
+        self.fail_n = fail_n
+        self.calls = 0
+    def cmdline(self, pane):
+        self.calls += 1
+        if self.calls <= self.fail_n:
+            return None
+        return DRAIN_CMDLINE
+
+
+def test_a_transient_wiring_read_does_not_raise_a_rise(tmp_path):
+    """The whole point: one failed read must not escalate a healthy lead."""
+    panes = _FlakyPanes({"p-maldoon"}, fail_n=1)
+    verdict = stop_event._lead_is_up(_reg(tmp_path), panes)("maldoon")
+    assert bool(verdict) is True, verdict.detail
+    assert panes.calls == 2, "should have re-probed exactly once after the miss"
+
+
+def test_a_persistent_cannot_read_STILL_rises(tmp_path):
+    """aegis-0v97 is NOT traded away. A wiring read that is still unreadable
+    after every attempt is a genuine cannot-tell, and a live-but-deaf lead
+    swallowing events silently is worse than a noisy rise."""
+    panes = _FlakyPanes({"p-maldoon"}, fail_n=99)
+    verdict = stop_event._lead_is_up(_reg(tmp_path), panes)("maldoon")
+    assert bool(verdict) is False
+    assert "UNVERIFIED" in verdict.detail
+    assert "attempts" in verdict.detail, "a genuine cannot-tell must say how hard we looked"
+    assert panes.calls == stop_event._WIRING_ATTEMPTS
+
+
+def test_a_healthy_lead_is_probed_once(tmp_path):
+    """The retry cost is paid ONLY on the failing path. A stop hook runs on every
+    stop; adding latency to the common case would be a real regression."""
+    panes = _FlakyPanes({"p-maldoon"}, fail_n=0)
+    assert bool(stop_event._lead_is_up(_reg(tmp_path), panes)("maldoon")) is True
+    assert panes.calls == 1
+
+
+def test_a_down_lead_is_not_retried(tmp_path):
+    """A missing pane will not appear in 150ms. Retrying it would add latency to
+    the one case that is already correctly and immediately decided."""
+    panes = _FlakyPanes(set(), fail_n=0)
+    verdict = stop_event._lead_is_up(_reg(tmp_path), panes)("maldoon")
+    assert bool(verdict) is False
+    assert "DOWN" in verdict.detail and "restart" in verdict.detail
+    assert panes.calls == 0, "the pane-existence check decides this before any wiring read"
