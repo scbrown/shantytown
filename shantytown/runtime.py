@@ -1129,6 +1129,48 @@ def _settings_env(role: str, root=None) -> dict:
     return env
 
 
+def apply_carried_env(merged: dict, emitted: dict) -> dict:
+    """Remove a carried env key the deployment has STOPPED asking for.
+
+    AFTER THE MERGE, and for the same reason codex's `_apply_mcp_approval` is:
+    `merge_one_level` is emitted-wins PER SUB-KEY, so `env` keeps every key it
+    already had. That is correct for the operator's own variables and wrong for
+    ours — a key we stop emitting has nothing to replace it, so it LATCHES.
+
+    Measured 2026-09-06 (aegis-936dop) by rendering twice, which is the only
+    shape that can see it: emit with QUIPU_SERVER set, then emit with it unset,
+    and all three carried keys survive in the merged output at their OLD values.
+    Every previous test rendered once from a clean fixture and could not have
+    expressed the question.
+
+    Why it matters more here than a stale key usually would is written in
+    `_settings_env`'s own docstring: an agent pointed at a wrong-but-reachable
+    graph or namespace gets "nobody exists" answered with a straight face, where
+    an unreachable one at least raises. So the latched value is the dangerous
+    kind of wrong — and SHANTY_CANONICAL_SOURCE is the pin `st doctor` audits
+    against, so a stale one makes the self-check vouch for the wrong checkout.
+
+    ONLY THE KEYS WE MANAGE (`_CARRIED_ENV`), never an operator's own variables
+    beside them — the same line `_apply_mcp_approval` draws inside a server's
+    sub-table. BOBBIN_ROLE is not in that set and needs no removal: it is emitted
+    unconditionally, so the merge always replaces it.
+
+    THE COST, stated because it is real and is the same trade n549ii took: an
+    operator's hand-set QUIPU_SERVER in an emitted role settings file is removed
+    on the next `roles set` when the deployment carries none. That file is st's
+    artifact and `roles set` exists to reconcile it; the operator expresses the
+    intent through the deployment config, which is the thing built for it.
+    """
+    env = merged.get("env")
+    if not isinstance(env, dict):
+        return merged
+    still_emitted = emitted.get("env") if isinstance(emitted.get("env"), dict) else {}
+    for key in _CARRIED_ENV:
+        if key not in still_emitted:
+            env.pop(key, None)
+    return merged
+
+
 def emitted_stop_directions(root, role: str, harness_name: str | None = None) -> set[str] | None:
     """READ BACK which stop directions a role's EMITTED settings file actually
     carries: a subset of {"send", "drain"}, or None if it could not be read.

@@ -474,8 +474,16 @@ class ClaudeHarness:
         # agents' hook files are already written in. This moved here from
         # cli._emit_role_settings unchanged, and changing it would rewrite every
         # settings file in every store on the next `role set` for no reason.
-        return json.dumps(merge_one_level(_load_json(existing), settings),
-                          indent=2, sort_keys=True)
+        #
+        # apply_carried_env runs AFTER the merge, the same shape and for the same
+        # reason as codex.render's _apply_mcp_approval: `env` is a MERGED
+        # container, so a carried key st has stopped emitting has nothing to
+        # replace it and would latch at its old value (aegis-936dop).
+        from .runtime import apply_carried_env   # call-time: runtime imports us
+        return json.dumps(
+            apply_carried_env(merge_one_level(_load_json(existing), settings),
+                              settings),
+            indent=2, sort_keys=True)
 
     def read_stop_directions(self, text: str) -> "set[str] | None":
         try:
