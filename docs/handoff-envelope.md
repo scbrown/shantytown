@@ -38,3 +38,6 @@ wire_bytes = canonical_bytes(claimed)
 Do not fill identity fields from a pane name, tab label, message body, or
 `BroadcastChannel` sender. They are references to the common session-attestation
 contract and must come from its authenticated binding.
+
+The optional [durable inbox bridge](inbox-bridge.md) transports these immutable
+envelopes and returns inbox delivery/read receipts without changing ownership.

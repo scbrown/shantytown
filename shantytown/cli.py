@@ -382,7 +382,8 @@ def _inbox(a, default="files"):
     if _backend(a, default) in ("beads", "br"):
         trk = _tracker(a, default)
         from .br import items as br_items
-        return TrackerInbox(trk, lambda: br_items(trk))
+        return TrackerInbox(trk, lambda: br_items(trk),
+                            lambda: br_items(trk, include_closed=True))
     return FilesInbox(Path(a.root) / "inbox")
 
 

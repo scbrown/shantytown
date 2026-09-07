@@ -35,10 +35,10 @@ THE SHAPE (three methods, and the split is the same one events.py makes):
                  explicitly for `--read`, or for the one pointer whose live pane
                  submission it just verified; counting/listing remain pure.
 
-Not four methods: there is no get(id). An inbox you can query by id is a mail
-store, and a harness that grows a message store is on its way to being a town
-(docs/cli.md, "st inbox is thin, not a bus"). If you need one, that is the
-finding — put it on a bead, not in this file.
+There is no general get(id). The optional ReceiptInbox seam in inbox_bridge.py
+adds a narrow marker lookup for cross-harness delivery proof, implemented by
+both backends. It includes read messages so a retry cannot resurrect an already
+acknowledged handoff. The full payload stays in the bridge spool, not the inbox.
 """
 from __future__ import annotations
 import json
@@ -353,6 +353,15 @@ class FilesInbox:
         return [m for p in sorted(self.root.glob("msg-*.json"))
                 if (m := self._read(p)).to == me and not m.read]
 
+    def find_delivery(self, me: str, marker: str) -> Message | None:
+        """Find a bridge receipt, including acknowledged messages. Pure read."""
+        matches = [m for p in self.root.glob("msg-*.json")
+                   if (m := self._read(p)).to == me
+                   and m.body.startswith(marker + " ")]
+        if len(matches) > 1:
+            raise RuntimeError("ambiguous durable delivery: multiple receipts")
+        return matches[0] if matches else None
+
     def mark_read(self, me: str, ids: list[str] | None = None) -> list[Message]:
         marked = []
         for msg in self.unread(me):
@@ -391,9 +400,24 @@ class TrackerInbox:
     (files.plate / beads.plate). So is this — files.items / beads.items.
     """
 
-    def __init__(self, tracker, items: Callable[[], list[WorkItem]]):
+    def __init__(self, tracker, items: Callable[[], list[WorkItem]],
+                 all_items: Callable[[], list[WorkItem]] | None = None):
         self._tracker = tracker
         self._items = items
+        self._all_items = all_items
+
+    def find_delivery(self, me: str, marker: str) -> Message | None:
+        """Receipt lookup needs CLOSED rows too; an unread-only query lies here."""
+        if self._all_items is None:
+            raise RuntimeError("durable receipt lookup requires an all-status reader")
+        matches = [Message(id=it.id, to=me, body=_body_of(it.title),
+                           read=it.status == "closed")
+                   for it in self._all_items()
+                   if is_message(it.title) and it.assignee == me
+                   and _body_of(it.title).startswith(marker + " ")]
+        if len(matches) > 1:
+            raise RuntimeError("ambiguous durable delivery: multiple receipts")
+        return matches[0] if matches else None
 
     def deliver(self, to: str, body: str, frm: str | None = None) -> Message:
         title = f"{PREFIX} {body}"

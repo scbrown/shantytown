@@ -191,13 +191,21 @@ def plate(tracker: BrTracker, agent: str,
     return item
 
 
-def items(tracker: BrTracker) -> list[WorkItem]:
+def items(tracker: BrTracker, *, include_closed: bool = False) -> list[WorkItem]:
     """Every item in the primary store, for durable inbox reads."""
-    r = tracker._bd("list", "--json", "--limit", "0")
+    args = ["list", "--json", "--limit", "0"]
+    if include_closed:
+        args.append("--all")
+    r = tracker._bd(*args)
     if r.returncode != 0:
         raise RuntimeError(f"br list failed: {r.stderr.strip()[:120]}")
     payload = json.loads(r.stdout) if r.stdout.strip() else {}
-    source = payload.get("issues", []) if isinstance(payload, dict) else payload
+    source = payload.get("issues") if isinstance(payload, dict) else payload
+    if include_closed and (not isinstance(source, list) or any(
+            not isinstance(x, dict) or not x.get("id") or "title" not in x
+            or "status" not in x for x in source)):
+        raise RuntimeError("br receipt read returned an incomplete response")
+    source = source or []
     return [WorkItem(id=x.get("id", ""), title=x.get("title", ""),
                      status=x.get("status", "open"), assignee=x.get("assignee"),
                      priority=_priority(x)) for x in source]
