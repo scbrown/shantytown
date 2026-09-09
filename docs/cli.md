@@ -239,7 +239,7 @@ $ st go st-9h2 ellie --dry-run
 
   would: tracker.update(st-9h2, status=in_progress, assignee=ellie)
   would: send-keys -> pane %5
-  would: name store -> [st store: bd -C /opt/rigs/aegis]
+  would: name store -> [st store: cd /opt/rigs/aegis && br]
 ```
 
 When the item is genuinely **not** in the store the recipient's own workspace resolves to, the tag
@@ -247,15 +247,15 @@ stops describing and starts warning — naming both sides, because "this is else
 elsewhere-*than-what* is not re-checkable:
 
 ```
-  would: name store -> [st store: bd -C /opt/work/sidecar — DIFFERENT STORE
+  would: name store -> [st store: cd /opt/work/sidecar && br — DIFFERENT STORE
          from your workspace's (embedded:/opt/work/sidecar/na vs
-         db.invalid:3306/beads_aegis); -C is REQUIRED, the id will NOT resolve without it]
+         db.invalid:3306/beads_aegis); selecting this directory is REQUIRED, the id will NOT resolve without it]
 ```
 
 Three properties worth knowing:
 
 * **The tag is unconditional; the warning is not.** Naming the store only "when it differs from the
-  default" requires being right about the recipient's default — but `bd` resolves from the *ambient
+  default" requires being right about the recipient's default — but `br` resolves from the *ambient
   cwd*, so that is a function of where the agent is standing when it types, not something this
   process can compute. A conditional built on a guess goes silent in exactly the case that costs a
   day. Naming it always has no failure mode.

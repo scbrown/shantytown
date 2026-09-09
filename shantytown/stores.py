@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -252,21 +253,22 @@ def hook_tag(tracker, workspace: str | None) -> str | None:
         return None
     if not Path(repo).expanduser().is_dir():
         # A coordinate, not a directory (forgejo's `owner/name`). Still worth
-        # naming — it is the same question — but there is no -C and nothing to
-        # compare it against.
+        # naming — it is the same question — but no directory can be selected
+        # or compared against the workspace.
         return f"[st store: {repo}]"
     dispatched = describe(repo)
+    command = f"cd {shlex.quote(dispatched.path)} && br"
     theirs_path = resolve_from(workspace)
     theirs = describe(theirs_path) if theirs_path else None
     if (theirs is not None and theirs.resolved and dispatched.resolved
             and theirs.identity != dispatched.identity):
         # THE EXPENSIVE CASE, and the only one that gets shouted at. Both sides
         # resolved and they disagree, so this item is genuinely not where the
-        # recipient's workspace points and `-C` is not optional.
-        return (f"[st store: bd -C {dispatched.path} — DIFFERENT STORE from your "
+        # recipient's workspace points and selecting its directory is required.
+        return (f"[st store: {command} — DIFFERENT STORE from your "
                 f"workspace's ({dispatched.identity} vs {theirs.identity}); "
-                f"-C is REQUIRED, the id will NOT resolve without it]")
-    return f"[st store: bd -C {dispatched.path}]"
+                f"selecting this directory is REQUIRED, the id will NOT resolve without it]")
+    return f"[st store: {command}]"
 
 
 def not_found_here(repo: str | None, item_id: str, roots: list[str] | None = None) -> str:

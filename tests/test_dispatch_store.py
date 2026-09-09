@@ -25,6 +25,7 @@ could become NOISE — because a tag the fleet learns to skip is not a fix:
 from __future__ import annotations
 
 import json
+import shlex
 from dataclasses import replace
 from pathlib import Path
 
@@ -119,11 +120,14 @@ def test_the_hook_line_names_the_store(tmp_path):
     )
 
 
-def test_the_store_is_named_as_a_command_not_a_bare_path(tmp_path):
-    """`bd -C <path>` is actionable; a bare path still leaves a step to guess."""
-    repo = _store(tmp_path / "rig")
+@pytest.mark.parametrize("dirname", ["rig", "rig with spaces", "rig's $(false)"])
+def test_the_store_is_named_as_a_command_not_a_bare_path(tmp_path, dirname):
+    """The command selects the live client and preserves the directory as one word."""
+    repo = _store(tmp_path / dirname)
     d, _ = _dispatch(tmp_path, repo, workspace=None)
-    assert f"bd -C {repo}" in d.go("na-2mn", "ellie", dry_run=True).text
+    text = d.go("na-2mn", "ellie", dry_run=True).text
+    assert f"cd {shlex.quote(str(repo))} && br" in text
+    assert "bd -C" not in text
 
 
 def test_the_tag_rides_the_same_send_as_the_work(tmp_path):
@@ -184,6 +188,9 @@ def test_cross_store_dispatch_is_shouted_and_names_both_sides(tmp_path):
     d, _ = _dispatch(tmp_path, mine, workspace=str(ws))
     text = d.go("na-2mn", "ellie", dry_run=True).text
 
+    assert f"cd {shlex.quote(str(mine))} && br" in text
+    assert "selecting this directory is REQUIRED" in text
+    assert "bd -C" not in text and "-C is REQUIRED" not in text
     assert "DIFFERENT STORE" in text, f"a cross-store dispatch must say so: {text!r}"
     assert "na" in text and "beads_aegis" in text, (
         f"name BOTH identities — 'this is elsewhere' without saying elsewhere-than-"
