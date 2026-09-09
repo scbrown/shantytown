@@ -27,6 +27,32 @@ class BrTracker(BeadsTracker):
         # monkeypatches cannot accidentally turn a br call into a bd call.
         return self._bd_in(self.repo, *args)
 
+    def _merged_notes(self, item_id: str, reason: str) -> "tuple[str, bool]":
+        """Existing notes + `reason`, and whether the write needs --force.
+
+        CANNOT-TELL MUST NOT FORCE. If the item cannot be read, this returns the
+        bare reason with force=False, so br's own guard refuses the write rather
+        than this code overwriting notes it never saw. A refusal costs a retry; a
+        blind force costs the resume_when condition permanently.
+        """
+        try:
+            r = self._bd_for(item_id, "show", item_id, "--json")
+            if r.returncode != 0:
+                return reason, False
+            value = json.loads(r.stdout) if r.stdout.strip() else {}
+            if isinstance(value, dict) and "issues" in value:
+                value = value["issues"]
+            if isinstance(value, list):
+                value = value[0] if value else {}
+            existing = value.get("notes") if isinstance(value, dict) else None
+        except Exception:
+            return reason, False
+        merged, force = merge_notes(existing, reason)
+        if force and existing and existing not in merged:
+            # Belt and braces: never force a write that drops what was there.
+            return reason, False
+        return merged, force
+
     def update(self, item_id: str, **fields) -> None:
         selected = fields.pop("blocker_kind", None)
         reason = fields.pop("defer_reason", None)
@@ -53,13 +79,50 @@ class BrTracker(BeadsTracker):
                 f"--remove-label={old}"
                 for old in sorted(set(BLOCKER_KIND_LABELS.values()) - {selected}))
         if reason is not None:
-            args.append(f"--notes={reason}")
+            merged, force = self._merged_notes(item_id, reason)
+            args.append(f"--notes={merged}")
+            if force:
+                args.append("--force")
         if len(args) == 2:
             return
         r = self._bd_for(item_id, *args)
         if r.returncode != 0:
             raise RuntimeError(
                 f"br update {item_id} failed: {r.stderr.strip()[:120]}")
+
+
+NOTES_SEPARATOR = "\n\n"
+
+
+def merge_notes(existing: str | None, addition: str) -> tuple[str, bool]:
+    """(notes to write, whether --force is required) for APPENDING a defer reason.
+
+    `st defer` used to write `--notes={reason}` unconditionally, and `br update`
+    refuses to replace non-empty notes with different content (beads #467). So
+    defer failed on exactly the population it is most often aimed at: a bead that
+    has been deferred BEFORE carries `resume_when:` in its Notes, and re-deferring
+    after a cycle of work is the commonest defer there is. st tend's self-heal
+    told agents to run that very command (aegis-c14kn6 is a sibling of this: a
+    tool advising an action it makes impossible).
+
+    ⚠ THE OBVIOUS FIX IS DATA LOSS. Adding `--force` alone makes the write
+    succeed by DESTROYING the existing notes — on these beads that is the
+    machine-readable `resume_when` gate and the only record of how to re-test.
+    The br guard is right; what was wrong is replacing instead of appending.
+
+    So force is returned ONLY alongside content that provably contains the
+    original, and the caller asserts that before writing.
+    """
+    old = existing or ""
+    if not old.strip():
+        return addition, False
+    if old.strip() == addition.strip():
+        # Byte-identical is not a replacement; br permits it without --force.
+        return addition, False
+    if old in addition:
+        # The caller already merged (the documented two-step). Preserving.
+        return addition, True
+    return old + NOTES_SEPARATOR + addition, True
 
 
 def _failure_reason(r) -> str:
