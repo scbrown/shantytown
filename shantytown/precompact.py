@@ -70,6 +70,35 @@ CHECKPOINT_MARKER = "[st precompact checkpoint]"
 # fleet event, and nothing schedules on it.
 MEASUREMENT_FILE = "compaction.jsonl"
 
+# WHAT THE HOOK DECIDED, written next to WHERE THE BOUNDARY FELL (aegis-902vnu,
+# dearing 2026-09-08). The measurement half of this module has always been
+# durable; the CHECKPOINT half reported its branch to stderr only, and a
+# PreCompact hook's stderr is captured nowhere. So the ledger recorded 15 real
+# boundaries carrying 2 checkpoints and NO WAY TO TELL WHY THE OTHER 13 HAVE
+# NONE — the designed skip (the agent had already commented, which is the policy
+# working) is indistinguishable from a silent total failure (no held bead, dead
+# tracker), and the two have opposite remedies.
+#
+# That ambiguity is not academic: it is exactly the confirm this bead was left
+# open for, and it consumed a forensic pass that COULD NOT ANSWER IT — the
+# per-agent held bead at a boundary six days ago is not recoverable from any
+# store on this host, and the offered explanation ("those sessions predate the
+# hook") is FALSIFIED by the ledger itself, since the ledger line is written by
+# this hook and one session compacted twice with a checkpoint on only the second.
+#
+# A mechanism that cannot say which branch it took can only ever be audited by
+# reconstruction, and reconstruction ran out. One field ends that.
+OUTCOME_KIND = "outcome"
+
+# The branches, exhaustively. Every non-crash exit from main() after the
+# measurement lands stamps exactly one of these.
+OUTCOME_NO_AGENT = "no-agent"              # $SHANTY_AGENT unset
+OUTCOME_NO_BEAD = "no-held-bead"           # nothing to checkpoint onto
+OUTCOME_NO_TRACKER = "no-tracker"          # store unreachable; NOT written
+OUTCOME_SKIPPED = "skipped-existing"       # the agent had already written one
+OUTCOME_WRITTEN = "written"                # auto-checkpoint appended
+OUTCOME_WRITE_FAILED = "write-failed"      # append raised
+
 # How much of the transcript tail goes into the checkpoint body. A checkpoint is
 # a POINTER (handoff_text's rule): enough for a reader to resume, not a replay.
 TAIL_MESSAGES = 6
@@ -216,10 +245,17 @@ def _last_boundary(log: Path, session_id: str) -> str:
             rec = json.loads(line)
         except ValueError:
             continue
-        if isinstance(rec, dict) and rec.get("session_id") == session_id:
-            at = rec.get("at")
-            if isinstance(at, str):
-                seen = at
+        if not isinstance(rec, dict) or rec.get("session_id") != session_id:
+            continue
+        # Outcome records share the session and sit a moment after the boundary
+        # they describe. Taking one as the boundary would shift the next
+        # window's floor by that moment — small, and the kind of "harmless"
+        # that gets found later. Boundary records are the ones being read here.
+        if rec.get("kind") == OUTCOME_KIND:
+            continue
+        at = rec.get("at")
+        if isinstance(at, str):
+            seen = at
     return seen
 
 
@@ -261,6 +297,25 @@ def _record(log: Path, rec: dict) -> None:
             f.write(json.dumps(rec, sort_keys=True) + "\n")
     except OSError as e:
         print(f"precompact: could not record measurement ({e})", file=sys.stderr)
+
+
+def _outcome(log: Path, session_id: str, agent: str, bead: str,
+             code: str, detail: str = "") -> None:
+    """Stamp which branch the checkpoint half took, beside the boundary.
+
+    A SEPARATE record rather than a field on the boundary record, because the
+    boundary record is written FIRST and unconditionally — before the tracker is
+    touched — and that ordering is deliberate: the measurement must survive a
+    store that hangs, which is precisely when the checkpoint is hardest to land.
+    Folding the outcome into it would mean holding the measurement hostage to
+    the slowest thing this hook does.
+
+    Best-effort, like everything here. An outcome that cannot be written must
+    never cost the checkpoint that was already written.
+    """
+    _record(log, {"at": _now(), "kind": OUTCOME_KIND, "agent": agent,
+                  "session_id": session_id, "bead": bead,
+                  "checkpoint": code, "detail": detail})
 
 
 def _held_bead(root: Path, me: str) -> str:
@@ -327,12 +382,14 @@ def main(argv: list[str] | None = None) -> int:
     if not me:
         print("precompact: $SHANTY_AGENT unset — measured, but no agent to "
               "checkpoint for", file=sys.stderr)
+        _outcome(log, session_id, me, "", OUTCOME_NO_AGENT)
         return 0
 
     bead = _held_bead(Path(root), me)
     if not bead:
         print("precompact: no held bead — measurement recorded, no checkpoint",
               file=sys.stderr)
+        _outcome(log, session_id, me, "", OUTCOME_NO_BEAD)
         return 0
 
     try:
@@ -349,13 +406,15 @@ def main(argv: list[str] | None = None) -> int:
         existing = []
         try:
             trk = _tracker(Path(root))
-        except Exception:
+        except Exception as e2:
             print("precompact: no tracker — checkpoint NOT written", file=sys.stderr)
+            _outcome(log, session_id, me, bead, OUTCOME_NO_TRACKER, str(e2))
             return 0
 
     if has_checkpoint_since(existing, me, since):
         print(f"precompact: {me} already checkpointed {bead} since {since}",
               file=sys.stderr)
+        _outcome(log, session_id, me, bead, OUTCOME_SKIPPED, f"since {since}")
         return 0
 
     body = checkpoint_body(me, bead, depth, trigger, transcript_tail(records))
@@ -363,8 +422,10 @@ def main(argv: list[str] | None = None) -> int:
         from .br import append_comment
         append_comment(trk, bead, body)
         print(f"precompact: checkpoint written to {bead}", file=sys.stderr)
+        _outcome(log, session_id, me, bead, OUTCOME_WRITTEN)
     except Exception as e:
         print(f"precompact: checkpoint NOT written to {bead} ({e})", file=sys.stderr)
+        _outcome(log, session_id, me, bead, OUTCOME_WRITE_FAILED, str(e))
     return 0
 
 

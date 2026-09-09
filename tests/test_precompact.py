@@ -171,10 +171,23 @@ def test_the_boundary_is_MEASURED_to_compaction_jsonl(tmp_path):
                          "transcript_path": str(t)})
     rows = [json.loads(l) for l in
             (tmp_path / P.MEASUREMENT_FILE).read_text().splitlines() if l.strip()]
-    assert len(rows) == 1
-    assert rows[0]["depth_tokens"] == 961_000
-    assert rows[0]["model"] == "claude-opus-5"
-    assert rows[0]["trigger"] == "auto"
+    # The ledger now carries TWO kinds of record on one line-oriented file: the
+    # boundary, and the outcome stamp saying which branch the checkpoint half
+    # took. Select the boundary rather than asserting the file has one line —
+    # the "exactly one" property being checked here is one BOUNDARY per run, and
+    # it stays worth checking; what changed is that the file is no longer a
+    # single-record file, so an unfiltered read tests the file's shape instead.
+    bounds = [r for r in rows if r.get("kind") != P.OUTCOME_KIND]
+    assert len(bounds) == 1
+    assert bounds[0]["depth_tokens"] == 961_000
+    assert bounds[0]["model"] == "claude-opus-5"
+    assert bounds[0]["trigger"] == "auto"
+    # And the outcome is stamped: _run_hook pops SHANTY_AGENT, so this run takes
+    # the no-agent branch. Asserting the CODE, not merely that a record exists —
+    # a stamp that cannot be wrong about which branch ran would be pointless.
+    outs = [r for r in rows if r.get("kind") == P.OUTCOME_KIND]
+    assert len(outs) == 1
+    assert outs[0]["checkpoint"] == P.OUTCOME_NO_AGENT
 
 
 def test_a_measurement_is_recorded_even_with_no_agent_and_no_bead(tmp_path):
@@ -184,7 +197,14 @@ def test_a_measurement_is_recorded_even_with_no_agent_and_no_bead(tmp_path):
     t.write_text(json.dumps(_assistant("x", input_tokens=42)) + "\n")
     r = _run_hook(tmp_path, {"trigger": "manual", "transcript_path": str(t)})
     assert r.returncode == 0
-    assert json.loads((tmp_path / P.MEASUREMENT_FILE).read_text())["depth_tokens"] == 42
+    rows = [json.loads(l) for l in
+            (tmp_path / P.MEASUREMENT_FILE).read_text().splitlines() if l.strip()]
+    bounds = [r for r in rows if r.get("kind") != P.OUTCOME_KIND]
+    assert len(bounds) == 1 and bounds[0]["depth_tokens"] == 42
+    # The separability this test is named for now has a witness: the measurement
+    # landed AND the hook said why no checkpoint followed it.
+    assert [r["checkpoint"] for r in rows
+            if r.get("kind") == P.OUTCOME_KIND] == [P.OUTCOME_NO_AGENT]
 
 
 def test_the_checkpoint_body_says_it_was_machine_written(tmp_path):
@@ -376,3 +396,32 @@ def test_a_codex_card_is_SKIPPED_not_counted_as_broken(tmp_path):
     verdict, why = S.precompact_wiring([_wired_ws(tmp_path, "arnold"), codex])
     assert verdict == S.WIRING_OK, why
     assert "gennaro" not in why
+
+
+def test_an_outcome_record_is_not_mistaken_for_the_boundary(tmp_path):
+    """The outcome stamp shares its session with the boundary it describes and is
+    written a moment LATER. `_last_boundary` feeds `has_checkpoint_since`, so
+    taking the outcome as the boundary would move that floor forward by that
+    moment — which silently narrows the window in which an agent's own
+    checkpoint counts as recent, and makes the hook overwrite a handoff the agent
+    had just written. Small, wrong, and exactly the kind of thing that is found
+    long afterwards, so it is pinned here rather than left to the reader of the
+    `continue`."""
+    log = tmp_path / P.MEASUREMENT_FILE
+    log.write_text(
+        json.dumps({"at": "2026-09-08T10:00:00Z", "session_id": "s9"}) + "\n" +
+        json.dumps({"at": "2026-09-08T10:00:07Z", "session_id": "s9",
+                    "kind": P.OUTCOME_KIND, "checkpoint": P.OUTCOME_WRITTEN}) + "\n")
+    assert P._last_boundary(log, "s9") == "2026-09-08T10:00:00Z"
+
+
+def test_every_exit_branch_after_the_measurement_stamps_an_outcome(tmp_path):
+    """The point of the field is that NO branch is silent — a branch that forgets
+    to stamp is indistinguishable from the total failure the stamp exists to rule
+    out, which is the ambiguity that cost a forensic pass on aegis-902vnu. Read
+    the source rather than trusting the six constants to be wired up: each
+    OUTCOME_* constant must be referenced somewhere beyond its own definition."""
+    src = Path(P.__file__).read_text()
+    for name in ("OUTCOME_NO_AGENT", "OUTCOME_NO_BEAD", "OUTCOME_NO_TRACKER",
+                 "OUTCOME_SKIPPED", "OUTCOME_WRITTEN", "OUTCOME_WRITE_FAILED"):
+        assert src.count(name) >= 2, f"{name} is defined but never stamped"
