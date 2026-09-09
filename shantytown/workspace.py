@@ -731,6 +731,11 @@ class Staleness:
     # about how many there are is worse than a long list.
     untracked: tuple = ()
     untracked_count: int = 0
+    # Tracked paths whose ONLY change is a provisioned block, and which are
+    # therefore excluded from `dirty`. Reported rather than merely dropped: a
+    # gate that silently ignores a modification is indistinguishable from one
+    # that did not see it, and this fleet keeps paying for that difference.
+    provisioned: tuple = ()
     note: str | None = None
     error: str | None = None
 
@@ -806,6 +811,99 @@ def split_porcelain(porcelain: str) -> tuple[bool, list[str]]:
     return tracked, untracked
 
 
+# Tracked files that st ITSELF writes into an agent's tree. A modification
+# confined to a provisioned block is not the agent's unsaved work, so it must not
+# raise the loss gate — see `provisioned_only` for why that distinction is
+# load-bearing rather than tidy.
+PROVISIONED_TRACKED_PATHS = ("CLAUDE.md",)
+
+
+def tracked_paths_from_porcelain(porcelain: str) -> list[str]:
+    """The TRACKED paths in `git status --porcelain`, in order.
+
+    `split_porcelain` deliberately returns only a bool for the tracked side,
+    because every consumer until now asked "is anything modified". Deciding
+    WHETHER THAT MODIFICATION IS OURS needs the names, so they are collected
+    here rather than by widening that function's contract under its callers.
+
+    A rename (`R  old -> new`) yields `old -> new` as one string on purpose: it
+    will not match a provisioned path, so a rename can never be waved through as
+    provisioned dirt. Silence in the direction of still gating.
+
+    ⚠ SPLIT, NEVER SLICE AT A FIXED OFFSET. The porcelain status field is two
+    columns and a space, so `line[3:]` looks right — but `_git` returns
+    `r.stdout.strip()`, which eats the leading space of the FIRST line only. So
+    ` M CLAUDE.md` arrives as `M CLAUDE.md` and a fixed slice returns
+    `LAUDE.md`, while every LATER line keeps its space and parses correctly. One
+    wrong path in a list of right ones, position-dependent — it cost a debugging
+    pass here, and it silently defeats the exemption rather than breaking loudly.
+
+    `split_porcelain` is unaffected and is not a latent instance of this: it only
+    tests `startswith("?? ")`/`"!! "`, and those codes occupy both columns, so
+    they carry no leading space for `strip()` to remove.
+    """
+    out: list[str] = []
+    for line in porcelain.splitlines():
+        if not line.strip() or line.lstrip().startswith(("?? ", "!! ")):
+            continue
+        parts = line.split(maxsplit=1)
+        if len(parts) == 2:
+            out.append(unquote_status_path(parts[1]))
+    return out
+
+
+def strip_tooling_block(text: str) -> str:
+    """`text` with every provisioned tooling block removed, trailing space normalized.
+
+    Comparing STRIPPED forms is used instead of parsing a diff because it answers
+    the question directly: if the file with the block removed equals HEAD with the
+    block removed, then the block is the ONLY difference. A diff-parsing version
+    has to decide what counts as "inside" a hunk, and gets it wrong at the edges.
+    """
+    from .tooling import BEGIN, END
+    lines = text.splitlines()
+    out: list[str] = []
+    skipping = False
+    for line in lines:
+        if not skipping and line.strip() == BEGIN:
+            skipping = True
+            continue
+        if skipping:
+            if line.strip() == END:
+                skipping = False
+            continue
+        out.append(line)
+    # An UNTERMINATED block (BEGIN with no END) means we never stopped skipping,
+    # and the tail of the file has been swallowed. That is a malformed tree, not
+    # a clean one: return the original so the caller sees a real difference and
+    # keeps gating.
+    if skipping:
+        return text.rstrip()
+    return "\n".join(out).rstrip()
+
+
+def provisioned_only(dest: Path | str, path: str, run: GitRunner = _git) -> bool:
+    """True when `path` differs from HEAD ONLY inside a provisioned tooling block.
+
+    THIS IS A LOSS GATE, so every uncertainty resolves to False — an unreadable
+    file, a missing HEAD blob, a decode error all mean "cannot tell", and cannot
+    tell is not clean. The same rule `tree_staleness` keeps for a failed status.
+    """
+    if path not in PROVISIONED_TRACKED_PATHS:
+        return False
+    rc, head = run(dest, "show", f"HEAD:{path}")
+    if rc != 0:
+        return False
+    try:
+        work = (Path(dest) / path).read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return False
+    try:
+        return strip_tooling_block(head) == strip_tooling_block(work)
+    except Exception:
+        return False
+
+
 def tree_staleness(dest: Path | str, run: GitRunner = _git,
                    fetch: bool = False,
                    untracked_all: bool = False) -> Staleness:
@@ -870,11 +968,34 @@ def tree_staleness(dest: Path | str, run: GitRunner = _git,
             note=note,
         )
     tracked_dirty, untracked = split_porcelain(porcelain)
+    # ST'S OWN WRITING IS NOT THE AGENT'S UNSAVED WORK (aegis-c14kn6). st
+    # provisions a delimited tooling block into TRACKED CLAUDE.md, which left 13
+    # of 13 crew clones permanently dirty and every cycle refused — while the
+    # rulebook forbids committing that file, so the refusal's own advice ("commit
+    # and push first") was the one action the agent must never take. Measured: 10
+    # of those 13 held ZERO unpushed commits, so this stranded them with every
+    # remote healthy; it was read as forge-outage fallout for a day.
+    #
+    # Same argument as aegis-4hwpdb, which took untracked strays out of this gate:
+    # a guard whose exit path is "commit it" is harmful when the dirt is not the
+    # agent's to commit. Narrow on purpose — only the exact provisioned paths, and
+    # only when the change is CONFINED to the block. An agent's own edit to
+    # CLAUDE.md outside the block is real work and still gates.
+    provisioned: tuple[str, ...] = ()
+    if tracked_dirty:
+        paths = tracked_paths_from_porcelain(porcelain)
+        if paths and all(p in PROVISIONED_TRACKED_PATHS for p in paths):
+            # At most one extra git call, and only in the case that would
+            # otherwise refuse — this runs on the edit-time hook path too.
+            if all(provisioned_only(dest, p, run) for p in paths):
+                provisioned = tuple(paths)
+                tracked_dirty = False
     return Staleness(
         ref=ref,
         behind=int(behind) if behind.isdigit() else 0,
         unpushed=int(unpushed) if unpushed.isdigit() else 0,
         dirty=tracked_dirty,
+        provisioned=provisioned,
         untracked=tuple(untracked[:UNTRACKED_SAMPLE_CAP]),
         untracked_count=len(untracked),
         note=note,

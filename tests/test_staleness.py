@@ -429,3 +429,125 @@ def test_the_cycle_guard_passes_a_real_clone_holding_only_a_secret_stray(tmp_pat
     v2 = assess("wu", [wt], "mid-way through the mcp fix",
                 staleness=lambda t: tree_staleness(t, untracked_all=True))
     assert not v2.ok and "would be lost" in v2.reason
+
+
+# --- provisioned dirt (aegis-c14kn6) -----------------------------------------
+#
+# st writes a delimited tooling block into TRACKED CLAUDE.md. That left 13 of 13
+# crew clones permanently dirty and refused every cycle, while the rulebook
+# forbids committing that file — so the refusal advised the one action the agent
+# must never take. 10 of the 13 held ZERO unpushed commits, i.e. this stranded
+# them with every remote healthy.
+#
+# The weight here is deliberately on the arms that must STILL GATE. Waving
+# provisioned dirt through is only safe if it cannot be stretched to cover an
+# agent's own work, and each test below is one way that stretch could happen.
+
+from shantytown.tooling import BEGIN, END
+from shantytown.workspace import strip_tooling_block
+
+
+def _tree_with_claude_md(tmp_path, body="base line\n"):
+    src = _repo(tmp_path / "src", "seed")
+    (src / "CLAUDE.md").write_text(body)
+    _run(src, "add", "-A")
+    _run(src, "commit", "-qm", "add CLAUDE.md")
+    return _clone(src, tmp_path / "work")
+
+
+def _block(text="tooling instructions"):
+    return f"\n{BEGIN}\n## {text}\n{END}\n"
+
+
+def test_a_provisioned_block_alone_is_NOT_dirty(tmp_path):
+    """The whole bug: st's own writing read as the agent's unsaved work."""
+    w = _tree_with_claude_md(tmp_path)
+    (w / "CLAUDE.md").write_text("base line\n" + _block())
+    s = tree_staleness(w)
+    assert s.dirty is False
+    assert s.provisioned == ("CLAUDE.md",)
+
+
+def test_an_edit_OUTSIDE_the_block_still_gates(tmp_path):
+    """THE ARM THAT MATTERS. A provisioned block must not launder the agent's own
+    edit to the same file — that edit is real work and losing it is what the gate
+    is for."""
+    w = _tree_with_claude_md(tmp_path)
+    (w / "CLAUDE.md").write_text("base line\nMY OWN NOTE\n" + _block())
+    s = tree_staleness(w)
+    assert s.dirty is True
+    assert s.provisioned == ()
+
+
+def test_another_modified_file_alongside_still_gates(tmp_path):
+    """The exemption is per-TREE, not per-file: any non-provisioned modification
+    anywhere in the tree keeps the gate up, so a provisioned block cannot make a
+    dirty tree read clean."""
+    w = _tree_with_claude_md(tmp_path)
+    (w / "CLAUDE.md").write_text("base line\n" + _block())
+    (w / "seed.txt").write_text("changed by the agent")
+    s = tree_staleness(w)
+    assert s.dirty is True
+    assert s.provisioned == ()
+
+
+def test_an_unterminated_block_still_gates(tmp_path):
+    """A BEGIN with no END is a malformed tree, not a clean one. If stripping
+    swallowed the tail, everything after a stray marker would compare equal and
+    real work would vanish through the exemption."""
+    w = _tree_with_claude_md(tmp_path)
+    (w / "CLAUDE.md").write_text(
+        "base line\n" + BEGIN + "\nhalf a block\nMY OWN NOTE\n")
+    s = tree_staleness(w)
+    assert s.dirty is True
+
+
+def test_a_block_in_a_NON_provisioned_file_still_gates(tmp_path):
+    """The allowlist is by PATH. Pasting the marker into another tracked file
+    must not buy an exemption for it."""
+    w = _tree_with_claude_md(tmp_path)
+    (w / "seed.txt").write_text("seed" + _block())
+    s = tree_staleness(w)
+    assert s.dirty is True
+    assert s.provisioned == ()
+
+
+def test_unpushed_is_untouched_by_the_exemption(tmp_path):
+    """This changes the DIRTY arm only. A tree carrying a real unpushed commit
+    must still be reported as holding work that exists in one place."""
+    w = _tree_with_claude_md(tmp_path)
+    _commit(w, "real-work")
+    (w / "CLAUDE.md").write_text("base line\n" + _block())
+    s = tree_staleness(w)
+    assert s.dirty is False
+    assert s.unpushed == 1
+
+
+def test_strip_tooling_block_is_reversible_on_a_clean_file(tmp_path):
+    """A file with no block must come back unchanged apart from trailing space —
+    otherwise every unmodified CLAUDE.md would compare unequal to itself."""
+    assert strip_tooling_block("a\nb\n") == "a\nb"
+    assert strip_tooling_block(f"a\n{BEGIN}\nx\n{END}\nb\n") == "a\nb"
+
+
+def test_a_block_only_change_to_a_NON_provisioned_file_still_gates_alongside_one(tmp_path):
+    """The hardest arm, and the one the other tests cannot reach.
+
+    The allowlist is enforced TWICE — once over the whole tracked set in
+    `tree_staleness`, once per path in `provisioned_only`. Either alone closes
+    this, so mutating one is behaviour-equivalent and no single-guard mutation can
+    be caught. That is defence in depth, not redundancy to be tidied away, and it
+    is only worth anything if something demonstrates the property it defends.
+
+    Here a provisioned file AND a non-provisioned one BOTH carry a change
+    confined to a tooling block. Every earlier arm fails the inner check for an
+    unrelated reason (the sibling's content differs outside any block), so this is
+    the only case where removing both guards would actually wave real work
+    through. Pasting the marker into a file st does not own must never buy it an
+    exemption."""
+    w = _tree_with_claude_md(tmp_path)
+    (w / "CLAUDE.md").write_text("base line\n" + _block())
+    (w / "seed.txt").write_text("seed" + _block("not st's file"))
+    s = tree_staleness(w)
+    assert s.dirty is True
+    assert s.provisioned == ()
