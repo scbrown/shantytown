@@ -603,3 +603,84 @@ def test_the_probe_is_cached_per_url(tmp_path):
     for url in list(cache):
         cache[url] = False
     assert remote_reachable(w, cache=cache) is False
+
+
+# --- a timeout must kill the whole process GROUP (aegis-ujz5gf) ---------------
+
+import os
+import signal as _signal
+import subprocess as _sp
+import time as _time
+
+from shantytown.workspace import run_with_group_timeout
+
+
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+        return True
+    except (ProcessLookupError, PermissionError):
+        return False
+
+
+def test_a_timeout_kills_the_GRANDCHILD_not_just_the_child(tmp_path):
+    """THE BUG, reproduced without git.
+
+    `subprocess.run(timeout=)` kills only the direct child. `git pull` had by
+    then spawned `git fetch`, which had spawned `ssh`; those survived, were
+    adopted by `systemd --user`, and hung forever against the unreachable forge —
+    45 of them, one per dispatch, with no upper bound.
+
+    Here a shell spawns a long-lived grandchild and writes its pid, then sleeps
+    past the timeout. The grandchild must be dead afterwards."""
+    pidfile = tmp_path / "grandchild.pid"
+    script = (f"sleep 300 & echo $! > {pidfile}; sleep 300")
+    with __import__("pytest").raises(_sp.TimeoutExpired):
+        run_with_group_timeout(["sh", "-c", script], 2,
+                               stdout=_sp.PIPE, stderr=_sp.PIPE, text=True)
+    for _ in range(50):                       # the kill is not instantaneous
+        if pidfile.exists():
+            break
+        _time.sleep(0.1)
+    assert pidfile.exists(), "the probe never recorded a grandchild pid"
+    gpid = int(pidfile.read_text().strip())
+    for _ in range(50):
+        if not _alive(gpid):
+            break
+        _time.sleep(0.1)
+    assert not _alive(gpid), (
+        f"grandchild {gpid} survived the timeout — it would be reparented to "
+        f"the subreaper and hang forever, which is aegis-ujz5gf")
+
+
+def test_the_killer_does_not_kill_ITSELF(tmp_path):
+    """`start_new_session=True` is what makes killpg safe as well as possible.
+    Without it the child shares OUR process group, and killing that group takes
+    down the caller — the same self-matching hazard as a `pkill -f` pattern that
+    matches the watcher. This test passing at all means we survived."""
+    with __import__("pytest").raises(_sp.TimeoutExpired):
+        run_with_group_timeout(["sh", "-c", "sleep 300"], 1,
+                               stdout=_sp.PIPE, stderr=_sp.PIPE, text=True)
+    assert os.getpid() > 0                    # reached = the caller is alive
+    assert _alive(os.getpid())
+
+
+def test_a_normal_command_is_unaffected():
+    """The helper replaces subprocess.run on hot paths, so the ordinary case must
+    behave identically — same returncode, same captured stdout."""
+    r = run_with_group_timeout(["sh", "-c", "echo hello; exit 3"], 30,
+                               stdout=_sp.PIPE, stderr=_sp.PIPE, text=True)
+    assert r.returncode == 3
+    assert r.stdout.strip() == "hello"
+
+
+def test_a_failing_kill_never_raises(tmp_path, monkeypatch):
+    """Every failure inside the kill is benign — already gone, not permitted, no
+    killpg on this platform. It must not turn a timeout into a crash on the
+    dispatch path, which never raises by design."""
+    from shantytown import workspace as W
+    monkeypatch.setattr(W.os, "killpg",
+                        lambda *a: (_ for _ in ()).throw(PermissionError()))
+    with __import__("pytest").raises(_sp.TimeoutExpired):
+        run_with_group_timeout(["sh", "-c", "sleep 30"], 1,
+                               stdout=_sp.PIPE, stderr=_sp.PIPE, text=True)

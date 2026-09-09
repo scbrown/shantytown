@@ -6797,8 +6797,12 @@ def _refresh_clone(path) -> str | None:
     try:
         mcp = Path(path) / ".mcp.json"
         saved = mcp.read_bytes() if mcp.is_file() else None
-        r = subprocess.run(["git", "-C", str(path), "pull", "--ff-only"],
-                           capture_output=True, text=True, timeout=60)
+        # Process-GROUP timeout: a plain subprocess timeout kills `git pull`
+        # and orphans the `git fetch` + `ssh` it already spawned (aegis-ujz5gf).
+        from .workspace import run_with_group_timeout
+        r = run_with_group_timeout(
+            ["git", "-C", str(path), "pull", "--ff-only"], 60,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         err = None if r.returncode == 0 else (r.stderr or r.stdout).strip()
         if saved is not None and (not mcp.is_file() or mcp.read_bytes() != saved):
             mcp.write_bytes(saved)
@@ -6991,8 +6995,10 @@ def _refresh_worktree(dest, base: str | None = None) -> str | None:
             note = None
         # --prune: see tree_staleness. Without it, refs for branches deleted
         # upstream survive and launder orphaned commits into "on a remote".
-        subprocess.run(["git", "-C", str(dest), "fetch", "--all", "--prune",
-                        "--quiet"], capture_output=True, text=True, timeout=60)
+        from .workspace import run_with_group_timeout
+        run_with_group_timeout(
+            ["git", "-C", str(dest), "fetch", "--all", "--prune", "--quiet"], 60,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         stale = tree_staleness(dest)
         extra = f" {note}" if note else ""
         # STRANDED WORK IS REPORTED WHETHER OR NOT THE REBASE SUCCEEDS. It is not

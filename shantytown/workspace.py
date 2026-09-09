@@ -509,14 +509,16 @@ MAIN_CANDIDATES = ("main", "master")
 
 
 def _git(dest: Path | str, *args: str) -> "tuple[int, str]":
-    r = subprocess.run(["git", "-C", str(dest), *args],
-                       capture_output=True, text=True, timeout=60)
+    r = run_with_group_timeout(["git", "-C", str(dest), *args], 60,
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                               text=True)
     return r.returncode, (r.stdout or "").strip()
 
 
 def _git_push(dest: Path | str, *args: str) -> "tuple[int, str, str]":
-    r = subprocess.run(["git", "-C", str(dest), "push", *args],
-                       capture_output=True, text=True, timeout=60)
+    r = run_with_group_timeout(["git", "-C", str(dest), "push", *args], 60,
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                               text=True)
     return r.returncode, (r.stdout or "").strip(), (r.stderr or "").strip()
 
 
@@ -904,6 +906,81 @@ def provisioned_only(dest: Path | str, path: str, run: GitRunner = _git) -> bool
         return False
 
 
+def run_with_group_timeout(cmd, timeout, **kwargs):
+    """subprocess.run(), but a timeout kills the whole PROCESS GROUP.
+
+    ⚠ `subprocess.run(..., timeout=)` KILLS ONLY THE DIRECT CHILD (aegis-ujz5gf).
+    `git pull` has by then spawned `git fetch`, which has spawned `ssh`. Those
+    grandchildren survive the parent's death, are orphaned, get adopted by
+    `systemd --user`, and hang forever against an unreachable remote. Measured
+    2026-09-08: **45 hung `git fetch` processes, 39 of them reparented to the
+    subreaper, each with a live ssh child, ages spread 127s..869s — one per
+    dispatch, accumulating with no upper bound.**
+
+    `start_new_session=True` is what makes the kill both possible and safe: the
+    child becomes a session and process-group LEADER, so `killpg` reaches every
+    descendant AND cannot reach back into our own group. Without it, killpg on
+    our own pgid would take down the caller — the same self-matching hazard as a
+    `pkill -f` pattern that matches the watcher.
+
+    ⚠ THE SYMPTOM DRAINS ON ITS OWN WHEN THE REMOTE STOPS HANGING, AND THAT IS
+    NOT A FIX. When the forge went from banner-exchange TIMEOUT to connection
+    REFUSED the orphans died and the count fell 45 -> 0 within the hour, because
+    a refused connect fails fast and never reaches the state that leaks. The
+    defect is unchanged; only the remote's failure mode moved. Do not read a
+    clean `ps` as this being fixed.
+
+    TERM first, then KILL: git and ssh clean up their own temporary state on
+    TERM, and a pack-write interrupted by KILL is how a repo acquires a stale
+    lock file. Escalate only if TERM is ignored.
+    """
+    import signal
+    kwargs.pop("start_new_session", None)
+    proc = subprocess.Popen(cmd, start_new_session=True, **kwargs)
+    try:
+        out, err = proc.communicate(timeout=timeout)
+        return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
+    except subprocess.TimeoutExpired:
+        _kill_group(proc)
+        raise
+
+
+def _kill_group(proc) -> None:
+    """TERM then KILL the process group led by `proc`. Never raises.
+
+    Every failure here is benign and must stay silent-but-harmless: the group is
+    already gone (ProcessLookupError), we cannot signal it (PermissionError), or
+    the platform has no killpg. Falling back to killing the direct child leaves
+    us no worse off than the behaviour this function replaces.
+    """
+    import signal
+    try:
+        pgid = os.getpgid(proc.pid)
+    except Exception:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        return
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.killpg(pgid, sig)
+        except ProcessLookupError:
+            return
+        except Exception:
+            break
+        try:
+            proc.communicate(timeout=5)
+            return
+        except Exception:
+            continue
+    try:
+        proc.kill()
+        proc.communicate(timeout=5)
+    except Exception:
+        pass
+
+
 #: How long to wait on a remote-reachability probe. Short on purpose: during a
 #: real outage ssh answers "connection refused" instantly, so the timeout exists
 #: for the HANG, which is the case that would make a cycle gate slower than the
@@ -940,10 +1017,10 @@ def remote_reachable(dest: Path | str, run: GitRunner | None = None,
     for url in urls:
         if url not in cache:
             try:
-                r = subprocess.run(
+                r = run_with_group_timeout(
                     ["git", "ls-remote", "--exit-code", "-h", url],
-                    capture_output=True, text=True,
-                    timeout=REACHABILITY_TIMEOUT)
+                    REACHABILITY_TIMEOUT,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
                 cache[url] = r.returncode == 0
             except subprocess.TimeoutExpired:
                 cache[url] = False
