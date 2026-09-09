@@ -149,6 +149,41 @@ class TreeRisk:
 
 
 @dataclass
+class TreeStranded:
+    """Unpushed commits in a tree whose push remote is MEASURED unreachable.
+
+    Reported, never blocking — and the reasoning is the asymmetry TreeRisk's own
+    docstring already states: `dirty` dies with the session, `unpushed` SURVIVES
+    THE CYCLE ON DISK. The commits are still there afterwards. What the gate was
+    really protecting against is them being forgotten, which is a real risk and a
+    strictly weaker one than losing them.
+
+    So during a forge outage the old behaviour traded the weaker risk for the
+    stronger one. `st push` cannot succeed, the refusal is therefore permanent,
+    `st tend` re-requests forever, and the agent keeps filling until it hits the
+    hard context wall — at which point it cannot compact, so it cannot write a
+    checkpoint either, and the UNWRITTEN context is lost for good (aegis-902vnu).
+    Refusing to cycle a saturated agent to protect commits that a cycle does not
+    touch is the wrong way round (aegis-tig80i).
+
+    ONLY A MEASURED FAILURE REACHES HERE. `remote_reachable` is three-state and
+    its None means could-not-tell, which keeps gating. And `dirty` is never
+    downgraded: a tree that is both dirty and unpushed still refuses on the dirt.
+    """
+    path: str
+    unpushed: int = 0
+    detail: str = ""
+
+    def render(self) -> list:
+        return [
+            f"{self.path}: {self.unpushed} commit(s) on no remote ref, and the "
+            f"push remote is UNREACHABLE — not blocking this cycle, because a "
+            f"cycle relaunches this same clone and does not touch commits",
+            f"    PUSH THESE when the remote returns: cd {self.path} && st push",
+        ]
+
+
+@dataclass
 class Verdict:
     """May we cycle, and what does the operator need to know first."""
     agent: str
@@ -160,12 +195,19 @@ class Verdict:
     #: refuse — see TreeUntracked. Carried on the verdict so the report is the
     #: same whether the cycle went ahead or was refused for something else.
     untracked: list = field(default_factory=list)
+    #: Trees holding unpushed commits whose remote is measured unreachable. Like
+    #: `untracked`, these are reported and never a reason to refuse — but unlike
+    #: untracked files they name work that MUST still be pushed later, so the
+    #: wording carries the instruction rather than withholding it.
+    stranded: list = field(default_factory=list)
 
     def notice_lines(self) -> list:
-        """The non-blocking untracked report, or []."""
+        """The non-blocking reports (untracked, stranded-by-outage), or []."""
         lines = []
         for u in self.untracked:
             lines += u.render()
+        for st_ in self.stranded:
+            lines += st_.render()
         return lines
 
     def render(self) -> str:
@@ -180,7 +222,7 @@ class Verdict:
 
 
 def assess(agent: str, trees, checkpoint: str, staleness,
-           allow_loss: bool = False) -> Verdict:
+           allow_loss: bool = False, reachable=None) -> Verdict:
     """Decide whether `agent` may be cycled now.
 
     `trees` are the paths this agent could hold work in — its crew clone and every
@@ -231,6 +273,15 @@ def assess(agent: str, trees, checkpoint: str, staleness,
 
     risks: list[TreeRisk] = []
     notices: list[TreeUntracked] = []
+    stranded: list[TreeStranded] = []
+    # One cache across every tree: a fleet's worktrees mostly share one forge, so
+    # the honest answer for the second tree is the answer measured for the first.
+    reach_cache: dict = {}
+    if reachable is None:
+        from .workspace import remote_reachable
+
+        def reachable(tree):
+            return remote_reachable(tree, cache=reach_cache)
     for tree in trees:
         s = staleness(tree)
         if getattr(s, "error", None):
@@ -249,6 +300,19 @@ def assess(agent: str, trees, checkpoint: str, staleness,
                 str(tree), files=list(getattr(s, "untracked", ()) or ()),
                 total=count))
         if s.dirty or s.unpushed:
+            # UNPUSHED-ONLY, AND THE REMOTE MEASURED UNREACHABLE, IS NOT A
+            # REFUSAL (aegis-tig80i). See TreeStranded for why this is the safer
+            # trade and not a loosening. `dirty` is never downgraded, and a
+            # could-not-tell (None) keeps gating.
+            if s.unpushed and not s.dirty:
+                try:
+                    verdict = reachable(tree)
+                except Exception:
+                    verdict = None
+                if verdict is False:
+                    stranded.append(
+                        TreeStranded(str(tree), unpushed=s.unpushed))
+                    continue
             risks.append(TreeRisk(str(tree), dirty=s.dirty, unpushed=s.unpushed))
 
     if risks and not allow_loss:
@@ -258,10 +322,11 @@ def assess(agent: str, trees, checkpoint: str, staleness,
             "--allow-loss if you have decided it is expendable (NOT --dry-run and "
             "NOT a general --force: this override is named on its own so that "
             "reaching past some other refusal cannot disarm it).",
-            risks=risks, checkpoint=checkpoint, untracked=notices)
+            risks=risks, checkpoint=checkpoint, untracked=notices,
+            stranded=stranded)
 
     return Verdict(agent, True, risks=risks, checkpoint=checkpoint,
-                   untracked=notices)
+                   untracked=notices, stranded=stranded)
 
 
 def _parse_ts(value):

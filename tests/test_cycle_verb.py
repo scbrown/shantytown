@@ -385,3 +385,101 @@ def test_a_staleness_reading_without_the_untracked_fields_still_judges():
 
     v = assess("ellie", ["/w/e"], CHECKPOINT, lambda _t: _Old(dirty=True))
     assert not v.ok and v.untracked == []
+
+
+# --- unpushed + an unreachable remote is a NOTICE, not a refusal (aegis-tig80i)
+#
+# The asymmetry TreeRisk's own docstring already states: `dirty` dies with the
+# session; `unpushed` SURVIVES THE CYCLE ON DISK. So refusing to cycle a
+# saturated agent over unpushed commits trades a weaker risk (they get forgotten)
+# for a stronger one (the agent hits the hard context wall, cannot compact, and
+# therefore cannot write a checkpoint — losing the unwritten context for good).
+#
+# During a forge outage that trade is also UNWINNABLE: the refusal advises
+# `st push`, which cannot succeed, so `st tend` re-requests the cycle forever.
+#
+# Every test below is about keeping this narrow. Relaxing a loss gate is only
+# defensible if it cannot be reached by accident.
+
+def _unpushed(n=2):
+    return lambda _tree: _Stale(unpushed=n)
+
+
+def test_unpushed_with_an_UNREACHABLE_remote_does_not_refuse():
+    """The bug. Measured-unreachable means the advised remedy is impossible."""
+    v = assess("dearing", ["/w/goldblum-wt"], CHECKPOINT, _unpushed(),
+               reachable=lambda _t: False)
+    assert v.ok is True
+    assert v.risks == []
+    assert len(v.stranded) == 1 and v.stranded[0].unpushed == 2
+
+
+def test_the_stranded_notice_still_says_to_push_them():
+    """Not refusing must not mean going quiet. Untracked strays are reported with
+    no instruction to commit them; these are the opposite — real commits that
+    MUST be pushed later — so the notice carries the instruction."""
+    v = assess("dearing", ["/w/goldblum-wt"], CHECKPOINT, _unpushed(),
+               reachable=lambda _t: False)
+    text = "\n".join(v.notice_lines())
+    assert "/w/goldblum-wt" in text
+    assert "PUSH THESE" in text and "st push" in text
+
+
+def test_unpushed_with_a_REACHABLE_remote_STILL_REFUSES():
+    """Unchanged behaviour when pushing is possible — which is the normal case.
+    The remedy works, so the gate should insist on it."""
+    v = assess("dearing", ["/w/tree"], CHECKPOINT, _unpushed(),
+               reachable=lambda _t: True)
+    assert v.ok is False and len(v.risks) == 1 and v.stranded == []
+
+
+def test_COULD_NOT_TELL_keeps_gating():
+    """THE DIRECTION THAT MATTERS. `remote_reachable` is three-state and None
+    means we did not establish anything. An unproven probe must never be able to
+    stand down a loss gate — uncertainty resolves toward keeping work safe."""
+    v = assess("dearing", ["/w/tree"], CHECKPOINT, _unpushed(),
+               reachable=lambda _t: None)
+    assert v.ok is False and v.stranded == []
+
+
+def test_a_probe_that_RAISES_keeps_gating():
+    """Same rule for a broken probe: an exception is not evidence of an outage."""
+    def boom(_t):
+        raise OSError("probe blew up")
+    v = assess("dearing", ["/w/tree"], CHECKPOINT, _unpushed(), reachable=boom)
+    assert v.ok is False and v.stranded == []
+
+
+def test_DIRTY_is_never_downgraded_even_when_the_remote_is_unreachable():
+    """THE ARM THIS MUST NOT BREAK. Uncommitted work dies with the session
+    whatever the remote is doing, so an outage is not a reason to wave it
+    through. A tree that is both dirty and unpushed refuses on the dirt."""
+    v = assess("ellie", ["/w/ellie"], CHECKPOINT,
+               lambda _t: _Stale(dirty=True, unpushed=3),
+               reachable=lambda _t: False)
+    assert v.ok is False
+    assert v.risks and v.risks[0].dirty is True
+    assert v.stranded == []
+
+
+def test_an_unreadable_tree_is_still_a_risk_when_the_remote_is_down():
+    """`error` means the tree could not be read at all — it might hold the only
+    copy of something. The outage exemption is about a MEASURED unpushed count,
+    not about any refusal that happens during an outage."""
+    v = assess("ellie", ["/w/ellie"], CHECKPOINT,
+               lambda _t: _Stale(error="could not read"),
+               reachable=lambda _t: False)
+    assert v.ok is False and v.stranded == []
+
+
+def test_a_clean_tree_probes_nothing():
+    """The probe is a network call on the cycle path. It must not fire for a tree
+    with nothing at stake, or the gate becomes slower than the wall it prevents."""
+    calls = []
+
+    def probe(tree):
+        calls.append(tree)
+        return False
+
+    v = assess("ellie", ["/w/a", "/w/b"], CHECKPOINT, _clean, reachable=probe)
+    assert v.ok is True and calls == []

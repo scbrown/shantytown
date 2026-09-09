@@ -904,6 +904,59 @@ def provisioned_only(dest: Path | str, path: str, run: GitRunner = _git) -> bool
         return False
 
 
+#: How long to wait on a remote-reachability probe. Short on purpose: during a
+#: real outage ssh answers "connection refused" instantly, so the timeout exists
+#: for the HANG, which is the case that would make a cycle gate slower than the
+#: wall it is trying to save the agent from.
+REACHABILITY_TIMEOUT = 10
+
+
+def remote_reachable(dest: Path | str, run: GitRunner | None = None,
+                     cache: dict | None = None) -> bool | None:
+    """Can this tree's push remote be reached RIGHT NOW? True / False / None.
+
+    THREE-STATE, and None is the important one: `None` means COULD NOT TELL and
+    callers must treat it as they would True — i.e. keep gating. Only a
+    positively measured failure may relax anything, because the whole point of
+    a loss gate is that uncertainty resolves toward keeping work safe.
+
+    Cached by remote URL, since a fleet's worktrees mostly share one forge and
+    the honest answer for the second tree is the answer from the first.
+    """
+    run = run or _git
+    cache = cache if cache is not None else {}
+    rc, out = run(dest, "config", "--get-regexp", r"^remote\..*\.url$")
+    if rc != 0 or not out.strip():
+        # No remote at all is not "unreachable" — it is a different situation
+        # (work that was never going anywhere from here) and this function must
+        # not launder it into a reason to stop gating.
+        return None
+    urls = []
+    for line in out.splitlines():
+        parts = line.split(maxsplit=1)
+        if len(parts) == 2 and parts[1] not in urls:
+            urls.append(parts[1])
+    verdicts = []
+    for url in urls:
+        if url not in cache:
+            try:
+                r = subprocess.run(
+                    ["git", "ls-remote", "--exit-code", "-h", url],
+                    capture_output=True, text=True,
+                    timeout=REACHABILITY_TIMEOUT)
+                cache[url] = r.returncode == 0
+            except subprocess.TimeoutExpired:
+                cache[url] = False
+            except Exception:
+                cache[url] = None
+        verdicts.append(cache[url])
+    if any(v is True for v in verdicts):
+        return True          # somewhere to push exists
+    if verdicts and all(v is False for v in verdicts):
+        return False         # every push target measured unreachable
+    return None
+
+
 def tree_staleness(dest: Path | str, run: GitRunner = _git,
                    fetch: bool = False,
                    untracked_all: bool = False) -> Staleness:

@@ -551,3 +551,55 @@ def test_a_block_only_change_to_a_NON_provisioned_file_still_gates_alongside_one
     s = tree_staleness(w)
     assert s.dirty is True
     assert s.provisioned == ()
+
+
+# --- remote_reachable: three-state, and None is the load-bearing one (tig80i) --
+
+from shantytown.workspace import remote_reachable
+
+
+def test_a_reachable_remote_reads_True(tmp_path):
+    src = _repo(tmp_path / "src", "seed")
+    w = _clone(src, tmp_path / "work")
+    assert remote_reachable(w) is True
+
+
+def test_an_unreachable_remote_reads_False(tmp_path):
+    """Measured failure — the only state permitted to stand down the loss gate."""
+    src = _repo(tmp_path / "src", "seed")
+    w = _clone(src, tmp_path / "work")
+    _run(w, "remote", "set-url", "origin", str(tmp_path / "gone.git"))
+    assert remote_reachable(w) is False
+
+
+def test_NO_remote_reads_None_and_not_False(tmp_path):
+    """A tree with nowhere to push is not "the forge is down". Returning False
+    here would let an unrelated situation stand down the gate — the exemption is
+    for work that CANNOT be pushed right now, not work that was never going
+    anywhere from this tree."""
+    w = _repo(tmp_path / "solo", "seed")
+    assert remote_reachable(w) is None
+
+
+def test_one_reachable_remote_is_enough(tmp_path):
+    """`st push` contacts every trusted peer, so somewhere-to-push means the
+    remedy the gate advises can still succeed and the gate should stand."""
+    src = _repo(tmp_path / "src", "seed")
+    w = _clone(src, tmp_path / "work")
+    _run(w, "remote", "add", "dead", str(tmp_path / "gone.git"))
+    assert remote_reachable(w) is True
+
+
+def test_the_probe_is_cached_per_url(tmp_path):
+    """Worktrees mostly share one forge; the honest answer for the second tree is
+    the answer measured for the first, and a per-tree probe would multiply a
+    10-second timeout across a fleet on the cycle path."""
+    src = _repo(tmp_path / "src", "seed")
+    w = _clone(src, tmp_path / "work")
+    cache: dict = {}
+    assert remote_reachable(w, cache=cache) is True
+    assert len(cache) == 1
+    # Poison the cached verdict: a second call must READ it, not re-probe.
+    for url in list(cache):
+        cache[url] = False
+    assert remote_reachable(w, cache=cache) is False
