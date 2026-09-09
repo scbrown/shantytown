@@ -475,6 +475,11 @@ def _with_capture_hook(text: str, root) -> str:
     if not isinstance(cfg, dict):
         return text
     hooks = cfg.setdefault("hooks", {})
+    pre = hooks.get("PreToolUse", [])
+    pre = [g for g in pre if not any(
+        "shantytown.stats capture" in h.get("command", "")
+        for h in g.get("hooks", []) if isinstance(h, dict))]
+    hooks["PreToolUse"] = pre + [{"matcher": ".*", "hooks": [_capture_cmd(root)]}]
     hooks["PostToolUse"] = [
         {"matcher": ".*", "hooks": [_capture_cmd(root), _yupana_post_tool_cmd()]},
         # The ACTION OUTCOME record (aegis-368cu.10), Bash only — see
@@ -491,6 +496,7 @@ def _with_capture_hook(text: str, root) -> str:
     # as `unknown` — a trace that looks complete and cannot answer the one
     # question it exists for.
     hooks["PostToolUseFailure"] = [
+        {"matcher": ".*", "hooks": [_capture_cmd(root)]},
         {"matcher": "Bash", "hooks": [_yupana_action_outcome_cmd()]},
     ]
     # NO MATCHER on Stop: Stop carries no tool name, and a matcher on an event

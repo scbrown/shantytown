@@ -591,7 +591,9 @@ class Dispatcher:
             refusal = self.governor(item, agent_name)
             if refusal:
                 raise GovernorRefused(refusal)
+        from .task_order import instruction
         text = f"Work is on your hook: {item_id} — {item.title}"
+        text += " — " + instruction(item_id)
         # NAME THE STORE (aegis-81zyb). An id and a title are not a dispatch on a
         # host with 125 bd stores — they are a riddle, and the receiving agent has
         # no signal that the question is even open. The tag rides HERE, inside

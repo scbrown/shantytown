@@ -1107,3 +1107,37 @@ The contract, because a program depends on it:
 
 Code 2 exists because of a specific bug we shipped: a check that couldn't reach its target reported
 CLEAR. **"I could not look" must never render as "fine."**
+
+
+### Task read ordering
+
+Run `st stats --begin-task test-123` as a **standalone tool command** before
+starting a task, including after changing tasks in the same session. Then call
+Quipu search/query/ask through the Homelab MCP tools with `task="test-123"`.
+Dispatch and haul prompts include this declaration step. The CLI prints a request
+marker; the post-tool hook records it with the harness session ID. Invoking the
+CLI outside a hooked tool call does not create a binding. Repeating the current
+declaration preserves earlier actions.
+
+`st stats --task-order [agent] --since 24` prints JSON with one row per observed
+session-local declaration and a count of unbound events. PASS means a successful,
+task-matched MCP read completed before the first definite material tool started
+in that scope. FAIL means the definite action started before the first recorded
+read completed. Missing starts, unsuccessful or absent reads, ambiguous earlier
+operations, and scopes with no definite action remain UNKNOWN. Shell commands
+are ambiguous; edit/write tools are definite. A successful hook result proves
+completion, not the usefulness of the answer.
+
+This is **declared-scope evidence, not whole-dispatch coverage**. Undeclared tasks
+remain outside this report; reconcile against the dispatch ledger and haul records
+before calculating adoption. A declaration made late cannot certify earlier work.
+Hooks cannot establish activity they never saw. Concurrent sessions do not borrow
+one another's tasks, and a read carrying a mismatched task remains unbound.
+
+Ordering metadata uses separate SQLite tables and stores no command bodies,
+queries, responses, or credentials. Existing usage counts retain their successful
+post-tool denominator. Both harness adapters provision pre-tool and failure
+capture alongside existing post-tool/stop capture on **next launch**. Already
+running sessions may lack starts and must report UNKNOWN; installing code does
+not prove those sessions adopted new hook settings. No restart is required by
+this command.

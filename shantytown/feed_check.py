@@ -783,6 +783,7 @@ def haul_feed_message(nid: str, title: str, rest: int, headroom: str = "",
     as an instruction to continue; it is actually just the re-serve rule, which
     means nothing at all. Saying so where it happens is the whole fix.
     """
+    from .task_order import instruction
     t = (title or "")[:80]
     # A repeat must READ as a repeat — being handed the same bead back looks like
     # an instruction to persist, when it only means you have not released it. One
@@ -795,7 +796,7 @@ def haul_feed_message(nid: str, title: str, rest: int, headroom: str = "",
     authority = f"Yours to work — {headroom}. " if headroom else "Yours to work. "
     return (
         f"HAUL: {nid} ({t}) — `br show {nid}`, execute, close to advance "
-        f"({rest} more). {again}{authority}"
+        f"({rest} more). {again}{authority}{instruction(nid)}"
         f"{handoff_text.deep_context_hint()}\n"
         f"Not this one? done -> `br close {nid}` · gated -> `st defer {nid} "
         f"<bead|human|access|external|parked> --reason-file <f>` · not yours -> "
@@ -813,6 +814,7 @@ def haul_resume_message(nid: str, title: str) -> str:
     Claude's autonomous turn loop does not need this prompt, so the caller gates
     it by the resolved harness.
     """
+    from .task_order import instruction
     t = (title or "")[:80]
     return (
         f"HAUL RESUME: {nid} ({t}) is still your active anchor. Continue it now "
@@ -821,7 +823,7 @@ def haul_resume_message(nid: str, title: str) -> str:
         f"the evidence, then use `st defer {nid} "
         f"<bead|human|access|external|parked> --reason-file <file>`; if it is not "
         f"yours, clear the assignee. "
-        f"Do not stop merely because the previous model turn ended.")
+        f"Do not stop merely because the previous model turn ended. {instruction(nid)}")
 
 
 def haul_handoff_message(context_k: float, line_k: float) -> str:

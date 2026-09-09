@@ -47,6 +47,8 @@ def test_codex_reprovision_is_idempotent_and_preserves_other_config(tmp_path):
     provision(card, root); twice = config.read_text()
     cfg = tomllib.loads(twice)
     assert once == twice
+    for event in ("PreToolUse", "PostToolUseFailure", "PostToolUse", "Stop"):
+        assert sum("shantytown.stats capture" in cmd for cmd in _commands(cfg, event)) == 1
     assert cfg["operator_key"] == "keep-me"
     assert sum("shantytown.stats capture" in c
                for c in _commands(cfg, "Stop")) == 1

@@ -109,7 +109,7 @@ def test_no_note_is_byte_identical_to_the_old_payload(tmp_path):
     panes = NullPanes(screen="")
     d = _dispatcher(_root(tmp_path), panes)
     d.go("item-1", "ellie")
-    assert panes.sent[0][1] == "Work is on your hook: item-1 — Restore the den"
+    assert panes.sent[0][1] == "Work is on your hook: item-1 — Restore the den — Before task work, run `st stats --begin-task item-1` as a standalone tool command, then query Quipu with task=item-1. "
 
 
 def test_the_item_id_precedes_the_note_so_verify_can_still_find_it(tmp_path):

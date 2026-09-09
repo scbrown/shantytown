@@ -968,6 +968,10 @@ def build_parser() -> argparse.ArgumentParser:
                                       "skills, tokens, activity (local store)")
     ss.add_argument("agent", nargs="?",
                     help="one agent's numbers; the whole crew if omitted")
+    ss.add_argument("--begin-task", metavar="TASK",
+                    help="declare a task boundary for the current tool-hook session")
+    ss.add_argument("--task-order", action="store_true",
+                    help="report observed reads before actions in declared task scopes")
     ss.add_argument("--files", action="store_true",
                     help="list the files an agent touched (needs agent)")
     ss.add_argument("--since", type=float, default=24.0, metavar="HOURS",
@@ -1380,6 +1384,23 @@ def main(argv: list[str] | None = None) -> int:
     if a.cmd == "log":
         return _cmd_log(a)
     if a.cmd == "stats":
+        if a.begin_task or a.task_order:
+            from . import task_order
+            if a.graph or a.files or (a.begin_task and (a.task_order or a.agent)):
+                print("task ordering flags cannot be combined with this report", file=sys.stderr)
+                return 2
+            if a.begin_task:
+                if not task_order.valid_task(a.begin_task):
+                    print("invalid task ID", file=sys.stderr)
+                    return 2
+                # The post-tool hook supplies the real harness session identity.
+                # A bare CLI invocation does not invent a binding from the plate.
+                print(task_order.marker(a.begin_task))
+                print("The tool hook records this declaration; use --task-order to verify.")
+                return 0
+            data = task_order.report(a.root, time.time() - a.since * 3600, a.agent)
+            print(json.dumps(data, indent=2))
+            return 0
         if a.graph:
             return _cmd_graph_adoption(a)
         from . import stats as stats_mod

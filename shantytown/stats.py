@@ -514,6 +514,19 @@ def capture(root: Path, payload: dict) -> None:
     hook = payload.get("hook_event_name") or ""
     conn = _db(root)
     try:
+        from . import task_order
+        try:
+            task_order.capture(conn, payload, now, agent)
+        except Exception:
+            # Optional ordering evidence must never suppress legacy statistics.
+            # Do not print exception values: hook input may contain credentials.
+            try:
+                task_order.capture_fault(conn, payload, now, agent)
+            except Exception:
+                pass
+        if hook in ("PreToolUse", "PostToolUseFailure"):
+            conn.commit()
+            return
         if hook == "PostToolUse" or payload.get("tool_name"):
             # Inspect RESULT CONTENT, not command text. The five motivating
             # leaks were stdout shaped like `token present: yes<bearer>`; a

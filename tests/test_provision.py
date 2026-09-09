@@ -55,6 +55,9 @@ def test_capture_hook_injected_with_real_interpreter_and_root(root, ws):
     import shantytown (never a bare 'python') and THIS store's root."""
     P.provision(_card(ws), root)
     d = json.loads((ws / ".claude" / P.CONSENT_TEMPLATE).read_text())
+    for event in ("PreToolUse", "PostToolUseFailure", "PostToolUse", "Stop"):
+        commands = [h["command"] for group in d["hooks"][event] for h in group["hooks"]]
+        assert sum("shantytown.stats capture" in cmd for cmd in commands) == 1
     post = d["hooks"]["PostToolUse"]
     # The count was pinned at 1 when capture was the only PostToolUse block. The
     # property it was really protecting is that CAPTURE is registered exactly

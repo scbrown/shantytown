@@ -343,6 +343,9 @@ def with_workspace_hooks(existing: str, role: str, root=None) -> str:
     hooks["PostToolUse"] = without("PostToolUse", "shantytown.stats capture") + [
         {"matcher": ".*", "hooks": [capture]}
     ]
+    hooks["PostToolUseFailure"] = without("PostToolUseFailure", "shantytown.stats capture") + [
+        {"matcher": ".*", "hooks": [capture]}
+    ]
     hooks["Stop"] = without("Stop", "shantytown.stats capture") + [
         {"hooks": [capture]}
     ]
@@ -355,6 +358,10 @@ def with_workspace_hooks(existing: str, role: str, root=None) -> str:
     if role != "administrator":
         pre.append(_untracked_hook(root))
     pre.append(_stale_hook(root))
+    pre = [g for g in pre if not any(
+        "shantytown.stats capture" in h.get("command", "")
+        for h in g.get("hooks", []) if isinstance(h, dict))]
+    pre.append({"matcher": ".*", "hooks": [capture]})
     hooks["PreToolUse"] = pre
     return dumps(cfg)
 

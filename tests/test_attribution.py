@@ -62,7 +62,7 @@ def test_a_dispatch_names_the_coordinator_who_sent_it(world):
     panes = NullPanes(screen="")
     Dispatcher(reg, trk, panes, sender="arnold").go("item-1", "ellie")
     assert panes.sent == [
-        ("%5", "[from arnold] Work is on your hook: item-1 — Restore the den")]
+        ("%5", "[from arnold] Work is on your hook: item-1 — Restore the den — Before task work, run `st stats --begin-task item-1` as a standalone tool command, then query Quipu with task=item-1. ")]
 
 
 def test_an_unattributable_dispatch_stays_BARE(world):
@@ -72,7 +72,7 @@ def test_an_unattributable_dispatch_stays_BARE(world):
     reg, trk = world
     panes = NullPanes(screen="")
     Dispatcher(reg, trk, panes).go("item-1", "ellie")
-    assert panes.sent == [("%5", "Work is on your hook: item-1 — Restore the den")]
+    assert panes.sent == [("%5", "Work is on your hook: item-1 — Restore the den — Before task work, run `st stats --begin-task item-1` as a standalone tool command, then query Quipu with task=item-1. ")]
 
 
 def test_the_prefix_is_on_the_payload_plan_hands_to_triage_and_the_send(world):
