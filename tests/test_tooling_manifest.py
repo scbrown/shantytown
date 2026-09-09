@@ -239,3 +239,26 @@ def test_actual_query_carries_attribution_and_rejects_truncation(tmp_path, monke
         T.load(tmp_path)
     assert seen[0].get_header("X-quipu-client") == "shantytown-tooling"
     assert json.loads(seen[0].data)["verbose"] is True
+
+
+def test_claude_consent_follows_manifest_changes(kit):
+    root, ws, _, data, _ = kit
+    (root / "provision" / P.CONSENT_TEMPLATE).write_text(json.dumps({
+        "enabledMcpjsonServers": ["retired"], "permissions": {"deny": ["ExampleTool"]}}))
+    P.provision(card(ws, "claude"), root)
+    path = ws / ".claude" / P.CONSENT_TEMPLATE
+    consent = json.loads(path.read_text())
+    assert consent["enabledMcpjsonServers"] == ["search"]
+    assert consent["permissions"]["deny"] == ["ExampleTool"]
+    consent["enabledMcpjsonServers"] = []
+    path.write_text(json.dumps(consent))
+    assert "mcp-consent(Quipu drift)" in P.missing_kit(card(ws, "claude"), root)
+
+
+def test_explicit_disabled_server_refuses_before_any_projection(kit):
+    root, ws, _, _, _ = kit
+    (root / "provision" / P.CONSENT_TEMPLATE).write_text('{"disabledMcpjsonServers":["search"]}')
+    with pytest.raises(P.ProvisionError, match="disabled"):
+        P.provision(card(ws, "claude"), root)
+    assert not (ws / ".mcp.json").exists()
+    assert T.BEGIN not in (ws / "CLAUDE.md").read_text()

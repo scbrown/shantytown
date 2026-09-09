@@ -404,8 +404,15 @@ def _manifest_gaps(card: Agent, root, manifest: tooling.Manifest, secrets=None) 
             have = None
         if have != want:
             gaps.append("codex-mcp(Quipu drift)")
-    elif not (ws / ".claude" / CONSENT_TEMPLATE).is_file():
-        gaps.append("mcp-consent")
+    else:
+        try:
+            consent = json.loads((ws / ".claude" / CONSENT_TEMPLATE).read_text())
+            enabled = set(consent.get("enabledMcpjsonServers", []))
+            disabled = set(consent.get("disabledMcpjsonServers", []))
+            if enabled != set(manifest.mcp) or disabled & set(manifest.mcp):
+                gaps.append("mcp-consent(Quipu drift)")
+        except (OSError, ValueError, TypeError, AttributeError):
+            gaps.append("mcp-consent")
     return gaps
 
 
@@ -511,6 +518,20 @@ def _consent_for_role(text: str, role: str) -> str:
             del cfg["permissions"]["deny"]
             if not cfg["permissions"]:
                 del cfg["permissions"]
+    return json.dumps(cfg, indent=2) + "\n"
+
+
+def _manifest_consent(text: str, manifest: tooling.Manifest) -> str:
+    try:
+        cfg = json.loads(text)
+        if not isinstance(cfg, dict):
+            raise ValueError
+        disabled = set(cfg.get("disabledMcpjsonServers", []))
+    except (ValueError, TypeError):
+        raise ProvisionError("canonical MCP consent template is invalid") from None
+    if disabled & set(manifest.mcp):
+        raise ProvisionError("canonical MCP server is disabled by the consent template; reconcile the policy")
+    cfg["enabledMcpjsonServers"] = sorted(manifest.mcp)
     return json.dumps(cfg, indent=2) + "\n"
 
 
@@ -738,7 +759,13 @@ def provision(card: Agent, root, *, secrets=None) -> list[str]:
         raise ProvisionError(str(e)) from None
     template = json.dumps({"mcpServers": manifest.mcp}) if manifest is not None else None
     rendered = None
+    canonical_consent = None
     if manifest is not None:
+        consent_path = provision_dir(root) / CONSENT_TEMPLATE
+        if consent_path.is_file():
+            canonical_consent = _manifest_consent(consent_path.read_text(), manifest)
+        elif card.harness != "codex":
+            raise ProvisionError("canonical MCP consent template is missing")
         rendered = json.dumps(_render_manifest(manifest, secrets if secrets is not None else load_secrets(root, template)))
         try:
             json.loads(rendered)
@@ -847,7 +874,7 @@ def provision(card: Agent, root, *, secrets=None) -> list[str]:
     if consent.is_file():
         out = ws / ".claude"
         out.mkdir(parents=True, exist_ok=True)
-        text = (render(consent.read_text(), {"SERVERS": ""}) if "${SERVERS}"
+        text = canonical_consent if canonical_consent is not None else (render(consent.read_text(), {"SERVERS": ""}) if "${SERVERS}"
                 in consent.read_text() else consent.read_text())
         final = _with_precompact_hook(
             _with_stale_hook(
