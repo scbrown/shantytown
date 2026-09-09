@@ -74,6 +74,82 @@ actually run.
 
 ## Setting up codex on a host
 
+### Canonical tooling from Quipu
+
+Deployments can select a Quipu entity as the authority for MCP definitions,
+skill sources, and tooling instructions:
+
+```toml
+# <root>/shantytown.toml
+[env]
+QUIPU_SERVER = "https://knowledge.example.com"
+SHANTY_TOOLING_MANIFEST = "urn:example:crew-tooling"
+```
+
+The selected entity must have exactly one `rdf:value` literal containing this
+versioned JSON document. Use an existing governed configuration entity type in
+your graph. Keep credentials in `provision/secrets.env` or the environment;
+the graph stores variable references, never bearer values.
+
+```json
+{
+  "version": 1,
+  "mcpServers": {
+    "search": {
+      "type": "http",
+      "url": "https://search.example.com/mcp",
+      "headers": {"Authorization": "Bearer ${SEARCH_TOKEN}"}
+    }
+  },
+  "skills": {"search": "skills/search"},
+  "instructions": "Use the search skill before investigating unfamiliar code."
+}
+```
+
+Skill values are source directories, relative to each workspace or absolute
+paths to a shared, maintained source. Each must contain `SKILL.md`. Provision
+links the declared names into both `.claude/skills` and `.agents/skills`. It
+records its links in `.shantytown-tooling.json` so a later manifest can retire
+them without removing personal skills. Existing real directories under a
+declared runtime name are preserved with a refusal; reconcile them before
+launching. The receipt is bookkeeping, never the source of expected content.
+
+Instructions are projected verbatim into a marked `shantytown:tooling` block in
+both `CLAUDE.md` and `AGENTS.md`. Text outside that block survives. Either
+symlink orientation is supported; separate rulebooks can retain their own
+general instructions while sharing the canonical tooling block.
+`AGENTS.override.md` shadows the projected Codex rulebook and is refused.
+These files may be tracked in a workspace, so provisioning can create a
+visible working-tree change. Commit projections through the workspace's normal
+review process; correct the canonical instructions in Quipu before regenerating.
+
+Provision reads the source on every launch. It renders `.mcp.json` privately
+with resolved credentials, projects Codex `mcp_servers` with bearer environment
+references, and removes MCP definitions retired from the manifest. Native Codex
+approval policy remains controlled by the existing deployment approval setting.
+The unrelated settings and hook trust ledger survive.
+
+`st doctor` reads one fresh source snapshot per report and compares actual
+configuration values, skill destinations, and instruction content against it.
+Matching server names alone cannot pass a changed endpoint. Missing, rejected,
+malformed, ambiguous, or truncated source data reports **UNKNOWN** and refuses
+provisioning; it never falls back to an old local template. This is configuration
+verification, not proof that a server is reachable or that an already-running
+harness has reloaded its configuration.
+
+To migrate, create and read back the canonical entity from an approved existing
+kit, including its tooling guidance. Then select its IRI, provision a disposable
+workspace for each harness, and verify doctor before converging the crew. To
+change the kit, replace the entity's single `rdf:value`, then provision again.
+Quipu reads use its existing server/auth resolver and the stable
+`X-Quipu-Client: shantytown-tooling` attribution label.
+
+Without `SHANTY_TOOLING_MANIFEST`, existing installations continue using
+`provision/mcp.template.json`, workspace skills, and the local rulebook. Keep a
+protected snapshot of those artifacts for rollback before migrating; removing
+the source setting explicitly restores that legacy mode. An outage never
+performs that rollback automatically.
+
 ### 1. Log in **before** you emit
 
 ```bash

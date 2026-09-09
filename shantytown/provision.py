@@ -40,11 +40,12 @@ import json
 import os
 import re
 import shutil
-import stat
 import tomllib
+import tempfile
 from pathlib import Path
 
 from .protocols import Agent
+from . import tooling
 
 
 class ProvisionError(RuntimeError):
@@ -80,7 +81,7 @@ def provision_dir(root) -> Path:
     return Path(root) / PROVISION_DIR
 
 
-def load_secrets(root) -> dict:
+def load_secrets(root, template: str | None = None) -> dict:
     """Secrets for rendering: the environment WINS over the file.
 
     Two sources on purpose. The file is the fleet's one copy — the thing that did
@@ -99,7 +100,8 @@ def load_secrets(root) -> dict:
             out[k.strip()] = v.strip().strip('"').strip("'")
     except OSError:
         pass                      # no file is not an error; an UNRESOLVED name is
-    for k in list(out) + _needed_names(root):
+    needed = _needed_names(root) if template is None else _PLACEHOLDER.findall(template)
+    for k in list(out) + needed:
         if os.environ.get(k):
             out[k] = os.environ[k]
     return out
@@ -138,12 +140,15 @@ def servers_in(path) -> list[str]:
         data = json.loads(Path(path).read_text())
     except (OSError, ValueError):
         return []
-    return sorted((data.get("mcpServers") or data).keys())
+    return sorted((data.get("mcpServers", data) or {}).keys())
 
 
 def expected_servers(root) -> list[str]:
     """What a fully-equipped agent has, per the template. The comparison target
     for `st new`'s claim and for tend's gap report."""
+    manifest = tooling.load(root)
+    if manifest is not None:
+        return sorted(manifest.mcp)
     try:
         return servers_in_text((provision_dir(root) / MCP_TEMPLATE).read_text())
     except OSError:
@@ -155,7 +160,7 @@ def servers_in_text(text: str) -> list[str]:
         data = json.loads(text)
     except ValueError:
         return []
-    return sorted((data.get("mcpServers") or data).keys())
+    return sorted((data.get("mcpServers", data) or {}).keys())
 
 
 def _skill_sources(ws: Path) -> list[Path]:
@@ -262,6 +267,8 @@ def link_instructions(ws, harness: str | None) -> bool:
     if harness != "codex":
         return True
     target = ws / "AGENTS.md"
+    if target.exists() and source.resolve() == target.resolve():
+        return True
     if target.is_symlink() and os.readlink(target) == "CLAUDE.md":
         return True
     if target.exists() and not target.is_symlink():
@@ -298,11 +305,12 @@ def _codex_servers(servers: dict, templates: dict | None = None) -> dict:
         if "headers" in spec:
             headers = dict(spec.pop("headers"))
             template_headers = templates.get(name, {}).get("headers", {})
-            template_auth = template_headers.get("Authorization", "")
+            template_auth = next((v for k, v in template_headers.items()
+                                  if k.lower() == "authorization"), "")
             match = re.fullmatch(r"Bearer \$\{([A-Z0-9_]+)\}", template_auth)
             if match:
                 spec["bearer_token_env_var"] = match.group(1)
-                headers.pop("Authorization", None)
+                headers = {k: v for k, v in headers.items() if k.lower() != "authorization"}
             if headers:
                 spec["http_headers"] = headers
         out[name] = spec
@@ -317,7 +325,7 @@ def codex_servers_in(path) -> list[str]:
     return sorted((data.get("mcp_servers") or {}).keys())
 
 
-def _project_codex_mcp(card: Agent, root, rendered: str) -> None:
+def _project_codex_mcp(card: Agent, root, rendered: str, template: str | None = None) -> None:
     if card.harness != "codex":
         return
     config = _codex_config(card, root)
@@ -326,13 +334,82 @@ def _project_codex_mcp(card: Agent, root, rendered: str) -> None:
                              "config.toml exists for the agent or its role")
     from . import codex as codex_mod
     data = json.loads(rendered)
-    template_data = json.loads((provision_dir(root) / MCP_TEMPLATE).read_text())
-    servers = _codex_servers(data.get("mcpServers") or data,
-                             template_data.get("mcpServers") or template_data)
-    config.write_text(codex_mod.render({"mcp_servers": servers}, config.read_text()))
+    template_data = json.loads(template if template is not None else
+                               (provision_dir(root) / MCP_TEMPLATE).read_text())
+    servers = _codex_servers(data.get("mcpServers", data),
+                             template_data.get("mcpServers", template_data))
+    existing = config.read_text()
+    if template is not None:
+        current = tomllib.loads(existing)
+        current.pop("mcp_servers", None)
+        existing = codex_mod.dumps(current)
+    config.write_text(codex_mod.render({"mcp_servers": servers}, existing, root=root))
 
 
-def missing_kit(card: Agent, root) -> list[str]:
+_UNREAD = object()
+
+
+def _render_manifest(manifest: tooling.Manifest, secrets: dict) -> dict:
+    # Substitute string values before JSON serialization, so quotes/backslashes
+    # in a credential cannot alter the shape of its configuration file.
+    def expand(value):
+        if isinstance(value, str):
+            return render(value, secrets)
+        if isinstance(value, dict):
+            return {key: expand(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [expand(item) for item in value]
+        return value
+    return {"mcpServers": expand(manifest.mcp)}
+
+
+def _manifest_gaps(card: Agent, root, manifest: tooling.Manifest, secrets=None) -> list[str]:
+    ws = Path(card.workspace).expanduser()
+    template = json.dumps({"mcpServers": manifest.mcp})
+    try:
+        rendered = _render_manifest(manifest, secrets if secrets is not None else load_secrets(root, template))
+    except (ProvisionError, ValueError):
+        return ["tooling-source(unresolved credentials)"]
+    gaps = []
+    try:
+        if json.loads((ws / ".mcp.json").read_text()) != rendered:
+            gaps.append("mcp(Quipu drift)")
+    except (OSError, ValueError):
+        gaps.append("mcp(unreadable)")
+    for name, src in manifest.sources(ws):
+        for runtime in (SKILLS_RUNTIME, CODEX_SKILLS_RUNTIME):
+            link = ws.joinpath(*runtime, name)
+            try:
+                valid = link.is_symlink() and link.resolve() == src.resolve() and (link / "SKILL.md").is_file()
+            except (OSError, RuntimeError):
+                valid = False
+            if not valid:
+                gaps.append(f"{runtime[0]}-skills({name})")
+    gaps.extend(tooling.instruction_gaps(ws, manifest))
+    try:
+        if tooling.retired_links(ws, manifest):
+            gaps.append("skills(retired in Quipu)")
+    except tooling.ToolingError:
+        gaps.append("skills(receipt or retired link unreadable)")
+    if card.harness == "codex":
+        from . import codex as codex_mod
+        config = _codex_config(card, root)
+        want = _codex_servers(rendered["mcpServers"], manifest.mcp)
+        # Include the deployment's existing approval projection in the expected
+        # values; endpoint/auth/command drift still must compare exactly.
+        want = tomllib.loads(codex_mod.render({"mcp_servers": want}, root=root)).get("mcp_servers", {})
+        try:
+            have = tomllib.loads(config.read_text()).get("mcp_servers", {}) if config else None
+        except (OSError, ValueError):
+            have = None
+        if have != want:
+            gaps.append("codex-mcp(Quipu drift)")
+    elif not (ws / ".claude" / CONSENT_TEMPLATE).is_file():
+        gaps.append("mcp-consent")
+    return gaps
+
+
+def missing_kit(card: Agent, root, *, manifest=_UNREAD) -> list[str]:
     """What this agent's workspace LACKS, by name. Empty = fully equipped.
 
     Cheap enough to run on every supervision pass, which is the point: nothing in
@@ -343,6 +420,13 @@ def missing_kit(card: Agent, root) -> list[str]:
     ws = Path(card.workspace).expanduser()
     if not ws.is_dir():
         return ["workspace"]
+    if manifest is _UNREAD:
+        try:
+            manifest = tooling.load(root)
+        except tooling.ToolingError:
+            return ["tooling-source(UNKNOWN)"]
+    if manifest is not None:
+        return _manifest_gaps(card, root, manifest)
     gaps = []
     want = expected_servers(root)
     have = servers_in(ws / ".mcp.json")
@@ -369,7 +453,7 @@ def missing_kit(card: Agent, root) -> list[str]:
         have = codex_servers_in(config) if config else []
         if expected_servers(root) and have != expected_servers(root):
             gaps.append("codex-mcp(uniformity)")
-        if not (ws / "AGENTS.md").is_symlink() or os.readlink(ws / "AGENTS.md") != "CLAUDE.md":
+        if not (ws / "AGENTS.md").is_file() or not (ws / "CLAUDE.md").is_file() or (ws / "AGENTS.md").resolve() != (ws / "CLAUDE.md").resolve():
             gaps.append("instructions(AGENTS.md)")
     return gaps
 
@@ -378,10 +462,14 @@ def uniformity_report(cards, root) -> tuple[str, bool]:
     """Doctor's harness-neutral realization check; manifest data is discovered."""
     rows = []
     broken = False
+    try:
+        manifest = tooling.load(root)
+    except tooling.ToolingError as e:
+        return f"  TOOLING UNIFORMITY: UNKNOWN — {e}", True
     for card in sorted(cards, key=lambda c: c.name):
         if card.retired or not card.workspace:
             continue
-        gaps = missing_kit(card, root)
+        gaps = missing_kit(card, root, manifest=manifest)
         harness = card.harness or "claude"
         if gaps:
             broken = True
@@ -640,11 +728,60 @@ def provision(card: Agent, root, *, secrets=None) -> list[str]:
             f"cannot provision {card.name}: workspace {ws} does not exist. "
             f"ensure_workspace runs first, and refuses before this is reached.")
 
+    # Establish the authority before touching any realized kit. A graph outage
+    # must never silently fall back to a stale, locally consistent template.
+    try:
+        manifest = tooling.load(root)
+        updates = tooling.instruction_updates(ws, manifest) if manifest is not None else {}
+        retired = tooling.retired_links(ws, manifest) if manifest is not None else []
+    except tooling.ToolingError as e:
+        raise ProvisionError(str(e)) from None
+    template = json.dumps({"mcpServers": manifest.mcp}) if manifest is not None else None
+    rendered = None
+    if manifest is not None:
+        rendered = json.dumps(_render_manifest(manifest, secrets if secrets is not None else load_secrets(root, template)))
+        try:
+            json.loads(rendered)
+        except ValueError:
+            raise ProvisionError("rendered tooling MCP is not valid JSON") from None
+        if card.harness == "codex":
+            config = _codex_config(card, root)
+            if config is None:
+                raise ProvisionError("cannot project tooling: Codex config is missing")
+            try:
+                tomllib.loads(config.read_text())
+            except (OSError, ValueError):
+                raise ProvisionError("cannot project tooling: Codex config is unreadable") from None
+        for name, src in manifest.sources(ws):
+            if not (src / "SKILL.md").is_file():
+                raise ProvisionError(f"canonical skill source unavailable: {name}")
+            for runtime in (SKILLS_RUNTIME, CODEX_SKILLS_RUNTIME):
+                link = ws.joinpath(*runtime, name)
+                if link.exists() and not link.is_symlink():
+                    raise ProvisionError(f"refusing to replace personal skill: {name}")
+        for path, text in updates.items():
+            if not path.is_file() or path.read_text() != text:
+                path.write_text(text)
+        for name, src in manifest.sources(ws):
+            for runtime in (SKILLS_RUNTIME, CODEX_SKILLS_RUNTIME):
+                link = ws.joinpath(*runtime, name)
+                link.parent.mkdir(parents=True, exist_ok=True)
+                if link.is_symlink():
+                    if link.resolve() == src.resolve():
+                        continue
+                    link.unlink()
+                link.symlink_to(src)
+        for link in retired:
+            link.unlink()
+        (ws / tooling.RECEIPT).write_text(json.dumps({"skills": {
+            name: str(src) for name, src in manifest.sources(ws)}}) + "\n")
+
     # SKILLS FIRST, and outside every early return below: a store that defines no
     # MCP template still has a workspace full of skills the runtime cannot see,
     # and the skill links depend on nothing but the clone itself.
-    link_skills(ws)
-    link_instructions(ws, card.harness)
+    if manifest is None:
+        link_skills(ws)
+        link_instructions(ws, card.harness)
 
     # Codex does not read Claude Code's workspace consent file.  Its equivalent
     # self-healing channel is the config.toml selected by the card, so refresh
@@ -661,7 +798,7 @@ def provision(card: Agent, root, *, secrets=None) -> list[str]:
 
     d = provision_dir(root)
     tmpl = d / MCP_TEMPLATE
-    if not tmpl.is_file():
+    if manifest is None and not tmpl.is_file():
         # NO KIT DEFINED is not a HALF kit, and a DELETED kit is neither (GitHub
         # #36). Three states, and the old code collapsed the last two into a note:
         #
@@ -690,14 +827,21 @@ def provision(card: Agent, root, *, secrets=None) -> list[str]:
                 f"fleet wants no MCP servers.")
         return []
 
-    rendered = render(tmpl.read_text(), secrets if secrets is not None
-                      else load_secrets(root))
+    if rendered is None:
+        rendered = render(tmpl.read_text(), secrets if secrets is not None
+                          else load_secrets(root))
     target = ws / ".mcp.json"
-    target.write_text(rendered)
-    # 0600 BEFORE anyone else can read it. The file carries a bearer token; the
-    # workspace is a git clone that other tooling walks.
-    target.chmod(stat.S_IRUSR | stat.S_IWUSR)
-    _project_codex_mcp(card, root, rendered)
+    # Create privately BEFORE writing secret bytes, then atomically publish.
+    # chmod after write leaves a newly created file readable for that window.
+    with tempfile.NamedTemporaryFile(mode="w", dir=ws, delete=False) as tmp:
+        temporary = Path(tmp.name)
+        try:
+            tmp.write(rendered)
+            tmp.close()
+            temporary.replace(target)
+        finally:
+            temporary.unlink(missing_ok=True)
+    _project_codex_mcp(card, root, rendered, template)
 
     consent = d / CONSENT_TEMPLATE
     if consent.is_file():
@@ -715,9 +859,13 @@ def provision(card: Agent, root, *, secrets=None) -> list[str]:
         (out / CONSENT_TEMPLATE).write_text(final)
 
     got = servers_in(target)
-    want = servers_in_text(tmpl.read_text())
+    want = sorted(manifest.mcp) if manifest is not None else servers_in_text(tmpl.read_text())
     if sorted(got) != sorted(want):
         raise ProvisionError(
             f"provisioned {card.name} but the written file lists {got}, not the "
             f"template's {want}. Refusing to report a kit we did not verify.")
+    if manifest is not None:
+        gaps = _manifest_gaps(card, root, manifest, secrets)
+        if gaps:
+            raise ProvisionError("provisioned tooling failed verification: " + ", ".join(gaps))
     return got

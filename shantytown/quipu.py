@@ -461,7 +461,7 @@ class QuipuRegistry:
     _ALL = None      # set below, from all_query()
 
     def __init__(self, server: str | None = None, timeout: float = 5.0,
-                 root=None, onto: str | None = None):
+                 root=None, onto: str | None = None, client_label: str | None = None):
         # ONE resolver, shared with QuipuEvents: explicit -> [env] in toml ->
         # $QUIPU_SERVER -> DEFAULT_SERVER. Reading deployment config is the point — the
         # address survived only as long as some shell kept exporting it, so a cron
@@ -469,6 +469,7 @@ class QuipuRegistry:
         # another service owns. "Fell back" meant "queried a stranger".
         self.server = resolve_server(server, root).rstrip("/")
         self.timeout = timeout
+        self.client_label = client_label
         # The NAMESPACE comes from the deployment too. A wrong one cannot be caught
         # by any wrong-service check: it asks the real quipu about entities that do
         # not exist, and gets a truthful empty answer.
@@ -497,7 +498,8 @@ class QuipuRegistry:
             # returns CURIEs by default, which makes `_local` preserve `aegis:`
             # and silently corrupts crew names and hierarchy edges.
             data=json.dumps({"query": sparql, "verbose": True}).encode(),
-            headers=request_headers(),
+            headers={**request_headers(), **(
+                {"X-Quipu-Client": self.client_label} if self.client_label else {})},
         )
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
