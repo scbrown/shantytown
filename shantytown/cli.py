@@ -5060,11 +5060,12 @@ def _crew_states(agents, panes, runtime, cycling=(), untracked_root=None,
             # stopped. Fail-open by construction: `gate` returns None on any
             # error, and unknown must never withhold an agent from work.
             if work == triage_mod.IDLE and budget_root is not None:
-                try:
-                    from . import session_budget as _sb
-                    _ceiling = _sb.gate(Path(budget_root), ag.name)[2]
-                except Exception:            # noqa: BLE001
-                    _ceiling = None
+                from . import session_budget as _sb
+                # session_budget.at_ceiling, not a local gate() call:
+                # free_feedable_workers asks the same helper (aegis-qviejh), and
+                # the point of both fixes is that these surfaces cannot drift
+                # apart. It carries the try/except this used to hold.
+                _ceiling = _sb.at_ceiling(budget_root, ag.name)
                 if _ceiling is not None:
                     work = f"ceiling ({_ceiling.measure})"
             # PANE-IDLE IS NOT WORK-IDLE (aegis-eh6ok). The PreToolUse

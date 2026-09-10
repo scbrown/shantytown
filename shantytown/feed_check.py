@@ -140,6 +140,7 @@ def free_feedable_workers(reg, panes, runtime, root=None, roles=("worker",)) -> 
     for leads is exactly the drift the paragraph above forbids — the two would
     agree until the night they don't.
     """
+    from . import session_budget as _sb
     from . import triage as triage_mod
     from .runtime import asks_a_question, auth_expired, live_wiring
     # tend owns the retirement predicate; imported HERE rather than at module
@@ -177,6 +178,16 @@ def free_feedable_workers(reg, panes, runtime, root=None, roles=("worker",)) -> 
             awaiting=asks_a_question(runtime, plain),
             auth_dead=auth_expired(runtime, plain))
         if state != triage_mod.IDLE:
+            continue
+        # AT ITS SESSION CEILING IS NOT FREE (aegis-qviejh). `st crew` already
+        # renders this agent `ceiling (items)` and the haul feed already refuses
+        # to feed it — this function did neither, so Rule Zero kept handing the
+        # coordinator names that no dispatch can serve. Asking the SAME gate the
+        # other two ask is the point; a second opinion here is exactly what this
+        # docstring forbids. Gated on `root` because that is where the budget
+        # lives, and fails open, so an unreadable budget never withholds an
+        # agent from work.
+        if root is not None and _sb.at_ceiling(root, ag.name) is not None:
             continue
         wiring = live_wiring(ag.pane, panes.cmdline)
         if wiring is None or "send" not in wiring.directions:

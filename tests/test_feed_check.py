@@ -576,3 +576,197 @@ def test_stop_hook_threads_root_into_every_tracker_read():
                  and not l.strip().startswith("#")
                  and "root=root" not in l]
     assert not offenders, "stop_event legs not threaded:\n  " + "\n  ".join(offenders)
+
+
+# --- at its ceiling is NOT free (aegis-qviejh) -------------------------------
+#
+# THE MEASURED DEFECT. On 2026-09-09 franklin showed `ceiling (items)` in
+# `st crew` — verified twice — while stop_policy raised "1 free feedable worker
+# (franklin)" THREE times in ten minutes, each demanding dispatch-or-say-why.
+# gennaro was flagged twice the same morning at `ceiling (hours)`. The alert is
+# unactionable by construction: the agent has been told to stop, the haul feed
+# already refuses to feed it, and a dispatch there is at best wasted.
+#
+# THREE SURFACES, ONE FACT, AND ONLY TWO OF THEM ASKED. `st crew` renders the
+# ceiling (aegis-9cobou) and the haul feed refuses it — but this function, the
+# one Rule Zero and the idle-fleet alert SHARE, asked nothing. Its own docstring
+# forbids a second opinion; it had a MISSING opinion instead.
+#
+# AND IT STOPPED BEING SELF-LIMITING. Before the ceiling was made sticky per
+# session (aegis-hqbwci), a ceilinged agent's stretch rolled after 45 idle
+# minutes and the false alert cleared itself — which is most of why this read as
+# noise. With the ceiling held for the session, the false alert is now permanent
+# until the agent is relaunched. The two fixes need each other.
+
+def _budget_root(tmp_path, agent, *, items):
+    """A root whose stats store puts `agent` at `items` haul items in one
+    stretch, and a [session_budget] that ceilings at 4."""
+    import sqlite3
+    import time as _time
+    from shantytown import stats
+    (tmp_path / "shantytown.toml").write_text(
+        "[session_budget]\nmax_hours = 4.0\nmax_items = 4\nmax_risk = 3\n",
+        encoding="utf-8")
+    now = _time.time()
+    rows = [(now - 3.0 * 3600 + i * 120, agent, "tool", "sess-C", None)
+            for i in range(91)]
+    rows += [(now - (2.5 - i * 0.5) * 3600, agent, "haul", "sess-C", None)
+             for i in range(items)]
+    conn = sqlite3.connect(tmp_path / "stats.sqlite")
+    conn.executescript(stats._SCHEMA)
+    conn.executemany(
+        "INSERT INTO events(ts, agent, kind, session, risk) VALUES (?,?,?,?,?)",
+        rows)
+    conn.commit()
+    conn.close()
+    return tmp_path
+
+
+def _idle_wired_worker(tmp_path, name="franklin"):
+    settings = _send_settings(tmp_path)
+    reg = _Reg([Agent(name=name, role="worker", pane=f"shanty-{name}")])
+    panes = _Panes({f"shanty-{name}": IDLE},
+                   {f"shanty-{name}": f"claude --settings {settings}"})
+    return reg, panes
+
+
+def test_a_worker_AT_ITS_CEILING_is_not_free(tmp_path):
+    """franklin's case: idle pane, send wiring, launch-stamp irrelevant — every
+    other gate says feedable, and it must still not be offered as free."""
+    reg, panes = _idle_wired_worker(tmp_path)
+    root = _budget_root(tmp_path, "franklin", items=4)
+    # CONTROL: without the budget root this is exactly the "idle wired worker is
+    # free" case above, so the exclusion below is the ceiling and nothing else.
+    assert feed_check.free_feedable_workers(reg, panes, _Runtime()) == ["franklin"]
+    assert feed_check.free_feedable_workers(
+        reg, panes, _Runtime(), root=root) == []
+
+
+def test_the_HOURS_ceiling_counts_too(tmp_path):
+    """sattler's addendum: gennaro was flagged free at `ceiling (hours)`, so the
+    exclusion must not be keyed on the items measure it was first seen with."""
+    import sqlite3
+    import time as _time
+    from shantytown import stats
+    reg, panes = _idle_wired_worker(tmp_path, "gennaro")
+    (tmp_path / "shantytown.toml").write_text(
+        "[session_budget]\nmax_hours = 4.0\nmax_items = 4\nmax_risk = 3\n",
+        encoding="utf-8")
+    now = _time.time()
+    rows = [(now - 5.0 * 3600 + i * 120, "gennaro", "tool", "sess-D", None)
+            for i in range(151)]           # 5h of dense work, ZERO haul items
+    conn = sqlite3.connect(tmp_path / "stats.sqlite")
+    conn.executescript(stats._SCHEMA)
+    conn.executemany(
+        "INSERT INTO events(ts, agent, kind, session, risk) VALUES (?,?,?,?,?)",
+        rows)
+    conn.commit()
+    conn.close()
+    from shantytown import session_budget as sb
+    assert sb.at_ceiling(tmp_path, "gennaro").measure == "hours"
+    assert feed_check.free_feedable_workers(
+        reg, panes, _Runtime(), root=tmp_path) == []
+
+
+def test_an_UNDER_ceiling_worker_is_STILL_FREE(tmp_path):
+    """THE CONTROL THAT MATTERS. An exclusion that never releases would empty
+    the feedable list and stop the fleet — a far more expensive bug than the
+    nagging alert it fixes. Same store, same agent, one fewer item."""
+    reg, panes = _idle_wired_worker(tmp_path)
+    root = _budget_root(tmp_path, "franklin", items=3)
+    assert feed_check.free_feedable_workers(
+        reg, panes, _Runtime(), root=root) == ["franklin"]
+
+
+def test_an_UNREADABLE_budget_never_withholds_an_agent(tmp_path):
+    """Fail-open, like every other path in session_budget: the cost of a missed
+    exclusion is one wasted dispatch, the cost of a wrong one is a worker
+    silently kept from work with nothing saying so."""
+    reg, panes = _idle_wired_worker(tmp_path)
+    (tmp_path / "stats.sqlite").write_text("not a database", encoding="utf-8")
+    (tmp_path / "shantytown.toml").write_text(
+        "[session_budget]\nmax_items = 4\n", encoding="utf-8")
+    assert feed_check.free_feedable_workers(
+        reg, panes, _Runtime(), root=tmp_path) == ["franklin"]
+
+
+def test_crew_and_feed_check_ask_THE_SAME_helper(tmp_path):
+    """The two surfaces disagreeing IS the bug, so this asserts they share one
+    implementation rather than asserting they happen to agree today."""
+    import inspect
+    import pathlib as _pl
+    from shantytown import session_budget as sb
+
+    src = inspect.getsource(feed_check.free_feedable_workers)
+    assert "_sb.at_ceiling(root" in src, "feed_check must ask the shared helper"
+    assert "sb.gate(" not in src, "…and must NOT re-derive it from gate()"
+
+    # cli's crew table is a generator inside a long function, so read the module
+    # file rather than fishing for the frame: the assertion is about there being
+    # ONE implementation, and a second `gate()[2]` call site is what would break
+    # it regardless of which function holds it.
+    cli_src = _pl.Path(inspect.getfile(sb)).with_name("cli.py").read_text()
+    assert "_sb.at_ceiling(budget_root" in cli_src, \
+        "st crew must ask the shared helper too"
+    assert "_sb.gate(Path(budget_root)" not in cli_src, \
+        "the old private copy in cli must be gone, not merely bypassed"
+
+
+def test_a_HELD_ceiling_also_withholds_the_agent(tmp_path):
+    """THE COMPOSITION WITH aegis-hqbwci, proven rather than argued.
+
+    Before the ceiling was made sticky, this false alert was self-limiting: a
+    ceilinged agent's stretch rolled after 45 idle minutes, `gate` went quiet,
+    and the disagreement closed on its own — which is most of why it read as
+    noise rather than a defect. With the trip held for the session, `st crew`
+    keeps rendering `ceiling (...)` indefinitely, so an unfixed
+    free_feedable_workers would nag the coordinator about that agent for the
+    rest of its session. The two fixes need each other and this asserts the
+    join, not each half separately.
+    """
+    import json
+    import sqlite3
+    import time as _time
+    from shantytown import session_budget as sb, stats
+
+    reg, panes = _idle_wired_worker(tmp_path, "arnold")
+    (tmp_path / "shantytown.toml").write_text(
+        "[session_budget]\nmax_hours = 4.0\nmax_items = 4\nmax_risk = 3\n",
+        encoding="utf-8")
+    now = _time.time()
+    trip_at = now - 81.3 * 60          # arnold's measured compliant idle
+    rows = [(trip_at - 3.5 * 3600 + i * 120, "arnold", "tool", "sess-E", None)
+            for i in range(106)]
+    rows += [(trip_at - (3.0 - i) * 3600, "arnold", "haul", "sess-E", None)
+             for i in range(4)]
+    conn = sqlite3.connect(tmp_path / "stats.sqlite")
+    conn.executescript(stats._SCHEMA)
+    conn.executemany(
+        "INSERT INTO events(ts, agent, kind, session, risk) VALUES (?,?,?,?,?)",
+        rows)
+    conn.commit()
+    conn.close()
+
+    trip = sb.read_spend(tmp_path, "arnold", trip_at)
+    ceiling = sb.verdict(sb.limits_for(tmp_path), trip)
+    assert ceiling is not None
+    sb.mark_reported(tmp_path, "arnold", trip, ceiling)
+
+    # the agent COMPLIES, idles past STRETCH_GAP_S, then stirs in the SAME session
+    conn = sqlite3.connect(tmp_path / "stats.sqlite")
+    conn.execute("INSERT INTO events(ts, agent, kind, session) VALUES (?,?,?,?)",
+                 (now, "arnold", "tool", "sess-E"))
+    conn.commit()
+    conn.close()
+
+    # the stretch really did roll — the LIVE verdict is clean ...
+    limits, spend, _c = sb.gate(tmp_path, "arnold", now)
+    assert spend.items == 0 and sb.verdict(limits, spend) is None
+    # ... the ceiling is nonetheless HELD ...
+    held = sb.at_ceiling(tmp_path, "arnold")
+    assert held is not None and held.held
+    # ... and that is enough to keep the agent out of the feedable list.
+    assert feed_check.free_feedable_workers(
+        reg, panes, _Runtime(), root=tmp_path) == []
+    assert json.loads(
+        (tmp_path / "session_budget" / "arnold.json").read_text())["session"] == "sess-E"

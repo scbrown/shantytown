@@ -548,6 +548,34 @@ def gate(root: Path, agent: str, now: float | None = None
         return Limits(), Spend(signal_lost=True), None
 
 
+def at_ceiling(root, agent: str) -> Ceiling | None:
+    """The ceiling `agent` is currently held by, or None — the ONE call every
+    surface that needs to ask "is this agent available?" should make.
+
+    IT EXISTS SO THE SURFACES CANNOT DISAGREE (aegis-qviejh). `st crew` learned
+    to render `ceiling (items)` instead of `idle` (aegis-9cobou) and the haul
+    feed learned to refuse a ceilinged worker — but `free_feedable_workers`, the
+    computation Rule Zero and the idle-fleet alert SHARE, never learned either.
+    So the table said `ceiling (items)`, the feed refused to feed, and the alert
+    went on calling the same agent a free feedable worker: measured 2026-09-09,
+    franklin flagged free three times in ten minutes at `ceiling (items)`, and
+    gennaro twice at `ceiling (hours)`.
+
+    That was already an unactionable alert. It became a PERMANENT one when the
+    ceiling was made sticky per session (aegis-hqbwci) — before that a ceilinged
+    agent's stretch rolled after 45 idle minutes and the false alert cleared
+    itself, which is most of why it read as noise rather than a bug. The two
+    fixes need each other, and this is the second half.
+
+    FAIL-OPEN, matching every other path in this module and the `st crew` call
+    site it replaces: any error is None, and None means "not withheld". An
+    agent must never be kept from work because a budget could not be read."""
+    try:
+        return gate(Path(root), agent)[2]
+    except Exception:                    # noqa: BLE001 — a budget never raises
+        return None
+
+
 def signal_lost_note(limits: Limits, spend: Spend, agent: str) -> str:
     """What to say when the budget is armed but blind.
 
