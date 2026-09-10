@@ -596,3 +596,111 @@ def test_a_400_with_an_unreadable_body_still_raises(monkeypatch):
         gm._push("http://gw.invalid", "st_governor", "host-a", "x 1\n")
     assert "400" in str(caught.value)
     assert "no explanation" in str(caught.value)
+
+
+# --- one sample per (name, label set) — aegis-4c8gk0 --------------------------
+#
+# `Policy.engaged` returns EVERY tier at or below the top one WITHIN ONE WINDOW,
+# so two tiers sharing a `window` is the normal state once usage crosses a second
+# threshold — and four series were keyed on `(lane, window)` alone. promtool calls
+# the result `metric not unique`; the pushgateway calls it HTTP 400 and drops the
+# WHOLE pass, every lane and every counter with it. Measured Sep 05 (4 consecutive
+# passes) and Sep 06 (6), both self-clearing when usage fell back.
+#
+# THESE TESTS ASSERT ON RAW LINES, NOT ON `_samples`. That is the point: `_samples`
+# is a dict keyed by `name{labels}`, so it COLLAPSES duplicates silently — the one
+# helper every other test in this file uses cannot see this defect at all. Same
+# shape as the pushgateway grouping-key rule, where an assertion on the body passes
+# for a broken URL.
+
+def _series_counts(body: str) -> dict[str, int]:
+    """{'name{labels}': how many TIMES it appears} — duplicates preserved."""
+    counts: dict[str, int] = {}
+    for line in body.splitlines():
+        if not line or line.startswith("#"):
+            continue
+        key = line.rpartition(" ")[0]
+        counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
+def _tier(at, window=gov_mod.SEVEN_DAY):
+    return gov_mod.Tier(at=at, window=window)
+
+
+def _verdict(**kw):
+    kw.setdefault("reading", gov_mod.Reading())
+    return gov_mod.Verdict(**kw)
+
+
+def test_two_tiers_in_one_window_do_not_duplicate_a_series():
+    body = gm.render([_lane(verdict=_verdict(engaged=(_tier(70), _tier(85))))],
+                     now=NOW)
+    dupes = {k: n for k, n in _series_counts(body).items() if n > 1}
+    assert not dupes, f"a duplicate label set 400s the whole pass: {dupes}"
+
+
+def test_the_engaged_tier_reported_is_the_STRICTEST_one():
+    # Not the first seen and not the last: the tier a reader means by "which tier
+    # is engaged here" is the highest one usage has reached. The COUNT stays on
+    # st_governor_engaged_tiers, so nothing is lost by one row per window.
+    s = _samples(gm.render([_lane(verdict=_verdict(engaged=(_tier(70), _tier(85),
+                                                            _tier(45))))],
+                           now=NOW))
+    key = f'st_governor_engaged_tier_percent{{lane="base",window="{gov_mod.SEVEN_DAY}"}}'
+    assert s[key] == 85
+    assert s['st_governor_engaged_tiers{lane="base"}'] == 3
+
+
+@pytest.mark.parametrize("field,metric", [
+    ("burning", "st_governor_burndown"),
+    ("pacing", "st_governor_pacing"),
+    ("relaxed", "st_governor_relaxed"),
+])
+def test_repeated_windows_in_the_tier_collections_do_not_duplicate(field, metric):
+    # These are True regardless of how many tiers in the window qualify, so
+    # deduplicating by window loses nothing — while NOT deduplicating loses the pass.
+    body = gm.render([_lane(verdict=_verdict(**{field: (_tier(70), _tier(85))}))],
+                     now=NOW)
+    counts = _series_counts(body)
+    key = f'{metric}{{lane="base",window="{gov_mod.SEVEN_DAY}"}}'
+    assert counts.get(key) == 1, f"{metric} duplicated: {counts.get(key)}"
+
+
+def test_the_accumulator_itself_refuses_a_duplicate_and_COUNTS_it():
+    # The guard, not the call sites. A future caller must not be able to take out
+    # the whole body with one repeated row — and the drop must not be silent,
+    # because a silent dedup trades a loud 400 for a quiet modelling error.
+    out = gm._Out()
+    out.add("m", 1, lane="a")
+    out.add("m", 2, lane="a")          # same label set — dropped
+    out.add("m", 3, lane="b")          # different — kept
+    assert out.dropped == 1
+    assert _series_counts(out.render()) == {'m{lane="a"}': 1, 'm{lane="b"}': 1}
+    assert _samples(out.render())['m{lane="a"}'] == 1, "first wins"
+
+
+def test_the_dropped_counter_is_published_at_zero_when_nothing_is_dropped():
+    # A counter that appears only on failure is a panel that reads green — this
+    # module's own rule, applied to its own guard.
+    s = _samples(gm.render([_lane(verdict=_verdict(engaged=(_tier(70),)))], now=NOW))
+    assert s["st_governor_duplicate_samples_dropped"] == 0
+
+
+def test_a_body_with_two_tiers_in_one_window_PARSES(tmp_path):
+    # The real oracle: promtool is the same Go parser the pushgateway uses, so this
+    # is the assertion that would have caught the outage. Skipped rather than faked
+    # where promtool is absent — a check that cannot run must say so.
+    import shutil, subprocess
+    if not shutil.which("promtool"):
+        pytest.skip("promtool absent — cannot verify against the gateway's own parser")
+    body = gm.render([_lane(verdict=_verdict(engaged=(_tier(70), _tier(85))))],
+                     now=NOW)
+    path = tmp_path / "body.prom"
+    path.write_text(body)
+    with path.open() as fh:
+        done = subprocess.run(["promtool", "check", "metrics"], stdin=fh,
+                              capture_output=True, text=True)
+    complaints = [l for l in (done.stdout + done.stderr).splitlines()
+                  if l.strip() and "no help text" not in l]
+    assert not complaints, complaints

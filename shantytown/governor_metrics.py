@@ -198,27 +198,55 @@ def _labels(**kw) -> str:
 
 
 class _Out:
-    """Exposition accumulator that emits each `# TYPE` line exactly ONCE.
+    """Exposition accumulator that emits each `# TYPE` line exactly ONCE, and each
+    (name, label set) at most once.
 
     Not a nicety: a repeated TYPE for one metric family makes the pushgateway
     reject the whole body with 400, so a second lane would silently take out the
     first lane's samples too.  The same class of defect as a .prom textfile that
     is not metric-major — one malformed family kills everything around it.
+
+    A REPEATED LABEL SET IS THE SAME DEFECT AND IT COST TWO OUTAGE CLUSTERS
+    (aegis-4c8gk0).  `Policy.engaged` returns EVERY tier at or below the top one
+    *within one window*, so as soon as usage crosses a second threshold the
+    verdict carries two tiers with the same `window` — and four call sites keyed
+    their series on `(lane, window)` alone.  promtool's verdict on the result is
+    `st_governor_engaged_tier_percent metric not unique`, and the gateway's is
+    HTTP 400 for the WHOLE pass: every lane, every window, every counter gone,
+    because two tiers engaged in one window.  Measured Sep 05 (4 consecutive
+    passes) and Sep 06 (6), both self-clearing when usage fell back.
+
+    So the guard lives HERE rather than only at the call sites.  The call sites
+    are fixed too, and this is the mechanism: a future caller cannot take out the
+    whole body by emitting one duplicate row.  The drop is COUNTED and exported
+    (`st_governor_duplicate_samples_dropped`) because a silent dedup would hide
+    the modelling error instead of the outage — a body that publishes is worth
+    more than a body that is right, but only if the difference is visible.
     """
 
     def __init__(self) -> None:
         self._typed: dict[str, str] = {}
         self._lines: dict[str, list[str]] = {}
         self._order: list[str] = []
+        self._seen: set[tuple[str, str]] = set()
+        self.dropped = 0
 
     def add(self, name: str, value, *, kind: str = "gauge", **labels) -> None:
         if value is None:
             return
+        rendered = _labels(**labels)
+        key = (name, rendered)
+        if key in self._seen:
+            # FIRST WINS, deliberately: the alternative is a body the gateway
+            # rejects entirely. Counted, never silent.
+            self.dropped += 1
+            return
+        self._seen.add(key)
         if name not in self._lines:
             self._typed[name] = kind
             self._lines[name] = []
             self._order.append(name)
-        self._lines[name].append(f"{name}{_labels(**labels)} {_num(value)}")
+        self._lines[name].append(f"{name}{rendered} {_num(value)}")
 
     def render(self) -> str:
         out: list[str] = []
@@ -466,15 +494,29 @@ def _lane_rows(out: _Out, lane: str, *, verdict, utilization, readings,
         out.add("st_governor_priority_floor", verdict.floor, **lb)
         out.add("st_governor_priority_floor_declared",
                 verdict.floor is not None, **lb)
+        # ONE SAMPLE PER WINDOW, because these collections are per-TIER and a
+        # window can hold several (aegis-4c8gk0 — see `_Out`).  The strictest
+        # engaged tier is the one a reader means by "which tier is engaged here";
+        # the COUNT is already `st_governor_engaged_tiers`, so nothing is lost by
+        # not emitting a row per tier — whereas emitting one per tier loses the
+        # ENTIRE PASS to a 400.  The label set is unchanged on purpose: these are
+        # series a dashboard may select on, and widening one to `(lane, window,
+        # tier)` would change what a `max by (lane, window)` sums over.
+        strictest: dict[str, float] = {}
         for tier in verdict.engaged or ():
-            out.add("st_governor_engaged_tier_percent", tier.at,
-                    lane=lane, window=tier.window)
-        for burning in verdict.burning or ():
-            out.add("st_governor_burndown", True, lane=lane, window=burning.window)
-        for pacing in verdict.pacing or ():
-            out.add("st_governor_pacing", True, lane=lane, window=pacing.window)
-        for relaxed in verdict.relaxed or ():
-            out.add("st_governor_relaxed", True, lane=lane, window=relaxed.window)
+            at = strictest.get(tier.window)
+            if at is None or tier.at > at:
+                strictest[tier.window] = tier.at
+        for window, at in strictest.items():
+            out.add("st_governor_engaged_tier_percent", at, lane=lane, window=window)
+        # True regardless of how many tiers in the window are burning/pacing/
+        # relaxed, so deduplicating by window loses nothing at all.
+        for field, metric in (("burning", "st_governor_burndown"),
+                              ("pacing", "st_governor_pacing"),
+                              ("relaxed", "st_governor_relaxed")):
+            for window in dict.fromkeys(t.window for t in
+                                        getattr(verdict, field, None) or ()):
+                out.add(metric, True, lane=lane, window=window)
         # The ALARM is a fact about the governor's own health, so it is a number
         # here even though the prose that explains it deliberately is not.
         out.add("st_governor_alarm", bool(verdict.alarm), **lb)
@@ -555,6 +597,11 @@ def render(lanes, *, agents=None, now: float, totals: Totals = EMPTY) -> str:
         out.add("st_agents_work", count, harness=harness, work=work)
     for harness, count in sorted((agents or {}).get("stopped", {}).items()):
         out.add("st_agents_stopped_deliberate", count, harness=harness)
+    # LAST, so it counts every drop above. Always emitted, 0 in the steady state:
+    # a counter that appears only on failure is a panel that reads green, which is
+    # this module's own rule. It is the visible half of the `_Out` guard — without
+    # it a dedup would trade a loud 400 for a silent modelling error.
+    out.add("st_governor_duplicate_samples_dropped", out.dropped)
     return out.render()
 
 
