@@ -326,3 +326,198 @@ def test_the_incident_would_have_been_STOPPED(tmp_path):
     # and it trips WELL before the end — the first deploy alone is 5h from the end
     early = sb.read_spend(tmp_path, "billy", now - 4.5 * 3600)
     assert sb.verdict(ARMED, early) is not None
+
+
+# --- the ceiling could not hold for an agent that OBEYED it (aegis-hqbwci) ---
+#
+# THE SHAPE OF THIS BUG, and why the tests below are mostly about the CONTROL
+# rather than the fix: the ceiling's own instruction is "stop cleanly" and "do
+# NOT pick up more work". Complying means going idle, and going idle past
+# STRETCH_GAP_S is precisely what rolled the stretch and restored a full budget.
+# Obedience was the trigger for the reset. So the first test is the incident,
+# and the SECOND is the one a reviewer should look at hardest — a fix that never
+# releases the hold would pass the first test perfectly and stop the fleet.
+
+def _store_sessions(root: Path, rows):
+    """rows: (ts, agent, kind, session, risk). `_store` pins one session id; the
+    hold is keyed on session identity, so these tests have to vary it."""
+    root.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(root / "stats.sqlite")
+    conn.executescript(stats._SCHEMA)
+    conn.executemany(
+        "INSERT INTO events(ts, agent, kind, session, risk) VALUES (?,?,?,?,?)",
+        rows)
+    conn.commit()
+    conn.close()
+
+
+def _busy(a: float, b: float, session: str):
+    """Tool events every two minutes from `a` to `b`. Dense on purpose: any gap
+    wider than STRETCH_GAP_S inside the run would roll the stretch by itself and
+    the test would pass for the wrong reason."""
+    n = max(2, int((b - a) // 120))
+    return [(a + i * (b - a) / n, "billy", "tool", session, None)
+            for i in range(n + 1)]
+
+
+def _armed(root: Path):
+    (root / "shantytown.toml").write_text(
+        "[session_budget]\nmax_hours = 4.0\nmax_items = 4\nmax_risk = 3\n",
+        encoding="utf-8")
+
+
+IDLE_MIN = 81.3          # arnold's measured gap, 23:12:13 -> 00:33:29
+
+
+def _ceilinged(root: Path, trip_at: float, session: str = "sess-A"):
+    """The run up to the moment the ceiling trips: four haul items over a busy
+    4.5 hours. Stops there, so the trip can be measured the way the live gate
+    measured it — before the idle gap exists in the store at all."""
+    _armed(root)
+    # 3.5 hours, four items: UNDER max_hours=4.0 on purpose, so the measure that
+    # trips is unambiguously `items` and the assertions below are about the thing
+    # they say they are about.
+    rows = _busy(trip_at - 3.5 * 3600, trip_at, session)
+    rows += [(trip_at - (3.0 - i) * 3600, "billy", "haul", session, None)
+             for i in range(4)]
+    _store_sessions(root, rows)
+
+
+def _stir(root: Path, ts: float, session: str = "sess-A"):
+    """One event after the idle gap — the agent waking up in the SAME session."""
+    conn = sqlite3.connect(root / "stats.sqlite")
+    conn.execute("INSERT INTO events(ts, agent, kind, session) VALUES (?,?,?,?)",
+                 (ts, "billy", "tool", session))
+    conn.commit()
+    conn.close()
+
+
+def _trip_and_comply(root: Path, now: float, session: str = "sess-A"):
+    """The whole incident: ceiling, marker, compliant idle, wake. Returns the
+    Ceiling that was recorded at the trip."""
+    trip_at = now - IDLE_MIN * 60.0
+    _ceilinged(root, trip_at, session)
+    trip = sb.read_spend(root, "billy", trip_at)
+    ceiling = sb.verdict(sb.limits_for(root), trip)
+    assert ceiling is not None, "the run must actually trip, or nothing is proven"
+    sb.mark_reported(root, "billy", trip, ceiling)
+    _stir(root, now, session)
+    return ceiling
+
+
+def test_the_ceiling_TRIPS_on_the_measured_run(tmp_path):
+    """Control for the two tests below: before the idle gap, this run is over."""
+    now = time.time()
+    _ceilinged(tmp_path, now)
+    _lim, spend, c = sb.gate(tmp_path, "billy", now)
+    assert c is not None and not c.held and spend.items == 4
+    assert c.measure == "items"
+
+
+def test_OBEYING_the_ceiling_no_longer_un_trips_it(tmp_path):
+    """THE BUG, in one test. The agent was told to stop, complied, and idled
+    81.3 minutes — the measured gap. That rolls the stretch, so every counter
+    the gate reads is back to zero and `verdict` alone sees a clean session."""
+    now = time.time()
+    _trip_and_comply(tmp_path, now)
+    limits, spend, c = sb.gate(tmp_path, "billy", now)
+    assert spend.items == 0                      # the stretch really did roll
+    assert sb.verdict(limits, spend) is None     # ... and the live read is clean
+    assert c is not None and c.held              # ... and the ceiling STILL holds
+    assert c.measure == "items" and c.measured == 4.0
+
+
+def test_a_GENUINELY_FRESH_agent_still_gets_its_full_budget(tmp_path):
+    """THE CONTROL, and the more important half. A hold that never releases is
+    not a ceiling, it is a fleet-wide stop with extra steps. Same store, same
+    marker, same idle gap — only the session id differs, which is exactly the
+    fact that separates 'complied and waited' from 'has done nothing today'."""
+    now = time.time()
+    _trip_and_comply(tmp_path, now)
+    # the agent was relaunched: its newest event carries a NEW session id
+    _store_sessions(tmp_path / "fresh", [(now, "billy", "tool", "sess-B", None)])
+    (tmp_path / "fresh" / "shantytown.toml").write_text(
+        (tmp_path / "shantytown.toml").read_text(), encoding="utf-8")
+    (tmp_path / "fresh" / "session_budget").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "fresh" / "session_budget" / "billy.json").write_text(
+        (tmp_path / "session_budget" / "billy.json").read_text(), encoding="utf-8")
+    _lim, spend, c = sb.gate(tmp_path / "fresh", "billy", now)
+    assert spend.session == "sess-B"
+    assert c is None                             # wide open, correctly
+
+
+def test_the_held_message_SAYS_it_is_held_and_quotes_the_TRIP(tmp_path):
+    """A held ceiling reporting the rolled stretch's zeros would tell the agent
+    'you have run 0.0h, 0 items, and I am not feeding you' — which reads as a
+    broken counter, and invites exactly the wait that used to clear it."""
+    now = time.time()
+    _trip_and_comply(tmp_path, now)
+    _lim, _sp, c = sb.gate(tmp_path, "billy", now)
+    msg = sb.stop_message(c)
+    assert "4 haul items" in msg                 # the trip's number, not 0
+    assert "0 item(s)" not in msg
+    assert "Idling does not clear it" in msg
+    assert "THIS SESSION" in msg
+
+
+def test_told_once_survives_the_idle_gap_it_causes(tmp_path):
+    """Without this the complying agent is re-told the same thing on every
+    45-minute boundary for the rest of its session — noise aimed at a worker
+    that already did as it was asked."""
+    trip = sb.Spend(session="sess-A", started=1000.0, hours=9.0)
+    sb.mark_reported(tmp_path, "billy", trip)
+    rolled = sb.Spend(session="sess-A", started=90_000.0)
+    assert sb.already_reported(tmp_path, "billy", rolled)
+    # ... and a different session is NOT silenced by it
+    assert not sb.already_reported(
+        tmp_path, "billy", sb.Spend(session="sess-B", started=90_000.0))
+
+
+@pytest.mark.parametrize("why,mutate", [
+    ("a marker written before this existed cannot name what tripped",
+     lambda d: d.pop("ceiling")),
+    ("an empty session id is UNKNOWN, and unknown never holds a worker",
+     lambda d: d.update(session="")),
+    ("a marker from some other session says nothing about this one",
+     lambda d: d.update(session="sess-OTHER")),
+])
+def test_the_hold_FAILS_OPEN_on_anything_it_cannot_establish(tmp_path, why, mutate):
+    import json
+    now = time.time()
+    _trip_and_comply(tmp_path, now)
+    m = tmp_path / "session_budget" / "billy.json"
+    d = json.loads(m.read_text())
+    mutate(d)
+    m.write_text(json.dumps(d), encoding="utf-8")
+    _lim, _sp, c = sb.gate(tmp_path, "billy", now)
+    assert c is None, why
+
+
+def test_RAISING_the_limit_lifts_the_hold_without_deleting_a_file(tmp_path):
+    """An operator who decides four items was too tight must have a way out that
+    is not 'find the json'. A stale marker must not pin a worker after the
+    config that justified it has been changed."""
+    now = time.time()
+    _trip_and_comply(tmp_path, now)
+    assert sb.gate(tmp_path, "billy", now)[2] is not None
+    (tmp_path / "shantytown.toml").write_text(
+        "[session_budget]\nmax_hours = 4.0\nmax_items = 8\nmax_risk = 3\n",
+        encoding="utf-8")
+    assert sb.gate(tmp_path, "billy", now)[2] is None
+
+
+def test_a_held_ceiling_never_outranks_a_LIVE_one(tmp_path):
+    """The held numbers are the trip's. A session that is over budget RIGHT NOW
+    must report today's, or the operator tunes against a stale measurement."""
+    now = time.time()
+    _armed(tmp_path)
+    rows = _busy(now - 4.5 * 3600, now, "sess-A")
+    rows += [(now - (4.0 - 0.6 * i) * 3600, "billy", "haul", "sess-A", None)
+             for i in range(6)]
+    _store_sessions(tmp_path, rows)
+    _lim, spend, c = sb.gate(tmp_path, "billy", now)
+    sb.mark_reported(tmp_path, "billy", sb.Spend(session="sess-A", started=1.0,
+                                                 hours=9.0, items=4),
+                     sb.Ceiling("items", 4.0, 4.0, sb.Spend(items=4), held=False))
+    _lim, _sp, c = sb.gate(tmp_path, "billy", now)
+    assert c is not None and not c.held and c.measured == 6.0

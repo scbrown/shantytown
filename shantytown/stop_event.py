@@ -516,7 +516,7 @@ def _haul(reg: FilesRegistry, panes, me: str, root: Path) -> int:
         if ceiling is not None:
             if sb.already_reported(root, me, spend):
                 return 0                 # told once — let the session end
-            sb.mark_reported(root, me, spend)
+            sb.mark_reported(root, me, spend, ceiling)
             print(json.dumps({"decision": "block",
                               "reason": sb.stop_message(ceiling)}))
             return 0

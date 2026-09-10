@@ -151,6 +151,14 @@ class Ceiling:
     measured: float
     limit: float
     spend: Spend
+    # HELD means this ceiling is not being measured right now — it was tripped
+    # earlier in THIS SESSION and is being carried across a stretch boundary
+    # (aegis-hqbwci). The numbers in `measured` and `spend` are the ones from the
+    # trip, never the current stretch's, which is why they have to be persisted
+    # rather than recomputed: a rolled stretch reads 0.0h / 0 items, and a stop
+    # message quoting that would say "you have done nothing" while refusing to
+    # feed. The report has to name what was actually spent.
+    held: bool = False
 
     def label(self) -> str:
         shown = (f"{self.measured:.1f}" if self.measure == "hours"
@@ -355,38 +363,153 @@ def current_session(root: Path, agent: str) -> str | None:
 # run would be the thing preventing it from ending, which is worse than no
 # control at all.
 #
-# So the ceiling blocks EXACTLY ONCE per stretch: the first stop after it trips
-# gets the report instruction, and every stop after that is allowed through. The
-# marker is keyed on the stretch's START, which is stable while the stretch lives
-# and changes the moment a real break begins a new one — so a genuinely new run
-# is never silenced by an old marker.
+# So the ceiling blocks EXACTLY ONCE: the first stop after it trips gets the
+# report instruction, and every stop after that is allowed through.
+#
+#
+# --- AND THE TRIP ITSELF IS STICKY PER SESSION (aegis-hqbwci) ---------------
+#
+# THE CEILING COULD NOT HOLD FOR AN AGENT THAT OBEYED IT, and that was not a
+# malfunction — it was a per-STRETCH budget behind a per-SESSION instruction.
+# The message says "stop cleanly" and "do NOT pick up more work". An agent that
+# complies goes idle. Idling past STRETCH_GAP_S is exactly what ends the stretch,
+# and every counter above — hours, items, risk, and the told-once marker — is
+# derived from `stretch_start()`. So obedience was the precondition for the
+# reset, and the more faithfully an agent obeyed, the more reliably the ceiling
+# un-tripped. Measured on two agents (arnold: ceiling -> 81.3 min idle -> a full
+# 4.0h/4-item budget -> took another item; dearing: the same offer, declined by
+# hand). Neither was careless. Declining cost a judgement call against a number
+# that said there was room, and expecting that of every agent every time is not
+# a mechanism.
+#
+# WHY NO AMOUNT OF TUNING FIXES IT (arnold's formulation, and the reason the
+# remedy is here rather than in STRETCH_GAP_S): the gate cannot distinguish an
+# agent that OBEYED a ceiling from one that is genuinely FRESH, because both
+# emit the same signal — an idle gap. Shortening the gap does not separate those
+# two states, it only moves where both of them land, and it would stop fresh
+# sessions on their first advance (the reason :233-236 chose 45 min at all).
+# Anything derived from activity TIMING inherits the ambiguity.
+#
+# SO THE DISCRIMINATOR IS IDENTITY, NOT TIMING — and it was already being written
+# to this marker on every trip and thrown away on every read. `session` is a
+# FACT (a complying agent keeps its session id across an idle gap; a genuinely
+# fresh agent has a different one), where a cooldown on `at` would be a policy
+# choice nobody has made. MEASURED against this fleet's own stats store over 14
+# days: 89 stretch-rolling gaps kept the session id and 200 changed it, so both
+# states occur and are cleanly separable — and arnold's incident gap
+# (23:12:13 -> 00:33:29, 81.3 min) is one of the 89.
+#
+# WHAT THIS DELIBERATELY DOES NOT CLAIM. A relaunch — `st cycle --self`, the
+# haul's own context handoff — DOES mint a new session id, so a held ceiling
+# does not survive one. That path is not made any worse than it is today (the
+# stretch survives a /clear, so `verdict` still trips there on its own), and it
+# is already partly covered by asking the ceiling BEFORE the handoff in
+# stop_event. It is a separate, older question and it is not settled here.
+#
+# AND AN OPERATOR CAN STILL LIFT IT WITHOUT DELETING FILES: a held ceiling is
+# re-checked against the CURRENT limits every time, so raising or removing the
+# limit that tripped releases it on the next pass. A stale marker must not pin a
+# worker after the config that justified it has been fixed.
 
 def _marker(root: Path, agent: str) -> Path:
     return Path(root) / "session_budget" / f"{agent}.json"
 
 
 def already_reported(root: Path, agent: str, spend: Spend) -> bool:
-    """Has this stretch already been told to stop? Unreadable marker -> False,
-    which costs one extra report and never costs a trapped worker."""
+    """Has this agent already been told to stop? Unreadable marker -> False,
+    which costs one extra report and never costs a trapped worker.
+
+    MATCHES ON EITHER KEY. `started` is the original block-once behaviour and is
+    kept unchanged. `session` is what makes "told once" survive the idle gap the
+    instruction itself causes — without it, a complying agent gets re-told the
+    same thing on every 45-minute boundary for the rest of its session, which is
+    pane noise aimed at a worker that has already done as it was asked. An empty
+    session id never matches: unknown is not identity."""
     try:
         import json
         d = json.loads(_marker(root, agent).read_text(encoding="utf-8"))
-        return abs(float(d.get("started") or 0.0) - spend.started) < 1.0
+        if abs(float(d.get("started") or 0.0) - spend.started) < 1.0:
+            return True
+        marked = str(d.get("session") or "")
+        return bool(marked) and marked == spend.session
     except Exception:                    # noqa: BLE001
         return False
 
 
-def mark_reported(root: Path, agent: str, spend: Spend) -> None:
-    """Record that this stretch has had its one report. Best effort: a failed
-    write means one more report next stop, never a wedged worker."""
+def mark_reported(root: Path, agent: str, spend: Spend,
+                  ceiling: "Ceiling | None" = None) -> None:
+    """Record that this agent has had its one report, and WHAT tripped.
+
+    The trip's own numbers are persisted because `held_ceiling` below has to be
+    able to report them after the stretch that produced them is gone. Best
+    effort: a failed write means one more report next stop, never a wedged
+    worker. `ceiling=None` still writes the told-once marker — it simply cannot
+    be held, which is the fail-open direction every other path here takes."""
     try:
         import json
+        d = {"started": spend.started, "at": time.time(),
+             "session": spend.session}
+        if ceiling is not None:
+            d["ceiling"] = {"measure": ceiling.measure,
+                            "measured": ceiling.measured,
+                            "limit": ceiling.limit}
+            # The trip's spend, so the held message quotes what was actually
+            # spent rather than the rolled stretch's zeros.
+            d["spend"] = {"hours": ceiling.spend.hours,
+                          "items": ceiling.spend.items,
+                          "risk": ceiling.spend.risk,
+                          "risk_kinds": dict(ceiling.spend.risk_kinds)}
         p = _marker(root, agent)
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(json.dumps({"started": spend.started, "at": time.time(),
-                                 "session": spend.session}), encoding="utf-8")
+        p.write_text(json.dumps(d), encoding="utf-8")
     except Exception:                    # noqa: BLE001
         pass
+
+
+def held_ceiling(root: Path, agent: str, limits: Limits,
+                 spend: Spend) -> Ceiling | None:
+    """The ceiling THIS SESSION already tripped, carried across a stretch
+    boundary — or None.
+
+    Every gate below is fail-open, and so is this one. It returns None (wide
+    open) whenever it cannot positively establish all three of:
+
+      * the marker names a session, and it is THIS session — an empty id on
+        either side is unknown, and unknown never holds a worker;
+      * the marker records which measure tripped — markers written before this
+        existed do not, and inventing a number for the report would be worse
+        than releasing one agent once;
+      * the recorded measurement STILL exceeds the limit as configured NOW — so
+        raising or removing that limit lifts the hold without anyone having to
+        find and delete a json file."""
+    try:
+        import json
+        if not spend.session or spend.signal_lost:
+            return None
+        d = json.loads(_marker(root, agent).read_text(encoding="utf-8"))
+        if str(d.get("session") or "") != spend.session:
+            return None
+        c = d.get("ceiling")
+        if not isinstance(c, dict):
+            return None                  # legacy marker — cannot name the cause
+        measure = str(c.get("measure") or "")
+        measured = float(c.get("measured"))
+        lim = {"hours": limits.max_hours, "items": limits.max_items,
+               "risk": limits.max_risk}.get(measure)
+        if lim is None or measured < float(lim):
+            return None                  # the operator has since lifted it
+        sp = d.get("spend") or {}
+        trip = Spend(session=spend.session,
+                     started=float(d.get("started") or 0.0),
+                     hours=float(sp.get("hours") or 0.0),
+                     items=int(sp.get("items") or 0),
+                     risk=int(sp.get("risk") or 0),
+                     risk_kinds={str(k): int(v)
+                                 for k, v in (sp.get("risk_kinds") or {}).items()})
+        return Ceiling(measure=measure, measured=measured, limit=float(lim),
+                       spend=trip, held=True)
+    except Exception:                    # noqa: BLE001 — a budget never raises
+        return None
 
 
 def limits_for(root: Path) -> Limits:
@@ -415,7 +538,12 @@ def gate(root: Path, agent: str, now: float | None = None
         if not limits.active:
             return limits, Spend(), None
         spend = read_spend(root, agent, now)
-        return limits, spend, verdict(limits, spend)
+        # The live measurement first; then the trip this SESSION already made,
+        # which a rolled stretch has erased from `spend` but not from the marker
+        # (aegis-hqbwci). Order matters only for the message: a ceiling that is
+        # tripping RIGHT NOW should report today's numbers, not the held ones.
+        return limits, spend, (verdict(limits, spend)
+                               or held_ceiling(root, agent, limits, spend))
     except Exception:                    # noqa: BLE001
         return Limits(), Spend(signal_lost=True), None
 
@@ -494,11 +622,19 @@ def stop_message(c: Ceiling, next_bead: str | None = None) -> str:
     IT ALSO DOES NOT FEED THE NEXT BEAD. Naming it would be handing over the
     thing the ceiling exists to withhold, and an agent told "stop, and by the way
     your next item is aegis-xyz" will do the item."""
-    held = (f" {next_bead} stays claimed for whoever picks it up next."
-            if next_bead else "")
+    claimed = (f" {next_bead} stays claimed for whoever picks it up next."
+               if next_bead else "")
+    # A HELD ceiling has to say so, or the agent reads a report of numbers it
+    # cannot see in the current stretch and concludes the counter is broken —
+    # and, worse, that waiting is what clears it. Waiting is the thing that used
+    # to clear it, which is exactly why this sentence exists (aegis-hqbwci).
+    still = ("\nThis ceiling was already reached earlier in THIS SESSION and it "
+             "is still in force. Idling does not clear it — a new stretch is not "
+             "a new session. It lifts when this session ends, not when you wait."
+             if c.held else "")
     return (
         f"SESSION CEILING: {c.label()}. This session has run {c.spend.summary()} "
-        f"unattended, and the haul is NOT serving another item.{held}\n"
+        f"unattended, and the haul is NOT serving another item.{claimed}{still}\n"
         f"Do this now, in order: (1) commit and push anything unpushed — work "
         f"stranded on one box is the cost this exists to avoid; (2) write what "
         f"you did and what is left onto the bead trail, so the next session "

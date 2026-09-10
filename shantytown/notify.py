@@ -906,11 +906,16 @@ class IdleFleetAlerter:
             from . import session_budget as sb
             limits, spend, ceiling = sb.gate(self._shanty_root, worker)
             if ceiling is not None:
-                self._log(f"haul: {worker} is over its session ceiling "
+                # HELD names the aegis-hqbwci case explicitly, because the two
+                # are indistinguishable in a log otherwise and they mean
+                # different things: one worker is over budget now, the other is
+                # a worker that already complied and whose stop is being kept.
+                self._log(f"haul: {worker} is over its "
+                          f"{'HELD ' if ceiling.held else ''}session ceiling "
                           f"({ceiling.label()}) — NOT fed; it has been asked to "
                           f"report and stop")
                 if not sb.already_reported(self._shanty_root, worker, spend):
-                    sb.mark_reported(self._shanty_root, worker, spend)
+                    sb.mark_reported(self._shanty_root, worker, spend, ceiling)
                     push_to_own_pane(self._reg, self._panes, worker,
                                      sb.stop_message(ceiling))
                 continue
