@@ -727,10 +727,38 @@ def test_a_FAILED_fetch_reports_UNKNOWN_and_never_current(tmp_path: Path):
         "a tree whose fetch FAILED must never read as current — this is the "
         "exact false-green that rendered crew agents 'current' at 21 and 16 "
         "commits behind")
-    assert frozen.error, "a failed fetch must set error, not report a count"
-    assert "fetch failed" in frozen.error
-    assert "staleness UNKNOWN" in frozen.render()
+    # THE FIELD MOVED AND THE PROPERTY DID NOT (aegis-5ewwhl). A failed fetch
+    # used to set `error`, which `cycle.assess` reads as "this tree could not be
+    # read at all" — so during the outage every tree became a risk and `st cycle`
+    # refused fleet-wide on clean trees with nothing unpushed. It now sets
+    # `unverified`, which says precisely which HALF was unmeasurable.
+    #
+    # Everything this test was written to protect is asserted below, on
+    # behaviour rather than on which attribute carries it.
+    assert frozen.unverified, "a failed fetch must mark the behind-count unmeasured"
+    assert "fetch failed" in frozen.unverified
     assert "current with" not in frozen.render()
+    assert "currency UNVERIFIED" in frozen.render()
+    # The behind-count is not merely wrong, it must not be PRINTED. `behind == 0`
+    # off a frozen ref is the lie; rendering it beside an UNVERIFIED banner would
+    # still hand a reader a number to believe.
+    import re as _re
+    assert not _re.search(r"\d+ behind ", frozen.render()), (
+        f"no behind-COUNT may be printed: {frozen.render()}")
+
+    # ...AND THE LOSS-RISK HALF IS STILL MEASURED, which is what lets the cycle
+    # gate keep working through an outage. `HEAD --not --remotes` reads refs we
+    # already hold, so a frozen ref can only over-report it, never under-report.
+    assert frozen.unpushed == 0 and not frozen.dirty, (
+        "a clean tree with nothing unpushed must be measured as such even when "
+        "the fetch failed — refusing here is what blocked every agent's cycle")
+
+    _commit(wt, "local-work-that-is-on-no-remote")
+    stranded = tree_staleness(wt, fetch=True)
+    assert stranded.unverified, "still a dead remote"
+    assert stranded.unpushed == 1, (
+        "loss risk must survive a failed fetch — this is the ONE signal the "
+        "cycle gate exists for")
 
 
 def test_a_SUCCESSFUL_fetch_is_unaffected(tmp_path: Path):

@@ -38,6 +38,9 @@ class _Stale:
     error: str | None = None
     untracked: tuple = ()
     untracked_count: int = 0
+    #: Set when the FETCH failed but the tree itself read fine — the behind-count
+    #: is unmeasured, the loss-risk fields are not (aegis-5ewwhl).
+    unverified: str | None = None
 
 
 def _clean(_tree):
@@ -483,3 +486,95 @@ def test_a_clean_tree_probes_nothing():
 
     v = assess("ellie", ["/w/a", "/w/b"], CHECKPOINT, _clean, reachable=probe)
     assert v.ok is True and calls == []
+
+
+# --------------------------------------------------------------------------
+# aegis-5ewwhl: a dead remote must not refuse a cycle it cannot help
+# --------------------------------------------------------------------------
+
+DEAD = ("fetch failed against origin/main — the remote-tracking ref is frozen, "
+        "so a behind-count here would compare the tree against itself. "
+        "Loss risk below IS measured")
+
+
+def test_a_dead_remote_does_NOT_refuse_a_clean_tree_with_nothing_unpushed():
+    """The fleet-wide stall, in one assertion.
+
+    During the forge sshd outage a failed fetch set `Staleness.error`; `assess`
+    reads an error as a tree it could not READ and refuses, correctly, because
+    such a tree might hold the only copy of something. But a failed FETCH is not
+    an unreadable tree — `unpushed`, `dirty` and `untracked` were all measured
+    from local refs. So every agent was refused on clean trees with nothing
+    unpushed, and the refusal was permanent: its stated remedy is "commit and
+    `st push` first", which cannot succeed against a remote that is down.
+
+    The cost is the part that makes this P1 rather than a nuisance: a cycle is
+    how a saturated session is recovered, so the wall that stops the cycle is
+    the wall the cycle exists to get past. Two agents measured blocked in one
+    night, both codex — the lane the governor most wants trimmed.
+    """
+    v = assess("ellie", ["/w/ellie"], CHECKPOINT, lambda t: _Stale(unverified=DEAD))
+
+    assert v.ok, f"a clean tree with 0 unpushed must cycle: {v.render()}"
+    assert not v.risks
+    # Reported, never silent: an agent that cycled without a currency reading
+    # has to know to re-check once the remote is back.
+    line = "\n".join(v.notice_lines())
+    assert "currency NOT measured" in line
+    assert "/w/ellie" in line
+    assert "REFUSED" not in v.render()
+
+
+def test_an_UNREADABLE_tree_still_refuses_even_though_a_dead_remote_does_not():
+    """The distinction the fix rests on, asserted so it cannot be collapsed
+    back. `error` (could not read the tree) keeps refusing; `unverified` (could
+    not reach the remote) does not. Same outage, opposite verdicts, and the
+    difference is whether the loss-risk fields were measurable at all."""
+    v = assess("ellie", ["/w/ellie"], CHECKPOINT,
+               lambda t: _Stale(error="could not count commits"))
+    assert not v.ok
+    assert v.risks
+
+
+def test_a_dead_remote_does_NOT_disarm_the_gate_for_a_DIRTY_tree():
+    """The loss gate must survive the fix. Uncommitted tracked work is never
+    downgraded by an unreachable remote — unlike unpushed-only, which
+    aegis-tig80i already reports rather than refuses, because `st push` cannot
+    succeed during an outage and a permanent refusal protects nothing."""
+    v = assess("ellie", ["/w/ellie"], CHECKPOINT,
+               lambda t: _Stale(dirty=True, unpushed=2, unverified=DEAD))
+    assert not v.ok, "dirty work is still loss risk when the remote is down"
+    assert v.risks
+
+
+def test_one_unpushed_commit_refuses_or_strands_BY_REACHABILITY_not_by_outage():
+    """Acceptance arm 2 of aegis-5ewwhl, pinned where it actually lands.
+
+    sattler's acceptance reads "with 1 unpushed commit it still refuses". That
+    holds wherever the remote can be reached — but it CONFLICTS with the landed
+    ruling of aegis-tig80i (0d2bdd8, 2026-09-09), which downgrades unpushed-only
+    behind a MEASURED-unreachable remote to a notice, on the ground that
+    `st push` cannot succeed and a permanent refusal protects nothing.
+
+    Both are pinned here rather than one being quietly chosen, because this fix
+    is what makes the difference observable: before it, the failed-fetch `error`
+    short-circuited `assess` and tig80i's path was never reached during an
+    outage. The three arms, measured:
+    """
+    def judge(reach):
+        return assess("ellie", ["/w/ellie"], CHECKPOINT,
+                      lambda t: _Stale(unpushed=1, unverified=DEAD),
+                      reachable=reach)
+
+    # Remote reachable (e.g. a GitHub worktree while only the LAN forge is down):
+    # sattler's arm 2, exactly.
+    assert not judge(lambda t: True).ok
+
+    # COULD NOT TELL keeps gating — uncertainty resolves toward keeping work.
+    assert not judge(lambda t: None).ok
+
+    # Remote MEASURED unreachable: tig80i governs. Not a refusal, but never
+    # silent — the work is named and the instruction to push it later is kept.
+    v = judge(lambda t: False)
+    assert v.ok and v.stranded and not v.risks
+    assert "no remote ref" in "\n".join(v.notice_lines())

@@ -184,6 +184,33 @@ class TreeStranded:
 
 
 @dataclass
+class TreeUnverified:
+    """A tree whose BEHIND count could not be measured, reported and never a
+    reason to refuse (aegis-5ewwhl).
+
+    Currency is a DUPLICATION risk — "somebody may have built this already" —
+    and this gate exists for LOSS. During the forge sshd outage a failed fetch
+    set `Staleness.error`, `assess` read that as a tree it could not read, and
+    `st cycle` refused fleet-wide on clean trees with nothing unpushed. The
+    refusal was permanent by construction: committing and pushing cannot revive
+    a dead remote, so the one remedy the refusal names was unavailable, and
+    sessions grew past the context wall with the cycle wall refusing the cycle.
+
+    Reported rather than dropped, and the wording says what was NOT measured, so
+    an agent that cycles under it knows to re-check currency once the remote is
+    back. Same contract as TreeUntracked and TreeStranded.
+    """
+    path: str = ""
+    why: str = ""
+
+    def render(self) -> list:
+        return [f"{self.path}: currency NOT measured ({self.why}). Cycling "
+                f"anyway — this gate is for work that would be LOST, and "
+                f"nothing here is. Re-check for upstream work when the remote "
+                f"is reachable again."]
+
+
+@dataclass
 class Verdict:
     """May we cycle, and what does the operator need to know first."""
     agent: str
@@ -200,14 +227,20 @@ class Verdict:
     #: untracked files they name work that MUST still be pushed later, so the
     #: wording carries the instruction rather than withholding it.
     stranded: list = field(default_factory=list)
+    #: Trees whose behind-count could not be measured (a dead remote). Reported,
+    #: never a refusal — see TreeUnverified.
+    unverified: list = field(default_factory=list)
 
     def notice_lines(self) -> list:
-        """The non-blocking reports (untracked, stranded-by-outage), or []."""
+        """The non-blocking reports (untracked, stranded-by-outage, unverified
+        currency), or []."""
         lines = []
         for u in self.untracked:
             lines += u.render()
         for st_ in self.stranded:
             lines += st_.render()
+        for uv in self.unverified:
+            lines += uv.render()
         return lines
 
     def render(self) -> str:
@@ -274,6 +307,7 @@ def assess(agent: str, trees, checkpoint: str, staleness,
     risks: list[TreeRisk] = []
     notices: list[TreeUntracked] = []
     stranded: list[TreeStranded] = []
+    unverified: list[TreeUnverified] = []
     # One cache across every tree: a fleet's worktrees mostly share one forge, so
     # the honest answer for the second tree is the answer measured for the first.
     reach_cache: dict = {}
@@ -294,6 +328,13 @@ def assess(agent: str, trees, checkpoint: str, staleness,
         # getattr, not attribute access: `staleness` is an injected callable and
         # older stand-ins predate these fields. A reporting nicety may not be the
         # thing that makes the loss gate raise.
+        # A BEHIND-COUNT WE COULD NOT TAKE IS NOT A TREE WE COULD NOT READ
+        # (aegis-5ewwhl). `error` above means the tree itself was unreadable and
+        # keeps refusing. `unverified` means the FETCH failed while `unpushed`,
+        # `dirty` and `untracked` were all measured from local refs — the only
+        # signals this gate acts on. Report it and judge the tree normally.
+        if getattr(s, "unverified", None):
+            unverified.append(TreeUnverified(str(tree), why=s.unverified))
         count = int(getattr(s, "untracked_count", 0) or 0)
         if count:
             notices.append(TreeUntracked(
@@ -323,10 +364,11 @@ def assess(agent: str, trees, checkpoint: str, staleness,
             "NOT a general --force: this override is named on its own so that "
             "reaching past some other refusal cannot disarm it).",
             risks=risks, checkpoint=checkpoint, untracked=notices,
-            stranded=stranded)
+            stranded=stranded, unverified=unverified)
 
     return Verdict(agent, True, risks=risks, checkpoint=checkpoint,
-                   untracked=notices, stranded=stranded)
+                   untracked=notices, stranded=stranded,
+                   unverified=unverified)
 
 
 def _parse_ts(value):

@@ -780,6 +780,19 @@ class Staleness:
     #: two days renders as "current", which is how a whole fleet read "ok" while
     #: agents sat 16 and 21 commits behind during a forge outage.
     measured_age: float | None = None
+    #: Why the BEHIND count could not be measured, when the loss-risk fields
+    #: (`unpushed`, `dirty`, `untracked`) still could. Distinct from `error`,
+    #: which means the tree itself could not be read (aegis-5ewwhl).
+    #:
+    #: The asymmetry is the whole point. A frozen remote-tracking ref makes
+    #: `behind` a CONFIDENT WRONG ANSWER pointing the reassuring way — it
+    #: compares the tree against itself and returns 0. It does NOT do that to
+    #: `unpushed`: `HEAD --not --remotes` asks whether these commits are
+    #: reachable from any ref we already hold, and a frozen ref can only make
+    #: that count too HIGH (work pushed since the last fetch reads as stranded),
+    #: never too low. So one of the two survives a dead remote and the other
+    #: does not, and collapsing them cost the fleet its entire cycle path.
+    unverified: str | None = None
 
     def measurement_is_stale(self) -> bool:
         """Is this reading too old to be worth calling "ok"?
@@ -797,7 +810,12 @@ class Staleness:
     def current(self) -> bool:
         """Nothing to fetch and nothing stranded. `dirty` is deliberately NOT
         part of this: uncommitted work is normal mid-task and is not staleness."""
-        return self.error is None and self.behind == 0 and self.unpushed == 0
+        # `unverified` keeps this False deliberately: an unmeasured behind-count
+        # must never render as "current with origin/main", which is the flattery
+        # wu's fetch-failure fix was written to stop. This class now reports the
+        # loss risk it CAN measure without also claiming the currency it cannot.
+        return (self.error is None and self.unverified is None
+                and self.behind == 0 and self.unpushed == 0)
 
     def render(self) -> str:
         """One line, and it must never flatter. Silence about a thing we could
@@ -805,7 +823,12 @@ class Staleness:
         if self.error:
             return f"staleness UNKNOWN ({self.error})"
         bits = []
-        if self.behind:
+        if self.unverified:
+            # FIRST, so the reader cannot take the measured half for the whole.
+            # No behind-count is printed at all in this state — it was not
+            # measured, and a 0 here is the lie this field exists to prevent.
+            bits.append(f"currency UNVERIFIED ({self.unverified})")
+        elif self.behind:
             bits.append(f"{self.behind} behind {self.ref} (work you do NOT have "
                         f"— check for duplication before you build)")
         if self.unpushed:
@@ -1165,6 +1188,7 @@ def tree_staleness(dest: Path | str, run: GitRunner = _git,
     ref, note = upstream_ref(dest, run=run)
     if ref is None:
         return Staleness(ref=None, note=note, error=note)
+    unverified = None
     if fetch:
         # --prune IS LOAD-BEARING, not tidiness (tim, aegis-ib65p). A plain fetch
         # does NOT delete remote-tracking refs for branches deleted upstream, and
@@ -1204,11 +1228,23 @@ def tree_staleness(dest: Path | str, run: GitRunner = _git,
             # built for: it already prints `staleness UNKNOWN (<error>)`, and
             # current() already returns False when error is set. The machinery
             # was all here; only the return code was being thrown away.
-            return Staleness(ref=ref, note=note,
-                             error=f"fetch failed against {ref} — staleness "
-                                   f"NOT measured (the remote-tracking ref is "
-                                   f"frozen, so a behind-count here would "
-                                   f"compare the tree against itself)")
+            # ...BUT IT DOES NOT MAKE THE LOSS-RISK FIELDS A LIE, AND
+            # RETURNING HERE COST THE FLEET ITS CYCLE PATH (aegis-5ewwhl).
+            # This used to `return` with `error` set. `cycle.assess` treats a
+            # tree it could not READ as a risk — correctly — so during the forge
+            # sshd outage EVERY tree became a risk and `st cycle` refused
+            # fleet-wide, on clean trees with nothing unpushed. Sessions then
+            # grew past the context wall with the cycle wall itself refusing the
+            # remedy, and the refusal was permanent: no amount of committing or
+            # pushing clears a dead remote.
+            #
+            # So mark the BEHIND count unmeasured and carry on measuring
+            # `unpushed`, `dirty` and `untracked`, which a frozen ref cannot
+            # under-report (see Staleness.unverified). The gate keeps the only
+            # signal it exists for.
+            unverified = (f"fetch failed against {ref} — the remote-tracking "
+                          f"ref is frozen, so a behind-count here would compare "
+                          f"the tree against itself. Loss risk below IS measured")
         ref, note = upstream_ref(dest, run=run)
         if ref is None:
             return Staleness(ref=None, note=note, error=note)
@@ -1238,6 +1274,7 @@ def tree_staleness(dest: Path | str, run: GitRunner = _git,
             unpushed=int(unpushed) if unpushed.isdigit() else 0,
             dirty=True,
             note=note,
+            unverified=unverified,
         )
     tracked_dirty, untracked = split_porcelain(porcelain)
     # ST'S OWN WRITING IS NOT THE AGENT'S UNSAVED WORK (aegis-c14kn6). st
@@ -1274,6 +1311,7 @@ def tree_staleness(dest: Path | str, run: GitRunner = _git,
         untracked=tuple(untracked[:UNTRACKED_SAMPLE_CAP]),
         untracked_count=len(untracked),
         note=note,
+        unverified=unverified,
     )
 
 
