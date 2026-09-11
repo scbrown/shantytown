@@ -111,8 +111,27 @@ _SEGMENT_SPLIT = ("&&", "||", ";", "|", "&")
 
 _QUIPU_TOKEN_FILE = Path(".config/aegis/quipu_token")
 _SCRUB_TAIL_BYTES = 1024 * 1024
+# THE HEADER FORM IS NOT THE ONLY FORM, AND THE JSON ONE IS THE DANGEROUS ONE
+# (aegis-nbworj, wu 2026-09-11). This matched `Authorization: Bearer <tok>` and
+# could NOT match `"Authorization": "Bearer <tok>"` — a quote sits between the
+# colon and `Bearer`, so `\s*` never reaches it. That JSON shape is exactly how
+# `.mcp.json` stores auth, across 24 crew clones, so a `cat`/`rg` of the kit
+# recorded a live credential in the clear AND the scrubber reported ZERO
+# redactions: a silent miss, which is worse than a loud one.
+#
+# Two shapes beyond wu's report also leaked and are covered here: compact JSON
+# (`"Authorization":"Bearer …"`, no space) and single quotes. And the one that
+# matters most in practice — transcripts are JSONL, so captured file content
+# arrives with ESCAPED quotes (`\"Authorization\": \"Bearer …`), which is the
+# literal byte shape this has to match to protect a real transcript.
+#
+# Group semantics are load-bearing and unchanged: group(1) is echoed verbatim
+# and group(2) is masked at EQUAL LENGTH, which is what preserves byte offsets,
+# JSONL validity and the inode a running harness holds open. The token class
+# excludes quotes, so group(2) stops at the closing quote on its own.
 _BEARER_OUTPUT = re.compile(
-    rb"(?i)(authorization\s*:\s*bearer\s+)([a-z0-9._~+/=-]{24,})"
+    rb"""(?i)((?:\\?["'])?authorization(?:\\?["'])?\s*:\s*(?:\\?["'])?\s*bearer\s+)"""
+    rb"""([a-z0-9._~+/=-]{24,})"""
 )
 
 

@@ -354,3 +354,62 @@ def test_export_failure_is_still_fail_open(tmp_path, monkeypatch):
     def boom(*a, **k): raise OSError("gateway down")
     monkeypatch.setattr(stats.urllib.request, "urlopen", boom)
     assert _run_capture(tmp_path, _payload_tool(), monkeypatch) == 0
+
+
+# --- the JSON bearer form, which .mcp.json uses (aegis-nbworj) --------------
+# wu, 2026-09-11, proved with a FAKE token: the scrubber matched
+# `Authorization: Bearer <tok>` and could NOT match `"Authorization": "Bearer
+# <tok>"` — a quote sits between the colon and `Bearer`, so `\s*` never reaches
+# it. That JSON shape is exactly how `.mcp.json` stores auth across 24 crew
+# clones, so a `cat`/`rg` of the kit wrote a live credential into the transcript
+# in the clear AND the scrubber reported ZERO redactions. A silent miss.
+
+#: Deliberately not credential-shaped in any real system. Tests must never carry
+#: a token that was ever live, even a rotated one.
+FAKE_TOKEN = b"FAKEfake0123456789abcdefFAKE"
+
+BEARER_SHAPES = {
+    "header": b"Authorization: Bearer " + FAKE_TOKEN,
+    "json_spaced": b'"Authorization": "Bearer ' + FAKE_TOKEN + b'"',
+    "json_compact": b'"Authorization":"Bearer ' + FAKE_TOKEN + b'"',
+    "single_quoted": b"'Authorization': 'Bearer " + FAKE_TOKEN + b"'",
+    # THE ONE THAT MATTERS MOST: transcripts are JSONL, so captured file content
+    # arrives with ESCAPED quotes. This is the literal byte shape a real
+    # transcript carries after an agent cats .mcp.json.
+    "jsonl_escaped": b'\\"Authorization\\": \\"Bearer ' + FAKE_TOKEN + b'\\"',
+}
+
+
+@pytest.mark.parametrize("shape", sorted(BEARER_SHAPES))
+def test_every_bearer_shape_is_redacted(shape):
+    from shantytown.stats import _redact_bearer_output
+    raw = BEARER_SHAPES[shape]
+    out, n = _redact_bearer_output(raw)
+    assert FAKE_TOKEN not in out, f"{shape}: the credential SURVIVED the scrub"
+    assert n == 1, f"{shape}: reported {n} redactions — a silent miss is the defect"
+
+
+@pytest.mark.parametrize("shape", sorted(BEARER_SHAPES))
+def test_redaction_preserves_byte_length(shape):
+    """Equal-length replacement is what keeps JSONL valid, byte offsets stable,
+    and the inode a running harness holds open usable. A fix that redacted but
+    shortened the line would trade a leak for corruption."""
+    from shantytown.stats import _redact_bearer_output
+    raw = BEARER_SHAPES[shape]
+    out, _ = _redact_bearer_output(raw)
+    assert len(out) == len(raw)
+
+
+def test_ordinary_text_is_NOT_redacted():
+    """CONTROL. A regex loosened until everything matches would pass every test
+    above while destroying transcripts — and `authorization` is an ordinary
+    English word that appears in prose about this very bug."""
+    from shantytown.stats import _redact_bearer_output
+    for benign in (
+        b"the authorization model is documented in the runbook",
+        b"Authorization: Basic dXNlcjpwYXNz",          # different scheme
+        b'"Authorization": "Bearer short"',            # below the 24-char floor
+        b"bearer of bad news",
+    ):
+        out, n = _redact_bearer_output(benign)
+        assert out == benign and n == 0, f"false positive on {benign!r}"
