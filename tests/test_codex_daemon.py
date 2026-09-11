@@ -91,6 +91,88 @@ def test_old_lock_with_recorded_dead_control_server_is_repaired(tmp_path):
     assert not lock.exists()
 
 
+def test_a_FRESH_lock_is_stale_when_the_recorded_pid_does_not_EXIST(tmp_path):
+    """aegis-h5wki0 defect 1, reproduced: the repair would not fire inside ten
+    minutes, so `st stop` + `st new` — the one sequence an operator actually runs
+    — could not clear the lock it had just been blocked by.
+
+    The recovery was to fail once, wait, and retry, i.e. to let the clock pass the
+    age gate. Here the recorded control-server PID is not in /proc at all, which
+    no amount of waiting can make more true: nothing is starting up under a PID
+    that does not exist. The lock is conclusively stale at ANY age.
+    """
+    proc = tmp_path / "proc"
+    runtime = tmp_path / "run"
+    proc.mkdir()
+    # Another card's live daemon, to prove the verdict is not "any missing pid".
+    _proc(proc, 999, cmd="codex app-server --remote-control --listen unix://",
+          env={"SHANTY_AGENT": "ian"})
+    _app_pid(runtime, "kelly", 101)          # recorded...
+    _app_pid(runtime, "ian", 999)
+    lock = (runtime / "shantytown/codex/kelly/app-server-control" /
+            "app-server-startup.lock")
+    lock.parent.mkdir(parents=True)
+    lock.write_text("")
+    os.utime(lock, (995, 995))               # ...5 seconds old: far inside the gate
+
+    found = codex_daemon.inspect("kelly", runtime_dir=runtime, proc=proc, now=1000)
+    assert found.blocked, "a recorded pid that does not exist needs no waiting"
+    assert found.stale_lock == lock
+
+    killed = []
+    codex_daemon.repair("kelly", runtime_dir=runtime, proc=proc, now=1000,
+                        kill=lambda pid, sig: killed.append((pid, sig)))
+    assert not lock.exists()
+    # THE POINT: this narrows the WAIT, it must not widen the KILL.
+    assert killed == [], "nothing may be signalled on the newly-admitted path"
+    assert (proc / "999").exists(), "another card's daemon is untouchable"
+
+
+def test_a_FRESH_lock_beside_a_LIVE_unidentifiable_pid_still_WAITS(tmp_path):
+    """The other half of the same gate, and the reason the age clause stays.
+
+    A recorded PID that EXISTS but does not yet look like an owned control server
+    is the ambiguous world: it may be this card's app-server mid-exec, before its
+    argv and environ are readable. Killing that is the failure the delay exists to
+    prevent, so an in-window lock beside a live PID must NOT be a blocker.
+    """
+    proc = tmp_path / "proc"
+    runtime = tmp_path / "run"
+    proc.mkdir()
+    _proc(proc, 101, cmd="", env={})          # exists; argv/environ not yet readable
+    _app_pid(runtime, "kelly", 101)
+    lock = (runtime / "shantytown/codex/kelly/app-server-control" /
+            "app-server-startup.lock")
+    lock.parent.mkdir(parents=True)
+    lock.write_text("")
+    os.utime(lock, (995, 995))
+
+    assert not codex_daemon.inspect(
+        "kelly", runtime_dir=runtime, proc=proc, now=1000).blocked
+
+    # ...and the age clause still catches it once waiting HAS happened.
+    os.utime(lock, (1, 1))
+    assert codex_daemon.inspect(
+        "kelly", runtime_dir=runtime, proc=proc, now=1000).blocked
+
+
+def test_an_UNREADABLE_proc_does_not_read_as_the_pid_being_gone(tmp_path):
+    """An unreadable /proc yields the same empty pid list as "that process is
+    gone", and the two have opposite meanings. Absence of evidence must fall back
+    to waiting, not to the conclusive branch."""
+    proc = tmp_path / "no-such-proc"           # iterdir raises OSError
+    runtime = tmp_path / "run"
+    _app_pid(runtime, "kelly", 101)
+    lock = (runtime / "shantytown/codex/kelly/app-server-control" /
+            "app-server-startup.lock")
+    lock.parent.mkdir(parents=True)
+    lock.write_text("")
+    os.utime(lock, (995, 995))
+
+    assert not codex_daemon.inspect(
+        "kelly", runtime_dir=runtime, proc=proc, now=1000).blocked
+
+
 def test_stop_owned_reaps_server_and_updater_for_only_one_card(tmp_path):
     proc = tmp_path / "proc"
     proc.mkdir()

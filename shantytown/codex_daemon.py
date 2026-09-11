@@ -129,8 +129,13 @@ def inspect(agent: str, *, runtime_dir: Path | None = None,
     parents: dict[int, tuple[str, int]] = {}
     try:
         pids = [int(p.name) for p in proc.iterdir() if p.name.isdigit()]
+        # Whether the LISTING succeeded, not whether it was non-empty. An
+        # unreadable /proc yields the same empty list as "that process is gone",
+        # and the two have opposite meanings below.
+        proc_readable = True
     except OSError:
         pids = []
+        proc_readable = False
     recorded_pid = _recorded_pid(home)
     for pid in pids:
         st = _stat(pid, proc)
@@ -150,8 +155,37 @@ def inspect(agent: str, *, runtime_dir: Path | None = None,
         age = (time.time() if now is None else now) - lock.stat().st_mtime
         # The lock itself is empty and survives healthy launches.  Its age is
         # therefore evidence only when Codex's recorded control-server PID is
-        # absent; an old lock beside a live recorded server is healthy.
-        if age > STALE_LOCK_S and recorded_pid is not None and not daemon_set:
+        # not serving; an old lock beside a live recorded server is healthy.
+        #
+        # WHY THERE ARE NOW TWO WAYS TO REACH `stale` (aegis-h5wki0). `not
+        # daemon_set` covers two different worlds and the age clause was paying
+        # for both:
+        #
+        #   the recorded PID does not EXIST      -> conclusive. Nothing can still
+        #                                           be starting up under a PID
+        #                                           that is not running.
+        #   the recorded PID exists but does not -> ambiguous. It may be this
+        #   match an owned control server           card's app-server mid-exec,
+        #                                           before its argv/environ are
+        #                                           readable. Killing that is
+        #                                           the failure the age clause
+        #                                           exists to prevent.
+        #
+        # Only the second needs to wait. Collapsing them cost a real outage: an
+        # operator stopped and re-launched a card inside the ten-minute window,
+        # which CANNOT satisfy the age clause, so the repair did not fire, the
+        # agent sat at a bash prompt for ~5 minutes, and the recovery was to fail
+        # once, wait, and retry — i.e. to let the clock pass the gate. A repair
+        # that requires the operator to fail first is not automatic.
+        #
+        # This NARROWS the wait; it does not widen what gets killed. repair()
+        # signals only `found.daemon_pids`, and that tuple is empty in exactly
+        # the case newly admitted here — a recorded PID with no process behind
+        # it. The new path removes a lock and terminates nothing.
+        recorded_absent = (proc_readable and recorded_pid is not None
+                           and recorded_pid not in set(pids))
+        if (recorded_pid is not None and not daemon_set
+                and (recorded_absent or age > STALE_LOCK_S)):
             stale = lock
     except OSError:
         pass
