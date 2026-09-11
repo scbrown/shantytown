@@ -96,8 +96,11 @@ def test_codex_gets_same_mcp_skills_and_instructions(tmp_path):
     assert provision(card, root) == ["bobbin", "homelab"]
     cfg = tomllib.loads(config.read_text())
     assert sorted(cfg["mcp_servers"]) == ["bobbin", "homelab"]
-    assert cfg["mcp_servers"]["homelab"]["bearer_token_env_var"] == "TOKEN"
-    assert "secret" not in config.read_text()
+    # The bearer rides in the config FILE, not the environment (aegis-6qau3t).
+    assert cfg["mcp_servers"]["homelab"]["http_headers"]["Authorization"] == "Bearer secret"
+    assert "bearer_token_env_var" not in cfg["mcp_servers"]["homelab"]
+    # ...which makes the file's mode load-bearing, so assert it here too.
+    assert config.stat().st_mode & 0o777 == 0o600
     assert (ws / ".agents" / "skills" / "quipu" / "SKILL.md").is_file()
     assert (ws / "AGENTS.md").is_symlink()
     assert (ws / "AGENTS.md").read_text() == "one rulebook\n"

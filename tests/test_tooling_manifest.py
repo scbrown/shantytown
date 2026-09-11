@@ -64,8 +64,10 @@ def test_both_harnesses_project_graph_and_preserve_other_instructions(kit):
     cfg = tomllib.loads(config.read_text())
     assert cfg["model"] == "example"
     assert set(cfg["mcp_servers"]) == {"search"}, "removed servers must be removed from Codex too"
-    assert cfg["mcp_servers"]["search"]["bearer_token_env_var"] == "SEARCH_TOKEN"
-    assert "test-secret" not in config.read_text()
+    # aegis-6qau3t: the bearer is a literal in the 0600 config, never an export.
+    assert cfg["mcp_servers"]["search"]["http_headers"]["Authorization"] == "Bearer test-secret"
+    assert "bearer_token_env_var" not in cfg["mcp_servers"]["search"]
+    assert config.stat().st_mode & 0o777 == 0o600
     assert (ws / ".mcp.json").stat().st_mode & 0o777 == 0o600
     assert all(f"<{IRI}>" in q for q in calls)
 

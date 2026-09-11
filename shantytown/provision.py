@@ -295,22 +295,44 @@ def _codex_config(card: Agent, root) -> Path | None:
     return next((p for p in candidates if p.is_file()), None)
 
 
-def _codex_servers(servers: dict, templates: dict | None = None) -> dict:
-    """Translate Claude's declarative MCP entries into Codex config values."""
+def _codex_servers(servers: dict) -> dict:
+    """Translate Claude's declarative MCP entries into Codex config values.
+
+    EVERY header — Authorization included — is carried as a LITERAL in
+    `http_headers`, which lands in the role's 0600 gitignored config.toml. It
+    used to be otherwise: an `Authorization: Bearer ${VAR}` in the template was
+    translated to codex's `bearer_token_env_var = "VAR"`, and CodexHarness.launch
+    then sourced <root>/provision/secrets.env with `set -a` so codex could read
+    it. That put the bearer in the SESSION ENVIRONMENT, and codex writes a shell
+    snapshot of its environment at session start — so the secret was captured
+    into $CODEX_HOME/shell_snapshots/*.sh BY CONSTRUCTION, on every launch, with
+    no careless act required (aegis-6qau3t, the env-capture half of aegis-lg8kxj).
+
+    MEASURED 2026-09-11, before and after, on this host:
+
+      * 6 of 6 existing codex shell snapshots across 5 agents carried a bearer
+        (grep -F against a 0600 needle file; CONTROL: the same grep against
+        .mcp.json itself returned 1, so the search could see the value).
+      * codex-cli 0.154.0 REFUSES the obvious alternative: `bearer_token` in
+        config.toml dies at load with "bearer_token is not supported for
+        streamable_http", which would have stopped every codex agent starting.
+        `http_headers` is the form it accepts — `codex mcp get homelab` reports
+        `http_headers: Authorization=*****` (codex masks it itself).
+      * END TO END with NO *_MCP_TOKEN in the environment: `codex exec` ran
+        homelab/service_health and agent/devops_check and both COMPLETED.
+        CONTROL that this is not two open servers: both endpoints answer 401
+        with no Authorization and 403 with a wrong bearer.
+
+    So the bearer now lives only in files the deployment already keeps at 0600
+    and out of git (provision/secrets.env, settings/codex/<role>/config.toml),
+    and in no process environment at all.
+    """
     out = {}
-    templates = templates or {}
     for name, raw in servers.items():
         spec = dict(raw)
         spec.pop("type", None)
         if "headers" in spec:
             headers = dict(spec.pop("headers"))
-            template_headers = templates.get(name, {}).get("headers", {})
-            template_auth = next((v for k, v in template_headers.items()
-                                  if k.lower() == "authorization"), "")
-            match = re.fullmatch(r"Bearer \$\{([A-Z0-9_]+)\}", template_auth)
-            if match:
-                spec["bearer_token_env_var"] = match.group(1)
-                headers = {k: v for k, v in headers.items() if k.lower() != "authorization"}
             if headers:
                 spec["http_headers"] = headers
         out[name] = spec
@@ -334,16 +356,28 @@ def _project_codex_mcp(card: Agent, root, rendered: str, template: str | None = 
                              "config.toml exists for the agent or its role")
     from . import codex as codex_mod
     data = json.loads(rendered)
-    template_data = json.loads(template if template is not None else
-                               (provision_dir(root) / MCP_TEMPLATE).read_text())
-    servers = _codex_servers(data.get("mcpServers", data),
-                             template_data.get("mcpServers", template_data))
+    servers = _codex_servers(data.get("mcpServers", data))
     existing = config.read_text()
     if template is not None:
         current = tomllib.loads(existing)
         current.pop("mcp_servers", None)
         existing = codex_mod.dumps(current)
-    config.write_text(codex_mod.render({"mcp_servers": servers}, existing, root=root))
+    # THIS FILE NOW CARRIES THE BEARER (see _codex_servers), so it is written the
+    # same way .mcp.json is: created privately, then atomically published. A
+    # plain write_text() would inherit the umask on first creation and leave the
+    # secret world-readable for the life of the file. Resolve first, because a
+    # deployment points its per-card CODEX_HOME at this path through a symlink
+    # and replace() onto the link would swap the link for a regular file.
+    target = Path(os.path.realpath(config))
+    with tempfile.NamedTemporaryFile(mode="w", dir=target.parent, delete=False) as tmp:
+        temporary = Path(tmp.name)
+        try:
+            tmp.write(codex_mod.render({"mcp_servers": servers}, existing, root=root))
+            tmp.close()
+            os.chmod(temporary, 0o600)
+            temporary.replace(target)
+        finally:
+            temporary.unlink(missing_ok=True)
 
 
 _UNREAD = object()
@@ -394,7 +428,7 @@ def _manifest_gaps(card: Agent, root, manifest: tooling.Manifest, secrets=None) 
     if card.harness == "codex":
         from . import codex as codex_mod
         config = _codex_config(card, root)
-        want = _codex_servers(rendered["mcpServers"], manifest.mcp)
+        want = _codex_servers(rendered["mcpServers"])
         # Include the deployment's existing approval projection in the expected
         # values; endpoint/auth/command drift still must compare exactly.
         want = tomllib.loads(codex_mod.render({"mcp_servers": want}, root=root)).get("mcp_servers", {})

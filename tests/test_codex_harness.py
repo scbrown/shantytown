@@ -320,6 +320,36 @@ def test_the_launch_carries_the_same_identity_env_as_claude():
         assert expected in launch, f"{expected} missing from {launch}"
 
 
+def test_the_launch_puts_NO_SECRET_IN_THE_ENVIRONMENT(tmp_path):
+    """aegis-6qau3t: the launch used to prefix `set -a; . provision/secrets.env;
+    set +a;` so codex could resolve `bearer_token_env_var`.
+
+    That kept the value out of the launch LINE and put it in the session
+    ENVIRONMENT, which codex writes to $CODEX_HOME/shell_snapshots/*.sh at
+    session start — so every launch re-captured it and no amount of redaction
+    could get ahead of it (6 of 6 snapshots across 5 agents carried both
+    bearers when measured). The bearer now lives in the 0600 config.toml as an
+    `http_headers` literal, so nothing needs exporting.
+
+    The fixture writes a REAL secrets.env, because the removed code was guarded
+    by `secrets.is_file()`: a test whose root has no such file would pass
+    against the very code this test exists to keep out.
+    """
+    root = tmp_path / "r"
+    (root / "provision").mkdir(parents=True)
+    (root / "provision" / "secrets.env").write_text(
+        "HOMELAB_MCP_TOKEN=nobody-should-export-this\n")
+
+    launch = CODEX.launch(Agent(name="ada", role="worker"),
+                          str(tmp_path / "s" / "codex" / "worker" / "config.toml"),
+                          root=str(root))
+
+    assert "secrets.env" not in launch
+    assert "set -a" not in launch
+    assert "HOMELAB_MCP_TOKEN" not in launch
+    assert "nobody-should-export-this" not in launch
+
+
 def test_hook_trust_is_bypassed_and_that_is_the_point():
     """codex will not run a hook it has no persisted trust record for
     (codex.py fact 4). Emitting a role's whole stop routing into a program that

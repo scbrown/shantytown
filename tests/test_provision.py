@@ -104,12 +104,15 @@ def test_the_secret_is_injected_not_left_as_a_placeholder(root, ws):
     assert "${" not in (ws / ".mcp.json").read_text()
 
 
-def test_codex_projects_each_bearer_from_its_own_template_env_var():
-    """Two authenticated MCPs need not share one credential.
+def test_codex_carries_each_bearer_as_a_literal_header_not_an_env_var():
+    """Two authenticated MCPs need not share one credential — and NEITHER goes
+    into the environment (aegis-6qau3t).
 
-    The rendered Claude kit contains secret VALUES, but Codex must recover the
-    placeholder NAMES from the template so its config points at the right
-    long-lived daemon environment without writing either value into TOML.
+    This test asserted the opposite until 2026-09-11: that each bearer became a
+    `bearer_token_env_var` and no value reached the TOML. That kept the secret
+    out of one file by putting it in the SESSION ENVIRONMENT, where codex
+    snapshots it at every session start. The value now rides in `http_headers`,
+    in a config.toml the deployment keeps at 0600 and out of git.
     """
     rendered = {
         "homelab": {"type": "http", "url": "http://homelab.invalid/mcp",
@@ -117,19 +120,16 @@ def test_codex_projects_each_bearer_from_its_own_template_env_var():
         "agent": {"type": "http", "url": "http://agent.invalid/mcp",
                   "headers": {"Authorization": "Bearer agent-value"}},
     }
-    template = {
-        "homelab": {"headers": {
-            "Authorization": "Bearer ${HOMELAB_MCP_TOKEN}"}},
-        "agent": {"headers": {
-            "Authorization": "Bearer ${AGENT_MCP_TOKEN}"}},
-    }
 
-    projected = P._codex_servers(rendered, template)
+    projected = P._codex_servers(rendered)
 
-    assert projected["homelab"]["bearer_token_env_var"] == "HOMELAB_MCP_TOKEN"
-    assert projected["agent"]["bearer_token_env_var"] == "AGENT_MCP_TOKEN"
-    assert "http_headers" not in projected["homelab"]
-    assert "http_headers" not in projected["agent"]
+    assert projected["homelab"]["http_headers"]["Authorization"] == "Bearer homelab-value"
+    assert projected["agent"]["http_headers"]["Authorization"] == "Bearer agent-value"
+    # Each MCP keeps its OWN credential — the property the old test protected.
+    assert (projected["homelab"]["http_headers"]["Authorization"]
+            != projected["agent"]["http_headers"]["Authorization"])
+    assert "bearer_token_env_var" not in projected["homelab"]
+    assert "bearer_token_env_var" not in projected["agent"]
 
 
 def test_the_rendered_file_is_not_world_readable(root, ws):

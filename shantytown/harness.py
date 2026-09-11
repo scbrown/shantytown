@@ -1064,12 +1064,21 @@ class CodexHarness:
         launch = (
             f"{daemon_start}{identity_env}{codex_mod().HOME_VAR}={home} codex {flags}"
         )
-        # MCP bearer values stay in the deployment's 0600 provision file. Codex
-        # config names them through bearer_token_env_var; source the file into
-        # the process environment without putting a secret in the launch line.
-        secrets = Path(root) / "provision" / "secrets.env" if root else None
-        if secrets is not None and secrets.is_file():
-            launch = f"set -a; . {shlex.quote(str(secrets))}; set +a; {launch}"
+        # NO SECRET REACHES THE SESSION ENVIRONMENT (aegis-6qau3t). This used to
+        # read `set -a; . <root>/provision/secrets.env; set +a;` so that codex
+        # could resolve `bearer_token_env_var`. Keeping the value out of the
+        # LAUNCH LINE was the goal and it was achieved; the environment was the
+        # part nobody costed. codex writes a shell snapshot of its environment at
+        # session start, so an exported bearer is captured into
+        # $CODEX_HOME/shell_snapshots/*.sh on EVERY launch, BY CONSTRUCTION —
+        # 6 of 6 snapshots across 5 agents carried both values when measured
+        # (2026-09-11). Redaction cannot get ahead of a mechanism that
+        # re-captures on every start, which is why rotation (aegis-lg8kxj)
+        # depends on this rather than the other way round.
+        #
+        # provision._codex_servers now writes the literal header into the role's
+        # 0600 gitignored config.toml as `http_headers`, which codex reads from
+        # the FILE. Nothing here needs to export anything.
         # Launch IN the agent's workspace, same as claude and for the same
         # reason: codex reads AGENTS.md and project config relative to its cwd.
         # A cd prefix, so the single send-keys still delivers one line. (codex
