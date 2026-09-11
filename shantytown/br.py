@@ -57,6 +57,13 @@ class BrTracker(BeadsTracker):
         selected = fields.pop("blocker_kind", None)
         reason = fields.pop("defer_reason", None)
         status = fields.pop("status", None)
+        # THE PROTOCOL FIELD IS `defer_until`; br'S FLAG IS `--defer`. The generic
+        # loop below would emit `--defer-until`, which br rejects — so the mapping
+        # lives here, with the backend that owns the spelling, rather than leaking
+        # a br-ism into the dispatcher. Unlike the notes route, this writes a
+        # first-class column and is NOT subject to the non-empty-notes overwrite
+        # protection (aegis-bqcjws).
+        defer_until = fields.pop("defer_until", None)
 
         # br protects terminal transitions behind dedicated verbs.
         if status == "closed":
@@ -73,6 +80,8 @@ class BrTracker(BeadsTracker):
         for key, value in fields.items():
             if value is not None:
                 args.append(f"--{key.replace('_', '-')}={value}")
+        if defer_until is not None:
+            args.append(f"--defer={defer_until}")
         if selected is not None:
             args.append(f"--add-label={selected}")
             args.extend(

@@ -233,6 +233,7 @@ class FilesTracker:
             assignee=d.get("assignee"),
             priority=_priority(d),
             blocker_kind=blocker_kind(d.get("labels")),
+            defer_until=(d.get("defer_until") or None),
         )
 
     def update(self, item_id: str, **fields) -> None:

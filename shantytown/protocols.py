@@ -190,6 +190,16 @@ class WorkItem:
                                   # than guessing a middle value for it, so
                                   # "nobody set one" stays visible instead of
                                   # silently becoming P2.
+    defer_until: str | None = None   # the STRUCTURED resume field (aegis-bqcjws).
+                                  # None means the tracker did not say — which
+                                  # for a deferred item means it has no
+                                  # machine-testable resume condition and is
+                                  # therefore invisible to the deferral sweeper
+                                  # AND to feeders at once. Carried as data so a
+                                  # write to it can be VERIFIED BY READ-BACK;
+                                  # without it, `st defer` could only confirm the
+                                  # status and label it set and would report
+                                  # success on a condition that never landed.
     blocker_kind: str | None = None  # one structured defer label, or None.
                                       # This is a DATA field, not a fourth tracker
                                       # method: get/update/create stays the whole

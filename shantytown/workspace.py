@@ -84,10 +84,23 @@ def git_clone(source: str, dest: Path) -> None:
     launcher that spews clone chatter into the operator's terminal buries the one
     line that matters. If it fails, the stderr comes back attached to the refusal.
     """
-    r = subprocess.run(
-        ["git", "clone", source, str(dest)],
-        capture_output=True, text=True,
-    )
+    # Bounded and group-killed for the same reason as the provisioning fetch
+    # above (aegis-ujz5gf): `git clone` is a NETWORK call that spawns ssh, and an
+    # unbounded one against an unreachable forge hangs a launch forever instead
+    # of failing with the refusal this function is written to raise. The timeout
+    # is generous because a first clone legitimately moves a lot of data.
+    try:
+        r = run_with_group_timeout(
+            ["git", "clone", source, str(dest)], 600,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+    except subprocess.TimeoutExpired:
+        # Reported as the refusal this function already contracts to raise, so a
+        # caller gets one failure type rather than a bare TimeoutExpired escaping
+        # from a helper it never called.
+        raise WorkspaceError(
+            f"git clone {source!r} -> {dest} timed out after 600s and its "
+            f"process group was killed (unreachable remote?)")
     if r.returncode != 0:
         raise WorkspaceError(
             f"git clone {source!r} -> {dest} failed (exit {r.returncode}): "
@@ -367,8 +380,29 @@ def git_worktree_add(shared: Path, dest: Path, agent: str, base: str) -> None:
     """
     branch = f"wt/{agent}"
     # Bring the shared checkout's refs current; tolerate failure (see docstring).
-    subprocess.run(["git", "-C", str(shared), "fetch", "origin", "--quiet"],
-                   capture_output=True, text=True)
+    #
+    # BOUNDED AND GROUP-KILLED (aegis-ujz5gf, surfaces the original fix missed).
+    # `run_with_group_timeout` was introduced for `_git` because a plain
+    # subprocess timeout reaps only the direct child while `git fetch` has
+    # already spawned `ssh`, which orphans to the subreaper and hangs forever
+    # against an unreachable remote. This call site is NETWORK and never went
+    # through `_git`, so it carried no timeout AT ALL -- strictly worse than the
+    # bug that was fixed: against a dead forge it does not hang for 60s, it
+    # hangs until someone notices. Tolerating a FAILED fetch (the docstring's
+    # deliberate choice) is not the same as tolerating one that never returns:
+    # this is the provisioning path `st worktree` and `st go --worktree` run, so
+    # a hang here blocks dispatch itself.
+    # The timeout is TOLERATED exactly like a non-zero exit: `run_with_group_timeout`
+    # RAISES TimeoutExpired (after killing the group), and letting that escape here
+    # would convert the docstring's deliberate "a failed fetch is a WARNING" into a
+    # hard refusal to provision a worktree -- turning a survivable offline state into
+    # a dispatch outage, which is the opposite of the intent.
+    try:
+        run_with_group_timeout(
+            ["git", "-C", str(shared), "fetch", "origin", "--quiet"], 60,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    except subprocess.TimeoutExpired:
+        pass
 
     def _ref_exists(ref: str) -> bool:
         return subprocess.run(
@@ -1066,7 +1100,33 @@ def tree_staleness(dest: Path | str, run: GitRunner = _git,
         #
         # "As of the last fetch" does NOT cover it, which is the subtle part -
         # the lying ref SURVIVES the fetch. Only the prune removes it.
-        run(dest, "fetch", "--all", "--prune", "--quiet")
+        rcf, _ = run(dest, "fetch", "--all", "--prune", "--quiet")
+        if rcf != 0:
+            # A FETCH WE ASKED FOR AND DID NOT GET MAKES EVERY COUNT BELOW A LIE
+            # (aegis-bqcjws sibling, wu 2026-09-11). The caller passed fetch=True
+            # precisely because "as of the last fetch" was not good enough. When
+            # that fetch fails, the remote-tracking ref is FROZEN at whatever it
+            # held, and `rev-list HEAD..<ref>` then compares the tree against
+            # ITSELF: it returns 0, and 0 renders as "current with origin/main".
+            #
+            # So the failure mode is not a missing answer, it is a CONFIDENT
+            # WRONG ONE, and it points the reassuring way. Measured on this fleet
+            # during the forge sshd outage: every crew clone's keep-current pull
+            # was refused over ssh, so every comparison trivially passed and
+            # `st crew` rendered agents "current" while they were 21 and 16
+            # commits behind. The author of this fix hit it in the same hour --
+            # a failed fetch, then `0 behind` reported against a true 19.
+            #
+            # This is the same rule the `status` read below already follows
+            # ("CANNOT TELL IS NOT CLEAN") and the one Staleness.render() was
+            # built for: it already prints `staleness UNKNOWN (<error>)`, and
+            # current() already returns False when error is set. The machinery
+            # was all here; only the return code was being thrown away.
+            return Staleness(ref=ref, note=note,
+                             error=f"fetch failed against {ref} — staleness "
+                                   f"NOT measured (the remote-tracking ref is "
+                                   f"frozen, so a behind-count here would "
+                                   f"compare the tree against itself)")
         ref, note = upstream_ref(dest, run=run)
         if ref is None:
             return Staleness(ref=None, note=note, error=note)

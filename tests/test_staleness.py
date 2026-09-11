@@ -684,3 +684,75 @@ def test_a_failing_kill_never_raises(tmp_path, monkeypatch):
     with __import__("pytest").raises(_sp.TimeoutExpired):
         run_with_group_timeout(["sh", "-c", "sleep 30"], 1,
                                stdout=_sp.PIPE, stderr=_sp.PIPE, text=True)
+
+
+# --- a fetch we asked for and did not get (aegis-bqcjws sibling, wu 2026-09-11) ---
+
+def test_a_FAILED_fetch_reports_UNKNOWN_and_never_current(tmp_path: Path):
+    """THE REGRESSION. fetch=True, the fetch fails, the ref is FROZEN.
+
+    `rev-list HEAD..origin/main` against a frozen ref compares the tree against
+    ITSELF and returns 0, which renders as "current with origin/main". So the
+    failure is not a missing answer but a confident wrong one, pointing the
+    reassuring way.
+
+    This is built to be a LIE DETECTOR, not a smoke test: upstream is genuinely
+    one commit ahead at assert time, so "current" would be false about the world,
+    and `behind == 0` is what the old code actually returned here.
+    """
+    up = _repo(tmp_path / "up")
+    wt = _clone(up, tmp_path / "wt")
+
+    # Upstream really advances. The clone has NOT fetched, so its remote-tracking
+    # ref still points at the old tip.
+    _commit(up, "work-the-clone-does-not-have")
+
+    # CONTROL: with the remote reachable, a fetch=True read SEES that commit.
+    # Without this arm the test could pass on a tree that was never behind.
+    good = tree_staleness(wt, fetch=True)
+    assert good.error is None, f"control arm should not error: {good.error}"
+    assert good.behind == 1, f"control arm must be 1 behind, got {good.behind}"
+
+    # Now rewind the clone's knowledge and make the remote unreachable, which is
+    # the fleet state during the forge outage: keep-current's pull is refused, so
+    # the remote-tracking ref freezes.
+    _run(wt, "update-ref", "refs/remotes/origin/main", "HEAD")
+    _run(wt, "remote", "set-url", "origin", str(tmp_path / "does-not-exist.git"))
+
+    frozen = tree_staleness(wt, fetch=True)
+
+    # The old behaviour, stated so a regression is unmistakable: a frozen ref
+    # yields behind == 0, and 0 renders as "current".
+    assert not frozen.current(), (
+        "a tree whose fetch FAILED must never read as current — this is the "
+        "exact false-green that rendered crew agents 'current' at 21 and 16 "
+        "commits behind")
+    assert frozen.error, "a failed fetch must set error, not report a count"
+    assert "fetch failed" in frozen.error
+    assert "staleness UNKNOWN" in frozen.render()
+    assert "current with" not in frozen.render()
+
+
+def test_a_SUCCESSFUL_fetch_is_unaffected(tmp_path: Path):
+    """The fix must not make every reachable tree read UNKNOWN.
+
+    Without this arm, returning `error` unconditionally would pass the test
+    above while breaking staleness for the whole fleet.
+    """
+    up = _repo(tmp_path / "up")
+    wt = _clone(up, tmp_path / "wt")
+    s = tree_staleness(wt, fetch=True)
+    assert s.error is None, f"reachable remote must not error: {s.error}"
+    assert s.current(), f"a freshly cloned tree is current, got {s.render()}"
+    assert "current with" in s.render()
+
+
+def test_fetch_FALSE_is_still_the_cheap_honest_read(tmp_path: Path):
+    """fetch=False never touches the network, so a dead remote is irrelevant to
+    it — the edit-time hook path must stay free and must NOT start erroring."""
+    up = _repo(tmp_path / "up")
+    wt = _clone(up, tmp_path / "wt")
+    _run(wt, "remote", "set-url", "origin", str(tmp_path / "does-not-exist.git"))
+    s = tree_staleness(wt, fetch=False)
+    assert s.error is None, f"fetch=False must not error: {s.error}"
+    assert s.current()

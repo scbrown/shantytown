@@ -780,6 +780,11 @@ def build_parser() -> argparse.ArgumentParser:
     reason.add_argument("--reason", help="short reason; prefer --reason-file for prose")
     reason.add_argument("--reason-file", type=Path,
                         help="read the reason from a file, or - for stdin")
+    df.add_argument("--until", default="", metavar="DATE",
+                    help="re-evaluation date (ISO, e.g. 2026-09-20) written to "
+                         "the STRUCTURED defer_until field. Without it the "
+                         "deferral has no machine-testable resume condition and "
+                         "is invisible to the deferral sweeper — st says so.")
     df.add_argument("-n", "--dry-run", action="store_true")
 
     cr = sub.add_parser("crew", help="who exists, what state, what role")
@@ -3925,6 +3930,23 @@ def _cmd_repool(a) -> int:
     return OK
 
 
+#: Printed whenever a deferral is created with no machine-testable resume
+#: condition. NOT a refusal: a deferral with only prose is still better than an
+#: item left falsely open, and refusing would push people back to raw `br`, where
+#: nothing warns at all. But it must never pass SILENTLY — 101 of 112 deferrals
+#: were conditionless when the sweeper was added (aegis-hm8994), and each one is
+#: off every automated path at once: feeders skip status=deferred, and the sweeper
+#: has nothing to test.
+_CONDITIONLESS_WARNING = (
+    "  ⚠ NO RESUME CONDITION — this deferral is invisible to the deferral "
+    "sweeper and to feeders.\n"
+    "    Nothing will ever bring it back on its own; only a person re-reading "
+    "the bead will.\n"
+    "    Give it one:  --until 2026-09-20   (a re-evaluation date), or add a\n"
+    "    `resume_when: closed:<id>` line to the bead's notes for a bead-gated one."
+)
+
+
 def _cmd_defer(a) -> int:
     """Park work only when its blocker KIND and reason travel with the state."""
     try:
@@ -3938,7 +3960,8 @@ def _cmd_defer(a) -> int:
         return REFUSED
     d = _wire(a)
     try:
-        r = d.defer(a.item, a.kind, reason, dry_run=a.dry_run)
+        r = d.defer(a.item, a.kind, reason, dry_run=a.dry_run,
+                    until=getattr(a, "until", "") or "")
     except (DeferRefused, LookupError) as e:
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED
@@ -3951,12 +3974,23 @@ def _cmd_defer(a) -> int:
         print(f"  {a.item} is already deferred as {r.label} — nothing to write.")
         return OK
     if a.dry_run:
+        cond = f", defer_until {r.condition}" if r.condition else ""
         print(f"  would defer {a.item}: {r.was_status} -> deferred, label "
-              f"{r.label}, reason recorded. 2 tracker reads, 0 writes.")
+              f"{r.label}, reason recorded{cond}. 2 tracker reads, 0 writes.")
+        if not r.condition:
+            print(_CONDITIONLESS_WARNING)
         return OK
     extra = f" ({r.track_attempts} attempts)" if r.track_attempts > 1 else ""
+    cond = (f" defer_until={r.condition} verified." if r.condition
+            else "")
     print(f"  ✓ {a.item} deferred as {r.label}; reason and exactly one blocker "
-          f"kind verified by read-back{extra}.")
+          f"kind verified by read-back{extra}.{cond}")
+    if not r.condition:
+        # SAID AT THE MOMENT IT IS CHEAP TO FIX. The success line above is true
+        # and used to be the whole message, which is how deferrals became
+        # invisible without anyone doing anything wrong: st confirmed exactly
+        # what it wrote and stayed silent about the field the sweeper reads.
+        print(_CONDITIONLESS_WARNING)
     return OK
 
 
@@ -6812,6 +6846,44 @@ def _refresh_clone(path) -> str | None:
         return str(e)
 
 
+# Git's transport failures, as they appear in the stderr `git pull` returns, plus
+# the string a process-group TIMEOUT surfaces through _refresh_clone's except arm.
+# Matched on SUBSTRINGS of git's own wording rather than on exit status because
+# `git pull` exits 1 for a refused merge AND for a dead remote — the status cannot
+# tell them apart, which is the whole reason this bead exists.
+_REMOTE_UNREACHABLE_MARKERS = (
+    "could not resolve hostname",
+    "connection refused",
+    "connection timed out",
+    "connection closed",
+    "operation timed out",
+    "network is unreachable",
+    "no route to host",
+    "could not read from remote repository",
+    "unable to access",
+    "failed to connect",
+    "timeoutexpired",          # _refresh_clone's except arm stringifies this
+    "timed out",
+    "repository not found",
+    "authentication failed",
+    "permission denied (publickey",
+)
+
+
+def _pull_failed_on_the_REMOTE(err: str) -> bool:
+    """Did the ff-pull fail because the REMOTE was unreachable, not the tree?
+
+    A refused MERGE (local divergence, dirty tree) is the agent's to fix; a dead
+    remote is not, and telling them to "clean or reconcile" a clean tree is a
+    false instruction that costs a search. Unknown failures fall through to the
+    EXISTING wording deliberately: this only ever narrows a message we already
+    print, so a marker we have not seen keeps today's behaviour rather than
+    claiming a cause we did not establish.
+    """
+    low = (err or "").lower()
+    return any(m in low for m in _REMOTE_UNREACHABLE_MARKERS)
+
+
 def _keep_current(a, agent_name: str) -> str | None:
     """Bring `agent_name`'s workspace clone current (ff-only) — the crew 'Keep
     Current' rule as MECHANISM instead of memory (aegis-4zld; Stiwi's ask).
@@ -6831,6 +6903,18 @@ def _keep_current(a, agent_name: str) -> str | None:
     if err is None:
         return None
     first = err.splitlines()[0] if err else "unknown"
+    if _pull_failed_on_the_REMOTE(err):
+        # NOT THE TREE'S FAULT, AND SAYING SO COSTS AN AGENT A SEARCH FOR DIRT
+        # THAT IS NOT THERE (aegis-ghedod). Found by arnold during the u6mdxf
+        # forge outage: his workspace had ZERO tracked edits and the note still
+        # told him to "clean or reconcile" it. During an outage EVERY dispatched
+        # agent gets that note, so the wording sends the whole fleet hunting for
+        # local dirt while the actual cause is a dead forge — and the one true
+        # consequence (the tree may be stale) is buried under a false instruction.
+        return (f"workspace could not be brought current — THE REMOTE IS "
+                f"UNREACHABLE ({first}); nothing to reconcile locally. "
+                f"Dispatching on the EXISTING tree, which MAY BE STALE and "
+                f"cannot be checked while the remote is down.")
     return (f"workspace could not be brought current (ff-only pull refused: "
             f"{first}) — dispatching anyway on the EXISTING tree; it may be "
             f"stale. Clean or reconcile {card.workspace} to restore keep-current.")
