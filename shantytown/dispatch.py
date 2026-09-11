@@ -873,6 +873,23 @@ class Dispatcher:
                     getattr(current, "defer_until", None), until)
             if not missing:
                 result.track_attempts = attempt
+                if not result.condition:
+                    # A `resume_when:` MARKER IN THE REASON COUNTS AS A CONDITION.
+                    # Found by using this the same day it shipped: the warning
+                    # keyed on `--until` alone, so it fired at an author who had
+                    # supplied the marker form the warning ITSELF recommends. A
+                    # warning that fires at someone who already complied is worse
+                    # than no warning, because it teaches the reader to ignore it
+                    # — and the sweeper was quiet about that very bead, so the
+                    # tool and the sweeper disagreed about the same deferral.
+                    #
+                    # Parsed with the SWEEPER's own regex, never a second copy:
+                    # two vocabularies for one marker is how they drift into
+                    # disagreeing about which deferrals are visible.
+                    from .deferrals import _CONDITION
+                    m = _CONDITION.search(getattr(current, "notes", "") or "")
+                    if m:
+                        result.condition = f"resume_when {m.group(1)}:{m.group(2)}"
                 return result
         raise TrackerWriteLost(item_id, missing, _TRACK_ATTEMPTS)
 

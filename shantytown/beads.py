@@ -262,6 +262,7 @@ class BeadsTracker:
             # so "the tracker returned nothing" and "the tracker returned blank"
             # cannot render differently to a caller checking for absence.
             defer_until=(d.get("defer_until") or None),
+            notes=(d.get("notes") or None),
             # From the SAME `bd show --json` read — no extra round trip, so the
             # module's one-tracker-read budget is unchanged. Only `blocks`-type
             # deps count: a `relates-to` link is context, not a gate. Only

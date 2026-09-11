@@ -190,6 +190,13 @@ class WorkItem:
                                   # than guessing a middle value for it, so
                                   # "nobody set one" stays visible instead of
                                   # silently becoming P2.
+    notes: str | None = None         # the item's notes, where a `resume_when:`
+                                  # marker lives. Carried for the same reason as
+                                  # defer_until: a caller that must decide whether
+                                  # a deferral has a machine-testable resume
+                                  # condition cannot do it from the structured
+                                  # field alone, and guessing produced a warning
+                                  # that fired at authors who had complied.
     defer_until: str | None = None   # the STRUCTURED resume field (aegis-bqcjws).
                                   # None means the tracker did not say — which
                                   # for a deferred item means it has no
