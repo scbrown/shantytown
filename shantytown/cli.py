@@ -1956,9 +1956,21 @@ def _launch(a, card, panes, runtime, *, dry_run: bool = False,
     # and never blocks the launch (stale-but-working beats no agent).
     if card.workspace:
         if err := _refresh_clone(card.workspace):
-            print(f"  ⚠ workspace not brought current (ff-only pull refused: "
-                  f"{err.splitlines()[0]}) — launching on the existing tree.",
-                  file=sys.stderr)
+            # SECOND SITE OF aegis-ghedod, found by running `st new` during the
+            # forge outage right after fixing the first one. "ff-only pull
+            # refused" for a `Connection refused` blames the TREE for a dead
+            # REMOTE here exactly as it did on the dispatch path — and a guard
+            # fixed at one call site while an identical message stands at
+            # another is the uncovered-surface class this repo keeps paying for.
+            if _pull_failed_on_the_REMOTE(err):
+                print(f"  ⚠ workspace not brought current — THE REMOTE IS "
+                      f"UNREACHABLE ({err.splitlines()[0]}); nothing to "
+                      f"reconcile locally. Launching on the existing tree, "
+                      f"which MAY BE STALE.", file=sys.stderr)
+            else:
+                print(f"  ⚠ workspace not brought current (ff-only pull refused: "
+                      f"{err.splitlines()[0]}) — launching on the existing tree.",
+                      file=sys.stderr)
     # EQUIPPED OR NOT CREATED. A workspace is not a provisioned agent: a fresh
     # clone has no .mcp.json (it is uncommitted BY DESIGN — it carries a bearer
     # token), so an agent launched from one has no code search, no graph and no

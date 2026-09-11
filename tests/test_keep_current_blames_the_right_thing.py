@@ -98,3 +98,30 @@ def test_MESSAGE_for_local_drift_still_says_reconcile(monkeypatch):
 
 def test_a_clean_pull_still_returns_None(monkeypatch):
     assert _drive(monkeypatch, None) is None
+
+
+# --- the RATCHET: no third site may blame the tree (aegis-ghedod) -----------
+# The first fix landed on the dispatch path; running `st new` during the same
+# outage immediately produced the identical message from the LAUNCH path. A
+# guard fixed at one call site while an identical message stands at another is
+# the uncovered-surface class this repo keeps paying for, so this fails the
+# build on site number three rather than waiting for someone to hit it.
+
+def test_every_not_brought_current_message_branches_on_the_classifier():
+    from pathlib import Path
+    src = (Path(__file__).resolve().parents[1] / "shantytown" / "cli.py").read_text()
+    lines = src.splitlines()
+    sites = [i for i, l in enumerate(lines) if "not brought current" in l]
+    assert sites, "the message moved or was renamed — update this ratchet"
+
+    unguarded = []
+    for i in sites:
+        window = "\n".join(lines[max(0, i - 12):i + 12])
+        if "_pull_failed_on_the_REMOTE" not in window:
+            unguarded.append(i + 1)
+
+    assert not unguarded, (
+        f"cli.py line(s) {unguarded} print a 'not brought current' warning "
+        f"without branching on _pull_failed_on_the_REMOTE, so a dead REMOTE is "
+        f"reported as the TREE's fault. Every site must distinguish them "
+        f"(aegis-ghedod).")
