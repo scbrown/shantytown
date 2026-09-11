@@ -248,6 +248,10 @@ class BeadsTracker:
             # say "nobody stated how important this is" instead of guessing.
             priority=_priority(d),
             blocker_kind=blocker_kind(d.get("labels")),
+            # Same read, no extra round trip. Empty string is normalised to None
+            # so "the tracker returned nothing" and "the tracker returned blank"
+            # cannot render differently to a caller checking for absence.
+            defer_until=(d.get("defer_until") or None),
             # From the SAME `bd show --json` read — no extra round trip, so the
             # module's one-tracker-read budget is unchanged. Only `blocks`-type
             # deps count: a `relates-to` link is context, not a gate. Only

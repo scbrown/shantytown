@@ -377,6 +377,11 @@ class Deferred:
     was_status: str = ""
     noop: bool = False
     track_attempts: int = 0
+    #: The machine-testable resume condition written with the deferral, or "".
+    #: EMPTY IS THE DANGEROUS CASE and is reported, never assumed benign — see
+    #: `defer()`. A deferral with no condition is invisible to the sweeper AND
+    #: to feeders at once, which is the aegis-bqcjws defect.
+    condition: str = ""
 
 
 @dataclass
@@ -806,7 +811,7 @@ class Dispatcher:
         return r
 
     def defer(self, item_id: str, kind: str, reason: str,
-              dry_run: bool = False) -> Deferred:
+              dry_run: bool = False, until: str = "") -> Deferred:
         """Park an item with one explicit blocker kind and a durable reason.
 
         Classification is supplied by the deferrer, never inferred from prose.
@@ -834,21 +839,38 @@ class Dispatcher:
         if item.status == "deferred" and item.blocker_kind == label:
             return Deferred(item_id, kind, label, reason,
                             was_status=item.status, noop=True)
-        result = Deferred(item_id, kind, label, reason, was_status=item.status)
+        result = Deferred(item_id, kind, label, reason, was_status=item.status,
+                          condition=until)
         if dry_run:
             return result
         missing = {}
         for attempt in range(1, _TRACK_ATTEMPTS + 1):
             if attempt > 1:
                 time.sleep(_TRACK_DELAY)
-            self.tracker.update(item_id, status="deferred",
-                                blocker_kind=label, defer_reason=reason)
+            fields = {"status": "deferred", "blocker_kind": label,
+                      "defer_reason": reason}
+            if until:
+                # THE STRUCTURED FIELD, NOT A NOTES MARKER (aegis-bqcjws).
+                # `br update --defer` writes a first-class column, so it is not
+                # subject to the non-empty-notes overwrite protection that makes
+                # the notes route refuse on exactly the well-documented beads a
+                # resume condition matters most for.
+                fields["defer_until"] = until
+            self.tracker.update(item_id, **fields)
             current = self.tracker.get(item_id)
             missing = {}
             if current.status != "deferred":
                 missing["status"] = (current.status, "deferred")
             if current.blocker_kind != label:
                 missing["blocker_kind"] = (current.blocker_kind, label)
+            if until and not (getattr(current, "defer_until", "") or ""):
+                # VERIFY WHAT WE WROTE, NOT A PROXY FOR IT. The loop used to
+                # confirm status and label only, so a defer_until that never
+                # landed reported SUCCESS — and the sweeper, which keys off that
+                # field, stayed blind to the bead. An unverified write is the
+                # thing this read-back exists to prevent.
+                missing["defer_until"] = (
+                    getattr(current, "defer_until", None), until)
             if not missing:
                 result.track_attempts = attempt
                 return result
