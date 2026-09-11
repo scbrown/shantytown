@@ -774,6 +774,25 @@ class Staleness:
     provisioned: tuple = ()
     note: str | None = None
     error: str | None = None
+    #: Seconds since the remote-tracking ref was last SUCCESSFULLY updated, or
+    #: None when we could not tell. This is what makes a FETCHLESS reading
+    #: honest: without it, `behind == 0` against a ref nobody has refreshed for
+    #: two days renders as "current", which is how a whole fleet read "ok" while
+    #: agents sat 16 and 21 commits behind during a forge outage.
+    measured_age: float | None = None
+
+    def measurement_is_stale(self) -> bool:
+        """Is this reading too old to be worth calling "ok"?
+
+        UNKNOWN AGE IS NOT FRESH. `measured_age is None` means we could not tell
+        when the ref was last refreshed, and this returns True for it — the same
+        direction as "CANNOT TELL IS NOT CLEAN" elsewhere in this file. Rounding
+        an unknown down to "recent" is exactly the flattery this class of defect
+        is made of.
+        """
+        if self.measured_age is None:
+            return True
+        return self.measured_age > MEASUREMENT_HORIZON_SECONDS
 
     def current(self) -> bool:
         """Nothing to fetch and nothing stranded. `dirty` is deliberately NOT
@@ -800,8 +819,28 @@ class Staleness:
         # act on. The place it IS actionable is the cycle guard's report, which
         # says both that it is not blocking and that it must not be committed.
         if not bits:
+            if self.measurement_is_stale():
+                # NEVER a bare "current" off a reading nobody refreshed. This is
+                # the fetchless half of the same defect: with fetch=True a failed
+                # fetch now reports UNKNOWN, but the DEFAULT `st crew` column is
+                # fetchless, so there is no failed fetch to key off and a frozen
+                # ref still rendered "current with origin/main". Found by wu
+                # 2026-09-11 on a tree that was 16 commits behind.
+                return (f"as of the LAST SUCCESSFUL FETCH ({self._age_phrase()}) "
+                        f"nothing was pending against {self.ref} — NOT a current "
+                        f"reading; nothing has refreshed it since")
             return f"current with {self.ref}"
         return "; ".join(bits)
+
+    def _age_phrase(self) -> str:
+        if self.measured_age is None:
+            return "age unknown"
+        h = self.measured_age / 3600.0
+        if h < 1:
+            return f"{int(self.measured_age // 60)}m ago"
+        if h < 48:
+            return f"{h:.0f}h ago"
+        return f"{h / 24:.0f}d ago"
 
 
 # A sample, not the truth: `Staleness.untracked_count` carries the real number.
@@ -1068,6 +1107,49 @@ def remote_reachable(dest: Path | str, run: GitRunner | None = None,
     return None
 
 
+#: How long a fetchless staleness reading stays worth calling "ok".
+#:
+#: NOT arbitrary, and not a guess about networks: this fleet ff-pulls a crew
+#: clone on every dispatch and at every tend cycle (5 min), so a tree that has
+#: had NO successful contact with its remote in six hours is not being kept
+#: current by anything. Past this, the honest cell is "cannot tell", not "ok".
+MEASUREMENT_HORIZON_SECONDS = 6 * 3600
+
+
+def ref_last_updated(dest: Path | str, ref: str) -> "float | None":
+    """When we last SUCCESSFULLY learned this remote-tracking ref, as an mtime.
+
+    MEASURED 2026-09-11, two arms, and the arms are the whole reason this reads
+    the REF and not `FETCH_HEAD`:
+
+        successful fetch -> loose ref mtime ADVANCES, FETCH_HEAD advances
+        FAILED fetch     -> loose ref mtime UNCHANGED, FETCH_HEAD ADVANCES ANYWAY
+
+    So FETCH_HEAD answers "when did we last TRY", which during an outage is
+    "seconds ago, continuously" — it would report a frozen ref as fresh and
+    reproduce the exact defect this is here to close, one level down. The ref
+    itself only moves when the remote actually answered. (A successful PUSH also
+    updates it, which is correct: that is real contact with the remote.)
+
+    Falls back to packed-refs, because a freshly cloned repo has NO loose ref
+    file at all — its refs are packed, and reading only the loose path would
+    report every fresh clone as never-contacted. None when neither exists, and
+    the caller must treat None as UNKNOWN rather than as old or as fresh.
+    """
+    d = Path(dest)
+    # `ref` arrives as "origin/main"; the loose path mirrors it verbatim.
+    candidates = [d / ".git" / "refs" / "remotes" / ref,
+                  d / ".git" / "packed-refs"]
+    best = None
+    for c in candidates:
+        try:
+            m = c.stat().st_mtime
+        except OSError:
+            continue
+        best = m if best is None else max(best, m)
+    return best
+
+
 def tree_staleness(dest: Path | str, run: GitRunner = _git,
                    fetch: bool = False,
                    untracked_all: bool = False) -> Staleness:
@@ -1180,8 +1262,11 @@ def tree_staleness(dest: Path | str, run: GitRunner = _git,
             if all(provisioned_only(dest, p, run) for p in paths):
                 provisioned = tuple(paths)
                 tracked_dirty = False
+    import time as _time
+    _upd = ref_last_updated(dest, ref)
     return Staleness(
         ref=ref,
+        measured_age=(None if _upd is None else max(0.0, _time.time() - _upd)),
         behind=int(behind) if behind.isdigit() else 0,
         unpushed=int(unpushed) if unpushed.isdigit() else 0,
         dirty=tracked_dirty,

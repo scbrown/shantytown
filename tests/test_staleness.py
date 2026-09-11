@@ -756,3 +756,66 @@ def test_fetch_FALSE_is_still_the_cheap_honest_read(tmp_path: Path):
     s = tree_staleness(wt, fetch=False)
     assert s.error is None, f"fetch=False must not error: {s.error}"
     assert s.current()
+
+
+# --- the FETCHLESS half: a frozen ref must not render "current" -------------
+# wu, 2026-09-11, verifying the fetch=True fix rather than taking it on report:
+# `st crew`'s DEFAULT column passes sweep=False, so it never fetches — there is
+# no failed fetch to key UNKNOWN off, and a ref frozen by a two-day forge outage
+# still rendered "ok". Measured on grant: ref frozen at 95f92e0c, 16 commits
+# behind, cell "ok".
+
+def test_ref_mtime_moves_on_a_SUCCESSFUL_fetch_and_not_on_a_failed_one(tmp_path: Path):
+    """THE MEASUREMENT the remedy rests on, and why it is not FETCH_HEAD.
+
+    A FAILED fetch still writes FETCH_HEAD, so FETCH_HEAD answers "when did we
+    last TRY" — during an outage that is "seconds ago, continuously", which
+    would report a frozen ref as fresh and rebuild the very defect this closes.
+    The ref itself only moves when the remote actually answered.
+    """
+    from shantytown.workspace import ref_last_updated
+    up = _repo(tmp_path / "up")
+    wt = _clone(up, tmp_path / "wt")
+
+    _commit(up, "more")
+    tree_staleness(wt, fetch=True)          # a SUCCESSFUL fetch
+    after_ok = ref_last_updated(wt, "origin/main")
+    assert after_ok is not None
+
+    fetch_head = Path(wt) / ".git" / "FETCH_HEAD"
+    fh_before = fetch_head.stat().st_mtime if fetch_head.exists() else None
+
+    _run(wt, "remote", "set-url", "origin", str(tmp_path / "gone.git"))
+    tree_staleness(wt, fetch=True)          # a FAILED fetch
+    after_fail = ref_last_updated(wt, "origin/main")
+
+    assert after_fail == after_ok, (
+        "a FAILED fetch must not advance the ref mtime — if it did, this signal "
+        "would report a frozen ref as freshly measured")
+    if fh_before is not None and fetch_head.exists():
+        assert fetch_head.stat().st_mtime >= fh_before, (
+            "control: FETCH_HEAD is touched by the failed fetch, which is "
+            "precisely why it cannot be the freshness signal")
+
+
+def test_a_FROZEN_ref_does_not_render_as_current(tmp_path: Path, monkeypatch):
+    up = _repo(tmp_path / "up")
+    wt = _clone(up, tmp_path / "wt")
+    s = tree_staleness(wt, fetch=False)
+    assert not s.measurement_is_stale(), "control: a fresh clone is fresh"
+    assert "current with" in s.render()
+
+    # age the reading past the horizon without touching the clock
+    import shantytown.workspace as W
+    monkeypatch.setattr(W, "MEASUREMENT_HORIZON_SECONDS", -1)
+    s2 = tree_staleness(wt, fetch=False)
+    assert s2.measurement_is_stale()
+    assert "current with" not in s2.render()
+    assert "LAST SUCCESSFUL FETCH" in s2.render()
+
+
+def test_an_UNKNOWN_age_is_treated_as_stale_not_as_fresh():
+    """Rounding "we could not tell" down to "recent" is the flattery this whole
+    class is made of — same direction as CANNOT TELL IS NOT CLEAN."""
+    assert Staleness(ref="origin/main", measured_age=None).measurement_is_stale()
+    assert not Staleness(ref="origin/main", measured_age=1.0).measurement_is_stale()

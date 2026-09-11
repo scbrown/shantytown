@@ -7012,6 +7012,18 @@ def _tree_staleness_cell(a, ag, sweep: bool = False) -> "tuple[str, str | None]"
             unknown = True
             parts.append(f"{_tree_label(t)}: {s.render()}")
             continue
+        if not sweep and s.measurement_is_stale():
+            # THE FETCHLESS COLUMN MUST NOT RENDER "ok" OFF A FROZEN REF
+            # (wu, 2026-09-11). The sweep fetches, so a failed fetch there
+            # reports UNKNOWN; this default column never fetches, so there is no
+            # failure to key off and `behind == 0` against a ref nobody has
+            # refreshed for days looked exactly like a healthy tree. Measured
+            # during the forge outage: agents rendered "ok" at 16 and 21 commits
+            # behind. `?` already means "cannot tell" here and never rounds to
+            # "ok" — a reading this old IS cannot-tell.
+            unknown = True
+            parts.append(f"{_tree_label(t)}: {s.render()}")
+            continue
         behind += s.behind
         unpushed += s.unpushed
         if not s.current():
