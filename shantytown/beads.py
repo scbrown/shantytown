@@ -87,7 +87,7 @@ class BeadsValidationError(RuntimeError):
     """
 
 
-def _bd_error_text(r) -> str:
+def _bd_error_text(r, tool: str = "bd") -> str:
     """The reason bd failed, in bd's own words — never a warning that rode along."""
     for stream in (r.stdout or "", r.stderr or ""):
         for line in stream.splitlines():
@@ -111,19 +111,29 @@ def _bd_error_text(r) -> str:
     # warning as the cause; "bd failed and said only <warning>" is honest and
     # does not send anyone to fix beads.role.
     if lines:
-        return f"bd exited {r.returncode} and emitted only advisories: {lines[0][:120]}"
-    return f"bd exited {r.returncode} with no output"
+        return (f"{tool} exited {r.returncode} and emitted only advisories: "
+                f"{lines[0][:120]}")
+    return f"{tool} exited {r.returncode} with no output"
 
 
-def _bd_failure(what: str, r) -> RuntimeError:
-    detail = _bd_error_text(r)
+def _bd_failure(what: str, r, tool: str = "bd") -> RuntimeError:
+    detail = _bd_error_text(r, tool=tool)
     if "validation failed" in detail.lower():
-        return BeadsValidationError(f"{what} refused by bd: {detail}")
+        return BeadsValidationError(f"{what} refused by {tool}: {detail}")
     return RuntimeError(f"{what} failed: {detail}")
 
 
 class BeadsTracker:
     _structured_defer = True
+    #: THE BINARY THIS TRACKER ACTUALLY RUNS, used in every error message below.
+    #: BrTracker inherits nearly all of these methods and overrides only `_bd`,
+    #: so a hardcoded "bd" in an error reported a RETIRED tool for a failure the
+    #: LIVE one produced (aegis-7okaae). A codex worker's read-only-store failure
+    #: surfaced as "bd create failed: bd exited 7", which read as a regression
+    #: back onto the dead Dolt store and sent the reader hunting for that instead
+    #: of the sandbox policy that actually caused it. The message must name the
+    #: program that ran.
+    _tool = "bd"
     # bd caps a title at 500 **UTF-8 BYTES**, though its error says "characters"
     # (aegis-2bjel, measured 2026-08-24 with an em dash in the title):
     #
@@ -229,7 +239,7 @@ class BeadsTracker:
             # named, and the unsearched remainder is counted. The enumeration is
             # best-effort and never raises: a diagnostic that fails must not
             # replace the real error with its own.
-            msg = f"bd show {item_id} failed: {r.stderr.strip()[:120]}"
+            msg = f"{self._tool} show {item_id} failed: {r.stderr.strip()[:120]}"
             try:
                 msg += f" — {stores.not_found_here(self.repo, item_id)}"
             except Exception:
@@ -312,7 +322,7 @@ class BeadsTracker:
             args.append(f"--{k.replace('_', '-')}={v}")
         r = self._bd(*args)
         if r.returncode != 0:
-            raise _bd_failure("bd create", r)
+            raise _bd_failure(f"{self._tool} create", r, tool=self._tool)
         try:
             d = json.loads(r.stdout)
             if isinstance(d, list):
@@ -325,7 +335,7 @@ class BeadsTracker:
         if not item_id:
             # Never invent an id. A create that cannot name what it made did not
             # create anything the caller can use.
-            raise RuntimeError(f"bd create gave no id: {r.stdout.strip()[:120]}")
+            raise RuntimeError(f"{self._tool} create gave no id: {r.stdout.strip()[:120]}")
         return WorkItem(id=item_id, title=title, status="open", assignee=fields.get("assignee"))
 
     def update(self, item_id: str, **fields) -> None:
@@ -345,7 +355,7 @@ class BeadsTracker:
             args.append(f"--append-notes={reason}")
         r = self._bd_for(item_id, *args)
         if r.returncode != 0:
-            raise RuntimeError(f"bd update {item_id} failed: {r.stderr.strip()[:120]}")
+            raise RuntimeError(f"{self._tool} update {item_id} failed: {r.stderr.strip()[:120]}")
 
 def _priority(d: dict) -> int | None:
     """bd's `priority` field, or None if it did not say.
@@ -576,7 +586,7 @@ def append_comment(repo: "str | None", item_id: str, body: str, timeout: int = 3
         cmd = ["bd"] + (["-C", repo] if repo else []) + ["comment", item_id, "--file", path]
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
         if r.returncode != 0:
-            raise RuntimeError(f"bd comment {item_id} failed: {r.stderr.strip()[:160]}")
+            raise RuntimeError(f"{self._tool} comment {item_id} failed: {r.stderr.strip()[:160]}")
     finally:
         try:
             os.unlink(path)

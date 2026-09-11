@@ -17,6 +17,11 @@ from .protocols import BLOCKER_KIND_LABELS, WorkItem
 class BrTracker(BeadsTracker):
     """The three-operation Tracker protocol implemented through ``br``."""
 
+    #: Nearly every method here is inherited from BeadsTracker, which builds its
+    #: error text from this name. Without it those messages say "bd" for a
+    #: failure `br` produced (aegis-7okaae).
+    _tool = "br"
+
     def _bd_in(self, repo: "str | None", *args: str) -> subprocess.CompletedProcess:
         cmd = [os.environ.get("SHANTY_BR_BIN", "br"), *args]
         return subprocess.run(cmd, cwd=repo, capture_output=True, text=True,

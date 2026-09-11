@@ -962,6 +962,35 @@ class CodexHarness:
                 f"ln -sfn {shlex.quote(daemon_current_target)} "
                 f"{shlex.quote(str(daemon_home / 'packages' / 'standalone' / 'current'))}",
             ))
+            # THE CARD'S PERMISSION OPT-IN HAS TO REACH THE DAEMON, NOT ONLY THE
+            # TUI (aegis-7okaae). Under Remote Control the model's shell commands
+            # execute in the app-server, and `codex app-server` accepts NEITHER
+            # --dangerously-bypass-approvals-and-sandbox NOR -s/--sandbox (it has
+            # only -c). So the client flag added below governs a process that is
+            # not the one running the tools, and the daemon silently kept codex's
+            # default `workspace-write`.
+            #
+            # MEASURED 2026-09-11 with `codex sandbox`, both arms, from a crew
+            # workspace:
+            #     workspace-write     touch <live br store>  -> Read-only file system
+            #                         getent hosts github.com -> DNS-FAIL
+            #     danger-full-access  touch <live br store>  -> WROTE-OK
+            #                         getent hosts github.com -> DNS-OK
+            # The live store sits OUTSIDE every crew workspace, so `br close`,
+            # `br comments add` and `st inbox -d` (which persists through the
+            # store) all failed from every codex session: the propulsion loop was
+            # dark for that whole lane while three dispatches reported "done but
+            # could not land". `-c` is per-card here because the daemon home is
+            # per-card, while config.toml is shared by ROLE and so cannot carry a
+            # per-card decision.
+            #
+            # Same contract as the TUI flag: opt-in on ONE card, never a default.
+            # A card without `dangerous` keeps codex's sandbox exactly as before.
+            daemon_sandbox = ""
+            if card.dangerous:
+                daemon_sandbox = ("-c sandbox_mode=\"danger-full-access\" "
+                                  "-c approval_policy=\"never\" ")
+
             # Start is idempotent for THIS card, then attach its TUI to its Unix
             # socket. The per-card identity prefix is load-bearing: it is the
             # environment inherited by tool shells and hooks. The explicit --cd
@@ -976,6 +1005,7 @@ class CodexHarness:
                 f"env -u TMUX_PANE {identity_env}"
                 f"{codex_mod().HOME_VAR}={daemon_home} "
                 "codex remote-control start "
+                f"{daemon_sandbox}"
                 "--json >/dev/null"
             )
             stop = (
