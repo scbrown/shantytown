@@ -1898,6 +1898,60 @@ def _cmd_harness(a) -> int:
     return rc
 
 
+def unobserved_launch_report(agent: str, harness: str, session: str,
+                             inspect=None) -> str:
+    """The line printed when a launch was NOT observed live.
+
+    A pure function because all three of its jobs are decisions, and none of them
+    were testable inside `_launch` (aegis-h5wki0 defects 2 and 3).
+
+    THE VERDICT IS NOT CHANGING. This path stays could-not-tell, and the bead is
+    explicit about why: that tier is what made a 5-minute outage visible instead
+    of silent. It did NOT report success, and an agent sitting at a bash prompt
+    under a "started" banner is the failure it prevented. Everything below is
+    about what the line SAYS.
+
+    Defect 2 — it named the wrong subsystem. The only cause a reader actually saw
+    was codex's own "Remote control is enabled on <host> but the connection is
+    errored", printed into the pane, which sends them to read remote-control
+    configuration. That configuration was fine; the cause was a stale
+    app-server startup lock. The text was not false, it was about the wrong
+    layer. `codex_daemon.inspect` can answer directly — it reads /proc and the
+    card's runtime dir, kills nothing, and is the same check `st crew` renders a
+    launch blocker from.
+
+    Defect 3 — the recovery is stop-then-new, and nothing said so. `st new`
+    refuses over the shell prompt its own failed launch left behind ("session
+    already exists — stop it first"), so a reader who takes the obvious retry
+    loses a round trip with the agent already down. One clause fixes it.
+
+    `inspect` is injected for testing and defaults to the real inspector. A
+    diagnostic may never be the reason a launch report fails, so any exception
+    from it is swallowed and the report degrades to the plain line.
+    """
+    blocker = ""
+    if harness == "codex":
+        try:
+            if inspect is None:
+                from . import codex_daemon as _cd
+                inspect, flag = _cd.inspect, _cd.FLAG
+            else:
+                from . import codex_daemon as _cd
+                flag = _cd.FLAG
+            health = inspect(agent)
+            if health.blocked:
+                blocker = (f" The daemon inspector reports {flag}: "
+                           f"{health.reason()} — that, not remote-control "
+                           f"configuration, is the likely cause.")
+        except Exception:
+            blocker = ""
+    return (f"could not tell: launched {agent} but the runtime was not observed "
+            f"live in {session} within the timeout. It may still be coming up; "
+            f"check `st log {agent}`.{blocker} If it is not coming up, the retry "
+            f"is `st stop {agent}` THEN `st new {agent}` — `st new` alone refuses "
+            f"over the session this launch left behind.")
+
+
 def _launch(a, card, panes, runtime, *, dry_run: bool = False,
             window_restore: bool = False) -> int:
     """LAUNCH ONE AGENT. The whole seam: refuse-first, then workspace, then kit,
@@ -2031,9 +2085,27 @@ def _launch(a, card, panes, runtime, *, dry_run: bool = False,
               f"(first-run consent), not up yet. Answer it: `st log {card.name}` to "
               f"see it, then `st attach {card.name}`.", file=sys.stderr)
         return CANNOT_TELL
-    print(f"  could not tell: launched {card.name} but the runtime was not observed "
-          f"live in {session} within the timeout. It may still be coming up; "
-          f"check `st log {card.name}`.", file=sys.stderr)
+    # NAME THE CAUSE IF WE CAN SEE IT, AND ALWAYS NAME THE RECOVERY
+    # (aegis-h5wki0 defects 2 and 3). The verdict stays CANNOT_TELL — that tier
+    # is what turned a silent 5-minute outage into a visible one and the bead is
+    # explicit that it must be preserved. What was missing is everything else in
+    # the line.
+    #
+    # Defect 2: the only cause a reader actually saw was codex's own
+    # "Remote control is enabled on <host> but the connection is errored",
+    # printed into the pane. That sends them to read remote-control settings,
+    # which are fine; the cause was a stale app-server startup lock. The text was
+    # not false, it was about the wrong layer. We can ask the daemon inspector
+    # directly — it is a read of /proc and the card's runtime dir, it kills
+    # nothing, and it is the same check `st crew` renders a launch blocker from.
+    #
+    # Defect 3: `st new` refuses over the shell prompt its own failed launch left
+    # behind ("session already exists — stop it first"), so the recovery is
+    # stop-then-new rather than new. That is discoverable in one attempt and it
+    # costs a cycle at the worst possible moment, with the agent already down.
+    # Printing it costs nothing.
+    print(f"  {unobserved_launch_report(card.name, card.harness, session)}",
+          file=sys.stderr)
     return CANNOT_TELL
 
 
