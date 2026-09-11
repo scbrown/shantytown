@@ -576,6 +576,53 @@ def at_ceiling(root, agent: str) -> Ceiling | None:
         return None
 
 
+def unholdable_note(root: Path, agent: str, spend: Spend) -> str:
+    """What to say when THIS session was already told to stop and the hold
+    cannot be re-applied — or "" when there is nothing to say.
+
+    THE SAME RULE AS SIGNAL LOST, ONE LAYER IN (aegis-jrax3). A ceiling that
+    tripped, was reported, and has since evaporated is indistinguishable from a
+    session with room to spare: the haul simply resumes feeding and nothing
+    anywhere says the ceiling is no longer in force.
+
+    MEASURED, aegis-yeu49c: malcolm tripped a 4.0h ceiling at 4.6h, complied —
+    committed, wrote the bead trail, tried to stop — and the compliance itself
+    is an idle gap, so the stretch rolled and `verdict` went quiet. The marker
+    that should have held it (aegis-hqbwci) had been written by a build that
+    predated the `ceiling` key, so `held_ceiling` could not name what tripped
+    and returned None, fail-open, as designed. The haul then served the next
+    plate item on every subsequent stop, 32 deep. Neither hook could observe the
+    other; the conflict was found by a human reading two block reasons.
+
+    A FORMAT CHANGE TO THE MARKER RE-OPENS THIS EVERY TIME, for any session
+    already running when the change lands — the marker is written once per
+    session and the new code only reads markers it wrote itself. So the note is
+    about the class, not about that one build.
+
+    Deliberately NOT a hold: inventing a measure for a marker that does not
+    record one would be worse than releasing one agent once, which is the call
+    `held_ceiling` already makes. This makes the release audible instead."""
+    try:
+        import json
+        if not spend.session or spend.signal_lost:
+            return ""
+        d = json.loads(_marker(root, agent).read_text(encoding="utf-8"))
+        if str(d.get("session") or "") != spend.session:
+            return ""
+        if isinstance(d.get("ceiling"), dict):
+            return ""                    # holdable — held_ceiling has the call
+        # NO TICKET ID IN THE STRING: this repo is public and the ratchet
+        # refuses one. The citation is the docstring above, in a comment, where
+        # it stays findable and leaks nothing.
+        return (f"session budget: {agent} was ALREADY told to stop earlier in "
+                f"THIS session, but the marker does not record which ceiling "
+                f"tripped, so the hold cannot be re-applied and the haul is "
+                f"feeding again. The ceiling is NOT in force for this session. "
+                f"End it rather than taking the next item.")
+    except Exception:                    # noqa: BLE001 — a budget never raises
+        return ""
+
+
 def signal_lost_note(limits: Limits, spend: Spend, agent: str) -> str:
     """What to say when the budget is armed but blind.
 

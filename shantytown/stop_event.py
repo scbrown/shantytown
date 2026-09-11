@@ -427,6 +427,46 @@ def _assigned_to(me: str, beads: list[dict]) -> list[dict]:
     return out
 
 
+def _ceiling_took_the_stop(root: Path, me: str, next_bead: str | None = None):
+    """Ask the session ceiling once, for EVERY branch of the advance that would
+    otherwise tell a worker to keep going.
+
+    Returns ``(took, limits, spend)``. ``took`` means this call has disposed of
+    the stop — either it printed the ceiling's block, or the ceiling is over and
+    the worker has already been told once, so the stop is allowed through in
+    silence. ``False`` means carry on with the branch's own decision.
+
+    ONE PREDICATE, NOT TWO COPIES (the aegis-d1qko rule). Two call sites ask this
+    now — the ready-work feed and the Codex resume prompt — and a second copy is
+    precisely how stop_policy rank 4 and stop_event._drain drifted apart.
+
+    IT BLOCKS ONCE PER SESSION, THEN ALLOWS: see the block-once note in
+    session_budget. A Stop hook that blocks for as long as the ceiling is over
+    can never let the agent stop at all, which is worse than the bug.
+
+    IT DOES NOT CLAIM A BEAD and names the next one only when the caller passes
+    one that is ALREADY claimed. Naming an unclaimed next item would hand over
+    the exact thing the ceiling is withholding; naming the anchor the worker is
+    already holding withholds nothing and tells whoever reads the plate why it
+    is still claimed."""
+    from . import session_budget as sb
+    limits, spend, ceiling = sb.gate(root, me)
+    if ceiling is None:
+        # A CEILING THAT IS SILENTLY NOT IN FORCE MUST STILL SAY SO (aegis-jrax3,
+        # measured again as aegis-yeu49c). stdout is the block protocol, so this
+        # goes to stderr exactly as the signal-lost alarm does.
+        note = sb.unholdable_note(root, me, spend)
+        if note:
+            print(note, file=sys.stderr)
+        return False, limits, spend
+    if sb.already_reported(root, me, spend):
+        return True, limits, spend       # told once — let the session end
+    sb.mark_reported(root, me, spend, ceiling)
+    print(json.dumps({"decision": "block",
+                      "reason": sb.stop_message(ceiling, next_bead)}))
+    return True, limits, spend
+
+
 def _haul(reg: FilesRegistry, panes, me: str, root: Path) -> int:
     """The worker's own advance: anchor closed + assigned ready work -> BLOCK
     the stop with the next bead as the reason — the same model-reaching
@@ -482,12 +522,30 @@ def _haul(reg: FilesRegistry, panes, me: str, root: Path) -> int:
                                harness_name == "codex") else None
         if active and resume is None:
             return 0
-        # Keep the active Codex path dependency-free and inside the hook's
-        # deadline. It is continuation of work already admitted, not a new haul
-        # item, so neither the session admission ceiling nor pane handoff applies.
+        # The pane HANDOFF does not apply here: this is continuation of work
+        # already admitted, not a new haul item, so there is nothing to recycle
+        # context for. THE CEILING IS DIFFERENT AND IT DOES APPLY (aegis-yeu49c).
+        #
+        # This branch used to be exempt on the same "already admitted" reasoning,
+        # and the exemption does not hold, because the ceiling bounds the SESSION
+        # rather than admission of a bead. The resume prompt's own words are
+        # "Do not stop merely because the previous model turn ended" — delivered,
+        # on the unfixed path, to a worker whose ceiling had already tripped and
+        # which was trying to comply with it. Worse, the gate below is
+        # unreachable while an anchor is active, so an over-ceiling Codex worker
+        # mid-bead was never told about its ceiling AT ALL: it got "do not stop",
+        # on a backoff, for the rest of the session. That is the bead's title
+        # exactly — an over-ceiling agent cannot stop.
+        #
+        # Asked BEFORE _allow_haul_resume so a ceiling report does not spend the
+        # resume backoff, and the anchor is named because it is already claimed:
+        # stop_message says it stays claimed for whoever picks it up next, which
+        # is what the plate should read after this session ends.
         if resume is not None:
             from .feed_check import haul_resume_message
             rid = resume.get("id", "?")
+            if _ceiling_took_the_stop(root, me, rid)[0]:
+                return 0
             if not _allow_haul_resume(root, me, rid):
                 return 0
             _mark_haul_resume(root, me, rid)
@@ -506,20 +564,10 @@ def _haul(reg: FilesRegistry, panes, me: str, root: Path) -> int:
         # — it sheds context and the haul resumes — so asking it first would send
         # an over-ceiling session through /clear and straight back into the
         # queue. The ceiling is a STOP, and a stop outranks a recycle.
-        #
-        # Blocks ONCE per stretch, then allows: see the block-once note in
-        # session_budget. Deliberately does NOT claim a bead and does NOT name
-        # the next one — naming it would hand over the exact thing the ceiling
-        # is withholding.
-        from . import session_budget as sb
-        limits, spend, ceiling = sb.gate(root, me)
-        if ceiling is not None:
-            if sb.already_reported(root, me, spend):
-                return 0                 # told once — let the session end
-            sb.mark_reported(root, me, spend, ceiling)
-            print(json.dumps({"decision": "block",
-                              "reason": sb.stop_message(ceiling)}))
+        took, limits, spend = _ceiling_took_the_stop(root, me)
+        if took:
             return 0
+        from . import session_budget as sb
         if limits.active and spend.signal_lost:
             # Armed but blind. Allowed — a probe bug must never stop the crew —
             # but never silently: stderr, because stdout is the block protocol.

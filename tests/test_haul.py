@@ -448,3 +448,164 @@ def test_a_claude_lead_mid_work_is_still_silent(monkeypatch, capsys):
         in_progress=[{"id": "aegis-1", "assignee": "billy"}],
     )
     assert rc == 0 and block is None
+
+
+# --- the CEILING vs the HAUL, composed (aegis-yeu49c) ------------------------
+#
+# MEASURED on malcolm, live, 2026-09-10. Its 4.0h ceiling tripped at 4.6h and
+# said, correctly, "stop cleanly; do NOT pick up more work". It complied —
+# committed, pushed, wrote the bead trail — and THE COMPLIANCE IS AN IDLE GAP,
+# so the stretch rolled and `verdict` went quiet. The marker that should have
+# carried the trip across that roll (aegis-hqbwci) had been written by a build
+# that predated its `ceiling` key, so `held_ceiling` could not name what tripped
+# and returned None, fail-open, as designed. The haul then served the next plate
+# item on EVERY subsequent stop attempt, 32 beads deep, 7 of them P1. The only
+# way to satisfy the haul was to do more work and the only way to satisfy the
+# ceiling was to stop: the agent was required to violate one.
+#
+# WHY THESE LIVE AT THE _haul LEVEL AND NOT IN test_session_budget. Both halves
+# pass their own tests today and did the night this happened. The nearest
+# existing test — test_the_ceiling_blocks_once_then_lets_the_session_END — keeps
+# the spend OVER the limit between stops, so it exercises `already_reported` and
+# never reaches `held_ceiling` at all. A regression in `held_ceiling` is
+# therefore invisible to it, and the second test below is what that regression
+# actually looks like from here.
+
+def _roll_the_stretch(root, agent="billy"):
+    """The agent OBEYED: it stopped taking actions for long enough that the
+    stretch rolled. Same store, same session id — only the old events fall out,
+    which is what compliance with the stop instruction looks like in the stats
+    store."""
+    import sqlite3
+    now = time.time()
+    conn = sqlite3.connect(root / "stats.sqlite")
+    conn.execute("DELETE FROM events WHERE ts < ?", (now - 120,))
+    conn.execute("INSERT INTO events(ts, agent, kind, session, risk)"
+                 " VALUES (?,?,?,?,?)", (now - 20, agent, "tool", "s1", None))
+    conn.commit()
+    conn.close()
+
+
+def _drop_the_ceiling_key(root, agent="billy"):
+    """Rewrite the marker into the shape malcolm's was ON DISK: session named,
+    cause not recorded. This is what every marker written before the aegis-hqbwci
+    fix looks like, and a marker is written once per session — so a session
+    already running when a marker FORMAT changes carries the old shape for its
+    whole life, and the new code never gets to read a marker it wrote itself."""
+    m = root / "session_budget" / f"{agent}.json"
+    d = json.loads(m.read_text(encoding="utf-8"))
+    d.pop("ceiling", None)
+    d.pop("spend", None)
+    m.write_text(json.dumps(d), encoding="utf-8")
+
+
+PLATE = [{"id": f"aegis-p{i}", "title": f"plate item {i}", "assignee": "billy"}
+         for i in range(8)]                    # malcolm's condition is >5
+
+
+def test_a_ROLLED_stretch_does_not_re_open_the_haul(tmp_path, monkeypatch,
+                                                    capsys):
+    """malcolm's falsifiable re-run: over the ceiling, a plate of 8, and the
+    stretch rolls between stops because the agent did as it was told. It must
+    terminate without the agent working past the ceiling AND without anything
+    being falsely parked."""
+    root = _armed_root(tmp_path, hours=4.0, items=None, risk=None,
+                       spend_hours=4.6)
+    claims = []
+    _rc, first = _haul_at(monkeypatch, capsys, root, ready=PLATE, claims=claims)
+    assert first and "SESSION CEILING" in first["reason"]
+
+    _roll_the_stretch(root)
+    assert sb.verdict(sb.limits_for(root), sb.read_spend(root, "billy")) is None, \
+        "fixture check: the roll must silence the LIVE verdict, or this is vacuous"
+
+    _rc, second = _haul_at(monkeypatch, capsys, root, ready=PLATE, claims=claims)
+    _rc, third = _haul_at(monkeypatch, capsys, root, ready=PLATE, claims=claims)
+    assert second is None and third is None, \
+        "the haul re-served a plate item to an agent that was told to stop"
+    assert claims == [], "nothing on the plate may be claimed after the ceiling"
+
+
+def test_a_marker_that_cannot_name_its_cause_releases_but_SAYS_SO(tmp_path,
+                                                                  monkeypatch,
+                                                                  capsys):
+    """NEGATIVE CONTROL for the test above — malcolm's exact on-disk artifact —
+    and the one place the composed failure is still reachable.
+
+    The release is deliberate and stays: inventing a measure for a marker that
+    does not record one is worse than releasing one agent once. What changes is
+    that it is no longer SILENT. A ceiling that has evaporated used to be
+    indistinguishable from a session with room to spare, which is the aegis-jrax3
+    rule one layer in, and it cost a whole night to find by reading two block
+    reasons side by side."""
+    root = _armed_root(tmp_path, hours=4.0, items=None, risk=None,
+                       spend_hours=4.6)
+    _rc, first = _haul_at(monkeypatch, capsys, root, ready=PLATE)
+    assert first and "SESSION CEILING" in first["reason"]
+
+    _drop_the_ceiling_key(root)
+    _roll_the_stretch(root)
+    claims = []
+    _bd(monkeypatch, ready=PLATE, claims=claims)
+    stop_event._haul(_Reg([WORKER]), _Panes({"p-b": "❯ "}), "billy", root)
+    cap = capsys.readouterr()
+    assert "HAUL" in cap.out, "fixture check: this arm is the one that DOES feed"
+    assert claims == ["aegis-p0"]
+    assert "ALREADY told to stop" in cap.err and "NOT in force" in cap.err, \
+        "an evaporated ceiling must never be silent"
+
+
+# --- the CODEX resume prompt is not exempt from the ceiling (aegis-yeu49c) ---
+#
+# The resume branch was exempt on the reasoning that it continues work already
+# admitted rather than admitting a new item. That holds for the pane HANDOFF and
+# does not hold for the ceiling, which bounds the SESSION rather than admission
+# of a bead. The gate lives below the active-anchor branch, so an over-ceiling
+# Codex worker mid-bead never reached it: it was told "Do not stop merely
+# because the previous model turn ended", on a backoff, for the rest of the
+# session, and was never told about its ceiling at all.
+
+CODEX = Agent(name="billy", role="worker", pane="p-b", harness="codex")
+ANCHOR = [{"id": "aegis-anchor", "title": "the bead in hand", "assignee": "billy"}]
+
+
+def test_an_over_ceiling_codex_worker_is_told_to_STOP_not_to_resume(tmp_path,
+                                                                    monkeypatch,
+                                                                    capsys):
+    root = _armed_root(tmp_path, hours=4.0, items=None, risk=None,
+                       spend_hours=4.6)
+    claims = []
+    _rc, block = _haul_at(monkeypatch, capsys, root, reg=_Reg([CODEX]),
+                          in_progress=ANCHOR, claims=claims)
+    assert block and "SESSION CEILING" in block["reason"]
+    assert "HAUL RESUME" not in block["reason"]
+    assert "aegis-anchor stays claimed" in block["reason"], \
+        "the anchor is already claimed — say so, or the plate reads as abandoned"
+    assert claims == []
+
+    _rc, second = _haul_at(monkeypatch, capsys, root, reg=_Reg([CODEX]),
+                           in_progress=ANCHOR)
+    assert second is None, "block-once: the session must be able to END"
+
+
+def test_an_under_ceiling_codex_worker_still_gets_its_resume(tmp_path,
+                                                             monkeypatch,
+                                                             capsys):
+    """NEGATIVE CONTROL: without this the test above passes on a resume prompt
+    that was simply deleted."""
+    root = _armed_root(tmp_path, hours=4.0, items=None, risk=None,
+                       spend_hours=1.0)
+    _rc, block = _haul_at(monkeypatch, capsys, root, reg=_Reg([CODEX]),
+                          in_progress=ANCHOR)
+    assert block and "HAUL RESUME" in block["reason"]
+    assert "aegis-anchor" in block["reason"]
+
+
+def test_the_ceiling_does_not_spend_the_resume_BACKOFF(tmp_path, monkeypatch,
+                                                       capsys):
+    """Asked before _allow_haul_resume, so a session that is later released
+    (the operator raises the limit) still has its full resume allowance."""
+    root = _armed_root(tmp_path, hours=4.0, items=None, risk=None,
+                       spend_hours=4.6)
+    _haul_at(monkeypatch, capsys, root, reg=_Reg([CODEX]), in_progress=ANCHOR)
+    assert not (root / "haul_resume" / "billy.json").exists()

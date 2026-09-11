@@ -919,6 +919,13 @@ class IdleFleetAlerter:
                     push_to_own_pane(self._reg, self._panes, worker,
                                      sb.stop_message(ceiling))
                 continue
+            # THE SAME NOTE THE WORKER'S OWN STOP EMITS. A ceiling that
+            # tripped and can no longer be held releases this worker back into
+            # the feed, and the two surfaces must not disagree about that: the
+            # stop hook says it on stderr, tend says it in the log, and neither
+            # is silent. Same rule as the HELD label above.
+            if (note := sb.unholdable_note(self._shanty_root, worker, spend)):
+                self._log(note)
             if limits.active and spend.signal_lost:
                 self._log(sb.signal_lost_note(limits, spend, worker))
 

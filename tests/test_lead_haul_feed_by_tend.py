@@ -170,3 +170,70 @@ def test_the_lead_feed_is_once_per_idle_episode(tmp_path, monkeypatch):
     alerter, panes = _lead_hauling_world(tmp_path, monkeypatch, [])
     alerter.sweep([]); alerter.sweep([]); alerter.sweep([])
     assert len(panes.sent) == 1
+
+
+# --- tend must say the same thing the worker's own stop says (aegis-yeu49c) --
+#
+# The ceiling gate above refuses to feed a worker that is over budget, and says
+# so in the log. It cannot refuse when the ceiling has EVAPORATED — a marker
+# that names this session but does not record what tripped releases the worker,
+# fail-open and deliberately (see session_budget.unholdable_note). What must not
+# happen is that the release is silent HERE while the worker's own stop hook
+# announces it on stderr: two surfaces disagreeing about whether a ceiling is in
+# force is the aegis-qviejh failure, and it is how this cost a whole night.
+
+def _legacy_marker_world(tmp_path, monkeypatch, claims, spend_hours=1.0):
+    """A lead under its ceiling whose marker says it was ALREADY told to stop in
+    this session, in the shape every marker written before aegis-hqbwci has."""
+    import json as _json
+    import sqlite3
+    import time as _time
+    from shantytown import stats
+    (tmp_path / "shantytown.toml").write_text(
+        "[session_budget]\nmax_hours = 4.0\n", encoding="utf-8")
+    now = _time.time()
+    conn = sqlite3.connect(tmp_path / "stats.sqlite")
+    conn.executescript(stats._SCHEMA)
+    n = max(2, int(spend_hours * 3600 / 300))
+    rows = [(now - spend_hours * 3600 + i * 300, "dearing", "tool", "s1", None)
+            for i in range(n)]
+    rows.append((now - 30, "dearing", "tool", "s1", None))
+    conn.executemany("INSERT INTO events(ts, agent, kind, session, risk)"
+                     " VALUES (?,?,?,?,?)", rows)
+    conn.commit()
+    conn.close()
+    m = tmp_path / "session_budget" / "dearing.json"
+    m.parent.mkdir(parents=True, exist_ok=True)
+    m.write_text(_json.dumps({"started": now - spend_hours * 3600,
+                              "at": now - 60, "session": "s1"}),
+                 encoding="utf-8")
+    alerter, panes = _lead_hauling_world(tmp_path, monkeypatch, claims)
+    return alerter, panes
+
+
+def test_tend_ANNOUNCES_a_ceiling_it_can_no_longer_hold(tmp_path, monkeypatch):
+    logged = []
+    claims = []
+    alerter, panes = _legacy_marker_world(tmp_path, monkeypatch, claims)
+    alerter._log = logged.append
+    assert alerter.sweep([]) == ["dearing"], "the release is real — it IS fed"
+    assert claims == ["aegis-2b2tti"]
+    assert any("ALREADY told to stop" in m and "NOT in force" in m
+               for m in logged), \
+        "tend fed a worker whose ceiling had evaporated and said nothing"
+
+
+def test_tend_says_NOTHING_when_the_marker_is_for_another_session(tmp_path,
+                                                                  monkeypatch):
+    """NEGATIVE CONTROL. Without it the assertion above is satisfied by a note
+    that fires on every feed, which would be noise rather than a signal."""
+    import json as _json
+    logged = []
+    alerter, panes = _legacy_marker_world(tmp_path, monkeypatch, [])
+    m = tmp_path / "session_budget" / "dearing.json"
+    d = _json.loads(m.read_text(encoding="utf-8"))
+    d["session"] = "a-different-session"
+    m.write_text(_json.dumps(d), encoding="utf-8")
+    alerter._log = logged.append
+    assert alerter.sweep([]) == ["dearing"]
+    assert not any("ALREADY told to stop" in m for m in logged)
