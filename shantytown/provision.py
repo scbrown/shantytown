@@ -173,33 +173,60 @@ def _skill_sources(ws: Path) -> list[Path]:
         return []                              # no skills/ is not an error
 
 
-def skills_linked(ws) -> list[str]:
-    """The skill names the RUNTIME can actually load, measured. Pure read.
+def _projected_targets(ws: Path) -> dict[str, str]:
+    """What the tooling projection RECORDED it linked, or {} if it never ran.
+
+    A manifest may legitimately source a skill from OUTSIDE the workspace, and on
+    this deployment every one of them does: the projection sources all 24 from the
+    ownership-neutral skills-src clone rather than from each agent's own tree. The
+    receipt is the only place that chosen source survives provisioning, so it is
+    the only way a pure read can tell a correctly-projected runtime from a broken
+    one (aegis-c64jfe).
+    """
+    try:
+        data = json.loads((ws / tooling.RECEIPT).read_text())
+        skills = data["skills"]
+        return {name: target for name, target in skills.items()
+                if isinstance(name, str) and isinstance(target, str)}
+    except (OSError, ValueError, TypeError, KeyError, AttributeError):
+        return {}
+
+
+def _runtime_linked(ws: Path, runtime: tuple[str, str]) -> list[str]:
+    """The skill names this runtime can actually load, measured. Pure read.
 
     Same discipline as servers_in: not "the directory exists" but "these names
     resolve, through a symlink, to a real SKILL.md". Every green signal in the
     original bug (files present, well-formed, committed, pulled) was true of a
     fleet loading ZERO skills — presence was never the question.
+
+    TWO targets are accepted and no others: the workspace's own source, and the
+    one THIS workspace's receipt recorded. That keeps the teeth — a link to some
+    arbitrary path still reads unlinked, which is the aegis-y0ky6 property this
+    predicate exists to hold — while no longer calling a runtime unlinked for
+    obeying the projection. Measured before this change: 0 of 24 on 13 of 13 live
+    agents, while codex was loading all 24 through those same links.
     """
-    ws = Path(ws).expanduser()
-    dst = ws.joinpath(*SKILLS_RUNTIME)
+    projected = _projected_targets(ws)
     out = []
     for src in _skill_sources(ws):
-        link = dst / src.name
-        if (link.is_symlink() and os.readlink(link) == str(src)
-                and (link / "SKILL.md").is_file()):
+        link = ws.joinpath(*runtime, src.name)
+        if not link.is_symlink() or not (link / "SKILL.md").is_file():
+            continue
+        target = os.readlink(link)
+        if target == str(src) or target == projected.get(src.name):
             out.append(src.name)
     return out
 
 
+def skills_linked(ws) -> list[str]:
+    """The skill names Claude Code's runtime can actually load. Pure read."""
+    return _runtime_linked(Path(ws).expanduser(), SKILLS_RUNTIME)
+
+
 def codex_skills_linked(ws) -> list[str]:
     """The same source skills, realized at Codex's documented repo location."""
-    ws = Path(ws).expanduser()
-    dst = ws.joinpath(*CODEX_SKILLS_RUNTIME)
-    return [src.name for src in _skill_sources(ws)
-            if (dst / src.name).is_symlink()
-            and os.readlink(dst / src.name) == str(src)
-            and (dst / src.name / "SKILL.md").is_file()]
+    return _runtime_linked(Path(ws).expanduser(), CODEX_SKILLS_RUNTIME)
 
 
 def _link_skill_runtime(ws: Path, runtime: tuple[str, str]) -> None:

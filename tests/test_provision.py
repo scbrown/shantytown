@@ -360,3 +360,61 @@ def test_missing_kit_NAMES_the_unlinked_skills(root, ws):
     (ws.joinpath(*P.SKILLS_RUNTIME) / "quipu").unlink()        # drift, post-launch
     gaps = P.missing_kit(_card(ws), root)
     assert gaps == ["skills(quipu)"], gaps
+
+
+# --- aegis-c64jfe: a projected runtime is LINKED, a foreign one is not -----------
+#
+# The predicate used to demand os.readlink(link) == <ws>/skills/<n>. A manifest may
+# legitimately source a skill from OUTSIDE the workspace, and on the aegis deployment
+# every one does (all 24 from the ownership-neutral skills-src clone), so the check
+# reported 0 of 24 on 13 of 13 live agents WHILE codex was loading all 24 through
+# those very links — the loudest thing `st tend` says about an agent, true of every
+# agent by construction. The fix must not cost the teeth: a link to a path this
+# workspace never projected still reads unlinked (aegis-y0ky6).
+
+def _projected_skill(ws: Path, name: str, target_root: Path, skill_md: bool = True) -> str:
+    (ws / "skills" / name).mkdir(parents=True, exist_ok=True)
+    (ws / "skills" / name / "SKILL.md").write_text("# " + name)
+    tgt = target_root / name
+    tgt.mkdir(parents=True, exist_ok=True)
+    if skill_md:
+        (tgt / "SKILL.md").write_text("# " + name)
+    for runtime in (P.SKILLS_RUNTIME, P.CODEX_SKILLS_RUNTIME):
+        d = ws.joinpath(*runtime); d.mkdir(parents=True, exist_ok=True)
+        os.symlink(str(tgt), str(d / name))
+    return str(tgt)
+
+
+def test_a_link_to_the_RECEIPTED_source_counts_as_linked(tmp_path, ws):
+    external = tmp_path / "neutral" / "skills"
+    target = _projected_skill(ws, "projected", external)
+    (ws / P.tooling.RECEIPT).write_text(json.dumps({"skills": {"projected": target}}))
+    assert P.codex_skills_linked(ws) == ["projected"]
+    assert P.skills_linked(ws) == ["projected"]
+
+
+def test_a_link_the_workspace_never_projected_is_NOT_linked(tmp_path, ws):
+    _projected_skill(ws, "foreign", tmp_path / "someoneelse" / "skills")
+    (ws / P.tooling.RECEIPT).write_text(json.dumps({"skills": {}}))
+    assert P.codex_skills_linked(ws) == []      # the aegis-y0ky6 teeth
+    assert P.skills_linked(ws) == []
+
+
+def test_a_receipted_target_with_no_SKILL_md_is_NOT_linked(tmp_path, ws):
+    target = _projected_skill(ws, "hollow", tmp_path / "neutral" / "skills", skill_md=False)
+    (ws / P.tooling.RECEIPT).write_text(json.dumps({"skills": {"hollow": target}}))
+    assert P.codex_skills_linked(ws) == []
+
+
+def test_the_workspaces_own_source_still_counts_without_any_receipt(ws):
+    _projected_skill(ws, "ownsrc", ws / "skills")
+    assert not (ws / P.tooling.RECEIPT).exists()
+    assert P.codex_skills_linked(ws) == ["ownsrc"]
+    assert P.skills_linked(ws) == ["ownsrc"]
+
+
+def test_an_unreadable_receipt_does_not_crash_or_flatter(tmp_path, ws):
+    _projected_skill(ws, "ownsrc", ws / "skills")
+    _projected_skill(ws, "foreign", tmp_path / "someoneelse" / "skills")
+    (ws / P.tooling.RECEIPT).write_text("{not json")
+    assert P.codex_skills_linked(ws) == ["ownsrc"]
