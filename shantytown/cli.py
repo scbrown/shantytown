@@ -6812,6 +6812,44 @@ def _refresh_clone(path) -> str | None:
         return str(e)
 
 
+# Git's transport failures, as they appear in the stderr `git pull` returns, plus
+# the string a process-group TIMEOUT surfaces through _refresh_clone's except arm.
+# Matched on SUBSTRINGS of git's own wording rather than on exit status because
+# `git pull` exits 1 for a refused merge AND for a dead remote — the status cannot
+# tell them apart, which is the whole reason this bead exists.
+_REMOTE_UNREACHABLE_MARKERS = (
+    "could not resolve hostname",
+    "connection refused",
+    "connection timed out",
+    "connection closed",
+    "operation timed out",
+    "network is unreachable",
+    "no route to host",
+    "could not read from remote repository",
+    "unable to access",
+    "failed to connect",
+    "timeoutexpired",          # _refresh_clone's except arm stringifies this
+    "timed out",
+    "repository not found",
+    "authentication failed",
+    "permission denied (publickey",
+)
+
+
+def _pull_failed_on_the_REMOTE(err: str) -> bool:
+    """Did the ff-pull fail because the REMOTE was unreachable, not the tree?
+
+    A refused MERGE (local divergence, dirty tree) is the agent's to fix; a dead
+    remote is not, and telling them to "clean or reconcile" a clean tree is a
+    false instruction that costs a search. Unknown failures fall through to the
+    EXISTING wording deliberately: this only ever narrows a message we already
+    print, so a marker we have not seen keeps today's behaviour rather than
+    claiming a cause we did not establish.
+    """
+    low = (err or "").lower()
+    return any(m in low for m in _REMOTE_UNREACHABLE_MARKERS)
+
+
 def _keep_current(a, agent_name: str) -> str | None:
     """Bring `agent_name`'s workspace clone current (ff-only) — the crew 'Keep
     Current' rule as MECHANISM instead of memory (aegis-4zld; Stiwi's ask).
@@ -6831,6 +6869,18 @@ def _keep_current(a, agent_name: str) -> str | None:
     if err is None:
         return None
     first = err.splitlines()[0] if err else "unknown"
+    if _pull_failed_on_the_REMOTE(err):
+        # NOT THE TREE'S FAULT, AND SAYING SO COSTS AN AGENT A SEARCH FOR DIRT
+        # THAT IS NOT THERE (aegis-ghedod). Found by arnold during the u6mdxf
+        # forge outage: his workspace had ZERO tracked edits and the note still
+        # told him to "clean or reconcile" it. During an outage EVERY dispatched
+        # agent gets that note, so the wording sends the whole fleet hunting for
+        # local dirt while the actual cause is a dead forge — and the one true
+        # consequence (the tree may be stale) is buried under a false instruction.
+        return (f"workspace could not be brought current — THE REMOTE IS "
+                f"UNREACHABLE ({first}); nothing to reconcile locally. "
+                f"Dispatching on the EXISTING tree, which MAY BE STALE and "
+                f"cannot be checked while the remote is down.")
     return (f"workspace could not be brought current (ff-only pull refused: "
             f"{first}) — dispatching anyway on the EXISTING tree; it may be "
             f"stale. Clean or reconcile {card.workspace} to restore keep-current.")
