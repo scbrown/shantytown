@@ -1612,6 +1612,45 @@ def _record_launch_unretirement(a, card) -> bool:
     return True
 
 
+def tend_fate(launches, agent: str) -> str:
+    """WHAT `st tend` WILL ACTUALLY DO to an agent whose launch stamp is gone.
+
+    ONE SPELLING, because there were two and they contradicted each other
+    (aegis-5gbshs). `st stop` said "will NOT bring it back"; `st crew`'s
+    operator-stopped row said "Still respawned by `st tend`". Both cannot be
+    true, and the evidence settled it: kelly sat operator-stopped for 46+ hours
+    with zero respawns, so the flat promise was the wrong one.
+
+    That promise had ALREADY been removed once. aegis-k9068 found it in `st stop`
+    — tend REFUSES an unstamped agent while any other agent holds a stamp, so a
+    stop taken on the strength of "tend will bring it back" silently became
+    permanent, measured at ~2h of lost tier-1 alert cover. The fix corrected the
+    sentence in `st stop` and left the identical sentence in `st crew` standing.
+    A second spelling of a fact is a second chance to be wrong about it, so both
+    call sites now read this.
+
+    The condition is narrow and real: with NO stamps left anywhere, tend's
+    ownership gate does not fire (a fresh deployment must still self-heal), so it
+    WOULD respawn. Reporting the condition keeps the sentence true in both worlds
+    rather than picking one and being wrong half the time.
+    """
+    try:
+        others = list(launches.root.glob("*.json")) if launches else []
+    except OSError:
+        # Cannot read the stamps. Say so rather than promising either fate: an
+        # operator who is told "it stays down" and finds it back, or told "it
+        # comes back" and finds it gone, is worse off than one told to check.
+        return (f"`st tend`'s behaviour here is UNKNOWN (launch stamps "
+                f"unreadable). Use `st new {agent}` to be sure it is up.")
+    if others:
+        return (f"`st tend` will NOT bring it back — its launch stamp is gone, "
+                f"and tend does not respawn an unstamped agent. "
+                f"Use `st new {agent}`.")
+    return (f"`st tend` will respawn it (no launch stamps remain, so tend's "
+            f"ownership gate does not apply); `st tend --retire {agent}` is how "
+            f"you say do not bring it back.")
+
+
 def _launches(a) -> FilesLaunches:
     """The launch-stamp store for this invocation. Beside events/."""
     return FilesLaunches(Path(a.root) / "launched")
@@ -2803,14 +2842,7 @@ def _cmd_stop(a) -> int:
     # all, tend's ownership gate does not fire (a fresh deployment must still
     # self-heal), so it would respawn. Reporting the condition instead of a flat
     # promise means the sentence stays correct in both.
-    others = [p for p in _launches(a).root.glob("*.json")] if _launches(a) else []
-    if others:
-        fate = (f"`st tend` will NOT bring it back — its launch stamp is gone, and "
-                f"tend does not respawn an unstamped agent. Use `st new {a.agent}`.")
-    else:
-        fate = (f"`st tend` will respawn it (no launch stamps remain, so tend's "
-                f"ownership gate does not apply); `st tend --retire {a.agent}` is "
-                f"how you say do not bring it back.")
+    fate = tend_fate(_launches(a), a.agent)
     print(f"  stopped {a.agent} ({session}) — recorded as DELIBERATE. {fate}")
     return OK
 
@@ -4616,8 +4648,14 @@ def _cmd_crew(a) -> int:
             f"{n}{f' — {r.reason}' if r.reason else ''}" for n, r in deliberate)
         print(f"  {len(deliberate)} stopped ON PURPOSE (`st stop`, not faults): "
               f"{who}")
-        print(f"    `st new <agent>` brings one back. Still respawned by "
-              f"`st tend` — use `st tend --retire` to make it stay down.")
+        # This row used to promise a respawn flatly. That is false on any fleet
+        # with other agents up, and aegis-5gbshs measured it: 46h down, zero
+        # respawns. Ask `tend_fate` rather than asserting a fate here — the
+        # quoted wording is deliberately NOT repeated, because a test bans the
+        # old string and a comment quoting it would defeat that ban.
+        names = [n for n, _ in deliberate]
+        print(f"    `st new <agent>` brings one back. "
+              f"{tend_fate(launches, names[0] if len(names) == 1 else '<agent>')}")
     if codex_blocked:
         print(f"  ⚠ {len(codex_blocked)} codex-daemon-wedged launch blocker(s):")
         for name, why in codex_blocked:

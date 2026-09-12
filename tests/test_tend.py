@@ -1185,3 +1185,67 @@ def test_a_normal_pass_defers_nothing(tmp_path, monkeypatch, capsys):
                                   "backend": "files", "repo": None,
                                   "registry": "files"})())
     assert "DEFERRED" not in capsys.readouterr().err
+
+
+# ── ONE SPELLING OF WHAT TEND WILL DO (aegis-5gbshs) ─────────────────────────
+#
+# `st stop` and `st crew` contradicted each other: stop said "will NOT bring it
+# back", crew's operator-stopped row said "Still respawned by `st tend`". Both
+# cannot be true, and 46+ hours of an operator-stopped agent with zero respawns
+# settled which. The flat promise had already been removed from `st stop` once
+# (aegis-k9068, ~2h of lost tier-1 alert cover) and survived in crew.
+
+def _launch_store(tmp_path, stamps):
+    from shantytown.launched import FilesLaunches
+    root = tmp_path / "launched"
+    root.mkdir(parents=True, exist_ok=True)
+    for n in stamps:
+        (root / f"{n}.json").write_text("{}")
+    return FilesLaunches(root)
+
+
+def test_tend_fate_says_NOT_COMING_BACK_while_other_stamps_exist(tmp_path):
+    """The ordinary live-fleet case, and the one crew was wrong about: tend
+    refuses an unstamped agent while ANY other agent holds a stamp."""
+    from shantytown.cli import tend_fate
+    out = tend_fate(_launch_store(tmp_path, ["ellie"]), "kelly")
+    assert "will NOT bring it back" in out
+    assert "st new kelly" in out
+
+
+def test_tend_fate_says_RESPAWN_only_when_no_stamps_remain_at_all(tmp_path):
+    """THE CONTROL. The narrow true case must survive the fix — a fresh
+    deployment with no stamps must still self-heal, and there `--retire` is the
+    real answer. A fix that said NOT-COMING-BACK unconditionally would trade one
+    false promise for its mirror image."""
+    from shantytown.cli import tend_fate
+    out = tend_fate(_launch_store(tmp_path, []), "kelly")
+    assert "will respawn it" in out
+    assert "st tend --retire kelly" in out
+
+
+def test_tend_fate_says_UNKNOWN_rather_than_guessing_when_stamps_are_unreadable(tmp_path):
+    """An operator told "it stays down" who finds it back — or told "it comes
+    back" and finds it gone — is worse off than one told to check."""
+    from shantytown.cli import tend_fate
+
+    class _Broken:
+        class root:
+            @staticmethod
+            def glob(_):
+                raise OSError("unreadable")
+    out = tend_fate(_Broken(), "kelly")
+    assert "UNKNOWN" in out
+
+
+def test_the_two_commands_cannot_drift_apart_again(tmp_path):
+    """The point of the fix is ONE spelling, so neither command may carry its own.
+    A second copy of a fact is a second chance to be wrong about it — which is
+    exactly how crew kept a sentence that stop had already had corrected."""
+    import inspect
+    from shantytown import cli
+    body = inspect.getsource(cli._cmd_crew) + inspect.getsource(cli._cmd_stop)
+    assert body.count("tend_fate(") == 2, "each command must call the shared helper"
+    assert "Still respawned by" not in body, "the false promise is back"
+    assert "does not respawn an unstamped agent" not in body, \
+        "a call site is re-spelling the fate instead of asking for it"
