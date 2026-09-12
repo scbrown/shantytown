@@ -123,6 +123,33 @@ def _bd_failure(what: str, r, tool: str = "bd") -> RuntimeError:
     return RuntimeError(f"{what} failed: {detail}")
 
 
+def _is_placeholder_dep(dep: dict) -> bool:
+    """Is this dependency row a PLACEHOLDER rather than a bead we can read?
+
+    br never omits a dependency row. When the target does not resolve it hands
+    back a stand-in with an honest marker, measured against br 0.5.8-aegis.2:
+
+        id=external:hq-v88  status=blocked     title='⏳ external:hq-v88'
+        id=gt-9h8wbq8       status=tombstone   title='[missing issue: gt-9h8wbq8]'
+
+    That is the difference from bd, and it is why the old arithmetic died: bd
+    COUNTED rows it did not LIST, so `dependency_count - len(dependencies)` was
+    the blind spot. br lists them, so that subtraction is 0 by construction and
+    cannot be revived by emitting `dependency_count` — it would report ALL-CLEAR
+    while detecting nothing, which is the exact failure the old comment here
+    warned about (aegis-kt7jr).
+
+    The status is deliberately not the sole test: a genuine bead may legitimately
+    be `tombstone`. The title marker is what br writes only for a stand-in.
+    """
+    dep_id = str(dep.get("id") or "")
+    if dep_id.startswith("external:"):
+        return True
+    return (dep.get("status") or "") == "tombstone" and str(
+        dep.get("title") or ""
+    ).startswith("[missing issue:")
+
+
 class BeadsTracker:
     _structured_defer = True
     #: THE BINARY THIS TRACKER ACTUALLY RUNS, used in every error message below.
@@ -267,46 +294,47 @@ class BeadsTracker:
             # module's one-tracker-read budget is unchanged. Only `blocks`-type
             # deps count: a `relates-to` link is context, not a gate. Only
             # not-closed ones count: a closed blocker holds nothing.
+            # A PLACEHOLDER row is excluded here on purpose, and this is the
+            # line that keeps sattler's 2026-08-05 ruling true under br.
+            #
+            # br renders an unresolvable `blocks` target as status `tombstone`,
+            # which is not "closed", so without this guard it would land in
+            # open_blockers and `st go` would REFUSE the bead — the blocking that
+            # was explicitly ruled against, because a cross-store reference is
+            # not an unfinished one and refusing on it strands real work
+            # permanently and silently. We cannot tell, from here, whether such a
+            # target is unfinished or merely elsewhere; so we WARN via
+            # unreadable_deps below and do not gate (aegis-kt7jr).
             open_blockers=tuple(
                 dep.get("id")
                 for dep in (d.get("dependencies") or [])
                 if dep.get("dependency_type") == "blocks"
                 and (dep.get("status") or "") != "closed"
                 and dep.get("id")
+                and not _is_placeholder_dep(dep)
             ),
-            # bd COUNTS every dependency row and LISTS only issue-targeted ones,
-            # so the difference is exactly the rows this view does not render
-            # (aegis-kt7jr). Measured on aegis-8y80: `dependency_count: 3`,
-            # `len(dependencies): 1` — the two omitted rows include a `blocks`
-            # edge to gt-9h8wbq8.
+            # HOW MANY DEPENDENCY ROWS ARE STAND-INS RATHER THAN READABLE BEADS.
             #
-            # gt-9h8wbq8 IS NOT UNRESOLVABLE, and this comment said it was.
-            # Migration 0041 split `depends_on_id` into three typed columns and
-            # classified it `depends_on_external` — recorded, typed, preserved.
-            # A join for unresolvable ISSUE targets returns ZERO: there are no
-            # dangling issue refs at all. So this is a serialisation difference
-            # over a deliberate classification, NOT a dropped edge.
+            # This was `dependency_count - len(dependencies)` and it was DEAD
+            # under br: `br show --json` emits no `dependency_count`, so the
+            # expression was `max(0, 0 - n)` = 0 on every bead forever —
+            # including aegis-8y80, the specimen it was built for (aegis-kt7jr).
             #
-            # ⚠ DO NOT "FIX" bd BY ADDING EXTERNAL DEPS TO THE `dependencies`
-            # ARRAY. `open_blockers` above takes every blocks-type entry with an
-            # id, so those rows would make `st go` REFUSE those beads — the
-            # blocking that was explicitly ruled against — and `unreadable_deps`
-            # below would go to 0, reporting ALL-CLEAR while detecting nothing.
-            # Safe direction: make the COUNT agree with the LIST, or carry
-            # external deps in a SEPARATE field. Never list-to-count.
+            # ⚠ EMITTING `dependency_count` DOES NOT FIX IT, which is why the
+            # obvious upstream change was not made. Measured against br
+            # 0.5.8-aegis.2 on a store seeded with one resolvable, one external
+            # and one missing target: the dependencies array came back with ALL
+            # THREE, so count(3) - len(3) = 0 even on the exact dangling edge
+            # this detector exists for. bd counted rows it did not list; br
+            # lists them. The subtraction has nothing left to measure.
             #
-            # This costs NOTHING: both numbers are in the `bd show --json` this
-            # method already parses, so the one-tracker-read budget is unchanged.
-            # That matters — it is why the gap can be closed here rather than
-            # filed against a second round trip. Every OTHER bd view is blind:
-            # `bd dep list` omits the row and `bd dep tree` prints [READY].
-            #
-            # max(0, ...) because a tracker that reports fewer than it returns is
-            # saying something we have no model for, and a NEGATIVE count would
-            # render as a nonsense warning. Clamp, do not invent.
-            unreadable_deps=max(
-                0, int(d.get("dependency_count") or 0)
-                - len(d.get("dependencies") or [])),
+            # So detect on what br actually hands us: rows rendered as
+            # placeholders. Same meaning as before — SOME DEPENDENCY IS INVISIBLE
+            # TO US, never THIS IS BLOCKED — and still a warning, never a gate.
+            unreadable_deps=sum(
+                1 for dep in (d.get("dependencies") or [])
+                if _is_placeholder_dep(dep)
+            ),
         )
 
     def create(self, title: str, **fields) -> WorkItem:

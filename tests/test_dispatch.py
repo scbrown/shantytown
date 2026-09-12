@@ -505,28 +505,69 @@ def _canned_bd(row):
     return _Fake().get(row.get("id", "x"))
 
 
-def test_the_count_mismatch_is_read_the_way_bd_ACTUALLY_REPORTED_it():
-    """Pinned to the MEASURED shape, not a guess about bd's schema: on aegis-8y80
-    `bd show --json` returned dependency_count 3 with ONE resolved row, so the
-    two invisible rows are 3 - 1. If bd ever changes which of the two numbers it
-    truncates, this is the test that notices."""
+def test_a_PLACEHOLDER_dependency_is_counted_UNREADABLE_under_br():
+    """Pinned to the MEASURED br shape, not a guess (aegis-kt7jr).
+
+    br 0.5.8-aegis.2, on a store seeded with one resolvable, one external and one
+    missing target, returned ALL THREE rows — an unresolvable target comes back
+    as a stand-in carrying its own marker:
+
+        id=external:hq-v88  status=blocked     title='⏳ external:hq-v88'
+        id=gt-9h8wbq8       status=tombstone   title='[missing issue: gt-9h8wbq8]'
+
+    So the signal is the placeholder, not a count mismatch. This replaces a test
+    that asserted `dependency_count(3) - len(1) == 2`, which was bd's behaviour:
+    bd counted rows it did not list. br lists them, that subtraction is 0 by
+    construction, and NO upstream change can revive it.
+    """
     item = _canned_bd({
         "id": "aegis-8y80", "title": "t", "status": "open",
-        "dependency_count": 3,
-        "dependencies": [{"id": "aegis-0v2v", "dependency_type": "discovered-from",
-                          "status": "closed"}],
+        "dependencies": [
+            {"id": "aegis-0v2v", "dependency_type": "discovered-from",
+             "status": "closed", "title": "a real bead"},
+            {"id": "external:hq-v88", "dependency_type": "related",
+             "status": "blocked", "title": "\u23f3 external:hq-v88"},
+            {"id": "gt-9h8wbq8", "dependency_type": "blocks",
+             "status": "tombstone", "title": "[missing issue: gt-9h8wbq8]"},
+        ],
     })
     assert item.unreadable_deps == 2
-    assert item.open_blockers == (), "the dropped blocks edge is invisible — that IS the bug"
 
 
-def test_a_tracker_returning_MORE_than_it_counted_is_clamped_not_negative():
-    """A backend reporting fewer deps than it returns is saying something we have
-    no model for. Clamp to 0 — a negative count would render as a nonsense
-    warning, and inventing a meaning for it would be worse than ignoring it."""
+def test_a_placeholder_BLOCKS_edge_does_not_become_an_OPEN_BLOCKER():
+    """sattler's 2026-08-05 ruling, kept true under br.
+
+    br renders an unresolvable `blocks` target as `tombstone`, which is not
+    "closed", so without the guard it lands in open_blockers and `st go` REFUSES
+    the bead. That is the blocking that was explicitly ruled against: a
+    cross-store reference is not an unfinished one, and refusing on it strands
+    real work permanently and silently. Warn, never gate.
+    """
     item = _canned_bd({
-        "id": "x", "title": "t", "status": "open", "dependency_count": 0,
-        "dependencies": [{"id": "a", "dependency_type": "relates-to"}],
+        "id": "aegis-8y80", "title": "t", "status": "open",
+        "dependencies": [
+            {"id": "gt-9h8wbq8", "dependency_type": "blocks",
+             "status": "tombstone", "title": "[missing issue: gt-9h8wbq8]"},
+        ],
+    })
+    assert item.open_blockers == (), "a placeholder must WARN, not block"
+    assert item.unreadable_deps == 1, "...and it must still be reported"
+
+
+def test_a_GENUINELY_TOMBSTONED_bead_is_not_mistaken_for_a_placeholder():
+    """THE DISCRIMINATING CONTROL for keying on the title marker.
+
+    `tombstone` is a legitimate status for a real bead, so status alone would
+    over-count and fire the warning on ordinary work — the vigilance-fatigue
+    failure the render control below guards against. A real tombstone carries its
+    own title; only a stand-in carries br's `[missing issue: ...]`.
+    """
+    item = _canned_bd({
+        "id": "z", "title": "t", "status": "open",
+        "dependencies": [
+            {"id": "aegis-real", "dependency_type": "blocks",
+             "status": "tombstone", "title": "a real bead that was tombstoned"},
+        ],
     })
     assert item.unreadable_deps == 0
 
