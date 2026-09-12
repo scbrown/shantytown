@@ -770,3 +770,84 @@ def test_a_HELD_ceiling_also_withholds_the_agent(tmp_path):
         reg, panes, _Runtime(), root=tmp_path) == []
     assert json.loads(
         (tmp_path / "session_budget" / "arnold.json").read_text())["session"] == "sess-E"
+
+
+# ── aegis-uejki1: the feed list offered work NOBODY handed it could do ────────
+#
+# Measured against the live store 2026-09-12: `dispatchable` returned 12 beads
+# and 4 were unactionable by any agent. The resulting `st tend` "12 ready" was
+# read by an administrator as an idle agent having work, and fed a stop/relaunch
+# decision. These arms encode the four real beads, by shape.
+
+def test_a_human_blocked_bead_is_NOT_dispatchable():
+    """aegis-z4y0w0 (a hypervisor-root resize, human-only) and aegis-btp8uc (a
+    disk reclaim owned by a human). No agent it is handed to can clear it."""
+    ready = [{"id": "aegis-z4y0w0", "title": "hypervisor root: resize a volume",
+              "labels": ["automation", "blocked:human", "disk"]}]
+    assert feed_check.dispatchable({"weaver"}, ready) == []
+
+
+def test_blocked_external_is_treated_as_human_blocked():
+    """0 in the ready pool today, included deliberately: it is the same KIND of
+    fact as blocked:human and the pair is how the store spells one idea, so
+    matching one half under-matches the moment somebody uses the other."""
+    ready = [{"id": "aegis-1", "title": "waiting on a vendor",
+              "labels": ["blocked:external"]}]
+    assert feed_check.dispatchable({"weaver"}, ready) == []
+
+
+def test_a_handoff_RECORD_is_NOT_dispatchable():
+    """aegis-jyvtts, a kelly session handoff. A report someone wrote has no
+    completion state, so "execute and close" is not a thing that can be done."""
+    ready = [{"id": "aegis-jyvtts", "title": "kelly session handoff 2026-09-05",
+              "labels": ["handoff"]}]
+    assert feed_check.dispatchable({"weaver"}, ready) == []
+
+
+def test_an_ANCHOR_bead_is_NOT_dispatchable():
+    """aegis-9l283s says "do not close" in its own title: it exists to be
+    referenced. Matched on the TITLE because it carries no distinguishing label
+    (its labels are the ordinary infra,monitoring)."""
+    ready = [{"id": "aegis-9l283s",
+              "title": "ANCHOR (do not close): permanent inventory exception",
+              "labels": ["infra", "monitoring"]}]
+    assert feed_check.dispatchable({"weaver"}, ready) == []
+
+
+def test_gt_escalation_is_STILL_dispatchable_and_that_is_deliberate():
+    """The 304-bead escalation glut distorts the OPEN pool, not this one —
+    measured 0 of 93 ready beads carry gt:escalation. Excluding it here would
+    imply a hazard this path never had. If escalations ever DO reach ready this
+    test is the thing that fails and forces the decision, rather than a silent
+    guard that was never exercised."""
+    ready = [{"id": "aegis-1", "title": "some check failed",
+              "labels": ["gt:escalation", "severity:medium"]}]
+    assert [b[0] for b in feed_check.dispatchable({"weaver"}, ready)] == ["aegis-1"]
+
+
+def test_ordinary_unassigned_work_SURVIVES_the_new_filters():
+    """The control. Four exclusions are easy to over-apply; these are the real
+    shapes of the 8 beads that remained dispatchable after the fix, and they
+    must not be caught by a label or prefix match."""
+    ready = [
+        {"id": "aegis-9rep3c", "title": "quipu /metrics is a full-store scan",
+         "labels": ["quipu", "scaling", "upstream"]},
+        {"id": "aegis-2og1jx", "title": "a unit stuck 'starting' not 'running'",
+         "labels": ["infra", "host", "monitoring", "needs-triage"]},
+        # "ANCHOR" must anchor at the START of the title, not match anywhere.
+        {"id": "aegis-3", "title": "rewrite the ANCHOR handling in foo",
+         "labels": ["infra"]},
+    ]
+    got = [b[0] for b in feed_check.dispatchable({"weaver"}, ready)]
+    assert got == ["aegis-9rep3c", "aegis-2og1jx", "aegis-3"]
+
+
+def test_an_UNASSIGNED_message_is_NOT_dispatchable():
+    """The assignee test alone hid this by accident: messages are normally
+    assigned to their recipient. Re-pooling clears an assignee while leaving the
+    bead ready (hauls' docstring documents that path), and an unassigned message
+    would then be offered to a worker as work. 59 of 93 ready beads were messages
+    when this was measured (aegis-uejki1), so the population is not marginal."""
+    ready = [{"id": "aegis-1", "title": "inbox: [from wu] some pointer"},
+             {"id": "aegis-2", "title": "mail: a legacy-prefixed one"}]
+    assert feed_check.dispatchable({"weaver"}, ready) == []

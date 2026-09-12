@@ -46,7 +46,7 @@ import sys
 from pathlib import Path
 
 from .answer import Answer
-from .inbox import is_decision, is_message
+from .inbox import is_decision, is_message, is_unfeedable
 from . import handoff_text
 
 
@@ -367,8 +367,26 @@ def dispatchable(free: set, ready_beads) -> list[tuple[str, str]]:
     for b in ready_beads:
         # A decision-gated bead is not implementer work — the coordinator must
         # not hand an unassigned one to a worker to "execute" either (aegis-2og7d).
-        if not b.get("assignee") and not is_decision(b.get("labels")):
-            out.append((b.get("id", "?"), b.get("title", "")))
+        #
+        # NOR one no agent can clear at all: human-blocked work, and RECORDS
+        # (handoffs, ANCHOR beads) that have no completion state. Measured
+        # 2026-09-12 (aegis-uejki1): 4 of the 12 beads this offered were in that
+        # class, and the resulting "12 ready" was read as an idle agent having
+        # work — a wrong answer to the question the feed count is asked.
+        # A MESSAGE is not work either, and the assignee test above only hides
+        # that by accident: messages are normally assigned to their recipient, so
+        # they never reach the rest of this loop. Re-pooling CLEARS an assignee
+        # while leaving the bead ready (see hauls' docstring), and an unassigned
+        # message would then be offered to a worker as dispatchable work. This is
+        # also the single-predicate discipline is_message exists for — the haul
+        # advance, hauls() and this function are meant to agree about what a
+        # worker may be handed, and this one was the odd path out.
+        if (b.get("assignee")
+                or is_message(b.get("title", ""))
+                or is_decision(b.get("labels"))
+                or is_unfeedable(b.get("title", ""), b.get("labels"))):
+            continue
+        out.append((b.get("id", "?"), b.get("title", "")))
     return out
 
 
