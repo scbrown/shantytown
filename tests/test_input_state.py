@@ -86,7 +86,7 @@ def test_no_input_box_is_absent_not_empty():
     """`ABSENT` is a third answer on purpose. "I saw an empty box" and "I never
     saw a box" are different facts, and only the first is evidence about the
     buffer."""
-    assert triage.input_state("braino@vati:~$ ") == triage.INPUT_ABSENT
+    assert triage.input_state("user@host:~$ ") == triage.INPUT_ABSENT
     assert triage.input_state("") == triage.INPUT_ABSENT
 
 

@@ -75,7 +75,7 @@ aegis:ian a aegis:CrewMember ;
 def test_ttl_with_no_crewmember_REFUSES_rather_than_returning_an_empty_crew():
     # An empty projection is the exact failure this module exists to prevent.
     with pytest.raises(HierarchyUnavailable, match="no aegis:CrewMember"):
-        _rows_from_ttl("@prefix aegis: <http://x/> .\naegis:kota a aegis:Host .\n")
+        _rows_from_ttl("@prefix aegis: <http://x/> .\naegis:host-a a aegis:Host .\n")
 
 
 def test_load_file_rows_json_and_the_two_refusals(tmp_path):

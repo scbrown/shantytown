@@ -48,6 +48,41 @@ FORBIDDEN = {
     "operator home path": re.compile(
         r"/home/(?!(?:user|you|alice|bob|someone|example|x)/)[a-z][a-z0-9_-]*/"),
     "internal ticket id": re.compile(r"\b(?:aegis|hq|gassy|qp)-[a-z0-9]{3,6}\b"),
+    # A BARE HOSTNAME HAS NO SUFFIX TO MATCH, so "internal hostname" above cannot
+    # see one — and the fleet directive this file implements names a bare one as its
+    # own example: "scrub internal names (hostnames, .lan/.svc, IPs, kota/dolt.lan/
+    # quipu.svc)". Measured 2026-09-12 (aegis-63rhri, wu): the suffix pattern answers
+    # False for a bare host and True only with .lan/.svc, and three bare references
+    # were live in this PUBLIC repo — two of them shell prompts carrying the operator
+    # username AND the host together, which is the exposure the directive is about.
+    #
+    # THE GUARD FOR HOSTNAME LEAKAGE CANNOT CARRY THE HOSTNAMES. Extending the
+    # pattern above to bare names needs a list of internal hosts, and that list would
+    # live in the public repo publishing exactly what it exists to keep out. So this
+    # matches the SHAPE of a shell prompt instead, which names nothing: it catches
+    # `braino@vati:~$` and every future variant, and prompt strings are common here
+    # because triage parses them. It also catches scp-style `user@host:/path`, which
+    # is the same exposure.
+    #
+    # What it deliberately does NOT attempt: bare hostnames outside a prompt. Those
+    # need an out-of-repo list (aegis-63rhri option 2), which is a policy decision
+    # about what a public test suite may assume, not a regex.
+    #
+    # THE PLACEHOLDER EXEMPTION IS LOAD-BEARING, not politeness. Without it this
+    # pattern flags FOUR legitimate fixtures in this repo — `user@host:~$` in
+    # test_crew_work/test_new/test_runtime and `rsync -a root@host:/etc/...` in
+    # test_stats — because triage parses prompts and its tests must contain them. A
+    # guard that fires on its own suite's placeholders gets deleted, and the bead that
+    # found this says so explicitly: false positives discredit the audit. Same shape,
+    # and the same remedy, as the "operator home path" exemption above.
+    #
+    # Keyed on the HOST half: that is what identifies infrastructure. `root@host` is
+    # generic because `host` is a placeholder; `braino@vati` is not.
+    "operator@host prompt": re.compile(
+        r"\b[a-z][a-z0-9_.-]*@"
+        r"(?!(?:host|host-[a-z0-9]|hostname|localhost|example|server|remote|box|"
+        r"somewhere|myhost|target|peer)\b)"
+        r"[a-z0-9][a-z0-9-]*:[~/]"),
 }
 
 
@@ -167,6 +202,14 @@ def test_the_ratchet_catches_each_class():
         'z = "addr 192.168.0.1"\n'
         'w = "/home/jsmith/src/x"\n'
         'v = "see aegis-1234"\n'
+        # SYNTHETIC prompt, and it must NOT be one of the exempted placeholders or
+        # this control can never see the class — which is exactly what the first
+        # version did: it planted `someone@host-a`, the exemption swallowed it, and
+        # this assertion failed with "Extra items in the right set:
+        # 'operator@host prompt'". `jsmith` is already this file's synthetic operator
+        # (see the home-path plant) and `workstation` is a generic English noun, not a
+        # host on this fleet.
+        'u = "jsmith@workstation:~$ ls"\n'
     )
     found = set()
     for _, text in live_string_literals(planted):

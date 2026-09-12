@@ -49,7 +49,7 @@ def test_no_indicator_is_none_not_zero():
     and "I could not see" must not be printed as "none running" — that is the
     same collapse this bead is about, one level down."""
     assert triage.running_shells(IDLE_NO_SHELL) is None
-    assert triage.running_shells("braino@vati:~$ ") is None
+    assert triage.running_shells("user@host:~$ ") is None
 
 
 def test_an_agent_talking_about_shells_is_not_running_one():
