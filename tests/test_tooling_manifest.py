@@ -264,3 +264,49 @@ def test_explicit_disabled_server_refuses_before_any_projection(kit):
         P.provision(card(ws, "claude"), root)
     assert not (ws / ".mcp.json").exists()
     assert T.BEGIN not in (ws / "CLAUDE.md").read_text()
+
+
+def _cron_repoint(ws, name):
+    """Reproduce what aegis's */30 relink-skills.sh does to the claude half:
+    it points <ws>/.claude/skills/<name> at the clone's OWN skills/<name>."""
+    source = ws / "skills" / name
+    source.mkdir(parents=True, exist_ok=True)
+    (source / "SKILL.md").write_text("# from the workspace\n")
+    link = ws / ".claude/skills" / name
+    link.unlink()
+    link.symlink_to(source)
+    return source
+
+
+def test_retiring_a_skill_survives_the_cron_repointed_claude_link(kit):
+    """aegis-adttz8: a */30 cron re-points the claude half at the clone's own
+    skills/ source. That is a target shantytown itself produces, so retiring the
+    skill must be an ordinary retirement, not a launch refusal."""
+    root, ws, _, data, _ = kit
+    P.provision(card(ws), root)
+    source = _cron_repoint(ws, "search")
+    data["skills"] = {}
+    assert "skills(retired in Quipu)" in P.missing_kit(card(ws), root)
+    P.provision(card(ws), root)
+    assert not (ws / ".claude/skills/search").exists()
+    assert not (ws / ".agents/skills/search").exists()
+    # the workspace source is never touched — only the link is retracted
+    assert (source / "SKILL.md").is_file()
+    assert P.missing_kit(card(ws), root) == []
+
+
+def test_retiring_a_skill_still_refuses_a_foreign_link(kit, tmp_path):
+    """The relaxation is scoped to the workspace's own skills/ source. Any other
+    target is still 'personal changes' and must still refuse."""
+    root, ws, _, data, _ = kit
+    P.provision(card(ws), root)
+    foreign = tmp_path / "elsewhere/search"
+    foreign.mkdir(parents=True)
+    (foreign / "SKILL.md").write_text("# hand-made\n")
+    link = ws / ".claude/skills/search"
+    link.unlink()
+    link.symlink_to(foreign)
+    data["skills"] = {}
+    assert "skills(receipt or retired link unreadable)" in P.missing_kit(card(ws), root)
+    with pytest.raises(P.ProvisionError, match="personal changes"):
+        P.provision(card(ws), root)

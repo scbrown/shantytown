@@ -154,11 +154,20 @@ def retired_links(ws: Path, manifest: Manifest) -> list[Path]:
                 raise ValueError
             if name in manifest.skills:
                 continue
+            # aegis-adttz8: aegis's */30 relink-skills.sh re-points the claude
+            # half at the clone's OWN skills/<name>, so on every established
+            # workspace a retired name's link is already NOT the receipt target.
+            # Refusing there turns retiring any skill into an `st new` refusal
+            # for every live workspace at once. That target is safe to retract:
+            # the source is the workspace's tracked skills/ tree, it is not
+            # deleted with the link, and the cron re-creates the link if the
+            # skill still exists locally. Any OTHER target is still personal.
+            own_source = ws / "skills" / name
             for harness in (".claude", ".agents"):
                 link = ws / harness / "skills" / name
                 if not link.exists() and not link.is_symlink():
                     continue
-                if not link.is_symlink() or link.readlink() != Path(target):
+                if not link.is_symlink() or link.readlink() not in (Path(target), own_source):
                     raise ToolingError("retired skill link has personal changes; reconcile it")
                 retired.append(link)
         return retired
