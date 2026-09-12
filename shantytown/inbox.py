@@ -115,6 +115,60 @@ def is_decision(labels) -> bool:
                for lbl in (labels or []))
 
 
+# Labels meaning NO AGENT can clear this bead, whoever it is handed to: the
+# action belongs to a human with access crew does not have. Distinct from
+# _DECISION_LABELS, which gate a decision an agent could otherwise implement —
+# here the WORK itself is out of reach, so "execute and close" is not merely
+# unsafe, it is impossible.
+_HUMAN_BLOCKED_LABELS = frozenset({"blocked:human", "blocked:external"})
+
+# Labels/titles for beads that are RECORDS, not work: a session handoff is a
+# report someone wrote, and an ANCHOR bead says "do not close" in its own title
+# because it exists to be referenced. Feeding either to a worker asks it to
+# "complete" something with no completion state.
+_RECORD_LABELS = frozenset({"handoff"})
+_RECORD_TITLE_PREFIXES = ("ANCHOR",)
+
+
+def is_unfeedable(title, labels) -> bool:
+    """Is this bead one NO free worker can be handed, beyond message/decision?
+
+    MEASURED 2026-09-12 (aegis-uejki1) against the live store: `dispatchable`
+    offered 12 beads and 4 of them could not be done by anyone it would be
+    handed to — a 33% false-positive rate on the coordinator's own feed list:
+
+        aegis-z4y0w0  blocked:human   a hypervisor-root resize, human-only
+        aegis-btp8uc  blocked:human   a disk reclaim whose owner is a human
+        aegis-jyvtts  handoff         a kelly session handoff RECORD
+        aegis-9l283s  ANCHOR          "ANCHOR (do not close)" in its own title
+
+    Why this matters more than a tidy list: `st tend`'s feed signal reported
+    "12 ready" and an administrator read it as gennaro having work, which fed a
+    stop/relaunch decision at the lead tier. A feed count that includes items
+    nobody can action does not merely waste a dispatch — it answers "does this
+    agent have something to do" with yes when the truth is no.
+
+    Same single-predicate discipline as is_message and is_decision, and shared
+    with them by `dispatchable` so the three cannot drift apart.
+
+    NOT included, deliberately:
+      * `gt:escalation` — sattler asked for it and it is a NO-OP today: measured
+        0 of 93 ready beads carry it, because escalation beads do not reach the
+        ready pool at all. Its 304-bead glut distorts the OPEN pool, which is a
+        different surface with a different fix. Adding a guard here would imply
+        a hazard this function had removed, when it never reached this path.
+      * `blocked:external` IS included though it is likewise 0 today: unlike
+        the escalation label it is the same KIND of fact as blocked:human and
+        the pair is how the store spells one idea, so matching only one half
+        would under-match the moment someone uses the other.
+    """
+    t = (title or "").lstrip()
+    if any(t.startswith(p) for p in _RECORD_TITLE_PREFIXES):
+        return True
+    low = {(lbl or "").strip().lower() for lbl in (labels or [])}
+    return bool(low & (_HUMAN_BLOCKED_LABELS | _RECORD_LABELS))
+
+
 def is_blocked(status) -> bool:
     """Is this bead BLOCKED, and therefore not workable by anyone right now?
 
