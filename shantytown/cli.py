@@ -7084,6 +7084,17 @@ def _tree_staleness_cell(a, ag, sweep: bool = False) -> "tuple[str, str | None]"
             unknown = True
             parts.append(f"{_tree_label(t)}: {s.render()}")
             continue
+        if s.unverified:
+            # A FAILED FETCH MAKES THE AHEAD COLUMN FALSE TOO, NOT ONLY BEHIND
+            # (aegis-8m3hig follow-on). `+N` reads as a fact and is the loudest
+            # cell in this table; during the forge outage it counted every HTTPS
+            # landing as stranded, on every agent at once. `?` is what this column
+            # already uses for cannot-tell, and a frozen ref IS cannot-tell in
+            # both directions. The refusal that protects the work lives in the
+            # cycle gate, which still sees the raw counts.
+            unknown = True
+            parts.append(f"{_tree_label(t)}: {s.render()}")
+            continue
         if not sweep and s.measurement_is_stale():
             # THE FETCHLESS COLUMN MUST NOT RENDER "ok" OFF A FROZEN REF
             # (wu, 2026-09-11). The sweep fetches, so a failed fetch there

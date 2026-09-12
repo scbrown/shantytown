@@ -847,3 +847,71 @@ def test_an_UNKNOWN_age_is_treated_as_stale_not_as_fresh():
     class is made of — same direction as CANNOT TELL IS NOT CLEAN."""
     assert Staleness(ref="origin/main", measured_age=None).measurement_is_stale()
     assert not Staleness(ref="origin/main", measured_age=1.0).measurement_is_stale()
+
+
+# --------------------------------------------------------------------------
+# aegis-8m3hig follow-on: the AHEAD side is unmeasured too when the fetch failed
+# --------------------------------------------------------------------------
+
+def test_a_failed_fetch_makes_the_AHEAD_count_a_bound_not_a_fact(tmp_path: Path):
+    """During the forge outage every HTTPS landing rendered as unpushed, because
+    `HEAD --not --remotes` reads frozen remote-tracking refs. One agent read +3
+    against a tree identical to the remote; this author's own clone reported 40
+    when the truth was 1.
+
+    The count is not dropped — it is a real UPPER BOUND, and a reader who sees
+    "up to N" knows both that it is not a fact and that it is not zero.
+    """
+    up = _repo(tmp_path / "up")
+    wt = _clone(up, tmp_path / "wt")
+    _commit(wt, "landed-by-another-transport")   # on no remote ref THIS tree knows
+
+    # CONTROL: with the remote reachable the count is a plain fact.
+    good = tree_staleness(wt, fetch=True)
+    assert good.unverified is None
+    assert good.unpushed == 1
+    assert "up to" not in good.render()
+    assert "1 on no remote ref" in good.render()
+
+    _run(wt, "remote", "set-url", "origin", str(tmp_path / "does-not-exist.git"))
+    frozen = tree_staleness(wt, fetch=True)
+
+    assert frozen.unverified, "fetch failed, so the reading is unverified"
+    assert frozen.unpushed == 1, "the RAW count must survive — the cycle gate consumes it"
+    r = frozen.render()
+    assert "up to 1 local commit(s) may be unpushed" in r
+    assert "UPPER BOUND" in r
+    # The bare factual phrasing must be gone, or the reader still reads it as measured.
+    assert "1 on no remote ref KNOWN LOCALLY" not in r
+
+
+def test_the_edit_time_advisory_goes_QUIET_on_an_unverified_reading(tmp_path: Path):
+    """stale_guard runs on every edit. Its own docstring argues that an advisory
+    which fires constantly and is never actionable is how the channel gets
+    ignored — and during the outage its unpushed warning was false fleet-wide."""
+    from shantytown import stale_guard
+    from shantytown.workspace import Staleness
+
+    import shantytown.workspace as ws
+
+    fresh = Staleness(ref="origin/main", unpushed=2, measured_age=10.0)
+    old_ref = Staleness(ref="origin/main", unpushed=2, measured_age=10**7)
+    unver = Staleness(ref="origin/main", unpushed=2, measured_age=10.0,
+                      unverified="fetch failed against origin/main")
+
+    def _advise(st_obj, monkey):
+        monkey.setattr(ws, "tree_staleness", lambda *a, **k: st_obj)
+        monkey.setattr(stale_guard, "_repo_root", lambda p: Path("/r"))
+        monkey.setattr(stale_guard, "_should_report", lambda *a, **k: True)
+        return stale_guard.advise(Path("/r/f.py"), now=0.0)
+
+    import pytest as _pytest
+    mp = _pytest.MonkeyPatch()
+    try:
+        # CONTROL: a FRESH measured unpushed count still warns, or the two
+        # silences below would pass against a guard that never fires at all.
+        assert _advise(fresh, mp) is not None
+        assert _advise(old_ref, mp) is None, "a stale ref makes the count untrustworthy"
+        assert _advise(unver, mp) is None, "so does an explicitly failed fetch"
+    finally:
+        mp.undo()

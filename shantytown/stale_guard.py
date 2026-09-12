@@ -121,6 +121,23 @@ def advise(path: Path, now: float | None = None) -> str | None:
     # is never actionable is how the whole channel gets ignored.
     if s.error or s.current():
         return None
+    # AN UNTRUSTWORTHY READING MUST NOT FIRE THIS ADVISORY (aegis-8m3hig
+    # follow-on). It runs on every edit, and during the forge outage its
+    # "N local commit(s) NOT pushed" was false on every agent — `HEAD --not
+    # --remotes` reads frozen remote-tracking refs, so work landed by another
+    # transport counts as stranded. This file's own reasoning applies exactly: an
+    # advisory that fires constantly and is never actionable is how the whole
+    # channel gets ignored, and a loss warning earns attention only by being rare.
+    #
+    # ⚠ KEYED ON THE REF'S AGE, NOT ONLY ON `unverified`. This path calls
+    # tree_staleness(fetch=False), which never ATTEMPTS a fetch and therefore can
+    # never set `unverified` — a check keyed only on that field would read as
+    # wired here and fire on nothing. `measurement_is_stale()` is the fetchless
+    # signal (and returns True for an unknown age, which is the same direction).
+    # Both are tested, because the function is importable and a future caller may
+    # pass a fetched reading.
+    if getattr(s, "unverified", None) or s.measurement_is_stale():
+        return None
     bits = []
     if s.behind:
         bits.append(f"{s.behind} commit(s) BEHIND {s.ref}")

@@ -831,7 +831,25 @@ class Staleness:
         elif self.behind:
             bits.append(f"{self.behind} behind {self.ref} (work you do NOT have "
                         f"— check for duplication before you build)")
-        if self.unpushed:
+        if self.unpushed and self.unverified:
+            # THE AHEAD SIDE IS ALSO UNMEASURED WHEN THE FETCH FAILED
+            # (aegis-8m3hig follow-on). `HEAD --not --remotes` reads the frozen
+            # remote-tracking refs, so anything landed by ANOTHER transport since
+            # the last successful fetch counts here as stranded. During the forge
+            # outage every HTTPS landing rendered as unpushed: one agent read +3
+            # against a tree that was identical to the remote, and this author's
+            # own clone reported 40 when the true figure was 1.
+            #
+            # Stated as a BOUND rather than dropped. The number is still the most
+            # anyone can say — there cannot be MORE unpushed work than this — and
+            # a reader who sees "up to N" knows both that it is not a fact and
+            # that it is not zero. The cycle gate keeps consuming the raw count,
+            # so nothing here relaxes what protects the work.
+            bits.append(f"up to {self.unpushed} local commit(s) may be unpushed "
+                        f"— an UPPER BOUND, not a measurement: the remote-tracking "
+                        f"refs are frozen, so work landed by another transport "
+                        f"counts here as stranded")
+        elif self.unpushed:
             bits.append(f"{self.unpushed} on no remote ref KNOWN LOCALLY "
                         f"(as of the last fetch — fetch before treating as lost)")
         if self.dirty:
