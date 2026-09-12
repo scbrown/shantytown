@@ -36,6 +36,8 @@ is handed out for a non-reason is one nobody reads later.
 """
 from __future__ import annotations
 
+import itertools
+
 import pytest
 from pathlib import Path
 
@@ -169,6 +171,77 @@ def _no_ambient_agent(monkeypatch):
     # it ambient makes an otherwise isolated test claim it is running in the
     # developer's real pane, and identity verification then reaches real tmux.
     monkeypatch.delenv("TMUX_PANE", raising=False)
+
+
+@pytest.fixture(scope="session")
+def _xdg_runtime_base():
+    """One SHORT base dir for the isolated runtime dirs, removed at session end.
+
+    Short is a requirement, not tidiness. A Unix-domain socket path has a 107-byte
+    ceiling and `harness` refuses above it by design, so pointing
+    $XDG_RUNTIME_DIR at pytest's own tmp_path (`/tmp/pytest-of-<user>/pytest-N/
+    <name>0`) makes the codex socket 120 bytes and eleven tests fail on a refusal
+    that production never hits — the real `/run/user/1000` is fourteen characters.
+    Isolating the variable is only correct if the isolated value is REPRESENTATIVE.
+
+    Session-scoped with per-test subdirectories: one dir per test would be ~3200
+    of them, and this session has already spent an evening on /tmp litter.
+    """
+    import shutil, tempfile
+    base = None
+    for parent in ("/tmp", "/var/tmp", None):
+        try:
+            base = tempfile.mkdtemp(prefix="stx", dir=parent)
+            break
+        except OSError:
+            continue
+    base = Path(base)
+    try:
+        yield base
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+
+
+_XDG_SEQ = itertools.count()
+
+
+@pytest.fixture(autouse=True)
+def _no_ambient_runtime_dir(_xdg_runtime_base, monkeypatch):
+    """No test may see the RUNNER'S LIVE CODEX CARDS. Fifth instance of the class
+    this file already guards four times, and the one that actually took the suite
+    down.
+
+    Per-card codex state lives under `$XDG_RUNTIME_DIR/shantytown/codex/<agent>`,
+    and `codex_daemon.inspect()` reads it. tend/governor/auth_dead fixtures use
+    REAL crew names — `ellie`, `ian` — so on a host where those agents are down
+    with a stale `app-server-startup.lock`, the inspector answers
+    `codex-daemon-wedged` about a card the test never created, and the verdict
+    under assertion changes.
+
+    MEASURED 2026-09-11 (aegis-hx9oos), and the arms are the whole diagnosis:
+
+        real $XDG_RUNTIME_DIR    18 failed, 202 passed
+        empty $XDG_RUNTIME_DIR  220 passed, 0 failed
+
+    Same commit, same tree, same command. Nothing about the code under test
+    differs between those two runs.
+
+    It is not flakiness and it is not a regression: it is DETERMINISTIC given host
+    state, which is why it crept. Earlier the same evening only two tests failed;
+    the count reached eighteen as more codex agents went down and accumulated
+    locks — six of six cards by the time it was diagnosed. A suite whose red count
+    tracks how many agents are currently down is not a gate, and bisecting it
+    finds nothing, because no commit introduced it.
+
+    Pointing at an empty tmp dir rather than deleting the variable: absent makes
+    the code fall back to `~/.cache`, which is also the runner's and reintroduces
+    the leak by a different road. A test that means to exercise a real card writes
+    one under this same variable — monkeypatch.setenv in the test body runs after
+    this fixture and wins, which is how test_codex_harness.py already works.
+    """
+    d = _xdg_runtime_base / f"r{next(_XDG_SEQ)}"
+    d.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(d))
 
 
 @pytest.fixture(autouse=True)
