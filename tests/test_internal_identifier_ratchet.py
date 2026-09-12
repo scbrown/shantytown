@@ -60,7 +60,7 @@ FORBIDDEN = {
     # pattern above to bare names needs a list of internal hosts, and that list would
     # live in the public repo publishing exactly what it exists to keep out. So this
     # matches the SHAPE of a shell prompt instead, which names nothing: it catches
-    # `braino@vati:~$` and every future variant, and prompt strings are common here
+    # `<operator>@<host>:~$` and every future variant, and prompt strings are common here
     # because triage parses them. It also catches scp-style `user@host:/path`, which
     # is the same exposure.
     #
@@ -77,7 +77,7 @@ FORBIDDEN = {
     # and the same remedy, as the "operator home path" exemption above.
     #
     # Keyed on the HOST half: that is what identifies infrastructure. `root@host` is
-    # generic because `host` is a placeholder; `braino@vati` is not.
+    # generic because `host` is a placeholder; `<operator>@<host>` is not.
     "operator@host prompt": re.compile(
         r"\b[a-z][a-z0-9_.-]*@"
         r"(?!(?:host|host-[a-z0-9]|hostname|localhost|example|server|remote|box|"
