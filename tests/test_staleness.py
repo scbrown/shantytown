@@ -915,3 +915,73 @@ def test_the_edit_time_advisory_goes_QUIET_on_an_unverified_reading(tmp_path: Pa
         assert _advise(unver, mp) is None, "so does an explicitly failed fetch"
     finally:
         mp.undo()
+
+
+# --------------------------------------------------------------------------
+# aegis-l5y2hk: the sweep must DEGRADE during an outage, not stall on it
+# --------------------------------------------------------------------------
+
+def test_the_sweep_SKIPS_the_fetch_when_the_remote_is_measured_unreachable(tmp_path, monkeypatch):
+    """`st crew --trees` fetches, and a fetch at a dead forge burns the full 60s
+    git timeout PER TREE — ~40 forge-hosted worktrees is ~40 minutes for one
+    status read. So the sweep is disabled by exactly the outage that makes it
+    necessary, and during the 2026-09-09 outage two agents hand-rolled sweeps
+    instead and produced three wrong answers between them.
+    """
+    from shantytown import cli
+    up = _repo(tmp_path / "up"); wt = _clone(up, tmp_path / "wt")
+    _commit(wt, "mine-only")                       # real unpushed work to find
+
+    fetched = []
+    real = cli.tree_staleness
+    monkeypatch.setattr(cli, "tree_staleness",
+                        lambda t, **kw: (fetched.append(kw.get("fetch")), real(t, **kw))[1])
+    monkeypatch.setattr(cli, "remote_reachable", lambda *a, **k: False)
+
+    cell, detail = cli._tree_staleness_cell(None, _card("zia", str(wt)), sweep=True)
+
+    # `sweep=True` discovers this agent's worktree off every shared repo on the
+    # host, so the count is environmental — assert the PROPERTY (no tree fetched)
+    # rather than a tree count that varies with the box.
+    assert fetched and all(f is False for f in fetched), \
+        f"every doomed fetch must be SKIPPED, got {fetched}"
+    assert cell == "?", "a tree we could not refresh must never read ok"
+    assert detail and "remote unreachable" in detail
+    assert "fetchless read" in detail
+
+
+def test_a_could_not_tell_reachability_STILL_FETCHES(tmp_path, monkeypatch):
+    """`remote_reachable` is three-state and its contract says None must be
+    treated as reachable. Only a MEASURED False may skip work — uncertainty
+    resolves toward doing it, which is the opposite direction from the skip."""
+    from shantytown import cli
+    up = _repo(tmp_path / "up"); wt = _clone(up, tmp_path / "wt")
+
+    fetched = []
+    real = cli.tree_staleness
+    monkeypatch.setattr(cli, "tree_staleness",
+                        lambda t, **kw: (fetched.append(kw.get("fetch")), real(t, **kw))[1])
+    monkeypatch.setattr(cli, "remote_reachable", lambda *a, **k: None)
+    cli._tree_staleness_cell(None, _card("zia", str(wt)), sweep=True)
+    assert fetched and all(f is True for f in fetched), \
+        f"could-not-tell must still fetch, got {fetched}"
+
+    # CONTROL: a reachable remote fetches too, so the assertion above is not
+    # passing merely because this code path always fetches.
+    fetched.clear()
+    monkeypatch.setattr(cli, "remote_reachable", lambda *a, **k: True)
+    cli._tree_staleness_cell(None, _card("zia", str(wt)), sweep=True)
+    assert fetched and all(f is True for f in fetched)
+
+
+def test_the_DEFAULT_column_never_probes_reachability(tmp_path, monkeypatch):
+    """The bead is explicit that the cost argument for the fetchless default
+    still holds: do not fix this by making the most-run command on the fleet do
+    network probes."""
+    from shantytown import cli
+    up = _repo(tmp_path / "up"); wt = _clone(up, tmp_path / "wt")
+    probed = []
+    monkeypatch.setattr(cli, "remote_reachable",
+                        lambda *a, **k: probed.append(1) or False)
+    cli._tree_staleness_cell(None, _card("zia", str(wt)))          # sweep=False
+    assert probed == [], "the default column must not probe the network"

@@ -173,7 +173,8 @@ from .runtime import (asks_a_question, auth_expired, bash_guard_command,
 from .tmux import Tmux, declared_socket
 from .workspace import (WorkspaceError, agent_worktrees, cleanup_worktree,
                         ensure_workspace, ensure_worktree, push_every_remote,
-                        tree_staleness, unlaunchable, upstream_ref, worktree_for)
+                        remote_reachable, tree_staleness, unlaunchable,
+                        upstream_ref, worktree_for)
 from .provision import ProvisionError, provision as provision_ws
 
 # `st new` liveness poll: how long to wait for the runtime to appear in the pane
@@ -7071,14 +7072,52 @@ def _tree_staleness_cell(a, ag, sweep: bool = False) -> "tuple[str, str | None]"
     behind = unpushed = 0
     unknown = False
     parts = []
+    # ONE reachability probe per REMOTE URL, shared across every tree below
+    # (aegis-l5y2hk). `remote_reachable` caches by URL, so a fleet of worktrees
+    # sharing one forge costs a single 10s probe rather than a 60s git timeout
+    # each.
+    reach_cache: dict = {}
     for t in trees:
+        # THE SWEEP WAS DISABLED BY EXACTLY THE OUTAGE THAT MAKES IT NECESSARY.
+        # `--trees` fetches, and a fetch against a dead forge burns the full 60s
+        # git timeout PER TREE — ~40 forge-hosted worktrees is ~40 minutes for
+        # one status read, so during an outage nobody runs the sweep and the
+        # unpushed work it exists to find accumulates unseen. Both halves of that
+        # were measured on 2026-09-09, when two agents hand-rolled sweeps instead
+        # and produced three wrong answers between them.
+        #
+        # A fetchless ahead-count is not merely cheaper here, it is AS CORRECT:
+        # tree_staleness argues that stale ahead-data can launder a pruned commit
+        # into "safe", and that argument is about a remote that MOVED. When the
+        # remote is unreachable nothing upstream can have moved, so the objection
+        # does not apply.
+        #
+        # Only a MEASURED False skips the fetch. `remote_reachable` is
+        # three-state and its own contract says a None (could-not-tell) must be
+        # treated as reachable — uncertainty resolves toward doing the work, not
+        # toward skipping it.
+        tree_fetch = sweep
+        offline = False
+        if sweep:
+            try:
+                if remote_reachable(t, cache=reach_cache) is False:
+                    tree_fetch, offline = False, True
+            except Exception:
+                pass          # a probe failure may never be why the sweep stalls
         try:
             # The SWEEP fetches+prunes: its whole purpose is an authoritative
             # at-risk number, and an unpruned read can under-report a genuinely
             # orphaned commit as safe. The cheap default column stays fetchless.
-            s = tree_staleness(t, fetch=sweep)
+            s = tree_staleness(t, fetch=tree_fetch)
         except Exception:
             unknown = True
+            continue
+        if offline:
+            # Never a silent `ok` for a tree we could not refresh. The reading is
+            # real and it is stale, and the line says which.
+            unknown = True
+            parts.append(f"{_tree_label(t)}: remote unreachable — fetchless read, "
+                         f"{s.render()}")
             continue
         if s.error:
             unknown = True
