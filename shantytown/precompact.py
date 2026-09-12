@@ -57,7 +57,7 @@ from __future__ import annotations
 import json
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 # The marker that makes an auto-written checkpoint recognisable — to a reader, to
@@ -113,6 +113,89 @@ SUMMARY_INSTRUCTIONS = (
     "anything already deployed; (d) the id of the bead being held. Prefer these "
     "over narrative."
 )
+
+
+#: How stale the agent's own comment may be and still suppress the checkpoint.
+#:
+#: The window used to be "since the last boundary" ALONE, which on this fleet is
+#: routinely 3-16 hours — so a comment written early in a long window suppressed
+#: the checkpoint at a fill many hours later, and the reasoning actually about to
+#: be summarised away was preserved by nothing. Measured over all 15 real
+#: boundaries (aegis-ugztez, dearing 2026-09-08): 13 suppressed, and 5 of those
+#: had a last own comment >= 2h old — 2.1h, 2.7h, 2.9h, 8.8h, 11.1h.
+#:
+#: 90 minutes is chosen against that distribution, not picked round: the median
+#: staleness was 0.9h (54 min), so it leaves the ordinary "I just commented"
+#: case suppressing exactly as before, while every one of the five measured gaps
+#: crosses it. Widening it past ~2h would re-admit the smallest of them.
+#:
+#: It bounds THIS HOOK'S floor only — see `_checkpoint_floor`.
+CHECKPOINT_MAX_AGE_S = 90 * 60
+
+
+def _parse_ts(value):
+    """Borrowed from cycle.py rather than re-spelled — one parser, one answer."""
+    from .cycle import _parse_ts as _p
+    return _p(value)
+
+
+def _own_comment_age_s(comments, who: str, now: str | None = None) -> "int | None":
+    """Age in seconds of `who`'s NEWEST comment, or None if there is none/unparseable.
+
+    Reported into the ledger so staleness is a measurement rather than an
+    archaeology exercise. Never used to DECIDE anything — the decision is
+    `has_checkpoint_since`, and a second spelling of it here would be the
+    two-answers problem cycle.py warns about.
+    """
+    stamp = _parse_ts(now or _now())
+    if stamp is None:
+        return None
+    newest = None
+    for c in comments or []:
+        if not isinstance(c, dict):
+            continue
+        if who and (c.get("author") or "") != who:
+            continue
+        at = _parse_ts(c.get("created_at"))
+        if at is not None and (newest is None or at > newest):
+            newest = at
+    if newest is None:
+        return None
+    return max(0, int((stamp - newest).total_seconds()))
+
+
+def _checkpoint_floor(window: str | None, now: str | None = None) -> "str | None":
+    """The later of the boundary window and `now - CHECKPOINT_MAX_AGE_S`.
+
+    WHY THE BOUND LIVES HERE AND NOT IN `cycle.checkpoint_since` (aegis-ugztez).
+    That predicate is THE one shared with the codex-side `st cycle` gate, and the
+    two callers want opposite things from staleness. The hook writing a duplicate
+    checkpoint costs a comment; the GATE refusing a cycle over a merely-old
+    handoff strands a saturated agent, which is the failure aegis-902vnu's
+    three-state design exists to avoid. So the recency bound is expressed as a
+    TIGHTER `since` passed by this caller, and the shared predicate is untouched.
+
+    Fails toward WRITING a checkpoint, like every other branch in this module: an
+    unparseable `now` falls back to the window (today's behaviour), and an absent
+    window yields the age floor rather than None, because "no boundary" is not
+    evidence that a handoff exists.
+    """
+    cutoff = None
+    stamp = now or _now()
+    parsed_now = _parse_ts(stamp)
+    if parsed_now is not None:
+        cutoff = (parsed_now - timedelta(seconds=CHECKPOINT_MAX_AGE_S)).strftime(
+            "%Y-%m-%dT%H:%M:%SZ")
+    if window is None:
+        return cutoff
+    if cutoff is None:
+        return window
+    a, b = _parse_ts(window), _parse_ts(cutoff)
+    if a is None:
+        return cutoff
+    if b is None:
+        return window
+    return window if a >= b else cutoff
 
 
 def _now() -> str:
@@ -372,7 +455,11 @@ def main(argv: list[str] | None = None) -> int:
     trigger = str(payload.get("trigger") or "?")
     session_id = str(payload.get("session_id") or "")
     log = Path(root) / MEASUREMENT_FILE
-    since = _last_boundary(log, session_id) or _session_started(records)
+    window = _last_boundary(log, session_id) or _session_started(records)
+    # Bound the window by recency too (aegis-ugztez). See _checkpoint_floor:
+    # the tighter floor is passed by THIS caller so the shared predicate —
+    # and the codex `st cycle` gate that depends on it — is unchanged.
+    since = _checkpoint_floor(window)
 
     _record(log, {"at": _now(), "agent": me, "harness": "claude",
                   "session_id": session_id, "trigger": trigger,
@@ -412,9 +499,19 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
     if has_checkpoint_since(existing, me, since):
+        # Record HOW OLD the qualifying comment was, not just that one existed.
+        # The gap this hook now closes was invisible for exactly this reason:
+        # the ledger said "clean boundary" and nothing carried the staleness, so
+        # the only way to find it was to re-resolve every held bead and re-run
+        # the predicate by hand (aegis-ugztez). One field makes the next
+        # regression measurable from the ledger alone.
+        age = _own_comment_age_s(existing, me)
+        detail = f"since {since}"
+        if age is not None:
+            detail += f" (own comment {age}s old, bound {CHECKPOINT_MAX_AGE_S}s)"
         print(f"precompact: {me} already checkpointed {bead} since {since}",
               file=sys.stderr)
-        _outcome(log, session_id, me, bead, OUTCOME_SKIPPED, f"since {since}")
+        _outcome(log, session_id, me, bead, OUTCOME_SKIPPED, detail)
         return 0
 
     body = checkpoint_body(me, bead, depth, trigger, transcript_tail(records))

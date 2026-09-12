@@ -24,6 +24,7 @@ import json
 import os
 import subprocess
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -318,13 +319,41 @@ def test_a_checkpoint_is_written_when_the_bead_has_none_since_the_boundary(
     assert "mid-refactor: cycle.py durable gate" in body
 
 
-def test_an_agents_OWN_handoff_is_not_overwritten_by_a_machine_one(
+def _ago(minutes):
+    """A real timestamp N minutes before now.
+
+    The fixture here used to be a hardcoded date, which silently became "eight
+    days stale" as the calendar moved and so tested the recency bound by
+    accident rather than on purpose (aegis-ugztez). Age is the variable these
+    two tests are about, so it is now stated in the call.
+    """
+    t = datetime.now(timezone.utc) - timedelta(minutes=minutes)
+    return t.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def test_an_agents_RECENT_OWN_handoff_is_not_overwritten_by_a_machine_one(
         hooked, tmp_path, monkeypatch):
     """The directive asks the agent to hand off. If it already did, adding a
-    tail-scrape on top buries the better artifact under the worse one."""
+    tail-scrape on top buries the better artifact under the worse one.
+
+    RECENT is load-bearing since aegis-ugztez — see the companion below."""
     assert _drive(monkeypatch, tmp_path,
-                  [{"author": "dearing", "created_at": "2026-09-04T02:00:00Z"}]) == 0
+                  [{"author": "dearing", "created_at": _ago(10)}]) == 0
     assert hooked.written == []
+
+
+def test_a_STALE_own_handoff_no_longer_suppresses_the_checkpoint(
+        hooked, tmp_path, monkeypatch):
+    """The companion, and the actual behaviour change (aegis-ugztez).
+
+    A comment written early in a 3-16h window used to suppress the checkpoint at
+    a fill many hours later, so the reasoning about to be summarised away was
+    preserved by nothing — measured on 5 of 13 real suppressions, up to 11.1h.
+    Beyond the bound the hook now writes, accepting a duplicate comment as the
+    cheaper error than silence."""
+    assert _drive(monkeypatch, tmp_path,
+                  [{"author": "dearing", "created_at": _ago(200)}]) == 0
+    assert len(hooked.written) == 1, "a stale handoff must not suppress"
 
 
 def test_an_unreadable_tracker_WRITES_rather_than_assuming_a_checkpoint_exists(
@@ -425,3 +454,83 @@ def test_every_exit_branch_after_the_measurement_stamps_an_outcome(tmp_path):
     for name in ("OUTCOME_NO_AGENT", "OUTCOME_NO_BEAD", "OUTCOME_NO_TRACKER",
                  "OUTCOME_SKIPPED", "OUTCOME_WRITTEN", "OUTCOME_WRITE_FAILED"):
         assert src.count(name) >= 2, f"{name} is defined but never stamped"
+
+
+# ── RECENCY BOUND ON THE SUPPRESSION (aegis-ugztez) ──────────────────────────
+#
+# The window used to be "since the last boundary" alone, which on this fleet runs
+# 3-16h, so a comment written early in a long window suppressed the checkpoint at
+# a fill hours later. Measured over all 15 real boundaries: 13 suppressed, 5 with
+# a last own comment >= 2h old (2.1, 2.7, 2.9, 8.8, 11.1h), median 0.9h.
+
+def test_the_floor_tightens_a_long_window_to_the_recency_bound():
+    """An old boundary must NOT be the floor — `now - bound` is later, so it wins.
+    This is the whole fix: a 16h window stops admitting a 15h-old comment."""
+    floor = P._checkpoint_floor("2026-09-08T00:00:00Z", now="2026-09-08T16:00:00Z")
+    assert floor == "2026-09-08T14:30:00Z", floor
+
+
+def test_the_floor_keeps_a_RECENT_boundary_and_does_not_loosen_it():
+    """THE CONTROL, and it is the one that matters: the bound must never WIDEN a
+    window. A boundary 10 minutes ago stays the floor — taking `now - 90m` there
+    would admit comments from BEFORE the boundary and suppress checkpoints the
+    old code correctly wrote."""
+    floor = P._checkpoint_floor("2026-09-08T15:50:00Z", now="2026-09-08T16:00:00Z")
+    assert floor == "2026-09-08T15:50:00Z", floor
+
+
+def test_each_MEASURED_stale_suppression_now_crosses_the_bound():
+    """Pinned to the real distribution, not to a round number. Every one of the
+    five measured gaps must fall outside the floor, and the MEDIAN case must
+    still fall inside it — a bound that also caught the median would write a
+    checkpoint on every ordinary boundary and become noise."""
+    now = "2026-09-08T12:00:00Z"
+    floor = P._checkpoint_floor("2026-09-08T00:00:00Z", now=now)
+    def comment(hours_old):
+        t = datetime.strptime(now, "%Y-%m-%dT%H:%M:%SZ") - timedelta(hours=hours_old)
+        return [{"author": "a", "created_at": t.strftime("%Y-%m-%dT%H:%M:%SZ")}]
+    for stale in (2.1, 2.7, 2.9, 8.8, 11.1):          # the five gaps
+        assert not P.has_checkpoint_since(comment(stale), "a", floor), \
+            f"{stale}h comment still suppresses the checkpoint"
+    assert P.has_checkpoint_since(comment(0.9), "a", floor), \
+        "the MEDIAN case must still suppress, or the hook writes on every boundary"
+
+
+def test_an_unparseable_now_falls_back_to_the_window_rather_than_failing():
+    """Fails toward the old behaviour, never toward a crash in a hook that runs
+    while the transcript is being destroyed."""
+    assert P._checkpoint_floor("2026-09-08T00:00:00Z", now="not-a-time") == \
+        "2026-09-08T00:00:00Z"
+
+
+def test_no_window_still_yields_a_floor_so_absence_is_not_taken_as_a_handoff():
+    """No boundary is not evidence that a handoff exists. Returning None here
+    would make `has_checkpoint_since` return False and write — which is the safe
+    direction — but returning the age floor is the same direction and says why."""
+    assert P._checkpoint_floor(None, now="2026-09-08T16:00:00Z") == \
+        "2026-09-08T14:30:00Z"
+
+
+def test_the_SHARED_predicate_is_untouched_by_the_bound():
+    """THE CONSTRAINT aegis-ugztez names explicitly: `cycle.checkpoint_since` is
+    the ONE predicate, shared with the codex `st cycle` gate, where a recency
+    bound would refuse a cycle for a merely-old handoff and strand a saturated
+    agent. The bound must therefore live in the CALLER's floor, never in the
+    predicate."""
+    import inspect
+    from shantytown import cycle
+    src = inspect.getsource(cycle.checkpoint_since)
+    assert "MAX_AGE" not in src and "timedelta" not in src, \
+        "a recency bound leaked into the shared predicate"
+
+
+def test_the_staleness_of_a_suppressing_comment_is_recorded():
+    """Remedy 3, kept alongside remedy 1: the gap was invisible because the
+    ledger recorded a clean boundary and nothing carried the age. One field makes
+    the next regression readable from the ledger instead of re-resolving every
+    held bead by hand."""
+    now = "2026-09-08T12:00:00Z"
+    cs = [{"author": "a", "created_at": "2026-09-08T11:00:00Z"},
+          {"author": "b", "created_at": "2026-09-08T11:59:00Z"}]
+    assert P._own_comment_age_s(cs, "a", now=now) == 3600
+    assert P._own_comment_age_s(cs, "nobody", now=now) is None
