@@ -50,8 +50,11 @@ FORBIDDEN = {
     "internal ticket id": re.compile(r"\b(?:aegis|hq|gassy|qp)-[a-z0-9]{3,6}\b"),
     # A BARE HOSTNAME HAS NO SUFFIX TO MATCH, so "internal hostname" above cannot
     # see one — and the fleet directive this file implements names a bare one as its
-    # own example: "scrub internal names (hostnames, .lan/.svc, IPs, kota/dolt.lan/
-    # quipu.svc)". Measured 2026-09-12 (aegis-63rhri, wu): the suffix pattern answers
+    # own example: its list of things to scrub includes a BARE machine name alongside
+    # the suffixed forms. PARAPHRASED rather than quoted on purpose — quoting it would
+    # reproduce a real machine name and two real service names in this public file,
+    # which is the exposure this rule exists to stop. Verbatim text: internal tracker.
+    # Measured 2026-09-12 (aegis-63rhri, wu): the suffix pattern answers
     # False for a bare host and True only with .lan/.svc, and three bare references
     # were live in this PUBLIC repo — two of them shell prompts carrying the operator
     # username AND the host together, which is the exposure the directive is about.
