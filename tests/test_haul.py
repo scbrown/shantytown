@@ -609,3 +609,43 @@ def test_the_ceiling_does_not_spend_the_resume_BACKOFF(tmp_path, monkeypatch,
                        spend_hours=4.6)
     _haul_at(monkeypatch, capsys, root, reg=_Reg([CODEX]), in_progress=ANCHOR)
     assert not (root / "haul_resume" / "billy.json").exists()
+
+
+@pytest.mark.parametrize("kind", ["stopped", "gaming"])
+@pytest.mark.parametrize("active", [False, True])
+def test_stop_hook_honours_deliberate_hold_before_claim_or_resume(
+        tmp_path, monkeypatch, capsys, kind, active):
+    from shantytown.stopped import FilesStops
+    if kind == "stopped":
+        FilesStops(tmp_path / "stopped").record("billy", 1, reason="deliberate pause")
+    else:
+        (tmp_path / "gaming").mkdir()
+        (tmp_path / "gaming" / "manual").touch()
+    claims = []
+    card = Agent(name="billy", role="worker", pane="p-b", harness="codex")
+    kwargs = dict(reg=_Reg([card]), claims=claims,
+                  ready=[{"id": "work-2", "assignee": "billy"}],
+                  in_progress=[{"id": "work-1", "assignee": "billy"}] if active else [])
+    _, block = _haul_at(monkeypatch, capsys, tmp_path, **kwargs)
+    assert block is None and not claims
+    assert not stop_event._haul_resume_marker(tmp_path, "billy").exists()
+    if kind == "stopped":
+        FilesStops(tmp_path / "stopped").forget("billy")
+    else:
+        (tmp_path / "gaming" / "manual").unlink()
+    _, block = _haul_at(monkeypatch, capsys, tmp_path, **kwargs)
+    assert block is not None, "released hold must not have spent the resume backoff"
+
+
+def test_codex_stop_reads_work_assigned_after_the_previous_boundary(tmp_path, monkeypatch, capsys):
+    ready = []
+    active = [{"id": "work-1", "assignee": "billy"}]
+    claims = []
+    card = Agent(name="billy", role="worker", pane="p-b", harness="codex")
+    kwargs = dict(reg=_Reg([card]), claims=claims, ready=ready, in_progress=active)
+    _, first = _haul_at(monkeypatch, capsys, tmp_path, **kwargs)
+    assert "HAUL RESUME" in first["reason"]
+    ready.append({"id": "work-2", "assignee": "billy"})
+    active.clear()
+    _, second = _haul_at(monkeypatch, capsys, tmp_path, **kwargs)
+    assert "work-2" in second["reason"] and claims == ["work-2"]

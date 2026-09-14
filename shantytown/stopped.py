@@ -13,15 +13,16 @@ were indistinguishable *because nothing wrote the distinction*.
 THIS IS NOT RETIREMENT, and the difference is the whole design.
 
   retired (on the CARD)   "and do not bring it back" — `st tend` never respawns it.
-  stopped (HERE)          "I stopped it, now" — tend's respawn-on-loss still applies.
+  stopped (HERE)          "I stopped it, now" — automatic feeding stays paused.
 
 Making `st stop` set `retired` would have been the cheap fix and it is wrong: every
 ordinary stop/restart cycle would then need an un-retire, and respawn-on-loss would
 be off for anything an operator ever stopped by hand.
 
-WHO MAY READ IT: the surfaces that REPORT (`st crew`, the drain's prioritized
-workflow). Explicitly NOT `st tend` — a supervisor that honoured this record would
-silently become the retirement above, which is the bug in the other direction.
+WHO MAY READ IT: reporting surfaces and automatic haul consumers. Stop hooks and
+idle tend feeds honour a current stamp before claiming or resuming work. Respawn
+ownership remains a separate launch-stamp decision: `st stop` removes that stamp;
+an explicit relaunch restores ownership and clears this stop record.
 
 CLEARED ON RELAUNCH, beside the launch stamp and for the same reason: the record
 describes a stop that is CURRENT. One left behind after the agent came back would

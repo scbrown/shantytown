@@ -840,7 +840,7 @@ Three ways to say it, in increasing strength:
 
 | | what it says | who honours it |
 |---|---|---|
-| `st stop <agent> --reason "…"` | *I stopped this one, now.* Recorded durably; **not** a retirement | `st crew` and the administrator's drain report it as deliberate. The removed launch stamp keeps `st tend` from respawning it; `st new <agent>` brings it back |
+| `st stop <agent> --reason "…"` | *I stopped this one, now.* Recorded durably; **not** a retirement | `st crew` and the administrator's drain report it as deliberate. Stop hooks and idle haul feeds honour the stop stamp. The removed launch stamp keeps `st tend` from respawning it; `st new <agent>` brings it back |
 | `st tend --retire <agent>` | *…and do not bring it back.* Lives on the card | `st tend` never respawns it; `st start` skips it; the drain never lists it |
 | `[fleet] stood_down = true` | *the whole fleet is quiet by decision* | Rule Zero yields (rank 2), and the drain withholds every dispatch step |
 
@@ -1195,3 +1195,16 @@ exclusive crew tmux scope, preserving stricter limits. It records original value
 before applying, verifies read-back, and restores on lift without overwriting
 external changes. Heavy-work wrappers are deployment integrations; this command never
 modifies Steam or kills processes.
+
+### Haul delivery after queue changes
+
+The Stop hook reads the current assigned queue at each boundary; work assigned
+mid-turn can be selected immediately. Tend's idle fallback also rereads the queue
+before deduplication. It remembers the next item it delivered, so a new assignment
+or a completed turn between two idle observations re-arms delivery. Appending more
+work behind the same next item does not resend it. Input preflight, session ceilings
+and delivery receipts still apply; a tracker claim alone is not proof a turn began.
+
+Both haul triggers honour a current deliberate-stop stamp and a gaming hold before
+claiming or resuming work. A held pass spends neither delivery dedup nor the resume
+backoff. Release the hold through the existing lifecycle or gaming controls.

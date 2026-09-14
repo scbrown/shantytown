@@ -651,8 +651,9 @@ class IdleFleetAlerter:
     It REUSES feed_check's free-feedable + dispatchable computation exactly, so the
     soft push and the hard gate agree on who is free and what is ready — no second
     opinion. And it reuses the blocked-worker push's dedup: alert once per idle
-    EPISODE per worker (re-armed when the worker stops being free), so a still-idle
-    fleet does not re-spam every interval but a NEWLY-idle agent does.
+    EPISODE per worker, with haul delivery also re-armed by a changed next item.
+    Thus a still-idle fleet does not re-spam, and a whole turn between scrapes
+    cannot hide the worker's next assignment.
 
     FAIL OPEN: any error (tmux, bd, registry) pushes nothing and returns []. A
     broken detector must never block a stop or a dispatch — it just goes quiet.
@@ -714,9 +715,20 @@ class IdleFleetAlerter:
         except (OSError, ValueError):
             return []
 
-    def _save(self, alerted: list) -> None:
+    def _load_work(self) -> dict:
+        try:
+            value = json.loads(self.path.with_name("idle_fleet_work.json").read_text())
+            return value if isinstance(value, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    def _save(self, alerted: list, *, heads: dict | None = None) -> None:
         from .files import write_json_atomic
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        if heads is not None:
+            # Write work first: interruption may repeat a feed, never hide new work.
+            write_json_atomic(self.path.with_name("idle_fleet_work.json"),
+                              {w: heads[w] for w in alerted if w in heads})
         write_json_atomic(self.path, sorted(alerted))
 
     def _pane_context_k(self, worker: str) -> float | None:
@@ -802,15 +814,21 @@ class IdleFleetAlerter:
         except Exception:                 # noqa: BLE001 — fail-open like `free`
             lead_haulers = []
         observed_idle = sorted(set(free) | set(resumable) | set(lead_haulers))
+        held = {w: reason for w in observed_idle
+                if (reason := feed_check.haul_hold_reason(self._shanty_root, w))}
+        for worker, reason in held.items():
+            self._log(f"haul: {worker} held — {reason}")
+        free = [w for w in free if w not in held]
+        resumable = [w for w in resumable if w not in held]
+        observed_idle = [w for w in observed_idle if w not in held]
         already = set(self._load())
 
         # Re-arm: a worker no longer free is forgotten, so a LATER idle episode
         # alerts again. Done first, so a fleet that emptied and re-filled is fresh.
         already &= set(observed_idle)
 
-        newly = [w for w in observed_idle if w not in already]
-        if not newly:
-            self._save(already)                    # still-idle set -> no re-spam
+        if not observed_idle:
+            self._save([], heads={})
             return []
 
         # bd is the one external call; a hiccup FAILS OPEN (no push, no record —
@@ -834,6 +852,24 @@ class IdleFleetAlerter:
         # feed_check gate: an item the worker already started is its next work,
         # and `bd ready` structurally cannot report it. Fails open.
         queues = feed_check.hauls(ready_beads, active)
+        # A whole turn can fit between idle scrapes, and assignments can arrive
+        # after an idle alert. Dedup the next item, not just the worker's name.
+        # Reading the queue BEFORE dedup is essential: otherwise new work is
+        # invisible precisely when the fallback is needed.
+        heads = {}
+        for worker in observed_idle:
+            own_active = [b.get("id") for b in active
+                          if (b.get("assignee") or "").split("/")[-1] == worker]
+            candidates = (own_active if worker in resumable and own_active else
+                          [bid for bid in queues.get(worker, ()) if bid not in own_active])
+            if candidates:
+                heads[worker] = candidates[0]
+        previous = self._load_work()
+        already -= {w for w, item in heads.items() if previous.get(w) != item}
+        newly = [w for w in observed_idle if w not in already]
+        if not newly:
+            self._save(already, heads=heads)
+            return []
         hauling_newly = [w for w in newly if w in queues]
         unhauled_free = [w for w in free if w not in queues]
         newly = [w for w in newly if w not in queues]
@@ -1040,7 +1076,7 @@ class IdleFleetAlerter:
             # Nothing for the coordinator this pass. Record who was HANDLED
             # (still-idle already + the nudged), so a still-idle hauling worker
             # is not re-nudged every interval; an un-nudged one stays pending.
-            self._save(sorted(already | set(nudged)))
+            self._save(sorted(already | set(nudged)), heads=heads)
             return nudged
 
         admin = self._push(self._reg, self._panes,
@@ -1048,9 +1084,9 @@ class IdleFleetAlerter:
         if admin is None:
             self._log("idle-fleet: free workers + ready work, but no reachable "
                       "coordinator pane — NOT alerted, will retry")
-            self._save(sorted(already | set(nudged)))
+            self._save(sorted(already | set(nudged)), heads=heads)
             return nudged
-        self._save(sorted(already | set(nudged) | set(unhauled_free)))
+        self._save(sorted(already | set(nudged) | set(unhauled_free)), heads=heads)
         self._log(f"idle-fleet: alerted {admin} — {len(unhauled_free)} idle, "
                   f"{len(ready)} ready")
         return newly + nudged

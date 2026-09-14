@@ -110,6 +110,17 @@ def st_launched_agents(root) -> set[str] | None:
         return None
 
 
+def haul_hold_reason(root, agent: str) -> str:
+    """A deliberate stop or gaming hold must precede claims and continuation."""
+    if root is None:
+        return ""
+    from .stopped import FilesStops
+    from . import gaming
+    if FilesStops(Path(root) / "stopped").get(agent) is not None:
+        return "deliberately stopped; relaunch clears the stop stamp"
+    return gaming.read(Path(root)).refusal
+
+
 def free_feedable_workers(reg, panes, runtime, root=None, roles=("worker",)) -> list[str]:
     """IDLE workers st can actually dispatch to — the same idle verdict `st crew`
     shows, gated on the `send` wiring so a dark worker is never counted as free.
@@ -160,6 +171,8 @@ def free_feedable_workers(reg, panes, runtime, root=None, roles=("worker",)) -> 
         # tri-state (None = not expressed), and every consumer tests truthiness.
         if is_retired(ag):
             continue                     # deliberately stopped -> not a target
+        if haul_hold_reason(root, ag.name):
+            continue
         if ag.name in dark:
             continue                     # gastown-dark: respawns + carries send
                                          # wiring, but routes no stop to us (dark_agents)
@@ -269,6 +282,8 @@ def idle_resumable_codex(reg, panes, runtime, active_beads, root=None) -> list[s
                 or not card.pane or not panes.exists(card.pane)):
             continue
         if stamped is not None and name not in stamped:
+            continue
+        if haul_hold_reason(root, name):
             continue
         try:
             if harness_mod.name_for(card, root=Path(root)) != "codex":

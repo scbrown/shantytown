@@ -513,7 +513,10 @@ def _haul(reg: FilesRegistry, panes, me: str, root: Path) -> int:
         # who dispatches work head-down in a bead.
         if card.role not in ("worker", "lead"):
             return 0
-        from .feed_check import bd_cwd
+        from .feed_check import bd_cwd, haul_hold_reason
+        if reason := haul_hold_reason(root, me):
+            print(f"haul: {me} held — {reason}", file=sys.stderr)
+            return 0
         cwd = bd_cwd(reg)
         # An active anchor = mid-work turn boundary. bd list is filtered
         # client-side (same reason as feed_check: assignee formats vary).

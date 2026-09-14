@@ -483,3 +483,62 @@ def test_STILL_alerts_when_the_floor_admits_the_work(tmp_path, monkeypatch):
     a.sweep(list(reg.all().exact()))
     assert panes.sent, "the alerter went silent even though the floor admits the work"
     assert "RULE ZERO" in panes.sent[0][1]
+
+
+def test_assignment_after_idle_alert_rearms_the_workers_haul(tmp_path, monkeypatch):
+    ready = [{"id": "work-1", "title": "first work"}]
+    claims = []
+    alerter, panes = _hauling_world(tmp_path, monkeypatch, ready=ready, claims=claims)
+    alerter.sweep([])
+    assert panes.sent[0][0] == "p-admin"
+    ready[0]["assignee"] = "billy"
+    assert alerter.sweep([]) == ["billy"]
+    assert claims == ["work-1"]
+    assert panes.sent[-1][0] == "p-billy"
+    alerter.sweep([])
+    assert claims == ["work-1"], "same work must not be sent again"
+
+
+def test_next_item_rearms_even_when_busy_turn_falls_between_sweeps(tmp_path, monkeypatch):
+    ready = [{"id": "work-1", "assignee": "billy"}]
+    claims = []
+    alerter, panes = _hauling_world(tmp_path, monkeypatch, ready=ready, claims=claims)
+    alerter.sweep([])
+    ready[:] = [{"id": "work-2", "assignee": "billy"}]
+    # A new process reads the persisted dedup state; no BUSY scrape occurred.
+    alerter, _ = _hauling_world(tmp_path, monkeypatch, ready=ready, claims=claims)
+    alerter._panes = panes
+    assert alerter.sweep([]) == ["billy"]
+    assert claims == ["work-1", "work-2"]
+    alerter.sweep([])
+    assert len(panes.sent) == 2
+
+
+def test_tend_haul_honours_stop_stamp_and_gaming_hold(tmp_path, monkeypatch):
+    from shantytown.stopped import FilesStops
+    for kind in ("stopped", "gaming"):
+        root = tmp_path / kind
+        claims = []
+        alerter, panes = _hauling_world(root, monkeypatch, claims=claims)
+        if kind == "stopped":
+            FilesStops(root / "stopped").record("billy", 1, reason="deliberate pause")
+        else:
+            (root / "gaming").mkdir(parents=True)
+            (root / "gaming" / "manual").touch()
+        assert alerter.sweep([]) == []
+        assert not claims and not panes.sent
+        if kind == "stopped":
+            FilesStops(root / "stopped").forget("billy")
+        else:
+            (root / "gaming" / "manual").unlink()
+        assert alerter.sweep([]) == ["billy"], "hold must not spend delivery dedup"
+
+
+def test_appending_behind_same_next_item_does_not_repeat_delivery(tmp_path, monkeypatch):
+    ready = [{"id": "work-1", "assignee": "billy"}]
+    claims = []
+    alerter, panes = _hauling_world(tmp_path, monkeypatch, ready=ready, claims=claims)
+    alerter.sweep([])
+    ready.append({"id": "work-2", "assignee": "billy"})
+    alerter.sweep([])
+    assert claims == ["work-1"] and len(panes.sent) == 1
