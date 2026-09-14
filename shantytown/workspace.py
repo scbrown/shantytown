@@ -831,7 +831,7 @@ class Staleness:
         elif self.behind:
             bits.append(f"{self.behind} behind {self.ref} (work you do NOT have "
                         f"— check for duplication before you build)")
-        if self.unpushed and self.unverified:
+        if self.unpushed and (self.unverified or self.measurement_is_stale()):
             # THE AHEAD SIDE IS ALSO UNMEASURED WHEN THE FETCH FAILED
             # (aegis-8m3hig follow-on). `HEAD --not --remotes` reads the frozen
             # remote-tracking refs, so anything landed by ANOTHER transport since
@@ -847,7 +847,8 @@ class Staleness:
             # so nothing here relaxes what protects the work.
             bits.append(f"up to {self.unpushed} local commit(s) may be unpushed "
                         f"— an UPPER BOUND, not a measurement: the remote-tracking "
-                        f"refs are frozen, so work landed by another transport "
+                        f"refs have not been verified recently ({self._age_phrase()}), "
+                        f"so work landed by another transport "
                         f"counts here as stranded")
         elif self.unpushed:
             bits.append(f"{self.unpushed} on no remote ref KNOWN LOCALLY "

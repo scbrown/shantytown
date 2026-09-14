@@ -75,6 +75,17 @@ st worktree <repo> [agent]    provision an agent's isolated worktree off a SHARE
 st push <repo> [agent]        push wt/<agent> to EVERY remote; refuses if invoked from another branch
 ```
 
+The `st crew` tree column uses cached remote refs by default. `+N` counts
+commits absent from those locally known refs; it does not prove nobody else
+has them. Old or unknown-age refs, a failed fetch, or an unreachable remote
+produce `?` and qualify cached ahead counts as possibly already pushed.
+When one tree has measured differences and another cannot be verified, the
+combined cell keeps the uncertainty, for example `-2/+1?`. `st crew --trees`
+opts into fetching and pruning discovered worktrees; an unreachable remote
+is reported without waiting for a doomed fetch. Refresh your own refs before
+acting on an apparent unpushed count. These display qualifications do not
+change the raw counts used by the cycle work-protection checks.
+
 `st go` and `st cycle` take `--quipu-node NAME` (repeatable) or
 `--no-graph-context REASON`, and every dispatch writes one row to
 `<root>/logs/graph-adoption.jsonl`. `SHANTY_GRAPH_CONTEXT=require` turns the

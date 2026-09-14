@@ -985,3 +985,60 @@ def test_the_DEFAULT_column_never_probes_reachability(tmp_path, monkeypatch):
                         lambda *a, **k: probed.append(1) or False)
     cli._tree_staleness_cell(None, _card("zia", str(wt)))          # sweep=False
     assert probed == [], "the default column must not probe the network"
+
+
+@pytest.mark.parametrize("age", [None, 10**7])
+def test_stale_ref_qualifies_phantom_ahead_details(tmp_path, monkeypatch, age):
+    """A commit can be on the remote while absent from this clone's cached refs."""
+    from dataclasses import replace
+    from shantytown import cli
+
+    up = _repo(tmp_path / "up")
+    wt = _clone(up, tmp_path / "wt")
+    _commit(wt, "already-published")
+    # Push through a URL so origin/main stays frozen in this clone.
+    _run(up, "checkout", "--detach", "-q")
+    _run(wt, "push", str(up), "HEAD:main")
+    cached = tree_staleness(wt)
+    assert cached.unpushed == 1
+    assert _run(up, "rev-parse", "main") == _run(wt, "rev-parse", "HEAD")
+    stale = replace(cached, measured_age=age)
+    monkeypatch.setattr(cli, "_agent_trees", lambda *a, **kw: [wt])
+    monkeypatch.setattr(cli, "tree_staleness", lambda *a, **kw: stale)
+    cell, detail = cli._tree_staleness_cell(None, _card("worker", str(wt)))
+    assert cell == "?"
+    assert "up to 1 local commit(s) may be unpushed" in detail
+    assert "1 on no remote ref KNOWN LOCALLY" not in detail
+    assert stale.unpushed == 1, "display qualification must not weaken cycle protection"
+    # A successful refresh resolves the phantom without changing HEAD.
+    assert tree_staleness(wt, fetch=True).unpushed == 0
+
+
+def test_offline_sweep_qualifies_even_a_recent_cached_ahead_count(tmp_path, monkeypatch):
+    from shantytown import cli
+    up = _repo(tmp_path / "up")
+    wt = _clone(up, tmp_path / "wt")
+    _commit(wt, "mine")
+    fresh = tree_staleness(wt)
+    assert not fresh.measurement_is_stale()
+    monkeypatch.setattr(cli, "_agent_trees", lambda *a, **kw: [wt])
+    monkeypatch.setattr(cli, "remote_reachable", lambda *a, **kw: False)
+    cell, detail = cli._tree_staleness_cell(None, _card("worker", str(wt)), sweep=True)
+    assert cell == "?"
+    assert "up to 1 local commit(s) may be unpushed" in detail
+    assert "1 on no remote ref KNOWN LOCALLY" not in detail
+
+
+def test_mixed_crew_readings_keep_unknown_visible(monkeypatch):
+    from shantytown import cli
+    trees = [Path("/fresh"), Path("/unknown")]
+    states = {
+        trees[0]: Staleness(ref="origin/main", unpushed=1, measured_age=0),
+        trees[1]: Staleness(ref="origin/main", unpushed=244, measured_age=None),
+    }
+    monkeypatch.setattr(cli, "_agent_trees", lambda *a, **kw: trees)
+    monkeypatch.setattr(cli, "tree_staleness", lambda t, **kw: states[t])
+    cell, detail = cli._tree_staleness_cell(None, _card("worker"))
+    assert cell == "-0/+1?", "unknown trees must not disappear behind measured totals"
+    assert "up to 244" in detail
+    assert states[trees[1]].unpushed == 244

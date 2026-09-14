@@ -4666,12 +4666,14 @@ def _cmd_crew(a) -> int:
     # would otherwise go and script again.
     if tree_stale:
         print()
-        print(f"  {len(tree_stale)} agent(s) on a STALE or DIVERGED tree:")
+        print(f"  {len(tree_stale)} agent(s) with tree differences or UNVERIFIED readings:")
         for name, detail in tree_stale:
             print(f"    · {name:<11} {detail}")
         print("    -N = commits you do NOT have (duplication risk: someone may "
               "have built it already).")
-        print("    +N = local commits nobody else has (loss risk: push them).")
+        print("    +N = commits absent from locally known remote refs; "
+              "fetch before treating them as unpushed.")
+        print("    ? = an unverified reading; counts may include work already pushed.")
         print("    NOT pulled for you — rebase your own clean tree, never one "
               "with work in it.")
     print()
@@ -7163,11 +7165,9 @@ def _tree_staleness_cell(a, ag, sweep: bool = False) -> "tuple[str, str | None]"
         # were measured on 2026-09-09, when two agents hand-rolled sweeps instead
         # and produced three wrong answers between them.
         #
-        # A fetchless ahead-count is not merely cheaper here, it is AS CORRECT:
-        # tree_staleness argues that stale ahead-data can launder a pruned commit
-        # into "safe", and that argument is about a remote that MOVED. When the
-        # remote is unreachable nothing upstream can have moved, so the objection
-        # does not apply.
+        # An unreachable URL does not prove upstream stopped moving: another
+        # transport or agent may still push. Keep the cached count for work
+        # protection, but qualify the display (aegis-puir5m).
         #
         # Only a MEASURED False skips the fetch. `remote_reachable` is
         # three-state and its own contract says a None (could-not-tell) must be
@@ -7193,6 +7193,7 @@ def _tree_staleness_cell(a, ag, sweep: bool = False) -> "tuple[str, str | None]"
             # Never a silent `ok` for a tree we could not refresh. The reading is
             # real and it is stale, and the line says which.
             unknown = True
+            s = replace(s, unverified="remote unreachable; fetch skipped")
             parts.append(f"{_tree_label(t)}: remote unreachable — fetchless read, "
                          f"{s.render()}")
             continue
@@ -7234,6 +7235,8 @@ def _tree_staleness_cell(a, ag, sweep: bool = False) -> "tuple[str, str | None]"
             parts.append(f"{_tree_label(t)} {'/'.join(bits)} vs {s.ref}")
     if behind or unpushed:
         cell = f"-{behind}/+{unpushed}"
+        if unknown:
+            cell += "?"
     elif unknown:
         cell = "?"
     else:
