@@ -196,3 +196,18 @@ def test_game_to_shader_transition_restarts_absence_clock(tmp_path):
     assert gaming.probe(tmp_path, proc=proc, now=1360).state == 'ending'
     assert gaming.probe(tmp_path, proc=proc, now=1480).held
     assert gaming.probe(tmp_path, proc=proc, now=1481).state == 'clear'
+
+
+def test_first_appid_after_long_shader_phase_gets_launch_grace(tmp_path):
+    enabled(tmp_path)
+    proc = tmp_path / 'proc'
+    process(proc, 1, '/steam/fossilize_replay')
+    for now in range(1000, 1661, 60):
+        assert gaming.probe(tmp_path, proc=proc, now=now).held
+    process(proc, 2, '/steam/reaper', 'SteamLaunch', 'AppId=42')
+    gaming.probe(tmp_path, proc=proc, now=1720)
+    for pid in (1, 2):
+        (proc / str(pid) / 'cmdline').unlink()
+    for now in (1780, 1900, 2019):
+        assert gaming.probe(tmp_path, proc=proc, now=now).state == 'gaming'
+    assert gaming.probe(tmp_path, proc=proc, now=2020).state == 'clear'

@@ -1177,7 +1177,8 @@ The probe only reads process argv: the executable must be `reaper`, followed by
 The exact `fossilize_replay` executable also holds during shader compilation,
 even without an AppId. Shader processes participate in activity accounting. The
 hold clears only after both signals have been absent for more than two minutes
-and the five-minute grace from the first launch observation has elapsed. Shell
+and the five-minute grace from the first launch observation has elapsed. The
+first AppId after shader compilation starts a fresh five-minute launch grace. Shell
 commands merely mentioning either executable do not match. A probe older
 than three minutes is UNKNOWN and does not enforce an automatic hold; a manual
 hold remains effective. `--disable-detection` does not clear a manual override.

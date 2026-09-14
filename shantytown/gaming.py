@@ -148,19 +148,23 @@ def probe(root: Path, *, proc: Path = Path("/proc"), now: float | None = None) -
             absent = previous.get("absent_since")
             automatic = previous.get("state") if 0 <= now - previous.get("observed", 0) <= MAX_AGE else None
             since = previous.get("since", now) if automatic in {"gaming", "ending"} else now
+            launch_until = previous.get("launch_until", since + LAUNCH_GRACE)
+            if automatic not in {"gaming", "ending"} or (appids and not previous.get("appids")):
+                launch_until = now + LAUNCH_GRACE
             if appids or shaders:
                 state, absent = "gaming", None
             elif automatic in {"gaming", "ending"}:
                 absent = now if absent is None else float(absent)
                 # Brief reaper disappearance during launch must not release workers.
-                if now - since < LAUNCH_GRACE:
+                if now < launch_until:
                     state = "gaming"
                 else:
                     state = "ending" if now - absent <= LIFT_DELAY else "clear"
             else:
                 state = "clear"
             data = dict(state=state, appids=appids, since=since if state != "clear" else 0,
-                        observed=now, absent_since=absent, shader_pids=shaders)
+                        observed=now, absent_since=absent, shader_pids=shaders,
+                        launch_until=launch_until)
             try:
                 data.update(gaming_activity.observe(proc, set(roots) | set(shaders), previous, now))
             except (OSError, ValueError, TypeError):
