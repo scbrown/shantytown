@@ -113,6 +113,49 @@ def instruction_text(before: str, instructions: str) -> str:
     return before[:start] + block + before[end:]
 
 
+def projected_instructions(text: str) -> str | None:
+    """The instructions inside our marked block in `text`, or None.
+
+    Lets a caller establish that a file is exactly "committed content PLUS our
+    generated block" WITHOUT querying Quipu: extract this, re-run
+    `instruction_text` over the committed bytes, and compare. Quipu is not
+    reachable from every path that needs to know (a keep-current pull runs at
+    respawn, where a graph round-trip is neither cheap nor guaranteed), and a
+    check that cannot run is a check that does not protect anything.
+    """
+    if text.count(BEGIN) != 1 or text.count(END) != 1:
+        return None
+    start, end = text.index(BEGIN), text.index(END)
+    if end < start:
+        return None
+    inner = text[start + len(BEGIN):end]
+    if not inner.startswith("\n") or not inner.endswith("\n"):
+        return None
+    return inner[1:-1]
+
+
+def is_committed_plus_block(committed: str, working: str) -> str | None:
+    """The block's instructions when `working` is exactly `committed` + our
+    block, else None. None means HANDS OFF: either there is no block, or the
+    file carries a real edit as well and only its author knows what it is.
+
+    The oracle is `instruction_text` itself rather than a hand-written inverse.
+    An inverse would have to re-derive the separator rules above (which differ
+    on whether `committed` ends in a newline, and on whether a block was already
+    present) and would drift from them silently — and every failure of that
+    drift discards someone's edit.
+    """
+    instructions = projected_instructions(working)
+    if instructions is None:
+        return None
+    try:
+        if instruction_text(committed, instructions) != working:
+            return None
+    except ToolingError:
+        return None
+    return instructions
+
+
 def instruction_updates(ws: Path, manifest: Manifest) -> dict[Path, str]:
     if (ws / "AGENTS.override.md").exists():
         raise ToolingError("AGENTS.override.md shadows the projected tooling instructions")

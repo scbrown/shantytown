@@ -6977,6 +6977,69 @@ def _not_yet(cmd: str) -> int:
 
 # --- tend: the only command that RESTARTS things ----------------------------
 
+def _set_aside_tooling_block(path) -> str | None:
+    """Remove the PROJECTED tooling block from CLAUDE.md so an ff-only pull is
+    not refused by it, returning the block's instructions to put back after.
+
+    WHY THIS IS HERE AND NOT A PROVISIONING CHANGE (aegis-6s9lxf). `st provision`
+    injects a generated block into CLAUDE.md, which is TRACKED and is touched by
+    ~76% of commits on main. `git merge --ff-only` aborts when incoming commits
+    touch a dirty file, so the great majority of keep-current pulls refused and
+    the fleet sat on stale trees (-2 to -97 commits) — st's own provisioning
+    defeating st's own keep-current mechanism.
+
+    The block cannot simply move to CLAUDE.local.md, which is the obvious fix and
+    the one the bead recommends: codex reads AGENTS.md, AGENTS.md is a SYMLINK to
+    CLAUDE.md precisely so there is one inode and nothing to drift (see
+    codex.py), and codex's `project_doc_fallback_filenames` is consulted ONLY
+    when AGENTS.md is absent. Moving the block would leave the codex harness
+    silently without it, which is the uniformity aegis-m8r3p exists to hold.
+
+    So it is set aside across the pull, exactly as .mcp.json already is above,
+    and for the same reason: provisioned, uncommitted by design, and destroyed
+    by the operation.
+
+    ONLY when the file is EXACTLY committed-content-plus-our-block. A CLAUDE.md
+    carrying any other edit is left alone and the pull refuses as before — loud,
+    and the agent's to reconcile. Never discard an edit to make a pull succeed.
+    """
+    import subprocess
+    try:
+        from .tooling import is_committed_plus_block
+        claude = Path(path) / "CLAUDE.md"
+        if not claude.is_file():
+            return None
+        working = claude.read_text()
+        r = subprocess.run(["git", "-C", str(path), "show", "HEAD:CLAUDE.md"],
+                           stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                           text=True, timeout=30)
+        if r.returncode != 0:
+            return None
+        committed = r.stdout
+        if working == committed:
+            return None
+        instructions = is_committed_plus_block(committed, working)
+        if instructions is None:
+            return None
+        claude.write_text(committed)
+        return instructions
+    except Exception:
+        return None
+
+
+def _restore_tooling_block(path, instructions) -> None:
+    """Put the projected block back after the pull. Never raises."""
+    if instructions is None:
+        return
+    try:
+        from .tooling import instruction_text
+        claude = Path(path) / "CLAUDE.md"
+        current = claude.read_text() if claude.is_file() else ""
+        claude.write_text(instruction_text(current, instructions))
+    except Exception:
+        pass
+
+
 def _refresh_clone(path) -> str | None:
     """ff-only pull at a SAFE moment: the agent is down, between items, or being
     relaunched — nothing holds the checkout mid-thought. Returns an error
@@ -6996,6 +7059,7 @@ def _refresh_clone(path) -> str | None:
     try:
         mcp = Path(path) / ".mcp.json"
         saved = mcp.read_bytes() if mcp.is_file() else None
+        block = _set_aside_tooling_block(path)
         # Process-GROUP timeout: a plain subprocess timeout kills `git pull`
         # and orphans the `git fetch` + `ssh` it already spawned (aegis-ujz5gf).
         from .workspace import run_with_group_timeout
@@ -7005,6 +7069,10 @@ def _refresh_clone(path) -> str | None:
         err = None if r.returncode == 0 else (r.stderr or r.stdout).strip()
         if saved is not None and (not mcp.is_file() or mcp.read_bytes() != saved):
             mcp.write_bytes(saved)
+        # Re-inject even when the pull FAILED: the block was removed to let the
+        # merge proceed, and leaving it out would strip the agent's tooling
+        # instructions as the price of a pull that achieved nothing.
+        _restore_tooling_block(path, block)
         return err
     except Exception as e:                       # not a repo, git absent, timeout
         return str(e)
