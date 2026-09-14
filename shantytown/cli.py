@@ -804,6 +804,8 @@ def build_parser() -> argparse.ArgumentParser:
     df.add_argument("-n", "--dry-run", action="store_true")
 
     cr = sub.add_parser("crew", help="who exists, what state, what role")
+    cr.add_argument("--wide", "--no-truncate", action="store_true",
+                    help="print the full assigned title (default marks clipped titles with …)")
     cr.add_argument("--count", action="store_true",
                     help="print ONLY `busy/total` — the same verdict the table "
                          "renders, for a status bar. Agents whose busy/idle state "
@@ -4579,6 +4581,14 @@ def _cmd_crew(a) -> int:
     _cmdline = getattr(panes, "cmdline", None)
     _live = ((lambda pane: live_wiring(pane, _cmdline)) if _cmdline
              else (lambda pane: None))
+    from . import dashboard as dash_mod
+    import shutil
+    title_width = None if getattr(a, "wide", False) else max(
+        1, shutil.get_terminal_size().columns - 14)
+    try:
+        plate = _plate(a)
+    except Exception:
+        plate = None
     print()
     for ag, state, work, posture in _crew_states(
             agents, panes, runtime, cycling=cycling, untracked_root=a.root,
@@ -4658,6 +4668,15 @@ def _cmd_crew(a) -> int:
                 role_drift.append((ag.name, ag.role, lv_why))
         print(f"  {ag.name:<11} {ag.role:<14} {state:<13} {verdict:<8} "
               f"{tree_cell:<9} {work:<16} {posture:<7} {ag.pane or '—'}")
+        if state == "up":
+            try:
+                held = plate(ag.name) if plate else None
+                text = dash_mod.assigned_text(held.id, held.title) if held else "—"
+                if plate is None:
+                    text = "? assignment unavailable"
+            except Exception:
+                text = "? assignment unavailable"
+            print("    assigned: " + dash_mod.text_window(text, title_width))
     stale, unknown = _reach_buckets(verdicts)
     # THE SWEEP, AS A LINE (aegis-ib65p decision 6). Learning that 12 of 12
     # worktrees were behind took a hand-rolled loop across three directories,
@@ -7737,8 +7756,19 @@ def _cmd_dashboard(a) -> int:
     if a.once:
         rc, data = one()
         if data is not None:
-            print(dash_mod.render(data, time.time()))
+            import shutil
+            print(dash_mod.render(data, time.time(),
+                                  width=shutil.get_terminal_size().columns))
         return rc
+
+    if a.interval <= 0:
+        print("  refused: --interval must be positive", file=sys.stderr)
+        return REFUSED
+    if sys.stdin.isatty() and sys.stdout.isatty():
+        try:
+            return dash_mod.watch(one, a.interval)
+        except KeyboardInterrupt:
+            return OK
 
     # The self-refreshing panel. Clear + redraw each interval; Ctrl-C exits clean.
     print("  st dashboard — refreshing every "

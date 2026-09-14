@@ -398,3 +398,30 @@ def test_an_UP_agent_is_never_flagged_even_if_its_name_appears_elsewhere():
     panes = _SessPanes(live=["shanty-muldoon"],
                        sessions=["shanty-muldoon", "aegis-crew-muldoon"])
     assert _alive_elsewhere_note(agents, panes) == ""
+
+
+def test_crew_title_default_marks_cut_and_wide_keeps_full_title(tmp_path, monkeypatch, capsys):
+    import os
+    import shutil
+    from shantytown.protocols import WorkItem
+    root = _roster(tmp_path, {'ellie': 'p-ellie'})
+    monkeypatch.setattr(cli, 'Tmux', lambda *_a, **_k: _Panes({'p-ellie': BUSY_SCREEN}))
+    title = 'START ' + 'important assigned work ' * 20 + 'FINISH'
+    monkeypatch.setattr(cli, '_plate', lambda a: lambda who: WorkItem(id='st-1', title=title))
+    monkeypatch.setattr(shutil, 'get_terminal_size', lambda: os.terminal_size((80, 24)))
+    args = _Args(root)
+    assert cli._cmd_crew(args) == cli.OK
+    first = next(l for l in capsys.readouterr().out.splitlines() if 'assigned:' in l)
+    assert first.endswith('…') and 'FINISH' not in first
+    args.wide = True
+    assert cli._cmd_crew(args) == cli.OK
+    wide = next(l for l in capsys.readouterr().out.splitlines() if 'assigned:' in l)
+    assert title in wide and wide.endswith('FINISH')
+
+
+def test_crew_wide_and_no_truncate_parse(monkeypatch):
+    seen = []
+    monkeypatch.setattr(cli, '_cmd_crew', lambda args: seen.append(args.wide) or 0)
+    assert cli.main(['crew', '--wide']) == 0
+    assert cli.main(['crew', '--no-truncate']) == 0
+    assert seen == [True, True]

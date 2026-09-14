@@ -32,6 +32,7 @@ class Row:
     item: str | None           # the held work item id, if any
     item_status: str | None    # its status
     last_activity: float | None  # epoch secs of the agent's last stop event, or None
+    title: str = ""
 
 
 @dataclass
@@ -98,6 +99,7 @@ def gather(admin: str, agents, crew_states, plate_reader, last_activity, at):
             continue
         item = None
         status = None
+        title = ""
         # Only ask the tracker about a live agent — a down pane holds nothing we
         # can act on, and a plate lookup per down agent is cost for no signal.
         if pane_state == "up":
@@ -106,7 +108,7 @@ def gather(admin: str, agents, crew_states, plate_reader, last_activity, at):
             except Exception:
                 held = None
             if held is not None:
-                item, status = held.id, held.status
+                item, status, title = held.id, held.status, held.title
         rows.append(Row(
             name=ag.name,
             role=by_name[ag.name].role if ag.name in by_name else ag.role,
@@ -115,6 +117,7 @@ def gather(admin: str, agents, crew_states, plate_reader, last_activity, at):
             item=item,
             item_status=status,
             last_activity=last_activity.get(ag.name),
+            title=title,
         ))
     rows.sort(key=lambda r: r.name)
     return Dashboard(admin=admin, rows=rows, at=at)
@@ -136,7 +139,8 @@ def _age(ts: float | None, now: float) -> str:
     return f"{secs // 86400}d ago"
 
 
-def render(d: Dashboard, now: float) -> str:
+def render(d: Dashboard, now: float, *, width: int | None = None,
+           offset: int = 0) -> str:
     """The panel as a string. Kept pure so a test asserts the rendering, and the
     CLI just prints it on each refresh."""
     from . import triage as triage_mod
@@ -145,14 +149,23 @@ def render(d: Dashboard, now: float) -> str:
     lines.append(f"  TIER OF {d.admin}   ·   {d.up} up / {d.down} down   ·   "
                  f"{_age(d.at, now)}".rstrip())
     lines.append("")
-    lines.append(f"  {'AGENT':<12} {'ROLE':<14} {'STATE':<15} {'ITEM':<12} "
-                 f"{'LAST':<9}")
-    lines.append(f"  {'-'*12} {'-'*14} {'-'*15} {'-'*12} {'-'*9}")
+    if width is None:
+        lines.append(f"  {'AGENT':<12} {'ROLE':<14} {'STATE':<15} {'ITEM':<12} "
+                     f"{'LAST':<9} ASSIGNED TITLE")
+    else:
+        lines.append("  AGENT         STATE / LAST          ASSIGNED WORK")
     for r in d.rows:
         state = r.work if r.pane_state == "up" else f"({r.pane_state})"
-        item = r.item or "—"
-        lines.append(f"  {r.name:<12} {r.role:<14} {state:<15} {item:<12} "
-                     f"{_age(r.last_activity, now):<9}")
+        if width is None:
+            lines.append(f"  {r.name:<12} {r.role:<14} {state:<15} {r.item or '—':<12} "
+                         f"{_age(r.last_activity, now):<9} {text_window(r.title, None)}")
+        else:
+            # One row per agent, even in a short pane; reserve useful space for
+            # the title instead of putting it beyond fixed metadata columns.
+            prefix = _row_prefix(r, state, now, width)
+            text = assigned_text(r.item, r.title) if r.item else "—"
+            room = max(1, width - sum(w for _, w in _cells(prefix)))
+            lines.append(prefix + text_window(text, room, offset))
     lines.append("")
 
     # Live tallies from the REUSED verdicts — the coordinator's at-a-glance.
@@ -169,3 +182,140 @@ def render(d: Dashboard, now: float) -> str:
     lines.append("  stats: throughput · time-on-item · files · skills · tokens — "
                  "need capture (st stats, Part B; not yet measured, not faked).")
     return "\n".join(lines)
+
+
+def assigned_text(item: str, title: str) -> str:
+    return f"{item} — {title or '(title unavailable)'}"
+
+
+def _cells(text: str) -> list[tuple[str, int]]:
+    """Printable units, keeping combining marks attached and wide glyphs whole.
+
+    Titles come from a tracker, not a trusted terminal program. Control bytes
+    must not turn a title into cursor movement or an extra roster row.
+    """
+    import unicodedata
+
+    cells = []
+    for ch in text:
+        if unicodedata.category(ch).startswith("C") or ch.isspace():
+            ch = " "
+        if unicodedata.combining(ch):
+            if cells:
+                prev, width = cells[-1]
+                cells[-1] = (prev + ch, width)
+            continue
+        cells.append((ch, 2 if unicodedata.east_asian_width(ch) in "WF" else 1))
+    return cells
+
+
+def text_window(text: str, width: int | None, offset: int = 0) -> str:
+    """A horizontal title viewport: ‹ means hidden left, … hidden right.
+
+    Clamp per title so End shows every suffix, even when row lengths differ.
+    None is the untruncated, printable one-shot form used by crew --wide.
+    """
+    cells = _cells(text)
+    if width is None or sum(w for _, w in cells) <= width:
+        return "".join(ch for ch, _ in cells)
+    if width <= 0:
+        return ""
+    start = min(max(0, offset), _last_start(cells, width))
+    if width == 1:
+        return "‹" if start else "…"
+    left = "‹" if start else ""
+    remaining = cells[start:]
+    right = sum(w for _, w in remaining) > width - len(left)
+    room = max(0, width - len(left) - int(right))
+    out, used = [], 0
+    for ch, w in remaining:
+        if used + w > room:
+            break
+        out.append(ch)
+        used += w
+    return left + "".join(out) + ("…" if right else "")
+
+
+def _last_start(cells, width: int) -> int:
+    if sum(w for _, w in cells) <= width:
+        return 0
+    end, used = len(cells), 0
+    while end and used + cells[end - 1][1] <= width - 1:
+        end -= 1
+        used += cells[end][1]
+    return end
+
+
+def _row_prefix(row: Row, state: str, now: float, width: int) -> str:
+    name_width = min(12, max(1, width // 4))
+    prefix = f" {text_window(row.name, name_width):<{name_width}} "
+    if width >= 70:
+        prefix += f"{text_window(state, 15):<15} {_age(row.last_activity, now):<9} "
+    elif width >= 45:
+        prefix += f"{text_window(state, 12):<12} "
+    return prefix
+
+
+def _scroll_end(data: Dashboard, width: int, now: float) -> int:
+    ends = []
+    for row in data.rows:
+        if row.item:
+            state = row.work if row.pane_state == "up" else f"({row.pane_state})"
+            prefix = _row_prefix(row, state, now, width)
+            room = max(1, width - sum(w for _, w in _cells(prefix)))
+            ends.append(_last_start(_cells(assigned_text(row.item, row.title)), room))
+    return max(ends, default=0)
+
+
+def watch(snapshot, interval: float) -> int:
+    """Curses owns/restores terminal modes; only the assigned lines scroll."""
+    import curses
+
+    return curses.wrapper(lambda screen: _watch(screen, snapshot, interval))
+
+
+def _watch(screen, snapshot, interval: float) -> int:
+    import curses
+    import time
+
+    screen.keypad(True)
+    offset = 0
+    data = None
+    refresh_at = 0.0
+    while True:
+        now = time.monotonic()
+        if data is None or now >= refresh_at:
+            rc, data = snapshot()
+            if data is None:
+                return rc
+            refresh_at = time.monotonic() + interval
+        height, width = screen.getmaxyx()
+        # The bottom-right cell may scroll a curses terminal. Leave it unused.
+        columns = max(1, width - 1)
+        lines = render(data, time.time(), width=columns, offset=offset).splitlines()
+        screen.erase()
+        for y, line in enumerate(lines[:max(0, height - 1)]):
+            try:
+                screen.addstr(y, 0, text_window(line, columns))
+            except curses.error:
+                pass  # a resize can race getmaxyx; redraw on the next key/tick
+        hint = "Left/Right: scroll titles · Home/End · q/Ctrl-C: quit"
+        try:
+            screen.addstr(max(0, height - 1), 0, text_window(hint, columns))
+        except curses.error:
+            pass
+        screen.refresh()
+        screen.timeout(max(1, int((refresh_at - time.monotonic()) * 1000)))
+        key = screen.getch()
+        longest = _scroll_end(data, columns, time.time())
+        offset = min(offset, longest)
+        if key in (ord("q"), ord("Q"), 3):
+            return 0
+        if key == curses.KEY_LEFT:
+            offset = max(0, offset - 8)
+        elif key == curses.KEY_RIGHT:
+            offset = min(longest, offset + 8)
+        elif key == curses.KEY_HOME:
+            offset = 0
+        elif key == curses.KEY_END:
+            offset = longest

@@ -170,3 +170,104 @@ def test_dashboard_refuses_an_unknown_admin(tmp_path, monkeypatch, capsys):
     rc = cli._cmd_dashboard(_Args(root, admin="nobody"))
     assert rc == cli.REFUSED
     assert "no such agent: nobody" in capsys.readouterr().err
+
+
+def test_title_is_retained_and_viewport_can_reach_both_ends():
+    title = 'START ' + 'long assigned work ' * 12 + 'FINISH'
+    agents = _agents()
+    d = dash.gather('sattler', agents, [(agents[0], 'up', triage.BUSY)],
+                    lambda _: WorkItem(id='st-9', title=title), {}, at=1000)
+    assert d.rows[0].title == title
+    first = dash.render(d, 1000, width=80)
+    middle = dash.render(d, 1000, width=80, offset=20)
+    last = dash.render(d, 1000, width=80, offset=10000)
+    assert 'START' in first and 'FINISH' not in first and '…' in first
+    row = next(x for x in middle.splitlines() if x.startswith(' sattler'))
+    assert '‹' in row and row.endswith('…')
+    row = next(x for x in last.splitlines() if x.startswith(' sattler'))
+    assert '‹' in row and row.endswith('FINISH') and not row.endswith('…')
+    assert title in dash.render(d, 1000)
+
+
+def test_windows_mark_overflow_fit_terminal_cells_and_keep_combining_marks():
+    text = 'a\u0301界' * 10 + 'END'
+    for width in range(1, 30):
+        for offset in (0, 1, 4, 999):
+            out = dash.text_window(text, width, offset)
+            assert sum(w for _, w in dash._cells(out)) <= width
+            assert not out.startswith('\u0301')
+    assert dash.text_window('short', 20, 999) == 'short'
+    assert dash.text_window('abc', 3) == 'abc'
+    assert dash.text_window('abcdef', 3) == 'ab…'
+    assert dash.text_window('abcdef', 3, 999) == '‹ef'
+    assert '\x1b' not in dash.text_window('a\x1b[2J\nb', None)
+    assert '\n' not in dash.text_window('a\nb', None)
+
+
+class _Screen:
+    def __init__(self, keys):
+        self.keys = iter(keys)
+        self.frames = []
+        self.lines = {}
+
+    def keypad(self, enabled):
+        assert enabled
+
+    def getmaxyx(self):
+        return 20, 80
+
+    def erase(self):
+        self.lines = {}
+
+    def addstr(self, y, x, text):
+        self.lines[y] = text
+
+    def refresh(self):
+        self.frames.append('\n'.join(self.lines.values()))
+
+    def timeout(self, value):
+        assert value > 0
+
+    def getch(self):
+        return next(self.keys)
+
+
+def test_keyboard_scrolls_cached_snapshot_home_end_and_left():
+    import curses
+    title = 'START ' + 'work ' * 50 + 'FINISH'
+    d = dash.Dashboard('lead', [dash.Row('worker', 'worker', 'up', 'busy',
+                                        'st-1', 'open', None, title)], at=1000)
+    calls = []
+    def snapshot():
+        calls.append(1)
+        return 0, d
+    screen = _Screen([curses.KEY_RIGHT, curses.KEY_END, curses.KEY_LEFT,
+                      curses.KEY_HOME, ord('q')])
+    assert dash._watch(screen, snapshot, 3600) == 0
+    assert len(calls) == 1, 'keypresses must not requery the tracker'
+    rows = [next(l for l in frame.splitlines() if l.startswith(' worker'))
+            for frame in screen.frames]
+    assert 'START' in rows[0] and rows[0].endswith('…')
+    assert rows[1] != rows[0] and '‹' in rows[1]
+    assert rows[2].endswith('FINISH') and '‹' in rows[2]
+    assert rows[3] != rows[2]
+    assert rows[4] == rows[0]
+
+
+def test_dashboard_interactive_dispatch_and_interrupt(tmp_path, monkeypatch):
+    import io
+    from shantytown import cli
+    a = _Args(tmp_path)
+    a.once = False
+    monkeypatch.setattr(cli, '_registry', lambda a: object())
+    monkeypatch.setattr(cli, '_panes', lambda a: object())
+    monkeypatch.setattr(cli, '_runtime', lambda a, p: object())
+    class TTY(io.StringIO):
+        def isatty(self):
+            return True
+    monkeypatch.setattr(cli.sys, 'stdin', TTY())
+    monkeypatch.setattr(cli.sys, 'stdout', TTY())
+    def interrupted(snapshot, interval):
+        raise KeyboardInterrupt
+    monkeypatch.setattr(dash, 'watch', interrupted)
+    assert cli._cmd_dashboard(a) == cli.OK

@@ -25,7 +25,7 @@ st inbox <agent> <message>    put a message in an agent's inbox (send-keys; -d p
 st inbox [--count|--read|--read-id ID]
                               read or acknowledge your own inbox
 st task <title>               create a work item
-st crew [--count]             who exists, what state, what role, WHO IS FREE
+st crew [--count] [--wide]    who exists, state, role, assigned title, WHO IS FREE
 st input <agent>              what's in their input box: EMPTY | TYPED | GHOST, with the
                               SGR evidence. --clear (typed only) --dismiss. NEVER submits.
 st ask <agent>                the QUESTION they're blocked on: prompt, the command being
@@ -74,6 +74,20 @@ st cycle <agent> [--self]     clear an agent's context WITHOUT destroying its ru
 st worktree <repo> [agent]    provision an agent's isolated worktree off a SHARED project repo
 st push <repo> [agent]        push wt/<agent> to EVERY remote; refuses if invoked from another branch
 ```
+
+Assigned titles are shown with `…` when the default `st crew` output clips them
+at the terminal width. `st crew --wide` (also `--no-truncate`) prints the complete
+title, suitable for piping or terminal scrollback. Control characters in titles
+are rendered as spaces so tracker text cannot move the terminal cursor.
+
+In an interactive `st dashboard`, **Left/Right** scroll assigned work eight
+characters at a time; **Home/End** show its beginning/end. `‹` marks hidden text
+to the left and `…` hidden text to the right. Shorter rows clamp independently,
+so End reveals each row's suffix. Agent/state metadata stays fixed; narrower
+panes reserve space for the work instead of retaining every metadata column.
+**q** or **Ctrl-C** exits and restores the terminal. The current snapshot is
+reused while scrolling; only the refresh interval queries the tracker again.
+`--once` and redirected output remain plain text without keyboard handling.
 
 The `st crew` tree column uses cached remote refs by default. `+N` counts
 commits absent from those locally known refs; it does not prove nobody else
