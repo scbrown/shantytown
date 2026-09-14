@@ -46,6 +46,40 @@ def _set(scope, values, run):
         raise OSError('CPU property read-back differs from requested values')
 
 
+def owned_scope(root, agent, pane_pid, cgroup_path):
+    """Accept pane descendants and reparented runtimes with matching provenance.
+
+    Codex's persistent processes can be adopted by the user service manager.
+    Their immutable launch environment identifies both agent AND deployment;
+    process names alone cannot establish ownership. MCP children may strip that
+    environment, so check descendants of the attributed runtime roots too.
+    """
+    exclusive, why = panemem.scope_is_exclusive_to(pane_pid, cgroup_path)
+    if exclusive:
+        return True, why
+    try:
+        pids = [int(p) for p in Path('/sys/fs/cgroup' + cgroup_path,
+                                     'cgroup.procs').read_text().split()]
+        anchors = [int(pane_pid)]
+        for pid in pids:
+            try:
+                env = dict(part.split(b'=', 1) for part in
+                           Path(f'/proc/{pid}/environ').read_bytes().split(b'\0')
+                           if b'=' in part)
+            except FileNotFoundError:
+                continue
+            if (env.get(b'SHANTY_AGENT') == agent.encode()
+                    and env.get(b'SHANTY_ROOT') == str(root).encode()):
+                anchors.append(pid)
+        foreign = [pid for pid in pids if not any(
+            panemem._is_descendant(pid, anchor) for anchor in anchors)]
+        if foreign:
+            return False, f'{len(foreign)} processes lack matching crew provenance'
+        return True, 'pane tree plus attributed reparented runtime trees'
+    except (OSError, ValueError) as exc:
+        return False, f'cannot verify reparented runtime ownership: {exc}'
+
+
 def reconcile(root, held, pane_pids, *, run=subprocess.run):
     """Persist originals before applying; lift only the exact settings we applied."""
     folder = Path(root) / 'gaming'
@@ -62,13 +96,13 @@ def reconcile(root, held, pane_pids, *, run=subprocess.run):
         if not isinstance(records, dict):
             raise ValueError('invalid gaming scope recovery ledger')
         if held:
-            for pid in pane_pids:
+            for agent, pid in pane_pids:
                 scope = panemem.scope_of_pid(pid)
                 group = panemem._cgroup_path_of_pid(pid)
                 if not scope or not scope.startswith('tmux-spawn-') or not group:
                     messages.append(f'slowdown UNKNOWN: pane {pid} has no private tmux scope')
                     continue
-                exclusive, why = panemem.scope_is_exclusive_to(pid, group)
+                exclusive, why = owned_scope(root, agent, pid, group)
                 if not exclusive:
                     messages.append(f'slowdown UNKNOWN: {scope}: {why}')
                     continue

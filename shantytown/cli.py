@@ -8106,24 +8106,12 @@ def _cmd_hold(a) -> int:
     elif not a.status and not a.probe:
         gaming_mod.manual(root)
     status = gaming_mod.probe(root) if a.probe else gaming_mod.read(root)
-    if a.metrics:
-        import tempfile
-        a.metrics.parent.mkdir(parents=True, exist_ok=True)
-        with tempfile.NamedTemporaryFile(mode="w", dir=a.metrics.parent,
-                                         delete=False) as stream:
-            tmp = Path(stream.name)
-            stream.write(gaming_mod.metrics(status))
-        try:
-            tmp.chmod(0o644)
-            tmp.replace(a.metrics)
-        finally:
-            tmp.unlink(missing_ok=True)
     slowdown_unknown = False
     if a.slowdown:
         from . import gaming_scopes
         try:
             panes = _panes(a)
-            pids = [pid for card in _registry(a).all().exact()
+            pids = [(card.name, pid) for card in _registry(a).all().exact()
                     if (pid := panes.pane_pid(_session_for(card)))] if status.held else []
             for line in gaming_scopes.reconcile(root, status.held, pids):
                 print(line)
@@ -8131,6 +8119,22 @@ def _cmd_hold(a) -> int:
         except Exception as exc:
             print(f"gaming slowdown UNKNOWN: {exc}", file=sys.stderr)
             slowdown_unknown = True
+    if a.metrics:
+        import tempfile
+        a.metrics.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(mode="w", dir=a.metrics.parent,
+                                         delete=False) as stream:
+            tmp = Path(stream.name)
+            stream.write(gaming_mod.metrics(status))
+            if a.slowdown:
+                stream.write("# HELP aegis_gaming_slowdown_ok Requested scope operations verified.\n"
+                             "# TYPE aegis_gaming_slowdown_ok gauge\n"
+                             f"aegis_gaming_slowdown_ok {int(not slowdown_unknown)}\n")
+        try:
+            tmp.chmod(0o644)
+            tmp.replace(a.metrics)
+        finally:
+            tmp.unlink(missing_ok=True)
     print(status.render())
     if not a.status:
         sent = _gaming_advisory(a, status)
