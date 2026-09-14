@@ -42,14 +42,15 @@ def test_start_end_debounce_and_restart(tmp_path):
     process(proc, 1, '/steam/reaper', 'SteamLaunch', 'AppId=42')
     assert gaming.probe(tmp_path, proc=proc, now=1000).held
     (proc / '1/cmdline').unlink()
-    assert gaming.probe(tmp_path, proc=proc, now=1060).state == 'ending'
+    assert gaming.probe(tmp_path, proc=proc, now=1060).state == 'gaming'
     assert gaming.probe(tmp_path, proc=proc, now=1120).held
     assert gaming.probe(tmp_path, proc=proc, now=1180).held
-    assert gaming.probe(tmp_path, proc=proc, now=1181).state == 'clear'
+    assert gaming.probe(tmp_path, proc=proc, now=1181).held
+    assert gaming.probe(tmp_path, proc=proc, now=1301).state == 'clear'
     (proc / '1/cmdline').write_bytes(b'reaper\0SteamLaunch\0AppId=42\0')
-    assert gaming.probe(tmp_path, proc=proc, now=1200).held
-    assert gaming.read(tmp_path, now=1381).state == 'unknown'
-    assert not gaming.read(tmp_path, now=1199).held
+    assert gaming.probe(tmp_path, proc=proc, now=1320).held
+    assert gaming.read(tmp_path, now=1501).state == 'unknown'
+    assert not gaming.read(tmp_path, now=1319).held
 
 
 def test_manual_survives_probe_and_clear_does_not_cancel_a_real_game(tmp_path):
@@ -150,3 +151,48 @@ def test_weak_idle_advisory_never_lifts_and_manual_wins(tmp_path, monkeypatch):
     gaming.manual(tmp_path)
     assert gaming.read(tmp_path).state == 'manual'
     assert 'your call' not in gaming.read(tmp_path).render()
+
+
+def test_recorded_shader_launch_holds_without_appid(tmp_path):
+    enabled(tmp_path)
+    proc = tmp_path / 'proc'
+    rows = json.loads((Path(__file__).parent / 'fixtures/shader-processes.json').read_text())
+    for row in rows:
+        process(proc, row['pid'], *row['argv'])
+    assert gaming.game_appids(proc) == ()
+    assert len(gaming.shader_pids(proc)) == len(rows)
+    gaming.manual(tmp_path)
+    assert gaming.probe(tmp_path, proc=proc, now=1000).state == 'manual'
+    # Only the test clears its own sandbox manual marker.
+    gaming.manual(tmp_path, clear=True)
+    for now in range(1060, 1901, 60):
+        assert gaming.probe(tmp_path, proc=proc, now=now).state == 'gaming'
+    data = json.loads((tmp_path / 'gaming/state.json').read_text())
+    assert data['absent_since'] is None and data['shader_pids']
+    for row in rows:
+        (proc / str(row['pid']) / 'cmdline').unlink()
+    assert gaming.probe(tmp_path, proc=proc, now=1960).state == 'ending'
+    assert gaming.probe(tmp_path, proc=proc, now=2080).held
+    assert gaming.probe(tmp_path, proc=proc, now=2081).state == 'clear'
+
+
+def test_shader_mentions_and_similar_names_do_not_hold(tmp_path):
+    process(tmp_path, 1, 'bash', '-c', '/steam/fossilize_replay')
+    process(tmp_path, 2, 'pgrep', '-af', 'fossilize_replay')
+    process(tmp_path, 3, '/steam/fossilize_replay_helper')
+    assert gaming.shader_pids(tmp_path) == ()
+
+
+def test_game_to_shader_transition_restarts_absence_clock(tmp_path):
+    enabled(tmp_path)
+    proc = tmp_path / 'proc'
+    process(proc, 1, '/steam/reaper', 'SteamLaunch', 'AppId=42')
+    gaming.probe(tmp_path, proc=proc, now=1000)
+    (proc / '1/cmdline').unlink()
+    assert gaming.probe(tmp_path, proc=proc, now=1120).state == 'gaming'
+    process(proc, 2, '/steam/fossilize_replay')
+    assert gaming.probe(tmp_path, proc=proc, now=1240).state == 'gaming'
+    (proc / '2/cmdline').unlink()
+    assert gaming.probe(tmp_path, proc=proc, now=1360).state == 'ending'
+    assert gaming.probe(tmp_path, proc=proc, now=1480).held
+    assert gaming.probe(tmp_path, proc=proc, now=1481).state == 'clear'

@@ -1174,7 +1174,11 @@ Automatic detection is opt-in: `st hold gaming --enable-detection`, then schedul
 `st hold gaming --probe` every minute using the deployment's normal scheduler.
 The probe only reads process argv: the executable must be `reaper`, followed by
 `SteamLaunch` and a numeric `AppId`. A Steam helper without an AppId is excluded.
-The hold clears after more than two minutes of observed absence. A probe older
+The exact `fossilize_replay` executable also holds during shader compilation,
+even without an AppId. Shader processes participate in activity accounting. The
+hold clears only after both signals have been absent for more than two minutes
+and the five-minute grace from the first launch observation has elapsed. Shell
+commands merely mentioning either executable do not match. A probe older
 than three minutes is UNKNOWN and does not enforce an automatic hold; a manual
 hold remains effective. `--disable-detection` does not clear a manual override.
 

@@ -17,6 +17,7 @@ from . import gaming_activity
 
 MAX_AGE = 180
 LIFT_DELAY = 120
+LAUNCH_GRACE = 300
 
 
 @dataclass(frozen=True)
@@ -76,6 +77,21 @@ def game_roots(proc: Path = Path("/proc")) -> dict[int, str]:
     return found
 
 
+def shader_pids(proc: Path = Path("/proc")) -> tuple[int, ...]:
+    """Shader replay precedes the game reaper; argv mentions are not evidence."""
+    found = []
+    for entry in proc.iterdir():
+        if not entry.name.isdecimal():
+            continue
+        try:
+            executable = (entry / "cmdline").read_bytes().split(b"\0", 1)[0]
+        except (FileNotFoundError, ProcessLookupError, PermissionError):
+            continue
+        if Path(executable.decode(errors="replace")).name == "fossilize_replay":
+            found.append(int(entry.name))
+    return tuple(sorted(found))
+
+
 def game_appids(proc: Path = Path("/proc")) -> tuple[str, ...]:
     return tuple(sorted(set(game_roots(proc).values())))
 
@@ -123,6 +139,7 @@ def probe(root: Path, *, proc: Path = Path("/proc"), now: float | None = None) -
             return old
         try:
             roots = game_roots(proc)
+            shaders = shader_pids(proc)
             appids = tuple(sorted(set(roots.values())))
             try:
                 previous = json.loads((folder / "state.json").read_text())
@@ -131,17 +148,21 @@ def probe(root: Path, *, proc: Path = Path("/proc"), now: float | None = None) -
             absent = previous.get("absent_since")
             automatic = previous.get("state") if 0 <= now - previous.get("observed", 0) <= MAX_AGE else None
             since = previous.get("since", now) if automatic in {"gaming", "ending"} else now
-            if appids:
+            if appids or shaders:
                 state, absent = "gaming", None
             elif automatic in {"gaming", "ending"}:
                 absent = now if absent is None else float(absent)
-                state = "ending" if now - absent <= LIFT_DELAY else "clear"
+                # Brief reaper disappearance during launch must not release workers.
+                if now - since < LAUNCH_GRACE:
+                    state = "gaming"
+                else:
+                    state = "ending" if now - absent <= LIFT_DELAY else "clear"
             else:
                 state = "clear"
             data = dict(state=state, appids=appids, since=since if state != "clear" else 0,
-                        observed=now, absent_since=absent)
+                        observed=now, absent_since=absent, shader_pids=shaders)
             try:
-                data.update(gaming_activity.observe(proc, roots, previous, now))
+                data.update(gaming_activity.observe(proc, set(roots) | set(shaders), previous, now))
             except (OSError, ValueError, TypeError):
                 pass  # Corroboration cannot turn a known game into signal loss.
         except (OSError, ValueError, TypeError) as exc:
