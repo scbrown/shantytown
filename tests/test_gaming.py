@@ -11,6 +11,11 @@ from shantytown.tend import Tender, GOVERNED
 from shantytown.tmux import NullPanes
 
 
+@pytest.fixture(autouse=True)
+def no_physical_gpu(monkeypatch):
+    monkeypatch.setattr(gaming.gaming_activity, 'gpu_busy', lambda: None)
+
+
 def enabled(root):
     (root / 'gaming').mkdir()
     (root / 'gaming/enabled').touch()
@@ -131,3 +136,17 @@ def test_rule_zero_yields_to_gaming_without_usage_governor(tmp_path):
     from shantytown.feed_check import governor_admits
     gaming.manual(tmp_path)
     assert 'gaming' in governor_admits(tmp_path)(None)
+
+
+def test_weak_idle_advisory_never_lifts_and_manual_wins(tmp_path, monkeypatch):
+    enabled(tmp_path)
+    proc = tmp_path / 'proc'
+    process(proc, 1, 'reaper', 'SteamLaunch', 'AppId=42')
+    monkeypatch.setattr(gaming.gaming_activity, 'observe', lambda *a:
+                        dict(game_present_idle=True, idle_since=1000, gpu_busy=0, game_cpu=0))
+    status = gaming.probe(tmp_path, proc=proc, now=1600)
+    assert status.held and status.game_present_idle
+    assert 'idle 10 min' in status.render() and 'your call' in status.render()
+    gaming.manual(tmp_path)
+    assert gaming.read(tmp_path).state == 'manual'
+    assert 'your call' not in gaming.read(tmp_path).render()

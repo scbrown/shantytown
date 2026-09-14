@@ -8083,7 +8083,8 @@ def _gaming_advisory(a, status, *, reg=None, panes=None):
             Path(a.root), reg if reg is not None else _registry(a),
             panes if panes is not None else _panes(a), filename="gaming_hold.json",
             label="gaming governor").sweep({"local": creel_advisory_mod.Advice(
-                status.render(), "held" if status.held else status.state)})
+                status.render(), ("game_present_idle" if status.game_present_idle and status.state != "manual"
+                                  else "held" if status.held else status.state))})
     except Exception as exc:
         print(f"  gaming advisory delivery failed: {exc}", file=sys.stderr)
         return []

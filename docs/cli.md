@@ -1177,7 +1177,12 @@ Prometheus, including hold state, probe freshness and session start. The probe
 and tend both retry coordinator advisory delivery until accepted, then dedupe
 repeats. Initial clear does not send a spurious session-ended notification.
 
-Detection alone cannot distinguish an idle game menu from active play. `--probe --slowdown` applies a 25% CPU quota and CPU weight 10 to each verified
+GPU utilization and game-tree CPU are weak corroboration. After ten continuous
+minutes at GPU <=5% and game-tree CPU <=2% of one core, the coordinator receives
+`game_present_idle — game present but idle N min — your call`. This never lifts
+the hold: a numeric-AppId reaper remains authoritative. Missing telemetry,
+changing process identities or renewed activity reset the idle interval. A manual
+hold outranks the idle advisory. Metrics retain the GPU and CPU evidence. `--probe --slowdown` applies a 25% CPU quota and CPU weight 10 to each verified
 exclusive crew tmux scope, preserving stricter limits. It records original values
 before applying, verifies read-back, and restores on lift without overwriting
 external changes. Heavy-work wrappers are deployment integrations; this command never

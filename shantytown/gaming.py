@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .files import write_json_atomic
+from . import gaming_activity
 
 MAX_AGE = 180
 LIFT_DELAY = 120
@@ -25,6 +26,10 @@ class Status:
     since: float = 0
     observed: float = 0
     error: str = ""
+    gpu_busy: float | None = None
+    game_cpu: float | None = None
+    idle_since: float | None = None
+    game_present_idle: bool = False
 
     @property
     def held(self) -> bool:
@@ -36,6 +41,10 @@ class Status:
                 "Wait for the session to end or clear the manual hold.") if self.held else ""
 
     def render(self) -> str:
+        if self.held and self.game_present_idle and self.state != "manual":
+            minutes = int((self.observed - self.idle_since) / 60)
+            return (f"game_present_idle — game present but idle {minutes} min — your call. "
+                    "GAMING HOLD remains active; activity telemetry never auto-lifts it.")
         if self.held:
             return self.refusal + " Recommend leads only; defer heavy local work."
         if self.state == "clear":
@@ -45,9 +54,9 @@ class Status:
         return "gaming detection off"
 
 
-def game_appids(proc: Path = Path("/proc")) -> tuple[str, ...]:
+def game_roots(proc: Path = Path("/proc")) -> dict[int, str]:
     """Match argv tokens, never a shell/pgrep command mentioning the signature."""
-    found = set()
+    found = {}
     for entry in proc.iterdir():
         if not entry.name.isdecimal():
             continue
@@ -63,8 +72,12 @@ def game_appids(proc: Path = Path("/proc")) -> tuple[str, ...]:
             continue
         match = re.fullmatch(rb"AppId=([0-9]+)", argv[2])
         if match:
-            found.add(match[1].decode())
-    return tuple(sorted(found))
+            found[int(entry.name)] = match[1].decode()
+    return found
+
+
+def game_appids(proc: Path = Path("/proc")) -> tuple[str, ...]:
+    return tuple(sorted(set(game_roots(proc).values())))
 
 
 def read(root: Path, *, now: float | None = None) -> Status:
@@ -82,7 +95,9 @@ def read(root: Path, *, now: float | None = None) -> Status:
         if data["state"] not in {"gaming", "ending", "clear", "unknown"}:
             raise ValueError("invalid probe state")
         return Status(data["state"], tuple(data["appids"]), float(data["since"]),
-                      observed, data.get("error", ""))
+                      observed, data.get("error", ""), data.get("gpu_busy"),
+                      data.get("game_cpu"), data.get("idle_since"),
+                      bool(data.get("game_present_idle", False)))
     except (OSError, ValueError, KeyError, TypeError) as exc:
         return Status("unknown", error=str(exc))
 
@@ -107,7 +122,8 @@ def probe(root: Path, *, proc: Path = Path("/proc"), now: float | None = None) -
         if not (folder / "enabled").exists():
             return old
         try:
-            appids = game_appids(proc)
+            roots = game_roots(proc)
+            appids = tuple(sorted(set(roots.values())))
             try:
                 previous = json.loads((folder / "state.json").read_text())
             except (OSError, ValueError):
@@ -124,6 +140,10 @@ def probe(root: Path, *, proc: Path = Path("/proc"), now: float | None = None) -
                 state = "clear"
             data = dict(state=state, appids=appids, since=since if state != "clear" else 0,
                         observed=now, absent_since=absent)
+            try:
+                data.update(gaming_activity.observe(proc, roots, previous, now))
+            except (OSError, ValueError, TypeError):
+                pass  # Corroboration cannot turn a known game into signal loss.
         except (OSError, ValueError, TypeError) as exc:
             data = dict(state="unknown", appids=[], since=0, observed=now, error=str(exc))
         write_json_atomic(folder / "state.json", data)
@@ -133,7 +153,7 @@ def probe(root: Path, *, proc: Path = Path("/proc"), now: float | None = None) -
 def metrics(status: Status) -> str:
     # Bounded labels: app IDs are reported separately, never retained as inactive
     # per-game series. The alert consumes the single unlabeled hold gauge.
-    return ("# HELP aegis_gaming_session_active Local gaming hold including manual override.\n"
+    base = ("# HELP aegis_gaming_session_active Local gaming hold including manual override.\n"
             "# TYPE aegis_gaming_session_active gauge\n"
             f"aegis_gaming_session_active {int(status.held)}\n"
             "# HELP aegis_gaming_probe_ok Whether current automatic evidence is readable.\n"
@@ -145,3 +165,14 @@ def metrics(status: Status) -> str:
             "# HELP aegis_gaming_session_start_timestamp_seconds Current hold start.\n"
             "# TYPE aegis_gaming_session_start_timestamp_seconds gauge\n"
             f"aegis_gaming_session_start_timestamp_seconds {status.since}\n")
+
+    extra = ("# HELP aegis_gaming_present_idle Weak idle advisory; never lifts the hold.\n"
+             "# TYPE aegis_gaming_present_idle gauge\n"
+             f"aegis_gaming_present_idle {int(status.game_present_idle)}\n")
+    for name, value in [('gpu_busy_percent', status.gpu_busy), ('tree_cpu_percent', status.game_cpu)]:
+        if value is not None:
+            extra += f"# TYPE aegis_gaming_{name} gauge\naegis_gaming_{name} {value}\n"
+    for appid in status.appids:
+        if re.fullmatch(r'[0-9]+', appid):
+            extra += f'aegis_gaming_app_present{{appid="{appid}"}} 1\n'
+    return base + extra
