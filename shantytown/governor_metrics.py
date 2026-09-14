@@ -595,8 +595,26 @@ def render(lanes, *, agents=None, now: float, totals: Totals = EMPTY) -> str:
         out.add("st_agents", count, harness=harness, state=state)
     for (harness, work), count in sorted((agents or {}).get("work", {}).items()):
         out.add("st_agents_work", count, harness=harness, work=work)
-    for harness, count in sorted((agents or {}).get("stopped", {}).items()):
-        out.add("st_agents_stopped_deliberate", count, harness=harness)
+    # ALWAYS emitted, 0 in the steady state — the same rule this module states for
+    # st_governor_duplicate_samples_dropped four lines below, and the same one the
+    # `known_windows` set above exists to keep ("counters exist at 0 from the first
+    # pass rather than from the first event"). It was stated twice here and not
+    # applied to this series (aegis-63mg5 class).
+    #
+    # `stopped` is keyed only by harnesses that HAVE a deliberately-stopped agent, so
+    # in the steady state — nobody stopped — it is empty and the series did not exist
+    # at all. That is not a cosmetic gap: goldblum's "Alert invariants" gate FAILS the
+    # build on a dashboard panel selecting a metric with no series, precisely because
+    # "a panel with no series renders 'No data' or a flat zero, and on a capacity or
+    # budget dashboard that reads as HEADROOM". So the steady state broke a shared CI
+    # gate for every agent touching goldblum, and read as "no agents stopped" being
+    # indistinguishable from "this is not measured".
+    _stopped = (agents or {}).get("stopped", {})
+    _harnesses = ({h for h, _ in (agents or {}).get("state", {})}
+                  | {h for h, _ in (agents or {}).get("work", {})}
+                  | set(_stopped))
+    for harness in sorted(_harnesses):
+        out.add("st_agents_stopped_deliberate", _stopped.get(harness, 0), harness=harness)
     # LAST, so it counts every drop above. Always emitted, 0 in the steady state:
     # a counter that appears only on failure is a panel that reads green, which is
     # this module's own rule. It is the visible half of the `_Out` guard — without

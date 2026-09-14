@@ -181,6 +181,45 @@ def test_agent_counts_absent_when_the_read_failed():
     assert s['st_agents_stopped_deliberate{harness="claude"}'] == 1
 
 
+def test_stopped_deliberate_exists_at_ZERO_when_nobody_is_stopped():
+    """THE STEADY STATE MUST PUBLISH A SERIES (aegis-63mg5 class).
+
+    `stopped` is keyed only by harnesses that have a stopped agent, so with
+    nobody stopped it is empty. Emitting nothing then made the series vanish in
+    the ordinary case, which broke goldblum's "Alert invariants" gate: it FAILS
+    the build when a dashboard panel selects a metric with no series, because a
+    panel with no series reads as headroom rather than as "not measured".
+
+    This is the rule the module already states for
+    st_governor_duplicate_samples_dropped four lines below the fix.
+    """
+    body = gm.render([_lane()], now=NOW, agents={
+        "state": {("claude", "up"): 4, ("codex", "down"): 2},
+        "work": {("claude", "busy"): 2},
+        "stopped": {}})
+    s = _samples(body)
+    assert s['st_agents_stopped_deliberate{harness="claude"}'] == 0
+    assert s['st_agents_stopped_deliberate{harness="codex"}'] == 0
+
+
+def test_a_populated_harness_still_reports_its_real_count():
+    """The zero-fill must not flatten a real count, and must not invent a
+    harness the fleet has never seen."""
+    s = _samples(gm.render([_lane()], now=NOW, agents={
+        "state": {("claude", "up"): 4},
+        "work": {("claude", "busy"): 2},
+        "stopped": {"claude": 3}}))
+    assert s['st_agents_stopped_deliberate{harness="claude"}'] == 3
+    assert 'st_agents_stopped_deliberate{harness="codex"}' not in s
+
+
+def test_could_not_look_still_publishes_NOTHING():
+    """The zero-fill must not defeat the None contract pinned above: an unread
+    fleet must stay silent, never publish a fleet of zero stopped agents."""
+    assert "st_agents_stopped_deliberate" not in gm.render(
+        [_lane()], agents=None, now=NOW)
+
+
 # --- a ratio ships with its arithmetic --------------------------------------
 
 def test_the_ratio_ships_with_its_own_arithmetic():
