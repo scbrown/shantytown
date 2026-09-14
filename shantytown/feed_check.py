@@ -541,6 +541,10 @@ def governor_admits(root):
     """
     try:
         from . import config
+        from . import gaming
+        hold = gaming.read(Path(root))
+        if hold.held:
+            return lambda item: hold.refusal
         from . import governor as gov_mod
         cfg, _err = config.load_or_default(Path(root))
         if not cfg.governor.active:

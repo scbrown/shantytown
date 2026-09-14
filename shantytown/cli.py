@@ -1,4 +1,4 @@
-"""st — the CLI. Thirty-one commands, and the count is load-bearing: each earns its slot.
+"""st — the CLI. Thirty-two commands, and the count is load-bearing: each earns its slot.
 
     anchor [--short|--events|--harness] · go · repool · defer · inbox [--count] · task
     · crew [--count|--governor] · input [--show|--clear|--dismiss] · ask · answer
@@ -7,7 +7,7 @@
     · tend [--install|--status|--reauth|--target] · attach [-r|--no-start]
     · dashboard [admin] · subscribe · cycle [--self|--allow-loss] · worktree [--gc]
     · push [--branch] · window {plan|drain|clear|release|abort} · stats · help <topic>
-    · history <agent>
+    · history <agent> · hold gaming [--clear|--status|--probe]
 
 `harness <agent> [claude|codex]` earned the thirty-first slot (aegis-6glmer, Stiwi
 2026-09-04: "it should be easy for you to convert crew to claude"). It is a command
@@ -141,6 +141,7 @@ from .dispatch import (Dispatcher, TriageRefused, SendUnverified,
                        GovernorRefused, RepoolRefused, DeferRefused,
                        BLOCKER_KIND_LABELS, TrackerWriteLost)
 from . import forgejo as forgejo_mod
+from . import gaming as gaming_mod
 from . import governor as gov_mod
 from . import governor_utilization as util_mod
 from . import governor_metrics as gov_metrics_mod
@@ -518,6 +519,9 @@ def _dispatch_gate(a):
         return lambda item, agent=None: (
             f"maintenance window {maintenance['id']!r} is {maintenance['state']} — "
             "dispatch/feed held until release or abort")
+    gaming = gaming_mod.read(Path(a.root))
+    if gaming.held:
+        return lambda item, agent=None: gaming.refusal
     cfg, governors = _governors(a)
     stood_down = bool(getattr(getattr(cfg, "fleet", None), "stood_down", False))
     if not governors and not stood_down:
@@ -769,6 +773,17 @@ def build_parser() -> argparse.ArgumentParser:
              "`br ready`, every haul, and every plate.")
     rp.add_argument("item")
     rp.add_argument("-n", "--dry-run", action="store_true")
+
+    hold = sub.add_parser("hold", help="local gaming hold and scheduled observation")
+    hold.add_argument("kind", choices=["gaming"])
+    actions = hold.add_mutually_exclusive_group()
+    actions.add_argument("--clear", action="store_true", help="clear manual override only")
+    actions.add_argument("--status", action="store_true", help="exit 1 held, 0 clear/off, 2 unknown")
+    actions.add_argument("--probe", action="store_true", help="scheduled read-only process scan")
+    actions.add_argument("--enable-detection", action="store_true")
+    actions.add_argument("--disable-detection", action="store_true")
+    hold.add_argument("--slowdown", action="store_true", help="with --probe, bound exclusive crew scopes and restore on lift")
+    hold.add_argument("--metrics", type=Path, help="atomic Prometheus textfile (with --probe)")
 
     df = sub.add_parser(
         "defer",
@@ -1356,6 +1371,15 @@ def main(argv: list[str] | None = None) -> int:
     a.root, a.root_how = resolve_root(a.root, discover=(a.cmd != "init"))
     _warn_if_no_store(a)
 
+    # Gate replacement operations before they stop a live session. The shared
+    # launch seam remains guarded too for internal callers and restore paths.
+    if a.cmd in {"new", "start", "cycle"}:
+        gaming = gaming_mod.read(Path(a.root))
+        if gaming.held:
+            print(f"  refused: {gaming.refusal}", file=sys.stderr)
+            return REFUSED
+    if a.cmd == "hold":
+        return _cmd_hold(a)
     if a.cmd == "anchor":
         return _cmd_anchor(a)
     if a.cmd == "go":
@@ -1888,6 +1912,10 @@ def _cmd_harness(a) -> int:
               + (f", model {plan.model}" if plan.model else ""))
         return OK
 
+    if plan.restart_now and gaming_mod.read(Path(a.root)).held:
+        print(gaming_mod.read(Path(a.root)).refusal, file=sys.stderr)
+        return REFUSED
+
     # BACK UP THE CARD FIRST. The five manual conversions this replaces had no
     # backups, and one had to be reverted from memory.
     import shutil
@@ -2008,6 +2036,10 @@ def _launch(a, card, panes, runtime, *, dry_run: bool = False,
     guard, the equipped-or-not-created refusal and the hooks verification are each
     load-bearing, and a second launcher would have to re-earn all four.
     """
+    gaming = gaming_mod.read(Path(a.root))
+    if gaming.held:
+        print(f"  refused: {gaming.refusal}", file=sys.stderr)
+        return REFUSED
     if not window_restore and (rc := _window_launch_gate(a)) is not None:
         return rc
     # A dead app-server can outlive its pane behind Codex's per-card daemon and
@@ -4490,6 +4522,9 @@ def _cmd_crew(a) -> int:
     # precedent for a status-bar reader here, and the command count is pinned by
     # test_command_count — a new verb is a deliberate widening, this is not.)
     if getattr(a, "governor", False):
+        gaming = gaming_mod.read(Path(a.root))
+        if gaming.state != "off":
+            print(gaming.render())
         return _crew_governor(a)
     if rules := getattr(a, "check_alert_keepers", None):
         return _check_alert_keepers(a, rules)
@@ -6393,6 +6428,10 @@ def _cmd_cycle(a) -> int:
     ORDER: assess -> stop -> launch -> re-dispatch. The guard runs first and to
     completion, because everything after it is irreversible from here.
     """
+    gaming = gaming_mod.read(Path(a.root))
+    if gaming.held:
+        print(f"  refused: {gaming.refusal}", file=sys.stderr)
+        return REFUSED
     from . import cycle as cycle_mod
 
     agent_name = a.agent or os.environ.get("SHANTY_AGENT", "")
@@ -8028,6 +8067,77 @@ def _cmd_dream(a) -> int:
     return OK
 
 
+def _gaming_advisory(a, status, *, reg=None, panes=None):
+    # Initial clear is not a lift event. Once any state has reached the
+    # coordinator, changes (including recovery from UNKNOWN) must reach it too.
+    ledger = Path(a.root) / "notify" / "gaming_hold.json"
+    if status.state in {"off", "clear"} and not ledger.exists():
+        return []
+    if status.state == "off":
+        status = gaming_mod.Status("clear")
+    try:
+        return creel_advisory_mod.Alerter(
+            Path(a.root), reg if reg is not None else _registry(a),
+            panes if panes is not None else _panes(a), filename="gaming_hold.json",
+            label="gaming governor").sweep({"local": creel_advisory_mod.Advice(
+                status.render(), "held" if status.held else status.state)})
+    except Exception as exc:
+        print(f"  gaming advisory delivery failed: {exc}", file=sys.stderr)
+        return []
+
+
+def _cmd_hold(a) -> int:
+    root = Path(a.root)
+    if (a.metrics or a.slowdown) and not a.probe:
+        print("--metrics and --slowdown require --probe", file=sys.stderr)
+        return REFUSED
+    if a.enable_detection or a.disable_detection:
+        folder = root / "gaming"
+        folder.mkdir(parents=True, exist_ok=True)
+        if a.enable_detection:
+            (folder / "enabled").touch()
+        else:
+            (folder / "enabled").unlink(missing_ok=True)
+    elif a.clear:
+        gaming_mod.manual(root, clear=True)
+    elif not a.status and not a.probe:
+        gaming_mod.manual(root)
+    status = gaming_mod.probe(root) if a.probe else gaming_mod.read(root)
+    if a.metrics:
+        import tempfile
+        a.metrics.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(mode="w", dir=a.metrics.parent,
+                                         delete=False) as stream:
+            tmp = Path(stream.name)
+            stream.write(gaming_mod.metrics(status))
+        try:
+            tmp.chmod(0o644)
+            tmp.replace(a.metrics)
+        finally:
+            tmp.unlink(missing_ok=True)
+    slowdown_unknown = False
+    if a.slowdown:
+        from . import gaming_scopes
+        try:
+            panes = _panes(a)
+            pids = [pid for card in _registry(a).all().exact()
+                    if (pid := panes.pane_pid(_session_for(card)))] if status.held else []
+            for line in gaming_scopes.reconcile(root, status.held, pids):
+                print(line)
+                slowdown_unknown |= "UNKNOWN" in line
+        except Exception as exc:
+            print(f"gaming slowdown UNKNOWN: {exc}", file=sys.stderr)
+            slowdown_unknown = True
+    print(status.render())
+    if not a.status:
+        sent = _gaming_advisory(a, status)
+        if sent:
+            print("gaming advisory delivered to coordinator: " + ", ".join(sent))
+    if a.status:
+        return CANNOT_TELL if status.state == "unknown" else int(status.held)
+    return CANNOT_TELL if status.state == "unknown" or slowdown_unknown else OK
+
+
 def _cmd_tend(a) -> int:
     """tend — one supervision pass, or manage the timer that runs them.
 
@@ -8165,6 +8275,9 @@ def _tend_once(a, quiet: bool = False) -> int:
     # that PERSISTS the engaged tier (hysteresis has to survive a process that
     # exists for five seconds every five minutes). A dry run evaluates and prints
     # but writes nothing, like everything else on a dry run.
+    gaming = gaming_mod.read(Path(a.root))
+    if gaming.state != "off":
+        print(f"  {gaming.render()}", file=sys.stderr)
     cfg, governors = _governors(a)
     verdicts = {name: gov.evaluate(persist=not a.dry_run)
                 for name, gov in governors.items()}
@@ -8411,15 +8524,17 @@ def _tend_once(a, quiet: bool = False) -> int:
         # is not sent hunting for a `--target` flag they never passed.
         target_src=_target_source(getattr(a, "target", None),
                                   None if verdict is None else verdict.max_agents),
-        governed=(None if not governors
-                  else lambda card: (_card_verdict(card).excludes(card, _catalog(a))
-                                     if _card_verdict(card) is not None else "")),
+        governed=(lambda card: gaming.refusal if gaming.held else
+                  (_card_verdict(card).excludes(card, _catalog(a))
+                   if governors and _card_verdict(card) is not None else "")),
         # The same record `st crew` reads to print "stopped ON PURPOSE", so the
         # two commands cannot disagree about whose decision put an agent down
         # (aegis-k9068). Without it tend explained every deliberate stop with the
         # foreign-orchestrator wording and counted it as a FAULT.
         stops=_stops(a),
     )
+    if not a.dry_run:
+        _gaming_advisory(a, gaming, reg=reg, panes=panes)
     rep = tender.pass_over(agents, dry_run=a.dry_run)
     # DELIVER blocked workers to their coordinator (aegis-w0kk). Not on a dry run
     # — a dry run pushes nothing, same as it launches nothing. Deduped, so a

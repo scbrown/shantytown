@@ -207,7 +207,7 @@ def test_the_surface_is_twenty():
     the restart to `--now`.
 
     Each command still earns its slot."""
-    assert len(_actual_subcommands()) == 31, (
+    assert len(_actual_subcommands()) == 32, (
         "the command count changed. If that's intended, update the number here and "
         "the cli.py docstring together — and say why the surface grew in docs/cli.md."
     )
@@ -253,7 +253,7 @@ def test_the_prose_number_in_the_docstring_matches_the_parser():
     words = {20: "twenty", 21: "twenty-one", 22: "twenty-two", 23: "twenty-three",
              24: "twenty-four", 25: "twenty-five", 26: "twenty-six",
              27: "twenty-seven", 28: "twenty-eight", 29: "twenty-nine",
-             30: "thirty", 31: "thirty-one"}
+             30: "thirty", 31: "thirty-one", 32: "thirty-two"}
     n = len(_actual_subcommands())
     doc_first_line = (cli.__doc__ or "").splitlines()[0].lower()
     assert words[n] in doc_first_line, (

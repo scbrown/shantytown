@@ -45,6 +45,7 @@ st harness <agent> [claude|codex]
 st start [--mode lite|heavy]  BOOT the town by mode: the admin alone, or every card. idempotent
 st start <agent>...           bring up exactly these agents (already-up is a SUCCESS, not a refusal)
 st stop <agent> [--reason]    stop it, and RECORD that it was deliberate
+st hold gaming [--clear|--status]  hold local launches during a gaming session
 st window plan|drain|clear|release|abort <id>
                               transactional fleet-maintenance ledger + relaunch lease
 st log [agent]                what happened
@@ -90,7 +91,7 @@ Codex input already includes its cached subset. This makes
 `cache_read / usage_in` a provider-independent prompt-cache hit rate. The fields
 are omitted—not zeroed—when every matching transcript is unknown.
 
-Thirty-one. `--dry-run` is on every command that writes, from commit one. The surface grew past the
+Thirty-two. `--dry-run` is on every command that writes, from commit one. The surface grew past the
 original eight, each slot on a specific ask — not drift: **inbox**/**task** (the dispatch/tracker
 pair, owner-directed), **context** (the bobbin Context protocol), **doctor**
 (out-of-box detect/install, Stiwi's direct ask), **subscribe** (the quipu events adapter,
@@ -1141,3 +1142,32 @@ capture alongside existing post-tool/stop capture on **next launch**. Already
 running sessions may lack starts and must report UNKNOWN; installing code does
 not prove those sessions adopted new hook settings. No restart is required by
 this command.
+
+### Gaming hold
+
+`st hold gaming` sets a persistent local manual hold; `st hold gaming --clear`
+clears that override without overriding a detected game. The hold refuses new
+launches, replacement cycles, dispatch and tend respawns. Existing sessions stay
+running; the coordinator gets a deduplicated recommendation to keep leads only
+and defer heavy local work. Clearing the hold resumes normal budget policy.
+
+Automatic detection is opt-in: `st hold gaming --enable-detection`, then schedule
+`st hold gaming --probe` every minute using the deployment's normal scheduler.
+The probe only reads process argv: the executable must be `reaper`, followed by
+`SteamLaunch` and a numeric `AppId`. A Steam helper without an AppId is excluded.
+The hold clears after more than two minutes of observed absence. A probe older
+than three minutes is UNKNOWN and does not enforce an automatic hold; a manual
+hold remains effective. `--disable-detection` does not clear a manual override.
+
+`st hold gaming --status` is a read-only gate for local build/reindex wrappers:
+exit 1 means defer, 0 means clear/off, and 2 means unknown. Never interpret 2 as
+proof of absence. `--probe --metrics <path.prom>` writes an atomic textfile for
+Prometheus, including hold state, probe freshness and session start. The probe
+and tend both retry coordinator advisory delivery until accepted, then dedupe
+repeats. Initial clear does not send a spurious session-ended notification.
+
+Detection alone cannot distinguish an idle game menu from active play. `--probe --slowdown` applies a 25% CPU quota and CPU weight 10 to each verified
+exclusive crew tmux scope, preserving stricter limits. It records original values
+before applying, verifies read-back, and restores on lift without overwriting
+external changes. Heavy-work wrappers are deployment integrations; this command never
+modifies Steam or kills processes.
