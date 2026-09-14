@@ -718,6 +718,14 @@ A launch that could not be *verified* still attaches, loudly. The session exists
 established is that the runtime came up. Putting your eyes on that pane is the useful next action —
 exiting instead would hide the evidence behind a second command.
 
+## Deliberate-stop metrics
+
+The crew census published by `st tend` includes
+`st_agents_stopped_deliberate{harness="…"}` for every observed harness. A complete
+stop-store read with no deliberate stops publishes zero. An unreadable or partial
+stop-store read omits that count, preserving the distinction between zero and an
+unknown count. The roster census remains available independently.
+
 ## The stop decision — one verdict, five ranks
 
 Every agent's Stop hook is **one command** that returns **one verdict with one

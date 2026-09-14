@@ -612,9 +612,12 @@ def render(lanes, *, agents=None, now: float, totals: Totals = EMPTY) -> str:
     _stopped = (agents or {}).get("stopped", {})
     _harnesses = ({h for h, _ in (agents or {}).get("state", {})}
                   | {h for h, _ in (agents or {}).get("work", {})}
-                  | set(_stopped))
-    for harness in sorted(_harnesses):
-        out.add("st_agents_stopped_deliberate", _stopped.get(harness, 0), harness=harness)
+                  | set(_stopped or {}))
+    # A readable roster does not establish that its separate stop store was read.
+    # None carries that partial failure; an empty mapping is a known zero.
+    if _stopped is not None:
+        for harness in sorted(_harnesses):
+            out.add("st_agents_stopped_deliberate", _stopped.get(harness, 0), harness=harness)
     # LAST, so it counts every drop above. Always emitted, 0 in the steady state:
     # a counter that appears only on failure is a panel that reads green, which is
     # this module's own rule. It is the visible half of the `_Out` guard — without
