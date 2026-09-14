@@ -78,7 +78,9 @@ st push <repo> [agent]        push wt/<agent> to EVERY remote; refuses if invoke
 Assigned titles are shown with `…` when the default `st crew` output clips them
 at the terminal width. `st crew --wide` (also `--no-truncate`) prints the complete
 title, suitable for piping or terminal scrollback. Control characters in titles
-are rendered as spaces so tracker text cannot move the terminal cursor.
+are rendered as spaces so tracker text cannot move the terminal cursor. The
+bead-backed roster shares one store/readiness snapshot across its assigned rows;
+a new invocation reads fresh work.
 
 In an interactive `st dashboard`, **Left/Right** scroll assigned work eight
 characters at a time; **Home/End** show its beginning/end. `‹` marks hidden text

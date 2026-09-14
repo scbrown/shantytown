@@ -407,7 +407,11 @@ def test_crew_title_default_marks_cut_and_wide_keeps_full_title(tmp_path, monkey
     root = _roster(tmp_path, {'ellie': 'p-ellie'})
     monkeypatch.setattr(cli, 'Tmux', lambda *_a, **_k: _Panes({'p-ellie': BUSY_SCREEN}))
     title = 'START ' + 'important assigned work ' * 20 + 'FINISH'
-    monkeypatch.setattr(cli, '_plate', lambda a: lambda who: WorkItem(id='st-1', title=title))
+    snapshots = []
+    def plate(args, *, snapshot=False):
+        snapshots.append(snapshot)
+        return lambda who: WorkItem(id='st-1', title=title)
+    monkeypatch.setattr(cli, '_plate', plate)
     monkeypatch.setattr(shutil, 'get_terminal_size', lambda: os.terminal_size((80, 24)))
     args = _Args(root)
     assert cli._cmd_crew(args) == cli.OK
@@ -417,6 +421,7 @@ def test_crew_title_default_marks_cut_and_wide_keeps_full_title(tmp_path, monkey
     assert cli._cmd_crew(args) == cli.OK
     wide = next(l for l in capsys.readouterr().out.splitlines() if 'assigned:' in l)
     assert title in wide and wide.endswith('FINISH')
+    assert snapshots == [True, True]
 
 
 def test_crew_wide_and_no_truncate_parse(monkeypatch):

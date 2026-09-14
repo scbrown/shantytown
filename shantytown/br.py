@@ -238,7 +238,29 @@ def plate(tracker: BrTracker, agent: str,
     agent holding an item in the unreadable store still never reads as a clean
     empty plate, because the warning names the store the answer is missing.
     """
-    seen, failures = rows_partial(tracker)
+    return _select_plate(tracker, agent, *rows_partial(tracker),
+                         lambda: ready_ids_or_none(tracker), warn)
+
+
+def plate_reader(tracker: BrTracker):
+    """One lazy read snapshot for a roster; discard it after each render.
+
+    A per-agent plate call rereads the entire store and readiness set. Keep the
+    selection rules identical while bounding those reads independently of crew
+    size. No cache survives this reader, so the next roster observes new work.
+    """
+    from functools import cache
+
+    snapshot = cache(lambda: rows_partial(tracker))
+    ready = cache(lambda: ready_ids_or_none(tracker))
+
+    def read(agent):
+        return _select_plate(tracker, agent, *snapshot(), ready, None)
+
+    return read
+
+
+def _select_plate(tracker, agent, seen, failures, read_ready, warn):
     for note in failures:
         (warn or _warn_stderr)(note)
     mine = [
@@ -254,7 +276,7 @@ def plate(tracker: BrTracker, agent: str,
     # degrades to None (previous ordering) rather than to an empty set — the
     # could-not-look-is-not-empty rule this function's docstring is built on
     # applies to the readiness call exactly as it does to the rows.
-    ready_ids = ready_ids_or_none(tracker)
+    ready_ids = read_ready()
     mine.sort(key=lambda row: plate_key(row.get("status"), _priority(row),
                                         row.get("id", ""), ready_ids))
     row = mine[0]

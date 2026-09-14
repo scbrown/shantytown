@@ -320,12 +320,12 @@ def _default_bd_repo(a) -> str | None:
         return None
 
 
-def _plate(a):
+def _plate(a, *, snapshot=False):
     """The plate reader matching the selected tracker."""
     trk = _tracker(a)
     if _backend(a) in ("beads", "br"):
-        from .br import plate as br_plate
-        return lambda who: br_plate(trk, who)
+        from .br import plate as br_plate, plate_reader
+        return plate_reader(trk) if snapshot else lambda who: br_plate(trk, who)
     return lambda who: files_plate(trk, who)
 
 
@@ -4586,7 +4586,7 @@ def _cmd_crew(a) -> int:
     title_width = None if getattr(a, "wide", False) else max(
         1, shutil.get_terminal_size().columns - 14)
     try:
-        plate = _plate(a)
+        plate = _plate(a, snapshot=True)
     except Exception:
         plate = None
     print()
