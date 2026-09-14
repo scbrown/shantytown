@@ -5688,8 +5688,10 @@ def _agent_counts(a, agents, panes, runtime):
         return None
     try:
         stopped_now = set((_stops(a).all().exact() or {}))
+        stopped_known = True
     except Exception:
         stopped_now = set()
+        stopped_known = False
     state: dict[tuple[str, str], int] = {}
     work_c: dict[tuple[str, str], int] = {}
     stopped: dict[str, int] = {}
@@ -5704,9 +5706,12 @@ def _agent_counts(a, agents, panes, runtime):
             w = ("unknown" if work in ("?", "—", "") else
                  work.replace(" ", "_").replace("-", "_"))
             work_c[(harness, w)] = work_c.get((harness, w), 0) + 1
-        if ag.name in stopped_now:
-            stopped[harness] = stopped.get(harness, 0) + 1
-    return {"state": state, "work": work_c, "stopped": stopped}
+        # A complete census with no deliberate stops is zero, not a missing
+        # metric. An unreadable/partial stop store still publishes no stop count.
+        if stopped_known:
+            stopped[harness] = stopped.get(harness, 0) + int(ag.name in stopped_now)
+    return {"state": state, "work": work_c,
+            "stopped": stopped if stopped_known else None}
 
 
 def _ready_count(root, reg):

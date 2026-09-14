@@ -743,3 +743,27 @@ def test_a_body_with_two_tiers_in_one_window_PARSES(tmp_path):
     complaints = [l for l in (done.stdout + done.stderr).splitlines()
                   if l.strip() and "no help text" not in l]
     assert not complaints, complaints
+
+
+@pytest.mark.parametrize('stop_record', [None, '{"at": 1000}', '{broken'])
+def test_stopped_census_distinguishes_zero_positive_and_unreadable(tmp_path, monkeypatch, stop_record):
+    from types import SimpleNamespace
+    from shantytown import cli
+
+    agents = [SimpleNamespace(name='alice', kind='claude'),
+              SimpleNamespace(name='bob', kind='codex')]
+    monkeypatch.setattr(cli, '_crew_states', lambda *_: [
+        (agent, 'up', 'busy', '') for agent in agents])
+    monkeypatch.setattr(cli.harness_mod, 'name_for', lambda agent, **_: agent.kind)
+    if stop_record is not None:
+        (tmp_path / 'stopped').mkdir()
+        (tmp_path / 'stopped/alice.json').write_text(stop_record)
+    counts = cli._agent_counts(SimpleNamespace(root=tmp_path), agents, None, None)
+    samples = _samples(gm.render([], agents=counts, now=NOW))
+    prefix = 'st_agents_stopped_deliberate'
+    if stop_record == '{broken':
+        assert not any(key.startswith(prefix) for key in samples)
+    else:
+        assert samples[prefix + '{harness="claude"}'] == int(stop_record is not None)
+        assert samples[prefix + '{harness="codex"}'] == 0
+    assert samples['st_agents{harness="codex",state="up"}'] == 1
