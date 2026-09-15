@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from shantytown.dispatch import Dispatcher, TrackerWriteLost
+from shantytown.dispatch import DeferRefused, Dispatcher, TrackerWriteLost
 from shantytown.files import FilesRegistry, FilesTracker
 from shantytown.tmux import NullPanes
 
@@ -43,13 +43,12 @@ def test_until_writes_the_STRUCTURED_field_and_verifies_it(world):
     assert tracker.get("item-1").defer_until == "2026-09-20"
 
 
-def test_without_until_the_deferral_is_conditionless_and_SAYS_SO(world):
-    """The prose-only defer still works — it must not start refusing — but the
-    result carries the fact, so the CLI can warn instead of passing silently."""
+def test_without_condition_refuses_without_writing(world):
     d, tracker = world
-    r = d.defer("item-1", "parked", "no condition given")
-    assert r.condition == ""
-    assert json.loads(tracker._path("item-1").read_text()).get("defer_until") in (None, "")
+    before = tracker._path("item-1").read_bytes()
+    with pytest.raises(DeferRefused, match="resume condition"):
+        d.defer("item-1", "parked", "no condition given")
+    assert tracker._path("item-1").read_bytes() == before
 
 
 def test_a_defer_until_THAT_NEVER_LANDS_is_caught_by_read_back(world):
@@ -75,11 +74,11 @@ def test_a_defer_until_THAT_NEVER_LANDS_is_caught_by_read_back(world):
     assert "defer_until" in str(e.value) or "defer_until" in repr(e.value.__dict__)
 
 
-def test_the_status_and_label_still_verify_when_no_condition_is_asked_for(world):
-    """CONTROL: the new check must not make ordinary prose defers fail."""
+def test_existing_condition_is_preserved(world):
     d, tracker = world
+    tracker.update("item-1", defer_until="2026-12-01")
     r = d.defer("item-1", "human", "waiting on a person")
-    assert r.track_attempts == 1
+    assert r.condition == "2026-12-01"
     assert tracker.get("item-1").status == "deferred"
 
 
@@ -99,14 +98,6 @@ def test_a_resume_when_MARKER_counts_as_a_condition(world):
     assert r.condition == "resume_when closed:aegis-u6mdxf", (
         "a sweeper-readable marker in the notes IS a machine-testable resume "
         f"condition; got {r.condition!r}")
-
-
-def test_prose_with_NO_marker_still_warns(world):
-    """CONTROL. Without this, treating every defer as conditioned would silence
-    the warning entirely and re-open aegis-bqcjws."""
-    d, tracker = world
-    r = d.defer("item-1", "human", "just prose, no machine-testable condition")
-    assert r.condition == ""
 
 
 def test_the_marker_is_parsed_with_the_SWEEPERS_regex(world):

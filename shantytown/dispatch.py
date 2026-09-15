@@ -353,6 +353,10 @@ class RepoolRefused(Exception):
     """
 
 
+class DeferUnconfirmed(Exception):
+    """A defer write or read failed; persisted state must be inspected."""
+
+
 class DeferRefused(Exception):
     """A structured defer was invalid or unsupported; nothing was written."""
 
@@ -812,86 +816,91 @@ class Dispatcher:
 
     def defer(self, item_id: str, kind: str, reason: str,
               dry_run: bool = False, until: str = "") -> Deferred:
-        """Park an item with one explicit blocker kind and a durable reason.
+        """Persist and verify the resume condition before hiding an item.
 
-        Classification is supplied by the deferrer, never inferred from prose.
-        The tracker primitive must write status, the selected label, removal of
-        contradictory labels, and the reason together; read-back proves both
-        structured outcomes before this reports success.
+        A backend may partially apply an update before timing out. Staging the
+        condition first means that interruption cannot strand newly deferred
+        work without a way back (aegis-wuy1j7).
         """
+        from .deferrals import parse_condition, parse_stamp
+
         label = BLOCKER_KIND_LABELS.get(kind)
         if label is None:
-            raise DeferRefused(
-                f"unknown blocker kind {kind!r}; choose "
-                f"{', '.join(BLOCKER_KIND_LABELS)}")
+            raise DeferRefused(f"unknown blocker kind {kind!r}")
         reason = reason.strip()
         if not reason:
-            raise DeferRefused(
-                "a defer reason is required — name the referent and the "
-                "condition that should be re-tested")
+            raise DeferRefused("a defer reason is required")
         item = self.tracker.get(item_id)
         if item.status == "closed":
-            raise DeferRefused(
-                f"{item_id} is closed — deferring it would resurrect terminal work")
+            raise DeferRefused(f"{item_id} is closed — deferring it would resurrect terminal work")
         if not getattr(self.tracker, "_structured_defer", False):
-            raise DeferRefused(
-                "this tracker backend cannot atomically record structured deferrals")
-        if item.status == "deferred" and item.blocker_kind == label:
-            return Deferred(item_id, kind, label, reason,
-                            was_status=item.status, noop=True)
+            raise DeferRefused("this tracker backend cannot record structured deferrals")
+        date = until or item.defer_until or ""
+        marker = parse_condition((item.notes or "") + "\n\n" + reason)
+        if date:
+            expected = parse_stamp(date)
+            if expected is None:
+                raise DeferRefused("--until/defer_until must be an ISO date or timestamp")
+            condition = date
+        elif marker and marker.testable() and (
+                marker.kind != "date" or parse_stamp(marker.arg) is not None):
+            condition = f"resume_when {marker.render()}"
+        else:
+            raise DeferRefused("a testable resume condition is required: use --until DATE "
+                               "or resume_when: closed:<id> / date:<ISO date>")
+
+        def missing(current, final=False):
+            absent = {}
+            if reason not in (current.notes or ""):
+                absent["defer_reason"] = (current.notes, reason)
+            if date:
+                if parse_stamp(current.defer_until) != expected:
+                    absent["defer_until"] = (current.defer_until, date)
+            elif parse_condition(current.notes or "") != marker:
+                absent["resume_when"] = (current.notes, marker.render())
+            if final:
+                for key, want in (("status", "deferred"), ("blocker_kind", label)):
+                    if getattr(current, key) != want:
+                        absent[key] = (getattr(current, key), want)
+            return absent
+
         result = Deferred(item_id, kind, label, reason, was_status=item.status,
-                          condition=until)
+                          condition=condition)
+        if not missing(item, final=True):
+            result.noop = True
+            return result
         if dry_run:
             return result
-        missing = {}
-        for attempt in range(1, _TRACK_ATTEMPTS + 1):
-            if attempt > 1:
-                time.sleep(_TRACK_DELAY)
-            fields = {"status": "deferred", "blocker_kind": label,
-                      "defer_reason": reason}
-            if until:
-                # THE STRUCTURED FIELD, NOT A NOTES MARKER (aegis-bqcjws).
-                # `br update --defer` writes a first-class column, so it is not
-                # subject to the non-empty-notes overwrite protection that makes
-                # the notes route refuse on exactly the well-documented beads a
-                # resume condition matters most for.
-                fields["defer_until"] = until
-            self.tracker.update(item_id, **fields)
-            current = self.tracker.get(item_id)
-            missing = {}
-            if current.status != "deferred":
-                missing["status"] = (current.status, "deferred")
-            if current.blocker_kind != label:
-                missing["blocker_kind"] = (current.blocker_kind, label)
-            if until and not (getattr(current, "defer_until", "") or ""):
-                # VERIFY WHAT WE WROTE, NOT A PROXY FOR IT. The loop used to
-                # confirm status and label only, so a defer_until that never
-                # landed reported SUCCESS — and the sweeper, which keys off that
-                # field, stayed blind to the bead. An unverified write is the
-                # thing this read-back exists to prevent.
-                missing["defer_until"] = (
-                    getattr(current, "defer_until", None), until)
-            if not missing:
-                result.track_attempts = attempt
-                if not result.condition:
-                    # A `resume_when:` MARKER IN THE REASON COUNTS AS A CONDITION.
-                    # Found by using this the same day it shipped: the warning
-                    # keyed on `--until` alone, so it fired at an author who had
-                    # supplied the marker form the warning ITSELF recommends. A
-                    # warning that fires at someone who already complied is worse
-                    # than no warning, because it teaches the reader to ignore it
-                    # — and the sweeper was quiet about that very bead, so the
-                    # tool and the sweeper disagreed about the same deferral.
-                    #
-                    # Parsed with the SWEEPER's own regex, never a second copy:
-                    # two vocabularies for one marker is how they drift into
-                    # disagreeing about which deferrals are visible.
-                    from .deferrals import _CONDITION
-                    m = _CONDITION.search(getattr(current, "notes", "") or "")
-                    if m:
-                        result.condition = f"resume_when {m.group(1)}:{m.group(2)}"
-                return result
-        raise TrackerWriteLost(item_id, missing, _TRACK_ATTEMPTS)
+
+        def write_verified(fields, final=False):
+            # A timeout can follow commit. Read once for evidence, but do not
+            # retry or claim success after an indeterminate write.
+            error = None
+            try:
+                self.tracker.update(item_id, **fields)
+            except Exception as exc:
+                error = exc
+            try:
+                current = self.tracker.get(item_id)
+            except Exception as exc:
+                raise DeferUnconfirmed(f"{item_id}: defer read-back failed: {exc}") from exc
+            absent = missing(current, final)
+            if error is not None:
+                raise DeferUnconfirmed(
+                    f"{item_id}: defer write failed ({error}); read-back status="
+                    f"{current.status}, missing={absent}. No automatic retry.") from error
+            if absent:
+                raise TrackerWriteLost(item_id, absent, 1)
+
+        fields = {"defer_reason": reason}
+        if until:
+            fields["defer_until"] = until
+        write_verified(fields)
+        # Never send condition/reason again with the status write: a backend
+        # interrupted after status is safe because those fields already exist.
+        write_verified({"status": "deferred", "blocker_kind": label}, final=True)
+        result.track_attempts = 1
+        return result
 
     def verify(self, pane: str, item_id: str) -> bool:
         """Did the send land? Read the pane back and look for the item id.

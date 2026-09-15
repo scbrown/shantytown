@@ -142,7 +142,12 @@ rotation, and capacity refusal without running supervision.
 The twenty-seventh is **defer**: the tracker already knew how to hide work, but bare
 deferral did not require the deferrer to state whether the blocker was a bead, human,
 access capability, external event, or no blocker at all. `st defer` records that kind
-and the reason together and verifies the resulting state before reporting success.
+and requires a testable resume condition: `--until <ISO date>`, an existing
+`defer_until`, or a `resume_when: closed:<id>` / `date:<ISO date>` marker. It
+writes and verifies the reason and condition before changing status, then verifies
+status, blocker kind, reason and condition together. An interrupted write returns
+non-success with read-back evidence and no automatic retry. An already-deferred
+item is only a no-op when all requested fields are present.
 
 The twenty-eighth is **help**: the rationale pages for the instructions st pushes into
 panes on a timer. It exists because those messages had grown into essays — every reason

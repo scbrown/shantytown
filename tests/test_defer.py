@@ -18,7 +18,7 @@ from shantytown.tmux import NullPanes
 def world(tmp_path: Path):
     tracker = FilesTracker(tmp_path / "items")
     tracker.update("item-1", title="Deploy the service", status="in_progress",
-                   assignee="kelly", labels=["security", "blocked:human"])
+                   assignee="kelly", defer_until="2026-12-01", labels=["security", "blocked:human"])
     dispatcher = Dispatcher(FilesRegistry(tmp_path / "crew"), tracker, NullPanes())
     return dispatcher, tracker
 
@@ -76,7 +76,7 @@ def test_dry_run_and_idempotent_repeat_do_not_append_notes(world):
 def test_cli_requires_a_reason_file_and_reports_the_structured_label(tmp_path, capsys):
     items = tmp_path / "items"
     tracker = FilesTracker(items)
-    tracker.update("item-1", title="x", status="open")
+    tracker.update("item-1", title="x", status="open", defer_until="2026-12-01")
     reason = tmp_path / "reason.md"
     reason.write_text("referent: release event; re-test on publication")
 
