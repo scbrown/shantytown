@@ -1417,3 +1417,24 @@ Config changes invalidate cached generic observations until the next probe.
 Evidence older than 180 seconds becomes UNKNOWN and fails open; manual holds do
 not expire. Test real playing, paused and other-client cases before relying on a
 new detector, and verify at least one run from the installed timer path.
+
+### Bounded active-session cost sampling
+
+For a reviewed sampling population, set `sample_active_sources: true` in
+`cost.json`. Only `st cost --sync` rotates: one source per invocation, round-robin
+by agent/session, requiring a live pane, a recent stats session and transcript
+metadata matching that session and workspace. Display commands keep their
+configured sources and never advance sampling. No capacity or token count is
+inferred by source selection.
+
+This population uses `cost-active-graph-state.*` and
+`cost-active-rotation.json`, preserving the original pilot files. Both populations'
+pending writes and request cooldowns block a new attempt. Camayoc's existing
+snapshot/item/record/byte/request caps remain unchanged. A refused source advances
+the rotation but is not manufactured into a sample.
+
+After 20 distinct observed shapes, sync pauses publication and writes
+`cost-active-review.json` with min/median/max dimensions. The normal producer
+receipt publishes `review_due` on the twentieth observation. The report describes
+the supplied session population, not proof of the fleet's tail distribution.
+Review must precede any new population or cap change.
