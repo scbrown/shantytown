@@ -110,6 +110,10 @@ ONTO = os.environ.get("SHANTY_ONTO_NS") or "http://shantytown.example/ontology/"
 CREW_CLASS = os.environ.get("SHANTY_ONTO_CREW_CLASS") or "CrewMember"
 REPORTS_PRED = os.environ.get("SHANTY_ONTO_REPORTS_PRED") or "reports_to"
 STATUS_PRED = os.environ.get("SHANTY_ONTO_STATUS_PRED") or "crewStatus"
+# WHICH RIG HOST a member runs on (aegis-5du1bz). A local name resolved under
+# ONTO like every other predicate here; the object is the host entity (a:vati),
+# and its LOCAL NAME is what cards and `[host] name` carry.
+HOST_PRED = os.environ.get("SHANTY_ONTO_HOST_PRED") or "runsOn"
 # The composable-role vocabulary (GitHub #37). Same seam and the same reason as the
 # three above: a deployment picks its own local names, st does not impose nouns.
 ROLE_CLASS = os.environ.get("SHANTY_ONTO_ROLE_CLASS") or "CrewRole"
@@ -223,12 +227,18 @@ def derive_agents(rows: list[dict],
             `administrator` may legitimately report to nobody)
     """
     reports_to: dict[str, str | None] = {}
+    hosts: dict[str, str | None] = {}
     for r in rows:
         name = _local(r["s"])
         reports_to.setdefault(name, None)
         rt = r.get("rt")
         if rt:
             reports_to[name] = _local(rt)
+        # OPTIONAL over a multi-valued predicate yields one row per value; a
+        # member on two hosts is a graph fault set() prevents, so first wins.
+        h = r.get("h")
+        if h and not hosts.get(name):
+            hosts[name] = _local(str(h)) or None
     has_reports = {rt for rt in reports_to.values() if rt is not None}
 
     agents: list[Agent] = []
@@ -244,8 +254,11 @@ def derive_agents(rows: list[dict],
         asserted = tuple(declared.get(name, ()) if declared else ())
         if len(asserted) == 1:
             role = asserted[0]
+        # The host rides the roster row (`?h`, OPTIONAL). Absent = None, which
+        # every consumer reads as UNSCOPED — a member nobody has placed — and
+        # never as the local host (aegis-5du1bz).
         agents.append(Agent(name=name, role=role, reports_to=lead,
-                            roles=asserted))
+                            roles=asserted, host=hosts.get(name)))
     return agents
 
 
@@ -448,13 +461,20 @@ def derive_catalog(rows: list[dict], precedence_rows: list[dict] | None = None):
 
 
 def all_query(onto: str = None, crew_class: str = None,
-              reports: str = None, status: str = None) -> str:
-    """The roster SPARQL, over a configurable vocabulary (GitHub #10)."""
+              reports: str = None, status: str = None,
+              host: str = None) -> str:
+    """The roster SPARQL, over a configurable vocabulary (GitHub #10).
+
+    Carries the member's HOST as an OPTIONAL third column (aegis-5du1bz): a graph
+    written before hosts existed answers `?h` unbound, which derive_agents reads
+    as "nobody said" — never as "here".
+    """
     return (
         f"PREFIX a: <{onto or ONTO}> "
-        f"SELECT ?s ?rt WHERE {{ ?s a a:{crew_class or CREW_CLASS} . "
+        f"SELECT ?s ?rt ?h WHERE {{ ?s a a:{crew_class or CREW_CLASS} . "
         f"OPTIONAL {{ ?s a:{status or STATUS_PRED} ?cs }} FILTER(!bound(?cs)) "
-        f"OPTIONAL {{ ?s a:{reports or REPORTS_PRED} ?rt }} }}")
+        f"OPTIONAL {{ ?s a:{reports or REPORTS_PRED} ?rt }} "
+        f"OPTIONAL {{ ?s a:{host or HOST_PRED} ?h }} }}")
 
 
 class QuipuRegistry:
@@ -739,6 +759,12 @@ class QuipuRegistry:
             current = None
         if current is not None and current.reports_to not in (None, agent.reports_to):
             self._retract(agent.name, "reports_to", current.reports_to)
+        # A host MOVE is a retract-then-assert for the same reason reports_to is:
+        # `runsOn` is not functional in the store, and two hosts on one member
+        # would make host-scoped sync claim it on both (aegis-5du1bz).
+        if (agent.host is not None and current is not None
+                and current.host not in (None, agent.host)):
+            self._retract(agent.name, HOST_PRED, current.host)
 
         # rdfs:label is REQUIRED by the graph's SHACL shape for a CrewMember
         # (MinCount(1)). Omitting it is why every identity write this registry ever
@@ -749,6 +775,8 @@ class QuipuRegistry:
             f"a:{agent.name} a a:{CREW_CLASS} .",
             f'a:{agent.name} rdfs:label "{agent.name}" .',
         ]
+        if agent.host is not None:
+            triples.append(f"a:{agent.name} a:{HOST_PRED} a:{agent.host} .")
         if agent.reports_to is not None:
             # cycle guard beyond the trivial self-edge: refuse if the new lead
             # already reaches back to this agent through the existing graph.

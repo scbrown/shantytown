@@ -150,6 +150,14 @@ class Fleet:
 
 
 @dataclass(frozen=True)
+class HostPeer:
+    """One reachable peer host: the ssh target and the .shanty root there."""
+    name: str
+    ssh: str
+    root: str
+
+
+@dataclass(frozen=True)
 class Config:
     """The whole file, resolved. `path` is None when no file was found — callers
     render that differently from a file that said the same thing by hand, because
@@ -172,6 +180,17 @@ class Config:
     env: dict[str, str] = field(default_factory=dict)
     # [tmux] socket — folded in from settings/tmux-socket (aegis-8calr).
     tmux_socket: str | None = None
+    # [host] — WHICH RIG HOST this deployment is, and how to reach its peers
+    # (aegis-5du1bz). `name` is the deployment's own host name as the graph and
+    # the cards spell it (vati, macbookair-stiwi); DECLARED, never hostname(1),
+    # for the same reason as the tmux socket: an inferred identity changes
+    # meaning with the machine you happen to run on, and this one decides which
+    # cards `roles sync` is allowed to write. None = single-host deployment,
+    # which is every deployment written before this existed.
+    host_name: str | None = None
+    # [host.peers.<name>] ssh = "user@addr", root = "/path/to/.shanty" — how the
+    # ephemeral inbox reaches an agent whose card says it lives elsewhere.
+    host_peers: dict[str, "HostPeer"] = field(default_factory=dict)
     # [roles.<name>] + [precedence.<axis>] — the deployment's own role vocabulary,
     # as traits (GitHub #37). Empty means "the built-in three", which is what every
     # deployment had before there was anywhere to say otherwise.
@@ -294,12 +313,14 @@ def load_or_default(root) -> tuple[Config, str | None]:
 _TOP_KEYS = {"startup", "modes", "hibernate", "fleet", "crew", "env", "tmux", "dream",
              "roles", "precedence", "governor", "session_budget", "hostmem", "quiet_time",
              "harness",
-             "model"}
+             "model", "host"}
 _HARNESS_KEYS = {"default", "by_role", "required_by_role"}
 _MODEL_KEYS = {"default", "by_role"}
 _STARTUP_KEYS = {"mode"}
 _HIB_KEYS = {"enabled", "max_quiet_minutes"}
 _TMUX_KEYS = {"socket"}
+_HOST_KEYS = {"name", "peers"}
+_HOST_PEER_KEYS = {"ssh", "root"}
 _DREAM_KEYS = {"enabled", "interval_minutes", "min_headroom_pct", "domains"}
 
 
@@ -363,6 +384,8 @@ def _resolve(data: dict, path: Path) -> Config:
                              declared=set(declared_roles)),
                   env=_env(path, _table(path, data, "env")),
                   tmux_socket=_tmux_socket(path, _table(path, data, "tmux")),
+                  host_name=_host_name(path, _table(path, data, "host")),
+                  host_peers=_host_peers(path, _table(path, data, "host")),
                   roles=declared_roles,
                   precedence=_precedence(path, _table(path, data, "precedence")),
                   governor=_governor(path, _table(path, data, "governor")),
@@ -667,6 +690,53 @@ def _env(path: Path, tbl: dict) -> dict[str, str]:
                 f"{path}: [env] {k} must be a string (or a number/bool), got "
                 f"{type(v).__name__}. Every value here is also settable as an "
                 f"environment variable, so it has to be one string.")
+    return out
+
+
+def _host_name(path: Path, tbl: dict) -> str | None:
+    """[host] name — this deployment's own rig host (aegis-5du1bz).
+
+    DECLARED, like the tmux socket, and for the same reason. The value is an
+    identity the graph and the cards are keyed on, so it must not depend on which
+    machine or container happens to evaluate it. An empty string reads as unset.
+    """
+    _refuse_unknown(path, "host", tbl, _HOST_KEYS)
+    v = tbl.get("name")
+    if v is None:
+        return None
+    if not isinstance(v, str):
+        raise ConfigError(f"{path}: [host] name must be a string, got "
+                          f"{type(v).__name__}")
+    return v.strip() or None
+
+
+def _host_peers(path: Path, tbl: dict) -> dict:
+    """[host.peers.<name>] — how to reach each OTHER host's st (aegis-5du1bz).
+
+        [host.peers.macbookair-stiwi]
+        ssh  = "stiwi@mac.example"
+        root = "/opt/st/.shanty"
+
+    Both keys are required: the relay is `ssh <ssh> st --root <root> inbox …`,
+    and a peer missing either half is a peer that cannot be reached, which is
+    worse than one that is not declared because it looks configured.
+    """
+    peers = tbl.get("peers")
+    if peers is None:
+        return {}
+    if not isinstance(peers, dict):
+        raise ConfigError(f"{path}: [host.peers] must be a table of tables")
+    out = {}
+    for name, spec in peers.items():
+        if not isinstance(spec, dict):
+            raise ConfigError(f"{path}: [host.peers.{name}] must be a table")
+        _refuse_unknown(path, f"host.peers.{name}", spec, _HOST_PEER_KEYS)
+        ssh, root = spec.get("ssh"), spec.get("root")
+        for k, v in (("ssh", ssh), ("root", root)):
+            if not isinstance(v, str) or not v.strip():
+                raise ConfigError(f"{path}: [host.peers.{name}] {k} must be a "
+                                  f"non-empty string")
+        out[name] = HostPeer(name=name, ssh=ssh.strip(), root=root.strip())
     return out
 
 

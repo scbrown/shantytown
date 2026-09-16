@@ -156,3 +156,26 @@ def deployment_default(root, key: str) -> str | None:
         if cfg.env.get(key):
             return cfg.env[key]
     return os.environ.get(key) or None
+
+
+def local_host(root) -> str | None:
+    """WHICH RIG HOST this deployment is (aegis-5du1bz), or None if it never said.
+
+    PRECEDENCE: `[host] name` in shantytown.toml, then $SHANTY_HOST, then None —
+    the same order and the same reader as every other deployment fact here, so
+    "which host am I" cannot have a second answer.
+
+    NEVER hostname(1). The value is an identity that the graph (`a:runsOn`) and
+    the cards (`host`) are keyed on, and it decides which cards `roles sync` may
+    write. A guessed identity that happens to match on the machine it was tested
+    on and not on the next one is exactly the kind of quiet wrong answer that
+    produced this feature: an unscoped sync on the second host would have
+    written the first host's whole crew locally. None is an honest answer that
+    the callers turn into a refusal or a warning; a guess is not.
+    """
+    if root is not None:
+        from .config import load_or_default
+        cfg, _err = load_or_default(root)
+        if cfg.host_name:
+            return cfg.host_name
+    return os.environ.get("SHANTY_HOST") or None

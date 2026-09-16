@@ -43,6 +43,7 @@ the safe read was to scrape every pane by hand. drain now does that scrape.
 from __future__ import annotations
 import json
 import os
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -339,6 +340,7 @@ def _send(reg: FilesRegistry, events: FilesEvents, panes, me: str,
     ev = events.persist(to=routing.to, frm=me, reason=reason, rose=routing.rose,
                         shells=shells, item=item, item_status=item_status,
                         context_k=context_k, detail=routing.detail or None)
+    _offhost_durable(reg, root, routing.to, me, item, ev.id)
     over = context_k is not None and context_k >= CYCLE_THRESHOLD_K
     # Silent on stdout (a non-blocking Stop hook's stdout is discarded anyway);
     # a terse stderr line is useful when a human runs it by hand.
@@ -361,6 +363,45 @@ def _send(reg: FilesRegistry, events: FilesEvents, panes, me: str,
 # CONSTRUCTION (the anchor just closed, the work is durable in the bead trail),
 # so the haul may grind past 400k — and at 600k the advance stops feeding and
 # instructs the handoff instead.
+def _offhost_durable(reg: FilesRegistry, root, to: str, me: str, item, ev_id) -> None:
+    """A stop event addressed to an administrator on ANOTHER HOST goes durable
+    too (aegis-5du1bz). The files queue it was just persisted to lives on THIS
+    host's disk, and nothing on the other host will ever drain it — so without
+    this, a worker whose lead sits across the fleet stops in silence, which is
+    the one thing a stop event exists to prevent.
+
+    Delivered through the CLI's own durable inbox (`st inbox -d`), so the backend
+    selection, the size cap and the delivery line are the ones every other
+    durable message gets; the sender identity rides $SHANTY_AGENT the way the
+    launcher exports it. FAIL-OPEN ABSOLUTELY: a relay that cannot be made must
+    never block the stop or lose the local event, so every failure is printed and
+    swallowed.
+    """
+    try:
+        if root is None:
+            return
+        from .deployment import local_host
+        local = local_host(root)
+        card = reg.get(to)
+        if not local or not card.host or card.host == local:
+            return
+        msg = (f"stop_event relay: {me} stopped on {item or '?'} on host {local}; "
+               f"event {ev_id} sits in {local}'s files queue, not drainable from "
+               f"{card.host}")
+        res = subprocess.run(
+            [sys.executable, "-m", "shantytown.cli", "--root", str(root),
+             "inbox", "-d", to, msg],
+            capture_output=True, text=True, timeout=60,
+            env={**os.environ, "SHANTY_AGENT": me})
+        tail = ((res.stdout or "").strip().splitlines() or
+                (res.stderr or "").strip().splitlines() or ["(no output)"])[-1]
+        print(f"stop_event: {to} is on host {card.host} — durable relay rc={res.returncode}: "
+              f"{tail}", file=sys.stderr)
+    except Exception as e:                       # noqa: BLE001 — see docstring
+        print(f"stop_event: off-host durable relay skipped ({type(e).__name__}: "
+              f"{str(e)[:120]}); the local event stands", file=sys.stderr)
+
+
 HAUL_HANDOFF_K = 600.0
 
 

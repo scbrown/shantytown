@@ -158,6 +158,19 @@ class Agent:
                                   # per-MEMBER parameter, not a property of the
                                   # role, so `keeper` stays reusable and the
                                   # member supplies what it keeps.
+    host: str | None = None       # WHICH RIG HOST this agent runs on (aegis-5du1bz).
+                                  # A fleet is now two hosts sharing one graph and
+                                  # one store, and nothing carried that fact: a
+                                  # `roles sync` on the second host materialised
+                                  # every card of the first (13 of them) and demoted
+                                  # its own administrator, because "the graph's
+                                  # crew" and "this host's crew" were the same set.
+                                  # None = NOBODY SAID, which is every card and
+                                  # every graph member written before this existed;
+                                  # consumers treat that as "unscoped" and never as
+                                  # "here". The value is the deployment's own host
+                                  # name ([host] name in shantytown.toml), never a
+                                  # hostname(1) guess — see deployment.local_host.
 
     def effective_roles(self) -> tuple[str, ...]:
         """The role set to ACT on: the declared stack, or the tree position alone.
