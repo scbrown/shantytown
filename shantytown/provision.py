@@ -428,7 +428,10 @@ def _manifest_gaps(card: Agent, root, manifest: tooling.Manifest, secrets=None) 
     ws = Path(card.workspace).expanduser()
     template = json.dumps({"mcpServers": manifest.mcp})
     try:
-        rendered = _render_manifest(manifest, secrets if secrets is not None else load_secrets(root, template))
+        from . import mcp_limits
+        rendered = mcp_limits.project(
+            _render_manifest(manifest, secrets if secrets is not None else load_secrets(root, template)),
+            root, card.name)
     except (ProvisionError, ValueError):
         return ["tooling-source(unresolved credentials)"]
     gaps = []
@@ -918,6 +921,11 @@ def provision(card: Agent, root, *, secrets=None) -> list[str]:
     if rendered is None:
         rendered = render(tmpl.read_text(), secrets if secrets is not None
                           else load_secrets(root))
+    from . import mcp_limits
+    try:
+        rendered = json.dumps(mcp_limits.project(json.loads(rendered), root, card.name), indent=2)
+    except (OSError, ValueError, TypeError) as exc:
+        raise ProvisionError(f"invalid MCP containment policy: {exc}") from exc
     target = ws / ".mcp.json"
     # Create privately BEFORE writing secret bytes, then atomically publish.
     # chmod after write leaves a newly created file readable for that window.

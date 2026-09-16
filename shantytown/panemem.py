@@ -219,8 +219,8 @@ def limits() -> Limits | None:
 def scope_of_pid(pid: int | str) -> str | None:
     """The systemd scope holding `pid`, read from /proc — or None.
 
-    cgroup v2 writes a single `0::<path>` line; the unit is the last path
-    segment. We accept ONLY a `.scope`, because that is the unit type a
+    cgroup v2 writes a single `0::<path>` line; use the nearest ancestor
+    scope, including when the process lives in a delegated child cgroup. We accept ONLY a `.scope`, because that is the unit type a
     transient per-pane cgroup is, and setting properties on something else
     (a .service, or the slice itself) would apply a per-pane ceiling to a
     shared parent — a far worse outcome than doing nothing.
@@ -233,9 +233,9 @@ def scope_of_pid(pid: int | str) -> str | None:
         _, _, path = line.partition("::")
         if not path:
             continue
-        unit = path.rstrip("/").rsplit("/", 1)[-1]
-        if unit.endswith(".scope"):
-            return unit
+        for unit in reversed(path.rstrip("/").split("/")):
+            if unit.endswith(".scope"):
+                return unit
     return None
 
 
@@ -348,8 +348,26 @@ def _cgroup_path_of_pid(pid: int | str) -> str | None:
     for line in text.splitlines():
         _, _, path = line.partition("::")
         if path:
+            parts = path.rstrip("/").split("/")
+            for i in range(len(parts) - 1, -1, -1):
+                if parts[i].endswith(".scope"):
+                    return "/".join(parts[:i + 1])
             return path.rstrip("/")
     return None
+
+
+def scope_pids(cgroup_path):
+    """Include delegated descendants: an empty parent is not an empty scope."""
+    root = Path(f"/sys/fs/cgroup{cgroup_path}")
+    pids = {int(x) for x in (root / 'cgroup.procs').read_text().split()}
+    for child in root.rglob('cgroup.procs'):
+        if child == root / 'cgroup.procs':
+            continue
+        try:
+            pids.update(int(x) for x in child.read_text().split())
+        except FileNotFoundError:
+            continue
+    return sorted(pids)
 
 
 def _is_descendant(pid: int, ancestor: int, limit: int = 64) -> bool:
@@ -399,7 +417,7 @@ def scope_is_exclusive_to(pane_pid: int | str, cgroup_path: str) -> tuple[bool, 
     """
     procs = Path(f"/sys/fs/cgroup{cgroup_path}/cgroup.procs")
     try:
-        pids = [int(x) for x in procs.read_text().split()]
+        pids = scope_pids(cgroup_path)
     except (OSError, ValueError) as e:
         return False, f"cannot read {procs} ({e}) — refusing to bound a scope we cannot inspect"
     pane = int(pane_pid)

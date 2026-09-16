@@ -58,8 +58,7 @@ def owned_scope(root, agent, pane_pid, cgroup_path):
     if exclusive:
         return True, why
     try:
-        pids = [int(p) for p in Path('/sys/fs/cgroup' + cgroup_path,
-                                     'cgroup.procs').read_text().split()]
+        pids = panemem.scope_pids(cgroup_path)
         anchors = [int(pane_pid)]
         for pid in pids:
             try:
