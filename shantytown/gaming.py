@@ -19,6 +19,22 @@ MAX_AGE = 180
 LIFT_DELAY = 120
 LAUNCH_GRACE = 300
 
+#: Shader replay with no reaper is evidence of an IMMINENT launch only for as
+#: long as a player would sit in front of the progress dialog waiting for it.
+#: Steam ALSO runs fossilize_replay as background library maintenance — after
+#: downloads, game updates and driver changes — with no launch coming at all,
+#: and that work is unbounded. Measured on this box 2026-09-15: a maintenance
+#: run held the whole crew for 76 minutes, five workers pegged and ~800 forks a
+#: second, while `appids` stayed empty from the first probe to the last. Treating
+#: shaders as a game with no ceiling means Steam merely being OPEN can hold the
+#: town indefinitely. An appid lifts the ceiling: a real game is held as long as
+#: it runs, and one that appears after the ceiling expires re-arms the hold.
+SHADER_GRACE = 1200
+
+#: The operator's way through a hold, for ONE command. Named here rather than in
+#: the CLI so the flag and the text that advertises it cannot drift apart.
+OVERRIDE_FLAG = "--despite-hold"
+
 
 @dataclass(frozen=True)
 class Status:
@@ -40,6 +56,31 @@ class Status:
     def refusal(self) -> str:
         return ("GOVERNOR HOLD — gaming; launches, dispatch and respawns held. "
                 "Wait for the session to end or clear the manual hold.") if self.held else ""
+
+    def override_lines(self, invocation: str = "") -> tuple[str, ...]:
+        """How an OPERATOR gets past this hold — the refusal's own remedy.
+
+        A refusal that states a rule but no way through it sends the reader to
+        the source, which is exactly where this one kept sending people. The
+        right remedy DEPENDS on which hold is in force: `--clear` removes a
+        manual marker and does nothing whatever to an automatic one, because the
+        next scheduled probe re-asserts that 60 seconds later. Saying "clear the
+        manual hold" to somebody holding an automatic one is worse than silence.
+
+        Deliberately NOT folded into `refusal`: the agent-facing surfaces
+        (dispatch, feed_check) quote that string, and an agent must not be handed
+        the override for a hold that exists to protect somebody's game. The flag
+        is for the person at the keyboard, who can see whether they are playing.
+        """
+        if not self.held:
+            return ()
+        retry = f"{invocation or 'st <command>'} {OVERRIDE_FLAG}"
+        if self.state == "manual":
+            return (f"launch anyway, this once:  {retry}",
+                    "lift the hold for good:    st hold gaming --clear")
+        return (f"launch anyway, this once:  {retry}",
+                "`st hold gaming --clear` will NOT lift this one — the hold is "
+                "automatic, and the next probe re-asserts it within a minute.")
 
     def render(self) -> str:
         if self.held and self.game_present_idle and self.state != "manual":
@@ -151,7 +192,17 @@ def probe(root: Path, *, proc: Path = Path("/proc"), now: float | None = None) -
             launch_until = previous.get("launch_until", since + LAUNCH_GRACE)
             if automatic not in {"gaming", "ending"} or (appids and not previous.get("appids")):
                 launch_until = now + LAUNCH_GRACE
-            if appids or shaders:
+            # Shader-only evidence ages out; an appid never does. The clock starts
+            # when a shader phase begins with no game and is dropped the moment one
+            # appears, so a launch that follows a long precompile is still held.
+            shader_since = previous.get("shader_since") if automatic else None
+            if appids or not shaders:
+                shader_since = None
+            elif shader_since is None:
+                shader_since = now
+            fresh_shaders = bool(shaders) and (
+                shader_since is None or now - float(shader_since) <= SHADER_GRACE)
+            if appids or fresh_shaders:
                 state, absent = "gaming", None
             elif automatic in {"gaming", "ending"}:
                 absent = now if absent is None else float(absent)
@@ -164,7 +215,7 @@ def probe(root: Path, *, proc: Path = Path("/proc"), now: float | None = None) -
                 state = "clear"
             data = dict(state=state, appids=appids, since=since if state != "clear" else 0,
                         observed=now, absent_since=absent, shader_pids=shaders,
-                        launch_until=launch_until)
+                        launch_until=launch_until, shader_since=shader_since)
             try:
                 data.update(gaming_activity.observe(proc, set(roots) | set(shaders), previous, now))
             except (OSError, ValueError, TypeError):
