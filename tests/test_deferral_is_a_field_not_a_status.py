@@ -93,13 +93,22 @@ def test_a_naive_stamp_is_read_as_UTC_not_crashed_on():
 # --- both plate readers, so the two backends cannot drift again -------------
 
 def test_both_plate_readers_refuse_a_field_deferred_row(monkeypatch):
-    """The two-implementation rule, applied to the thing that actually moved.
-    Checked through is_unworkable on the ROW — which is what each reader now
-    passes — so a reader that reverts to `row.get("status")` fails here."""
+    """Exercise both public readers, regardless of where filtering lives."""
     from shantytown import beads, br
-    import inspect
-    for mod, name in ((beads, "beads.plate"), (br, "br.plate")):
-        src = inspect.getsource(mod.plate)
-        assert "is_unworkable(x)" in src or "is_unworkable(row)" in src, (
-            f"{name} must pass the ROW to is_unworkable, not just the status — "
-            f"deferral is a FIELD on br (aegis-vyc3aa)")
+    deferred = dict(id="task-a", title="deferred", assignee="worker", status="open",
+                    defer_until=_iso(timedelta(days=1)))
+    available = dict(id="task-b", title="available", assignee="worker", status="open")
+    population = [deferred, available]
+    monkeypatch.setattr(beads, "rows", lambda _: population)
+    monkeypatch.setattr(br, "rows_partial", lambda _: (population, []))
+    for mod in (beads, br):
+        # Deliberately admit both IDs: the plate's row filter must reject the
+        # deferred candidate even when readiness cannot help it.
+        monkeypatch.setattr(mod, "ready_ids_or_none", lambda _: {"task-a", "task-b"})
+        assert mod.plate(object(), "worker").id == "task-b"
+        population[:] = [deferred]
+        assert mod.plate(object(), "worker") is None
+        population[:] = [deferred, available]
+        deferred["defer_until"] = _iso(timedelta(days=-1))
+        assert mod.plate(object(), "worker").id == "task-a"
+        deferred["defer_until"] = _iso(timedelta(days=1))
