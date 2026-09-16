@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from shantytown import runtime
 from shantytown import cli
 from shantytown.cli import main, OK
 from shantytown.runtime import settings_for_role
@@ -134,7 +135,15 @@ def test_the_guard_invokes_yupanas_pre_edit_event():
     """
     hook = settings_for_role("worker")["hooks"]["PreToolUse"][0]["hooks"][0]
     assert "yupana hook pre-edit" in hook["command"], "guard no longer consults yupana"
-    assert hook.get("timeout") == 5, "guard has no timeout; a hung guard stalls every edit"
+    # Bound to the CONSTANT, not a literal. A literal here is how the ladder
+    # drifted: this asserted 5 while yupana's own per-call ceiling was 10, so the
+    # test was pinning a parent that not even ONE query could fit, and pinning it
+    # is what made the incoherence look intentional.
+    assert hook.get("timeout") == runtime.PRE_EDIT_PARENT_TIMEOUT_SECS, (
+        "guard has no timeout; a hung guard stalls every edit")
+    assert (runtime.PRE_EDIT_PER_CALL_SECS
+            < runtime.PRE_EDIT_TOTAL_BUDGET_SECS
+            < hook["timeout"]), "per-call < total < parent"
 
 
 def test_guard_can_never_produce_the_blocking_exit_code(tmp_path):

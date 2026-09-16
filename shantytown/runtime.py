@@ -625,7 +625,55 @@ def _yupana_trace_cmd() -> dict:
 # warned about: stdout is captured, and it is echoed ONLY when yupana exited 0. A
 # crashed or stale yupana therefore contributes exactly nothing to stdout, so no
 # partial output can ever be read as a forged permission decision.
-_YUPANA_GUARD = 'out=$(yupana hook pre-edit) || exit 0; printf %s "$out"'
+# ── The pre-edit guard's TIME LADDER — one constant, all three derived ────────
+#
+# Three numbers bound this hook and they MUST be ordered
+# `per-call < total < parent`. They were previously set in two repositories by
+# two people and were incoherent: the emitted parent was 5s while yupana's
+# per-call ceiling alone is 10s, so not even ONE query could fit (aegis-wiv6ih).
+# That is not a mis-sized budget, it is an incoherent one — there is no middle
+# ground to tune toward — and the fix for the orphaned reads it causes does not
+# defuse it, because a bound the parent does not respect is not a bound.
+#
+# WHY THE EMITTER OWNS ALL THREE. yupana cannot see the harness timeout that
+# kills it, so it cannot check the ordering; the harness cannot see yupana's
+# budget. Only the thing that EMITS the hook can know both, so it sets both and
+# asserts the ordering here, once, instead of leaving two repos to agree by
+# argument.
+#
+# WHY THESE VALUES. A pre-edit makes 7-9 SERIAL quipu `/query` calls on the
+# live-projection fallback (measured, aegis-h9c0no). The common path is the
+# resident daemon, which single-flights them and abandons 0.0% of its reads. So
+# the live path is the FALLBACK, and on it we would rather degrade to
+# cache-or-fail-open QUICKLY than hang: being killed mid-request leaves quipu
+# holding a read it cannot cancel, while choosing to stop does not. Hence a
+# small per-call ceiling and a total that binds well before the parent does.
+PRE_EDIT_PARENT_TIMEOUT_SECS = 30
+PRE_EDIT_TOTAL_BUDGET_SECS = 20
+PRE_EDIT_PER_CALL_SECS = 5
+
+# Asserted at IMPORT, not in a test, so an incoherent ladder cannot be emitted
+# even once. A test can be skipped, and the thing this prevents is a settings
+# file that disables the edit guard fleet-wide.
+assert (
+    PRE_EDIT_PER_CALL_SECS
+    < PRE_EDIT_TOTAL_BUDGET_SECS
+    < PRE_EDIT_PARENT_TIMEOUT_SECS
+), (
+    "pre-edit time ladder must be per-call < total < parent, got "
+    f"{PRE_EDIT_PER_CALL_SECS} < {PRE_EDIT_TOTAL_BUDGET_SECS} "
+    f"< {PRE_EDIT_PARENT_TIMEOUT_SECS}"
+)
+
+# The env assignments ride INSIDE the command substitution rather than wrapping
+# it: `VAR=x cmd` is a plain command prefix, so the yupana#20 contract below —
+# bare command, no shell wrapper, stdout echoed only on exit 0 — is unchanged.
+_YUPANA_GUARD = (
+    "out=$("
+    f"YUPANA_PROJECTION_HTTP_TIMEOUT_SECS={PRE_EDIT_PER_CALL_SECS} "
+    f"YUPANA_PROJECTION_TOTAL_BUDGET_SECS={PRE_EDIT_TOTAL_BUDGET_SECS} "
+    'yupana hook pre-edit) || exit 0; printf %s "$out"'
+)
 EDIT_MATCHER = "Edit|Write|MultiEdit"
 
 
@@ -662,7 +710,11 @@ def _guard_hook() -> dict:
     """
     return {
         "matcher": EDIT_MATCHER,
-        "hooks": [{"type": "command", "command": _YUPANA_GUARD, "timeout": 5}],
+        "hooks": [{
+            "type": "command",
+            "command": _YUPANA_GUARD,
+            "timeout": PRE_EDIT_PARENT_TIMEOUT_SECS,
+        }],
     }
 
 
