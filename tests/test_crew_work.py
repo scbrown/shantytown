@@ -430,3 +430,21 @@ def test_crew_wide_and_no_truncate_parse(monkeypatch):
     assert cli.main(['crew', '--wide']) == 0
     assert cli.main(['crew', '--no-truncate']) == 0
     assert seen == [True, True]
+
+
+def test_context_advisory_visible_without_withholding_free_agent(tmp_path, monkeypatch, capsys):
+    from shantytown import context_hint as ch, session_budget as sb
+    from shantytown.protocols import Agent
+    root = _roster(tmp_path, {"ellie": "p-ellie"})
+    (root / "shantytown.toml").write_text('[session_budget]\ncontext_window = 1000\n')
+    transcript = root / "turn.jsonl"
+    transcript.write_text(json.dumps({"message": {"usage": {"input_tokens": 750}}}))
+    ch.emit(root, Agent(name="ellie", role="worker"),
+            {"session_id": "current", "transcript_path": str(transcript)})
+    capsys.readouterr()
+    monkeypatch.setattr(sb, "current_session", lambda *_: "current")
+    monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: _Panes({"p-ellie": IDLE_SCREEN}))
+    assert cli._cmd_crew(_Args(root)) == cli.OK
+    output = capsys.readouterr().out
+    assert "ceiling (context), advisory" in output and "75%" in output
+    assert "1 free: ellie" in output

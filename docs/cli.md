@@ -77,6 +77,31 @@ st worktree <repo> [agent]    provision an agent's isolated worktree off a SHARE
 st push <repo> [agent]        push wt/<agent> to EVERY remote; refuses if invoked from another branch
 ```
 
+Context occupancy hints are opt-in in `shantytown.toml`:
+
+```toml
+[session_budget]
+context_window = 1000000
+context_threshold_pct = 70
+
+[session_budget.context_by_role.lead]
+context_threshold_pct = 60
+```
+
+Declare the actual deployment window; transcript model names can omit window
+variants. A role override inherits the global settings. A threshold without a
+window reports UNKNOWN. Omitting all context settings leaves hints disabled.
+
+Existing Stop hooks read the latest turn's input occupancy, including Claude
+cache tokens, and give one advisory per threshold crossing or session change.
+They name `st cycle --self --checkpoint-file <notes-file>`; they never schedule
+that cycle or latch a work ceiling. Finish critical work before checkpointing.
+`st crew` shows occupancy from that session's most recent hook transcript.
+Missing, stale or unreadable observations say UNKNOWN. Consumption exceeding
+the declared window reports a configuration fault, never a clamped percentage.
+A too-large window cannot be detected from usage alone; verify the configured
+window against the launcher when enabling this policy.
+
 Assigned titles are shown with `…` when the default `st crew` output clips them
 at the terminal width. `st crew --wide` (also `--no-truncate`) prints the complete
 title, suitable for piping or terminal scrollback. Control characters in titles

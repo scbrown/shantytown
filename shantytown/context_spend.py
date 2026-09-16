@@ -103,37 +103,62 @@ def read_consumed(session_path: str | Path) -> tuple[int, str | None] | None:
     the whole picture, so the nested copy under-reports exactly when occupancy
     matters most.
     """
-    consumed: int | None = None
-    model: str | None = None
     try:
-        with Path(session_path).open(encoding="utf-8", errors="replace") as fh:
-            for line in fh:
+        # Stop hooks and the crew table poll this. Walking from the end avoids
+        # repeatedly scanning a long session's entire transcript at its ceiling.
+        with Path(session_path).open("rb") as fh:
+            for line in _reverse_lines(fh):
                 try:
                     rec = json.loads(line)
                 except ValueError:
                     continue
-                if not isinstance(rec, dict):
+                if not isinstance(rec, dict) or rec.get("isSidechain"):
                     continue
+                payload = rec.get("payload")
+                if (rec.get("type") == "event_msg" and isinstance(payload, dict)
+                        and payload.get("type") == "token_count"):
+                    info = payload.get("info")
+                    usage = info.get("last_token_usage") if isinstance(info, dict) else None
+                    if not isinstance(usage, dict):
+                        continue
+                    # Codex input already includes cached input; total_token_usage
+                    # is cumulative cost and must never be used as occupancy.
+                    value = usage.get("input_tokens")
+                    return (value, None) if type(value) is int and value >= 0 else None
                 msg = rec.get("message")
                 msg = msg if isinstance(msg, dict) else {}
                 usage = msg.get("usage") or rec.get("usage")
                 if not isinstance(usage, dict) or not usage:
                     continue
+                if "input_tokens" not in usage:
+                    return None
                 total = 0
                 for key in ("input_tokens", "cache_creation_input_tokens",
                             "cache_read_input_tokens"):
-                    v = usage.get(key)
-                    if isinstance(v, int) and v >= 0:
-                        total += v
-                # LAST wins: occupancy is a snapshot, never a sum (see module docstring).
-                consumed = total
-                if isinstance(msg.get("model"), str):
-                    model = msg["model"]
+                    v = usage.get(key, 0)
+                    if type(v) is not int or v < 0:
+                        return None
+                    total += v
+                return total, msg.get("model") if isinstance(msg.get("model"), str) else None
     except OSError:
         return None
-    if consumed is None:
-        return None
-    return consumed, model
+    return None
+
+
+def _reverse_lines(fh):
+    """Yield complete JSONL records newest first, retaining cross-block lines."""
+    fh.seek(0, 2)
+    offset = fh.tell()
+    pending = b""
+    while offset:
+        size = min(offset, 65536)
+        offset -= size
+        fh.seek(offset)
+        parts = (fh.read(size) + pending).split(b"\n")
+        pending = parts[0]
+        yield from reversed(parts[1:])
+    if pending:
+        yield pending
 
 
 def read(session_path: str | Path, window: int | None) -> ContextReading:

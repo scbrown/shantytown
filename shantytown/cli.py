@@ -4714,6 +4714,10 @@ def _cmd_crew(a) -> int:
             except Exception:
                 text = "? assignment unavailable"
             print("    assigned: " + dash_mod.text_window(text, title_width))
+        if state == "up":
+            from . import context_hint
+            if context_label := context_hint.crew_label(a.root, ag):
+                print(f"    {context_label}")
     stale, unknown = _reach_buckets(verdicts)
     # THE SWEEP, AS A LINE (aegis-ib65p decision 6). Learning that 12 of 12
     # worktrees were behind took a hand-rolled loop across three directories,

@@ -372,6 +372,14 @@ def run(root, me: str, **kw) -> int:
     that exits non-zero is a stop hook that breaks the agent)."""
     import time
     try:
+        from . import context_hint
+        reg = kw.get("reg") or FilesRegistry(root / "crew")
+        try:
+            card = reg.get(me)
+        except Exception:
+            card = None  # gather owns the existing unreadable-card diagnostic
+        if card is not None and context_hint.emit(root, card):
+            return 0
         inp = gather(root, me, **kw)
         verdict = decide(inp)
     except Exception as e:  # noqa: BLE001 — FAIL OPEN, see the module docstring

@@ -57,6 +57,7 @@ was only survivable because being blind ALARMED instead of reading as healthy.
 from __future__ import annotations
 
 import os
+import math
 import sqlite3
 import time
 from dataclasses import dataclass, field
@@ -93,6 +94,13 @@ class BudgetError(ValueError):
 
 
 @dataclass(frozen=True)
+class ContextLimits:
+    """An advisory occupancy threshold, independent of the sticky work ceiling."""
+    window: int | None = None
+    threshold_pct: float = 70.0
+
+
+@dataclass(frozen=True)
 class Limits:
     """The [session_budget] table, resolved.
 
@@ -111,6 +119,11 @@ class Limits:
     max_items: int | None = None
     max_risk: int | None = None
     on_signal_lost: str = WARN
+    context: ContextLimits | None = None
+    context_by_role: dict[str, ContextLimits] = field(default_factory=dict)
+
+    def context_for(self, role: str) -> ContextLimits | None:
+        return self.context_by_role.get(role, self.context)
 
     @property
     def active(self) -> bool:
@@ -180,7 +193,8 @@ def parse(tbl: dict) -> Limits:
     refusing at parse rather than discovering at 3am."""
     if not tbl:
         return Limits()
-    known = {"max_hours", "max_items", "max_risk", "on_signal_lost"}
+    known = {"max_hours", "max_items", "max_risk", "on_signal_lost",
+             "context_window", "context_threshold_pct", "context_by_role"}
     for k in tbl:
         if k not in known:
             raise BudgetError(
@@ -203,10 +217,32 @@ def parse(tbl: dict) -> Limits:
     if sl not in (WARN, STOP):
         raise BudgetError(
             f"[session_budget] on_signal_lost must be {WARN!r} or {STOP!r}, got {sl!r}")
+    def context(values, inherited=None):
+        window = values.get("context_window", inherited.window if inherited else None)
+        pct = values.get("context_threshold_pct",
+                         inherited.threshold_pct if inherited else 70.0)
+        if window is not None and (type(window) is not int or window <= 0):
+            raise BudgetError("[session_budget] context_window must be a positive integer")
+        if (type(pct) not in (float, int) or not math.isfinite(pct)
+                or not 0 < pct < 100):
+            raise BudgetError("[session_budget] context_threshold_pct must be finite and between 0 and 100")
+        return ContextLimits(window, float(pct))
+
+    base = (context(tbl) if any(k in tbl for k in
+            ("context_window", "context_threshold_pct")) else None)
+    overrides = tbl.get("context_by_role", {})
+    if not isinstance(overrides, dict):
+        raise BudgetError("[session_budget] context_by_role must be a table")
+    by_role = {}
+    for role, values in overrides.items():
+        if (not isinstance(values, dict) or not values
+                or set(values) - {"context_window", "context_threshold_pct"}):
+            raise BudgetError(f"[session_budget.context_by_role.{role}] expected context_window/context_threshold_pct")
+        by_role[role] = context(values, base)
     return Limits(max_hours=num("max_hours", float),
                   max_items=num("max_items", int),
                   max_risk=num("max_risk", int),
-                  on_signal_lost=sl)
+                  on_signal_lost=sl, context=base, context_by_role=by_role)
 
 
 # --- reading the spend -----------------------------------------------------
