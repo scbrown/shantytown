@@ -59,6 +59,7 @@ from .answer import Answer
 
 from . import governor as governor_mod
 from . import hostmem as hostmem_mod
+from . import quiet_detectors
 from . import session_budget as session_budget_mod
 from .governor import Policy as GovernorPolicy
 from .hostmem import Limits as HostMemLimits
@@ -190,6 +191,7 @@ class Config:
     # usage gauge, and it was the second that went unbounded for six hours. Same
     # default-off-by-omission rule as the governor.
     session_budget: SessionLimits = field(default_factory=SessionLimits)
+    quiet_time: quiet_detectors.Policy = field(default_factory=quiet_detectors.Policy)
     # [hostmem] — the PHYSICAL brake (aegis-do672). A third axis beside the usage
     # governor and the per-session ceiling: tokens are refilled by waiting, RAM is
     # refilled by something finishing, and a governor that can only see the first
@@ -290,7 +292,7 @@ def load_or_default(root) -> tuple[Config, str | None]:
 # --- parsing ----------------------------------------------------------------
 
 _TOP_KEYS = {"startup", "modes", "hibernate", "fleet", "crew", "env", "tmux", "dream",
-             "roles", "precedence", "governor", "session_budget", "hostmem",
+             "roles", "precedence", "governor", "session_budget", "hostmem", "quiet_time",
              "harness",
              "model"}
 _HARNESS_KEYS = {"default", "by_role", "required_by_role"}
@@ -364,6 +366,7 @@ def _resolve(data: dict, path: Path) -> Config:
                   roles=declared_roles,
                   precedence=_precedence(path, _table(path, data, "precedence")),
                   governor=_governor(path, _table(path, data, "governor")),
+                  quiet_time=_quiet_time(path, _table(path, data, "quiet_time")),
                   session_budget=_session_budget(
                       path, _table(path, data, "session_budget")),
                   hostmem=_hostmem(path, _table(path, data, "hostmem")),
@@ -943,3 +946,10 @@ def resolve_crew(selectors, agents: list[Agent]) -> Roster:
 
     picked.sort(key=lambda n: (_TIER_ORDER.get(by_name[n].role, 9), n))
     return Roster(names=picked, skipped_retired=skipped, unknown=unknown)
+
+
+def _quiet_time(path: Path, tbl: dict) -> quiet_detectors.Policy:
+    try:
+        return quiet_detectors.parse(tbl)
+    except ValueError as exc:
+        raise ConfigError(f"{path}: {exc}") from exc

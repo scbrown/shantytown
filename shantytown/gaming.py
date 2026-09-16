@@ -137,13 +137,13 @@ def game_appids(proc: Path = Path("/proc")) -> tuple[str, ...]:
     return tuple(sorted(set(game_roots(proc).values())))
 
 
-def read(root: Path, *, now: float | None = None) -> Status:
+def read(root: Path, *, now: float | None = None, spec=None) -> Status:
     folder = Path(root) / "gaming"
     now = time.time() if now is None else now
     try:
         if (folder / "manual").exists():
             return Status("manual", since=(folder / "manual").stat().st_mtime, observed=now)
-        if not (folder / "enabled").exists():
+        if not detection_enabled(folder, spec):
             return Status()
         data = json.loads((folder / "state.json").read_text())
         observed = float(data["observed"])
@@ -168,19 +168,31 @@ def manual(root: Path, *, clear: bool = False) -> None:
         (folder / "manual").touch()
 
 
-def probe(root: Path, *, proc: Path = Path("/proc"), now: float | None = None) -> Status:
+def probe(root: Path, *, proc: Path = Path("/proc"), now: float | None = None, spec=None) -> Status:
     folder = Path(root) / "gaming"
     folder.mkdir(parents=True, exist_ok=True)
     now = time.time() if now is None else now
+    launch_grace = spec.grace if spec else LAUNCH_GRACE
+    lift_delay = spec.lift_delay if spec else LIFT_DELAY
+    shader_grace = spec.options.get('shader_grace', SHADER_GRACE) if spec else SHADER_GRACE
     # A delayed cron and an operator probe must not overwrite newer debounce state.
     with (folder / "probe.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        old = read(root, now=now)
-        if not (folder / "enabled").exists():
+        old = read(root, now=now, spec=spec)
+        if not detection_enabled(folder, spec):
             return old
         try:
-            roots = game_roots(proc)
-            shaders = shader_pids(proc)
+            if spec is None or not spec.options:
+                roots = game_roots(proc)
+                shaders = shader_pids(proc)
+            else:
+                from .quiet_detectors import processes
+                opts = spec.options
+                roots = {pid: fields['appid'] for pid, fields in processes(
+                    proc, opts.get('game_executable', 'reaper'),
+                    opts.get('game_arguments', ['SteamLaunch', r'AppId=(?P<appid>[0-9]+)'])).items()
+                         if re.fullmatch(r'[0-9]+', fields.get('appid') or '')}
+                shaders = tuple(sorted(processes(proc, opts.get('shader_executable', 'fossilize_replay'))))
             appids = tuple(sorted(set(roots.values())))
             try:
                 previous = json.loads((folder / "state.json").read_text())
@@ -189,9 +201,9 @@ def probe(root: Path, *, proc: Path = Path("/proc"), now: float | None = None) -
             absent = previous.get("absent_since")
             automatic = previous.get("state") if 0 <= now - previous.get("observed", 0) <= MAX_AGE else None
             since = previous.get("since", now) if automatic in {"gaming", "ending"} else now
-            launch_until = previous.get("launch_until", since + LAUNCH_GRACE)
+            launch_until = previous.get("launch_until", since + launch_grace)
             if automatic not in {"gaming", "ending"} or (appids and not previous.get("appids")):
-                launch_until = now + LAUNCH_GRACE
+                launch_until = now + launch_grace
             # Shader-only evidence ages out; an appid never does. The clock starts
             # when a shader phase begins with no game and is dropped the moment one
             # appears, so a launch that follows a long precompile is still held.
@@ -201,7 +213,7 @@ def probe(root: Path, *, proc: Path = Path("/proc"), now: float | None = None) -
             elif shader_since is None:
                 shader_since = now
             fresh_shaders = bool(shaders) and (
-                shader_since is None or now - float(shader_since) <= SHADER_GRACE)
+                shader_since is None or now - float(shader_since) <= shader_grace)
             if appids or fresh_shaders:
                 state, absent = "gaming", None
             elif automatic in {"gaming", "ending"}:
@@ -210,7 +222,7 @@ def probe(root: Path, *, proc: Path = Path("/proc"), now: float | None = None) -
                 if now < launch_until:
                     state = "gaming"
                 else:
-                    state = "ending" if now - absent <= LIFT_DELAY else "clear"
+                    state = "ending" if now - absent <= lift_delay else "clear"
             else:
                 state = "clear"
             data = dict(state=state, appids=appids, since=since if state != "clear" else 0,
@@ -223,7 +235,7 @@ def probe(root: Path, *, proc: Path = Path("/proc"), now: float | None = None) -
         except (OSError, ValueError, TypeError) as exc:
             data = dict(state="unknown", appids=[], since=0, observed=now, error=str(exc))
         write_json_atomic(folder / "state.json", data)
-        return read(root, now=now)
+        return read(root, now=now, spec=spec)
 
 
 def metrics(status: Status) -> str:
@@ -252,3 +264,11 @@ def metrics(status: Status) -> str:
         if re.fullmatch(r'[0-9]+', appid):
             extra += f'aegis_gaming_app_present{{appid="{appid}"}} 1\n'
     return base + extra
+
+
+def detection_enabled(folder: Path, spec=None) -> bool:
+    if (folder / 'disabled').exists():
+        return False
+    if spec is not None and spec.enabled is not None:
+        return spec.enabled
+    return (folder / 'enabled').exists()

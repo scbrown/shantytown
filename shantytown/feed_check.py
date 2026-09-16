@@ -115,7 +115,7 @@ def haul_hold_reason(root, agent: str) -> str:
     if root is None:
         return ""
     from .stopped import FilesStops
-    from . import gaming
+    from . import quiet_time as gaming
     if FilesStops(Path(root) / "stopped").get(agent) is not None:
         return "deliberately stopped; relaunch clears the stop stamp"
     return gaming.read(Path(root)).refusal
@@ -556,7 +556,7 @@ def governor_admits(root):
     """
     try:
         from . import config
-        from . import gaming
+        from . import quiet_time as gaming
         hold = gaming.read(Path(root))
         if hold.held:
             return lambda item: hold.refusal

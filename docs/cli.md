@@ -1313,3 +1313,97 @@ Reasoning is a subset of output. Unknown fields are omitted from metrics rather
 than zeroed. Reconstructed allocations can decrease, so `st_bead_tokens_total`
 is a gauge despite its requested name; do not apply `rate()` to it. The freshness
 and coverage gauges must accompany any dashboard interpretation.
+
+### Configurable quiet-time detectors
+
+Declare additional holds in `<root>/shantytown.toml`; the same registry drives
+launch/dispatch/tend gates, coordinator advice and exclusive crew scope quotas.
+`st hold all --probe --slowdown --metrics <path.prom>` samples every detector.
+Schedule it every minute. The legacy `hold gaming --probe` and `--status` also
+use the aggregate, so existing heavy-work wrappers honour new detectors.
+One active reason keeps the hold in force even when another reason clears or
+becomes UNKNOWN. `aegis_quiet_time_detector_active{reason="media"}` identifies
+the cause; `aegis_quiet_time_hold_active` is the combined decision. Per-reason
+`aegis_quiet_time_probe_ok` and `aegis_quiet_time_probe_timestamp_seconds` expose
+unavailable or stale evidence. Existing gaming metrics still describe gaming only.
+
+```toml
+[[quiet_time.detector]]
+name = "gaming"
+kind = "steam"
+enabled = true
+# Steam defaults; presence stays authoritative regardless of weak activity.
+game_executable = "reaper"
+game_arguments = ['SteamLaunch', 'AppId=(?P<appid>[0-9]+)']
+shader_executable = "fossilize_replay"
+shader_grace = 1200
+grace = 300
+lift_delay = 120
+lift_rule = "absent"
+
+[[quiet_time.detector]]
+name = "media"
+kind = "http_json"
+url = "http://localhost:32400/status/sessions"
+items_path = "MediaContainer.Metadata"
+count_path = "MediaContainer.size"
+match = { "Player.machineIdentifier" = "replace-with-this-desktops-client-id" }
+state_path = "Player.state"
+active_values = ["playing", "buffering"]
+auth_header = "X-Plex-Token"
+token_file = "~/.config/player/plex.ini"
+token_ini_section = "web"
+token_ini_key = "myplexaccesstoken"
+timeout = 5
+enter_delay = 0
+grace = 0
+lift_delay = 120
+lift_rule = "inactive"
+```
+
+The HTTP reader issues a bounded read-only GET, refuses redirects, and matches
+only the configured client. Match values are exact strings; dotted paths traverse
+JSON objects. A matching paused session is inactive. A valid zero session count
+is clear; a missing schema, count/list disagreement, authentication failure or
+unavailable server is UNKNOWN. State files and diagnostics never retain tokens,
+URLs, response bodies or media titles. `token_file` can instead hold a plain token
+when both INI options are omitted. Keep credentials outside TOML.
+
+For another application, use a process detector without changing Python:
+
+```toml
+[[quiet_time.detector]]
+name = "presentation"
+kind = "process"
+executable = "PresentationApp"
+arguments = ['--present=.*']
+min_cpu_percent = 2
+enter_delay = 60
+grace = 120
+lift_delay = 60
+lift_rule = "inactive"
+```
+
+Executable regexes full-match the basename of argv[0]; argument regexes full-match
+successive argv tokens. Shell commands mentioning a signature do not qualify.
+With no activity thresholds, presence is sufficient. Optional `min_cpu_percent`
+uses the matched process trees and `min_gpu_percent` uses host GPU utilization;
+GPU activity alone cannot attribute work to a particular process. `activity_rule`
+can be `any` (default) or `all`. Missing required telemetry is UNKNOWN, including
+the first CPU sample. `enter_delay` requires continuous positive observations;
+`grace` is the minimum hold duration after activation. `lift_delay` requires
+continuous negative observations after grace. `lift_rule = "absent"` keeps an
+already active hold while the matched process/session remains present, even if
+inactive. Steam requires `absent` and zero entry delay; its bounded shader phase
+and AppId launch grace retain their existing semantics.
+
+`st hold <name>` creates a persistent manual hold for that configured detector;
+`--clear` removes only that manual marker. `--disable-detection` suppresses its
+automatic observations without clearing manual holds; `--enable-detection`
+removes that runtime suppression. An explicit `enabled = false` in TOML still
+wins. Without a gaming config entry, the legacy opt-in marker remains in use.
+`all` is reserved for status/probe and cannot create or clear manual holds.
+Config changes invalidate cached generic observations until the next probe.
+Evidence older than 180 seconds becomes UNKNOWN and fails open; manual holds do
+not expire. Test real playing, paused and other-client cases before relying on a
+new detector, and verify at least one run from the installed timer path.

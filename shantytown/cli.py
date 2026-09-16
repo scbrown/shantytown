@@ -141,6 +141,7 @@ from .dispatch import (Dispatcher, TriageRefused, SendUnverified,
                        GovernorRefused, RepoolRefused, DeferRefused, DeferUnconfirmed,
                        BLOCKER_KIND_LABELS, TrackerWriteLost)
 from . import forgejo as forgejo_mod
+from . import quiet_time as quiet_time_mod
 from . import gaming as gaming_mod
 from . import governor as gov_mod
 from . import governor_utilization as util_mod
@@ -519,7 +520,7 @@ def _dispatch_gate(a):
         return lambda item, agent=None: (
             f"maintenance window {maintenance['id']!r} is {maintenance['state']} — "
             "dispatch/feed held until release or abort")
-    gaming = gaming_mod.read(Path(a.root))
+    gaming = quiet_time_mod.read(Path(a.root))
     if gaming.held:
         return lambda item, agent=None: gaming.refusal
     cfg, governors = _governors(a)
@@ -774,12 +775,12 @@ def build_parser() -> argparse.ArgumentParser:
     rp.add_argument("item")
     rp.add_argument("-n", "--dry-run", action="store_true")
 
-    hold = sub.add_parser("hold", help="local gaming hold and scheduled observation")
-    hold.add_argument("kind", choices=["gaming"])
+    hold = sub.add_parser("hold", help="configurable quiet-time holds and scheduled observation")
+    hold.add_argument("kind", help="configured detector name, or all for aggregate status/probe")
     actions = hold.add_mutually_exclusive_group()
     actions.add_argument("--clear", action="store_true", help="clear manual override only")
     actions.add_argument("--status", action="store_true", help="exit 1 held, 0 clear/off, 2 unknown")
-    actions.add_argument("--probe", action="store_true", help="scheduled read-only process scan")
+    actions.add_argument("--probe", action="store_true", help="scheduled read-only detector sweep")
     actions.add_argument("--enable-detection", action="store_true")
     actions.add_argument("--disable-detection", action="store_true")
     hold.add_argument("--slowdown", action="store_true", help="with --probe, bound exclusive crew scopes and restore on lift")
@@ -1426,7 +1427,7 @@ def main(argv: list[str] | None = None) -> int:
     # Gate replacement operations before they stop a live session. The shared
     # launch seam remains guarded too for internal callers and restore paths.
     if a.cmd in {"new", "start", "cycle"} and not _despite_hold(a):
-        gaming = gaming_mod.read(Path(a.root))
+        gaming = quiet_time_mod.read(Path(a.root))
         if gaming.held:
             return _refuse_gaming(a, gaming)
     if a.cmd == "hold":
@@ -1967,7 +1968,7 @@ def _cmd_harness(a) -> int:
         return OK
 
     if plan.restart_now and not _despite_hold(a):
-        gaming = gaming_mod.read(Path(a.root))
+        gaming = quiet_time_mod.read(Path(a.root))
         if gaming.held:
             return _refuse_gaming(a, gaming)
 
@@ -2091,7 +2092,7 @@ def _launch(a, card, panes, runtime, *, dry_run: bool = False,
     guard, the equipped-or-not-created refusal and the hooks verification are each
     load-bearing, and a second launcher would have to re-earn all four.
     """
-    gaming = gaming_mod.read(Path(a.root))
+    gaming = quiet_time_mod.read(Path(a.root))
     if gaming.held:
         if not _despite_hold(a):
             return _refuse_gaming(a, gaming)
@@ -4561,7 +4562,7 @@ def _cmd_crew(a) -> int:
     # precedent for a status-bar reader here, and the command count is pinned by
     # test_command_count — a new verb is a deliberate widening, this is not.)
     if getattr(a, "governor", False):
-        gaming = gaming_mod.read(Path(a.root))
+        gaming = quiet_time_mod.read(Path(a.root))
         if gaming.state != "off":
             print(gaming.render())
         return _crew_governor(a)
@@ -6495,7 +6496,7 @@ def _cmd_cycle(a) -> int:
     ORDER: assess -> stop -> launch -> re-dispatch. The guard runs first and to
     completion, because everything after it is irreversible from here.
     """
-    gaming = gaming_mod.read(Path(a.root))
+    gaming = quiet_time_mod.read(Path(a.root))
     if gaming.held and not _despite_hold(a):
         return _refuse_gaming(a, gaming)
     from . import cycle as cycle_mod
@@ -8220,14 +8221,17 @@ def _gaming_advisory(a, status, *, reg=None, panes=None):
     if status.state in {"off", "clear"} and not ledger.exists():
         return []
     if status.state == "off":
-        status = gaming_mod.Status("clear")
+        status = (quiet_time_mod.Status((("quiet_time", quiet_time_mod.Observation("clear")),))
+                  if isinstance(status, quiet_time_mod.Status) else gaming_mod.Status("clear"))
+    key = ('game_present_idle' if status.game_present_idle and status.state != 'manual'
+           else 'held' if status.held else status.state)
+    if isinstance(status, quiet_time_mod.Status):
+        key += ':' + ','.join(status.reasons)
     try:
         return creel_advisory_mod.Alerter(
             Path(a.root), reg if reg is not None else _registry(a),
             panes if panes is not None else _panes(a), filename="gaming_hold.json",
-            label="gaming governor").sweep({"local": creel_advisory_mod.Advice(
-                status.render(), ("game_present_idle" if status.game_present_idle and status.state != "manual"
-                                  else "held" if status.held else status.state))})
+            label="quiet-time governor").sweep({"local": creel_advisory_mod.Advice(status.render(), key)})
     except Exception as exc:
         print(f"  gaming advisory delivery failed: {exc}", file=sys.stderr)
         return []
@@ -8238,18 +8242,35 @@ def _cmd_hold(a) -> int:
     if (a.metrics or a.slowdown) and not a.probe:
         print("--metrics and --slowdown require --probe", file=sys.stderr)
         return REFUSED
+    try:
+        from .config import load
+        policy = load(root).quiet_time
+        names = {spec.name for spec in policy.detectors}
+        if a.kind not in names | {'all'}:
+            print('unknown detector; configured: ' + ', '.join(sorted(names)), file=sys.stderr)
+            return REFUSED
+        if a.kind == 'all' and not (a.status or a.probe):
+            print('all requires --status or --probe; mutate a named detector', file=sys.stderr)
+            return REFUSED
+    except ValueError as exc:
+        print(f'quiet-time configuration invalid: {exc}', file=sys.stderr)
+        return CANNOT_TELL
     if a.enable_detection or a.disable_detection:
-        folder = root / "gaming"
+        folder = quiet_time_mod.folder(root, a.kind)
         folder.mkdir(parents=True, exist_ok=True)
         if a.enable_detection:
-            (folder / "enabled").touch()
+            (folder / 'disabled').unlink(missing_ok=True)
+            (folder / 'enabled').touch()
         else:
-            (folder / "enabled").unlink(missing_ok=True)
+            (folder / 'disabled').touch()
+            (folder / 'enabled').unlink(missing_ok=True)
     elif a.clear:
-        gaming_mod.manual(root, clear=True)
+        quiet_time_mod.manual(root, a.kind, clear=True)
     elif not a.status and not a.probe:
-        gaming_mod.manual(root)
-    status = gaming_mod.probe(root) if a.probe else gaming_mod.read(root)
+        quiet_time_mod.manual(root, a.kind)
+    # Every probe/status uses the aggregate, including the legacy gaming command.
+    # A clear detector must never restore scopes while a different hold is active.
+    status = quiet_time_mod.probe(root) if a.probe else quiet_time_mod.read(root)
     slowdown_unknown = False
     if a.slowdown:
         from . import gaming_scopes
@@ -8269,7 +8290,7 @@ def _cmd_hold(a) -> int:
         with tempfile.NamedTemporaryFile(mode="w", dir=a.metrics.parent,
                                          delete=False) as stream:
             tmp = Path(stream.name)
-            stream.write(gaming_mod.metrics(status))
+            stream.write(quiet_time_mod.metrics(status))
             if a.slowdown:
                 stream.write("# HELP aegis_gaming_slowdown_ok Requested scope operations verified.\n"
                              "# TYPE aegis_gaming_slowdown_ok gauge\n"
@@ -8283,7 +8304,7 @@ def _cmd_hold(a) -> int:
     if not a.status:
         sent = _gaming_advisory(a, status)
         if sent:
-            print("gaming advisory delivered to coordinator: " + ", ".join(sent))
+            print("quiet-time advisory delivered to coordinator: " + ", ".join(sent))
     if a.status:
         return CANNOT_TELL if status.state == "unknown" else int(status.held)
     return CANNOT_TELL if status.state == "unknown" or slowdown_unknown else OK
@@ -8426,7 +8447,7 @@ def _tend_once(a, quiet: bool = False) -> int:
     # that PERSISTS the engaged tier (hysteresis has to survive a process that
     # exists for five seconds every five minutes). A dry run evaluates and prints
     # but writes nothing, like everything else on a dry run.
-    gaming = gaming_mod.read(Path(a.root))
+    gaming = quiet_time_mod.read(Path(a.root))
     if gaming.state != "off":
         print(f"  {gaming.render()}", file=sys.stderr)
     cfg, governors = _governors(a)
