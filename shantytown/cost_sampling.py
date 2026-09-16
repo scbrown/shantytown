@@ -38,9 +38,9 @@ def active_sources(root):
     from .harness import for_card
     from .session_budget import current_session
     from .cli import _default_settings
-    from .tmux import Tmux
+    from .tmux import Tmux, declared_socket
     root = Path(root)
-    panes, settings = Tmux(), _default_settings(root)
+    panes, settings = Tmux(socket=declared_socket(root)), _default_settings(root)
     sources = []
     for card in FilesRegistry(root / 'crew').all().exact():
         if not card.pane or not card.workspace or not panes.exists(card.pane):
