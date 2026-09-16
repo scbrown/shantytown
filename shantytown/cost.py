@@ -234,39 +234,77 @@ def metrics(result):
 def run(args):
     try:
         config = json.loads((Path(args.root) / 'cost.json').read_text())
+        rotation = None
         lock_path = Path(args.root) / 'cost.lock'
         with lock_path.open('a') as lock:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            result, records, method = retrieve(args.root, config)
-            if args.sync:
-                # Do not publish a clean-looking replacement on a failed source.
-                if result['errors']:
-                    raise RuntimeError('Camayoc source coverage UNKNOWN: ' + '; '.join(result['errors']))
-                destination = Path(config['metric_path'])
-                with tempfile.NamedTemporaryFile(mode='w', dir=destination.parent, delete=False) as handle:
-                    handle.write(metrics(result)); temporary = handle.name
-                os.replace(temporary, destination)
-                if config.get('metrics_script'):
-                    pushed = subprocess.run([sys.executable, config['metrics_script'], str(destination),
-                                             '--rig', config['rig']], capture_output=True, text=True, timeout=30)
-                    if pushed.returncode:
-                        raise RuntimeError('cost metric publication failed')
-                if config.get('publish_script'):
-                    with tempfile.NamedTemporaryFile(mode='w', suffix='.json') as handle:
-                        json.dump(method, handle); handle.flush()
-                        published = subprocess.run([sys.executable, config['publish_script'], handle.name,
-                            '--actor', 'st-cost', '--state', str(Path(args.root) / 'cost-graph-state.json'),
-                            '--post', '--publish-status'], capture_output=True, text=True, timeout=120)
-                    if published.returncode:
-                        raise RuntimeError('Camayoc cost graph publication failed: ' + published.stderr[:300])
-                posted = comment_closed(config, result, records, Path(args.root) / 'cost-pending.json')
-                print(json.dumps({'receipt': result['receipt'], 'commented': posted}))
-            elif args.bead:
-                value = receipt(result, args.bead)
-                print(json.dumps(result, indent=2) if args.json else value[1] if value else 'cost: UNKNOWN (no attributable requests)')
-            else:
-                print(json.dumps(result, indent=2))
-        return 0
+            graph_state = Path(args.root) / 'cost-graph-state.json'
+            if args.sync and config.get('sample_active_sources') is True:
+                from . import cost_sampling
+                # Changing population must not bypass the previous producer's
+                # request cooldown or an unresolved write.
+                for state in (graph_state, cost_sampling.state_path(args.root)):
+                    if state.with_suffix('.pending.json').exists():
+                        raise RuntimeError('indeterminate cost snapshot requires reconciliation')
+                if report := cost_sampling.review(args.root):
+                    _atomic_json(Path(args.root) / 'cost-active-review.json', report)
+                    refreshed = subprocess.run([sys.executable, config['publish_script'],
+                        '--actor', 'st-cost', '--state', str(cost_sampling.state_path(args.root)),
+                        '--review-only', '--publish-status'], capture_output=True, text=True, timeout=30)
+                    if refreshed.returncode:
+                        raise RuntimeError('review status publication failed: ' + refreshed.stderr[:300])
+                    print(json.dumps(report, sort_keys=True))
+                    return 0
+                for state in (graph_state, cost_sampling.state_path(args.root)):
+                    receipt_path = state.with_suffix('.receipt.json')
+                    prior = json.loads(receipt_path.read_text()) if receipt_path.exists() else {}
+                    if prior.get('next_request_after', 0) > time.time():
+                        print(json.dumps({'status': 'BACKOFF', 'until': prior['next_request_after']}))
+                        return 0
+                if not config.get("publish_script"):
+                    raise ValueError("active sampling requires the Camayoc publisher")
+                rotation = cost_sampling.select(args.root)
+                attempted_at = time.time()
+                config = {**config, 'sources': [rotation]}
+                graph_state = cost_sampling.state_path(args.root)
+            try:
+                return _run_selected(args, config, graph_state)
+            finally:
+                if rotation is not None:
+                    cost_sampling.attempted(args.root, rotation, attempted_at)
     except (OSError, ValueError, RuntimeError, KeyError, sqlite3.Error, subprocess.SubprocessError) as exc:
         print(f'cost: UNKNOWN: {exc}', file=sys.stderr)
         return 2
+
+
+def _run_selected(args, config, graph_state):
+    result, records, method = retrieve(args.root, config)
+    if args.sync:
+        # Do not publish a clean-looking replacement on a failed source.
+        if result['errors']:
+            raise RuntimeError('Camayoc source coverage UNKNOWN: ' + '; '.join(result['errors']))
+        destination = Path(config['metric_path'])
+        with tempfile.NamedTemporaryFile(mode='w', dir=destination.parent, delete=False) as handle:
+            handle.write(metrics(result)); temporary = handle.name
+        os.replace(temporary, destination)
+        if config.get('metrics_script'):
+            pushed = subprocess.run([sys.executable, config['metrics_script'], str(destination),
+                                     '--rig', config['rig']], capture_output=True, text=True, timeout=30)
+            if pushed.returncode:
+                raise RuntimeError('cost metric publication failed')
+        if config.get('publish_script'):
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.json') as handle:
+                json.dump(method, handle); handle.flush()
+                published = subprocess.run([sys.executable, config['publish_script'], handle.name,
+                    '--actor', 'st-cost', '--state', str(graph_state),
+                    '--post', '--publish-status'], capture_output=True, text=True, timeout=120)
+            if published.returncode:
+                raise RuntimeError('Camayoc cost graph publication failed: ' + published.stderr[:300])
+        posted = comment_closed(config, result, records, Path(args.root) / 'cost-pending.json')
+        print(json.dumps({'receipt': result['receipt'], 'commented': posted}))
+    elif args.bead:
+        value = receipt(result, args.bead)
+        print(json.dumps(result, indent=2) if args.json else value[1] if value else 'cost: UNKNOWN (no attributable requests)')
+    else:
+        print(json.dumps(result, indent=2))
+    return 0
