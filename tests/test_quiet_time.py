@@ -249,3 +249,25 @@ def test_configured_steam_regex_and_grace(tmp_path, monkeypatch):
     (proc / '1/cmdline').unlink()
     gaming.probe(tmp_path, spec=spec, proc=proc, now=1060)
     assert not gaming.probe(tmp_path, spec=spec, proc=proc, now=1120).held
+
+
+@pytest.mark.parametrize('other', ['unknown', 'off'])
+def test_healthy_clear_detector_keeps_aggregate_usable(tmp_path, monkeypatch, capsys, other):
+    configure(tmp_path)
+    # The cold-start deployment window: gaming has a fresh clear observation,
+    # media has no observation yet. Existing scheduled consumers need rc=0.
+    monkeypatch.setattr(gaming, 'read', lambda *a, **k: gaming.Status('clear', observed=1000))
+    monkeypatch.setattr(quiet, '_read', lambda *a, **k: quiet.Observation(other))
+    status = quiet.read(tmp_path, now=1000)
+    assert status.state == 'clear' and not status.held
+    assert 'aegis_quiet_time_probe_ok{reason="media"} 0' in quiet.metrics(status)
+    if other == 'unknown':
+        assert 'UNKNOWN detectors: media' in status.render()
+    monkeypatch.setattr(cli, '_warn_if_no_store', lambda a: None)
+    assert cli.main(['--root', str(tmp_path), 'hold', 'gaming', '--status']) == 0
+
+
+def test_no_healthy_observation_still_reports_aggregate_unknown():
+    status = quiet.Status((('gaming', gaming.Status('unknown')), ('media', quiet.Observation('unknown'))))
+    assert status.state == 'unknown' and not status.held
+    assert quiet.Status((('gaming', gaming.Status()), ('media', quiet.Observation('unknown')))).state == 'unknown'

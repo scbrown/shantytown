@@ -1322,7 +1322,11 @@ launch/dispatch/tend gates, coordinator advice and exclusive crew scope quotas.
 Schedule it every minute. The legacy `hold gaming --probe` and `--status` also
 use the aggregate, so existing heavy-work wrappers honour new detectors.
 One active reason keeps the hold in force even when another reason clears or
-becomes UNKNOWN. `aegis_quiet_time_detector_active{reason="media"}` identifies
+becomes UNKNOWN. With no active hold, a healthy clear detector keeps the aggregate
+clear even if a peer is UNKNOWN (including before its first probe). That peer
+remains UNKNOWN in diagnostics and per-reason metrics. The aggregate is UNKNOWN
+only when no detector supplies a healthy observation and at least one is unknown.
+`aegis_quiet_time_detector_active{reason="media"}` identifies
 the cause; `aegis_quiet_time_hold_active` is the combined decision. Per-reason
 `aegis_quiet_time_probe_ok` and `aegis_quiet_time_probe_timestamp_seconds` expose
 unavailable or stale evidence. Existing gaming metrics still describe gaming only.

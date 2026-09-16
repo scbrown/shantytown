@@ -45,8 +45,11 @@ class Status:
     def state(self):
         if self.held:
             return 'manual' if all(s.state == 'manual' for _, s in self.entries if s.held) else 'active'
-        return ('unknown' if any(s.state == 'unknown' for _, s in self.entries) else
-                'clear' if any(s.state == 'clear' for _, s in self.entries) else 'off')
+        # A healthy negative is a usable admission decision. An unavailable
+        # peer remains visible in its own metrics/rendering, not an outage of
+        # every consumer (notably while a new detector awaits its first probe).
+        return ('clear' if any(s.state == 'clear' for _, s in self.entries) else
+                'unknown' if any(s.state == 'unknown' for _, s in self.entries) else 'off')
 
     @property
     def game_present_idle(self):
