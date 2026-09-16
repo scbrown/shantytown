@@ -77,6 +77,10 @@ class FilesRegistry:
             # happens to equal its tree position.
             roles=tuple(d.get("roles", ()) or ()),
             domain=d.get("domain"),
+            # No default: a card that does not name a host reads None — "nobody
+            # said" — so an un-migrated card is distinguishable from one that
+            # was scoped to this host on purpose (aegis-5du1bz).
+            host=d.get("host"),
         )
 
     def set(self, agent: Agent) -> None:
@@ -151,6 +155,11 @@ class FilesRegistry:
             existing["roles"] = list(agent.roles)
         if agent.domain is not None:
             existing["domain"] = agent.domain
+        # host, like roles/domain: written only when carried. A projection that
+        # knows the host scopes the card; a `role set` that does not mention it
+        # must not un-scope a card some other source scoped (aegis-5du1bz).
+        if agent.host is not None:
+            existing["host"] = agent.host
         # EVERY CARD LEAVES HERE STARTABLE. A card with no pane names no session,
         # and launch/attach/stop/tend all resolve an agent THROUGH its pane — so a
         # pane-less card is an agent that exists and cannot be run. The card

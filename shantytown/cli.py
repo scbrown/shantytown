@@ -3710,6 +3710,9 @@ def _cmd_inbox(a) -> int:
         return _inbox_durable(a, agent, msg, panes, typed=typed)
 
     # ROUTINE — unchanged. send-keys only, ephemeral.
+    relayed = _relay_if_offhost(a, agent, typed, sender)
+    if relayed is not None:
+        return relayed
     if agent.pane is None:
         print(f"  refused: {agent.name} has no pane in the registry", file=sys.stderr)
         return REFUSED
@@ -3753,6 +3756,69 @@ def _cmd_inbox(a) -> int:
         return CANNOT_TELL
     print(f"  -> {agent.name}    sent to pane {agent.pane}")
     return OK
+
+
+def _relay_if_offhost(a, agent, typed: str, sender: str | None) -> int | None:
+    """Route an EPHEMERAL send to the host the recipient's card names
+    (aegis-5du1bz). None = the recipient is here (or nobody said where anyone
+    is), so the caller's send-keys path applies unchanged.
+
+    The relay IS the other host's own `st inbox`, over ssh, with the sender's
+    identity carried in $SHANTY_AGENT so the remote attributes the message once
+    and exactly as a local send would. The raw text is sent, not the attributed
+    one, for that reason. A refusal ALWAYS names the host it could not reach:
+    "pane is not there" is the wrong story for an agent that is alive on
+    another machine.
+    """
+    from .deployment import local_host
+    local = local_host(a.root)
+    if agent.host is None or local is None or agent.host == local:
+        return None
+    cfg, _err = config.load_or_default(a.root)
+    peer = cfg.host_peers.get(agent.host)
+    if peer is None:
+        print(f"  refused: {agent.name} lives on host {agent.host}, not here "
+              f"({local}), and no [host.peers.{agent.host}] is declared in "
+              f"shantytown.toml — cannot relay. Use `st inbox -d` (store-backed, "
+              f"host-independent) or declare the peer (ssh + root).",
+              file=sys.stderr)
+        return REFUSED
+    import shlex
+    q = shlex.quote
+    remote_cmd = (
+        (f"SHANTY_AGENT={q(sender)} " if sender else "")
+        + 'PATH="$HOME/.local/bin:$PATH" '
+        + f"st --root {q(peer.root)} inbox {q(agent.name)} {q(typed)}")
+    if a.dry_run:
+        print(f"  would: relay via ssh {peer.ssh} -> host {agent.host} "
+              f"(st --root {peer.root} inbox {agent.name} …)")
+        print(f"  would: {typed}")
+        print("\n  0 writes. 1 relay.")
+        return OK
+    import subprocess
+    try:
+        res = subprocess.run(
+            ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
+             peer.ssh, remote_cmd],
+            capture_output=True, text=True, timeout=45)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        print(f"  could not tell: host {agent.host} ({peer.ssh}) did not answer "
+              f"the relay ({type(e).__name__}); nothing is known to have been "
+              f"delivered.", file=sys.stderr)
+        return CANNOT_TELL
+    out = (res.stdout or "").strip()
+    err = (res.stderr or "").strip()
+    if res.returncode == 255:
+        print(f"  could not tell: ssh to host {agent.host} ({peer.ssh}) failed"
+              f"{': ' + err.splitlines()[-1] if err else ''}; nothing delivered.",
+              file=sys.stderr)
+        return CANNOT_TELL
+    for line in (out.splitlines() + err.splitlines()):
+        print(f"  [{agent.host}] {line}", file=sys.stdout if res.returncode == OK else sys.stderr)
+    if res.returncode == OK:
+        print(f"  -> {agent.name}    relayed to host {agent.host} via {peer.ssh}")
+        return OK
+    return REFUSED if res.returncode == REFUSED else CANNOT_TELL
 
 
 def _looks_stranded(panes, pane: str) -> bool:
@@ -6064,7 +6130,18 @@ def _cmd_band(a) -> int:
     return OK
 
 
-def _would_break(files, graph_agents, catalog):
+def _rooted_quipu(a):
+    """`cli.QuipuRegistry` built WITH the deployment root, so `[env]` is read.
+    Falls back to a bare construction for a seam that takes no arguments (the
+    tests' FakeQuipu) — the root is a courtesy to the real client, not a contract
+    every stand-in has to honour."""
+    try:
+        return QuipuRegistry(root=a.root)
+    except TypeError:
+        return QuipuRegistry()
+
+
+def _would_break(files, graph_agents, catalog, remote=()):
     """The cards this sync would NEWLY break. `[(name, measured reason)]`.
 
     Builds the crew that WOULD EXIST and asks `roles.faults` — the same function
@@ -6097,7 +6174,19 @@ def _would_break(files, graph_agents, catalog):
         cur = current.get(ag.name)
         after[ag.name] = (replace(cur, role=ag.role, reports_to=ag.reports_to)
                           if cur is not None else ag)
-    return roles_mod.newly_broken(before, list(after.values()), catalog)
+    # A lead on ANOTHER HOST is not "not in the registry" (aegis-5du1bz): the
+    # graph knows it, the host-scoped sync just does not write a card for it
+    # here. Carry the remote members into the hypothetical crew so the
+    # cross-host reports_to resolves, and report only LOCAL breakage — a remote
+    # member's own row is the other host's sync to judge.
+    remote_names = set()
+    for ag in remote:
+        if ag.name not in after:
+            after[ag.name] = ag
+            remote_names.add(ag.name)
+    return [(n, why) for n, why in
+            roles_mod.newly_broken(before, list(after.values()), catalog)
+            if n not in remote_names]
 
 
 def _cmd_project(a) -> int:
@@ -6137,9 +6226,15 @@ def _cmd_project(a) -> int:
         # Inject cli's QuipuRegistry rather than letting hierarchy bind its own:
         # the graph source stays patchable at ONE name (tests/test_project_guard
         # monkeypatches `cli.QuipuRegistry`), and the seam stays injectable.
+        # ROOTED. `hier_mod.resolve`'s default factory built QuipuRegistry() with
+        # no root, so `[env]` in shantytown.toml was never read on this path and a
+        # plain-shell sync fell back to the example namespace + localhost:3030 —
+        # measured on the MacBook as an "empty fleet" from a reachable graph
+        # (aegis-5du1bz / aegis-aphj31). The lambda keeps the seam patchable at
+        # `cli.QuipuRegistry` for the tests, which construct it with no args.
         source, src_info = hier_mod.resolve(
             spec, file_default=hier_mod.default_file(a.root),
-            quipu_factory=QuipuRegistry)
+            quipu_factory=lambda: _rooted_quipu(a))
         agents = source.all().exact()
     except ValueError as e:                      # a mistyped --from is usage, not outage
         print(f"  {e}", file=sys.stderr)
@@ -6163,6 +6258,46 @@ def _cmd_project(a) -> int:
               f"ZERO CrewMembers{ns_hint}",
               file=sys.stderr)
         return CANNOT_TELL
+
+    # HOST SCOPING (aegis-5du1bz). A fleet is now two hosts sharing one graph, and
+    # "the graph's crew" is no longer "this host's crew". Measured on the MacBook
+    # before this existed: a dry-run there would have minted 13 cards for vati's
+    # entire crew, demoted the Mac's administrator to worker and orphaned it.
+    #
+    # Engages only when the GRAPH places members on hosts. A graph that names no
+    # host is a single-host deployment and projects exactly as before, so every
+    # existing fleet keeps working; the moment one `runsOn` fact exists the rules
+    # below apply, and a deployment that cannot say which host it is REFUSES
+    # rather than defaulting to "all of them" — which is the failure mode.
+    from .deployment import local_host
+    local = local_host(a.root)
+    placed = [ag for ag in agents if ag.host]
+    remote: list = []
+    if placed and local is None:
+        hosts = ", ".join(sorted({ag.host for ag in placed}))
+        print(f"  could not project: the graph places members on hosts ({hosts}) "
+              f"but this deployment declares no host — set `[host] name` in "
+              f"shantytown.toml (or $SHANTY_HOST). A sync that cannot tell which "
+              f"host it is would materialize the whole fleet here.",
+              file=sys.stderr)
+        return CANNOT_TELL
+    if placed:
+        mine = [ag for ag in agents if ag.host == local]
+        remote = [ag for ag in agents if ag.host and ag.host != local]
+        unscoped = [ag for ag in agents if not ag.host]
+        print(f"  host: {local} — {len(mine)} member(s) placed here"
+              + (f"; skipping {len(remote)} on other host(s): "
+                 + ", ".join(f"{ag.name}@{ag.host}" for ag in sorted(remote, key=lambda x: x.name))
+                 if remote else "")
+              + (f"; skipping {len(unscoped)} UNSCOPED (no runsOn in the graph): "
+                 + ", ".join(ag.name for ag in sorted(unscoped, key=lambda x: x.name))
+                 if unscoped else ""))
+        if not mine:
+            print(f"  could not project: no member is placed on host {local}. "
+                  f"Place them (`a:runsOn a:{local}`) before syncing here.",
+                  file=sys.stderr)
+            return CANNOT_TELL
+        agents = [replace(ag, host=local) for ag in mine]
 
     files = FilesRegistry(a.root / "crew")
     panes = _panes(a)
@@ -6272,16 +6407,37 @@ def _cmd_project(a) -> int:
     # PRINTED EVEN ON --dry-run, and that is most of the value: a dry-run is what
     # an operator runs to decide, and this finding is exactly the thing they
     # cannot derive from the rows.
-    broke = _would_break(files, agents, _catalog(a))
+    broke = _would_break(files, agents, _catalog(a), remote=remote)
     if broke:
         print(f"\n  and {len(broke)} card(s) would be NEWLY BROKEN — "
               f"not broken now, broken after:")
         for nm, why in broke:
             print(f"  {'LIVE ' if live(nm) else '     '}! {nm:<10} {why}")
 
+    # NEVER DEMOTE THE ADMINISTRATOR FROM A SYNC (aegis-5du1bz). Not --force,
+    # not --allow-breakage: a sync is a projection, and a projection that turns
+    # the root of the tree into a worker has not projected anything, it has
+    # decapitated the host. The MacBook dry-run would have done exactly this
+    # to hammond, silently, on the strength of an undeclared role. Changing who
+    # the administrator is happens through `st roles set`, on purpose, once.
+    decap = [(n, b, af) for n, b, af, _l, _new in changes
+             if b and b[0] == "administrator" and af[0] != "administrator"]
+    if decap:
+        for n, b, af in decap:
+            print(f"\n  REFUSED: sync would DEMOTE the administrator {n} "
+                  f"({b[0]} -> {af[0]}, reports_to {af[1] or '—'}).",
+                  file=sys.stderr)
+        print("  A sync never changes the administrator. Declare the role in the "
+              "graph (hasRole administrator) or change it deliberately with "
+              "`st roles set`. No flag overrides this.\n", file=sys.stderr)
+        # A dry-run keeps its contract (exit 0, nothing written): the finding
+        # above IS the value of the dry-run. The real run refuses below.
+
     if dry:
         print("\n  --dry-run: nothing written.\n")
         return OK
+    if decap:
+        return REFUSED
 
     # BOTH refusals are reported, never one hiding behind the other — the same
     # rule `roles._fold` states for two legs of one row. An operator who is told
