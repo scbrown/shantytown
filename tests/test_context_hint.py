@@ -167,3 +167,32 @@ def test_explicit_agent_window_overrides_role_and_reaches_hook(tmp_path, capsys)
     assert ch.emit(tmp_path, card, payload)
     assert "EXCEEDS" in json.loads(capsys.readouterr().out)["reason"]
     assert sb.parse({"context_by_agent": {"reader": {"context_window": 1000}}}).context_for("worker", "other") is None
+
+
+@pytest.mark.parametrize("native,expected", [(1000, cs.MEASURED), (0, cs.UNKNOWN),
+                                             (True, cs.UNKNOWN), ("1000", cs.UNKNOWN),
+                                             (None, cs.UNKNOWN)])
+def test_codex_native_capacity_without_declaration(tmp_path, native, expected):
+    path = tmp_path / "native.jsonl"
+    path.write_text(json.dumps({"type": "event_msg", "payload": {"type": "token_count",
+        "info": {"last_token_usage": {"input_tokens": 750}, "model_context_window": native}}}))
+    reading = cs.read(path, None)
+    assert reading.state == expected
+    if expected == cs.MEASURED:
+        assert reading.pct == 75
+    assert cs.read(path, 2000).pct == 37.5, "explicit override remains authoritative"
+
+
+def test_native_window_and_usage_come_from_same_latest_record(tmp_path, capsys):
+    card, payload = world(tmp_path)
+    (tmp_path / "shantytown.toml").write_text('[session_budget]\ncontext_threshold_pct = 70\n')
+    from pathlib import Path
+    def record(window):
+        return {"type": "event_msg", "payload": {"type": "token_count", "info": {
+            "model_context_window": window, "last_token_usage": {"input_tokens": 750}}}}
+    path = Path(payload["transcript_path"])
+    path.write_text(json.dumps(record(2000)) + "\n" + json.dumps(record(1000)))
+    assert ch.emit(tmp_path, card, payload)
+    assert "75%" in json.loads(capsys.readouterr().out)["reason"]
+    path.write_text(json.dumps(record(1000)) + "\n" + json.dumps(record(None)))
+    assert cs.read(path, None).state == cs.UNKNOWN, "never reuse old capacity after a change"

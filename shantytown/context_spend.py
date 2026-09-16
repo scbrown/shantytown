@@ -35,8 +35,10 @@ pick 200k and a 1M session reads 207% and fires instantly; pick 1M and a 200k
 session reads 41% and NEVER FIRES. The second is the bug this module exists to
 prevent, wearing a principled-looking mechanism.
 
-So: the window is declared by the deployment. An unconfigured window is UNKNOWN,
-never a guess — a guessed window is a measurement dressed as a fact.
+For Claude, the window must be declared by the deployment. Codex token_count
+records carry an authoritative model_context_window alongside last_token_usage;
+use that capacity when no override is declared. Neither path guesses from model
+names. Missing capacity remains UNKNOWN, never a default.
 
 ## Three states, and UNKNOWN is not zero
 
@@ -92,7 +94,13 @@ class ContextReading:
 
 
 def read_consumed(session_path: str | Path) -> tuple[int, str | None] | None:
-    """(tokens occupying the window, model) from the LAST usage record, or None.
+    """Latest input occupancy and model, preserving the measurement-only API."""
+    snapshot = _read_snapshot(session_path)
+    return snapshot[:2] if snapshot is not None else None
+
+
+def _read_snapshot(session_path: str | Path) -> tuple[int, str | None, int | None] | None:
+    """(input occupancy, model, native window) from the latest usage record.
 
     None means cannot-tell — an unreadable, absent or usage-free transcript. It is
     deliberately not (0, None): a caller that cannot distinguish those will report
@@ -124,7 +132,9 @@ def read_consumed(session_path: str | Path) -> tuple[int, str | None] | None:
                     # Codex input already includes cached input; total_token_usage
                     # is cumulative cost and must never be used as occupancy.
                     value = usage.get("input_tokens")
-                    return (value, None) if type(value) is int and value >= 0 else None
+                    native = info.get("model_context_window")
+                    native = native if type(native) is int and native > 0 else None
+                    return (value, None, native) if type(value) is int and value >= 0 else None
                 msg = rec.get("message")
                 msg = msg if isinstance(msg, dict) else {}
                 usage = msg.get("usage") or rec.get("usage")
@@ -139,7 +149,7 @@ def read_consumed(session_path: str | Path) -> tuple[int, str | None] | None:
                     if type(v) is not int or v < 0:
                         return None
                     total += v
-                return total, msg.get("model") if isinstance(msg.get("model"), str) else None
+                return total, msg.get("model") if isinstance(msg.get("model"), str) else None, None
     except OSError:
         return None
     return None
@@ -162,12 +172,14 @@ def _reverse_lines(fh):
 
 
 def read(session_path: str | Path, window: int | None) -> ContextReading:
-    """Resolve a transcript plus a CONFIGURED window into one of three states."""
-    got = read_consumed(session_path)
+    """Use an explicit window, otherwise the native window from the same record."""
+    got = _read_snapshot(session_path)
     if got is None:
         return ContextReading(
             UNKNOWN, detail=f"no usage records readable at {session_path}")
-    consumed, model = got
+    consumed, model, native_window = got
+    if window is None:
+        window = native_window
     if not window or window <= 0:
         return ContextReading(
             UNKNOWN, consumed=consumed, model=model,

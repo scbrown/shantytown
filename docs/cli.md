@@ -93,8 +93,9 @@ context_window = 200000
 
 Declare the actual deployment window; transcript model names can omit window
 variants. Role and agent overrides inherit global settings; an agent override takes
-precedence over its role. Use agent declarations for mixed-model crews. A threshold without a
-window reports UNKNOWN. Omitting all context settings leaves hints disabled.
+precedence over its role. Use agent declarations for mixed-model crews. Without an explicit window, Codex uses the server-provided `model_context_window`
+from the same usage record. Claude needs a declaration; missing capacity reports
+UNKNOWN. Omitting all context settings leaves hints disabled.
 
 Existing Stop hooks read the latest turn's input occupancy, including Claude
 cache tokens, and give one advisory per threshold crossing or session change.
