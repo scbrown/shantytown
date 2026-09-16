@@ -125,7 +125,13 @@ class Limits:
     context_by_agent: dict[str, ContextLimits] = field(default_factory=dict)
 
     def context_for(self, role: str, agent: str | None = None) -> ContextLimits | None:
-        return self.context_by_agent.get(agent, self.context_by_role.get(role, self.context))
+        # Enabling monitoring for one role/agent must not silently exclude the
+        # rest of the roster. Default only the threshold, NEVER the capacity:
+        # native transcript capacity or an explicit declaration is still required.
+        fallback = self.context
+        if fallback is None and (self.context_by_role or self.context_by_agent):
+            fallback = ContextLimits()
+        return self.context_by_agent.get(agent, self.context_by_role.get(role, fallback))
 
     @property
     def active(self) -> bool:

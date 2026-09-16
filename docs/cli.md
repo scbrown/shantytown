@@ -95,13 +95,19 @@ Declare the actual deployment window; transcript model names can omit window
 variants. Role and agent overrides inherit global settings; an agent override takes
 precedence over its role. Use agent declarations for mixed-model crews. Without an explicit window, Codex uses the server-provided `model_context_window`
 from the same usage record. Claude needs a declaration; missing capacity reports
-UNKNOWN. Omitting all context settings leaves hints disabled.
+UNKNOWN. Enabling any context setting enables coverage for the whole crew:
+otherwise undeclared agents use a 70% threshold with no assumed capacity. A
+role/agent-specific capacity is never borrowed by another agent. Omitting all
+context settings leaves hints disabled.
 
 Existing Stop hooks read the latest turn's input occupancy, including Claude
 cache tokens, and give one advisory per threshold crossing or session change.
 They name `st cycle --self --checkpoint-file <notes-file>`; they never schedule
 that cycle or latch a work ceiling. Finish critical work before checkpointing.
-`st crew` shows occupancy from that session's most recent hook transcript.
+`st anchor` shows context measurement at startup, and `st crew` shows occupancy
+from that session's most recent hook transcript plus a named summary of live
+agents with unmeasured context. An agent without a current Stop observation is
+unmeasured, even if its window is configured.
 Missing, stale or unreadable observations say UNKNOWN. Consumption exceeding
 the declared window reports a configuration fault, never a clamped percentage.
 A too-large window cannot be detected from usage alone; verify the configured

@@ -448,3 +448,39 @@ def test_context_advisory_visible_without_withholding_free_agent(tmp_path, monke
     output = capsys.readouterr().out
     assert "ceiling (context), advisory" in output and "75%" in output
     assert "1 free: ellie" in output
+
+
+def test_context_coverage_summary_names_live_gaps_only(tmp_path, monkeypatch, capsys):
+    from shantytown import context_hint as ch, session_budget as sb
+    from shantytown.protocols import Agent
+    import time
+    root = _roster(tmp_path, {"measured": "p-ok", "unmeasured": "p-gap", "down": None})
+    (root / "shantytown.toml").write_text(
+        '[session_budget.context_by_agent.measured]\ncontext_window = 1000\n')
+    panes = _Panes({"p-ok": IDLE_SCREEN, "p-gap": IDLE_SCREEN})
+    monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: panes)
+    transcript = root / "session.jsonl"
+    transcript.write_text(json.dumps({"message": {"usage": {"input_tokens": 100}}}))
+    ch._save(ch._path(root, Agent(name="measured", role="worker")), {
+        "at": time.time(), "payload": {"session_id": "current", "transcript_path": str(transcript)}})
+    monkeypatch.setattr(sb, "current_session", lambda *_: "current")
+    assert cli._cmd_crew(_Args(root)) == cli.OK
+    out = capsys.readouterr().out
+    assert "context 10%" in out
+    assert "1 live agent(s) with UNMEASURED context: unmeasured" in out
+    assert "Missing measurements are not under-threshold readings" in out
+
+
+def test_anchor_exposes_startup_context_gap_but_short_mode_stays_machine_readable(
+        tmp_path, monkeypatch, capsys):
+    root = _roster(tmp_path, {"reader": "p-reader"})
+    (root / "shantytown.toml").write_text(
+        '[session_budget.context_by_agent.other]\ncontext_window = 1000\n')
+    monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: _Panes({"p-reader": IDLE_SCREEN}))
+    a = _Args(root)
+    a.me = "reader"
+    assert cli._cmd_anchor(a) == cli.OK
+    assert "reader: context UNKNOWN" in capsys.readouterr().out
+    a.short = True
+    assert cli._cmd_anchor(a) == cli.OK
+    assert capsys.readouterr().out == ""
