@@ -166,7 +166,7 @@ def test_explicit_agent_window_overrides_role_and_reaches_hook(tmp_path, capsys)
     assert ch.policy(tmp_path, card)[0].window == 500
     assert ch.emit(tmp_path, card, payload)
     assert "EXCEEDS" in json.loads(capsys.readouterr().out)["reason"]
-    assert sb.parse({"context_by_agent": {"reader": {"context_window": 1000}}}).context_for("worker", "other") is None
+    assert sb.parse({"context_by_agent": {"reader": {"context_window": 1000}}}).context_for("worker", "other") == sb.ContextLimits()
 
 
 @pytest.mark.parametrize("native,expected", [(1000, cs.MEASURED), (0, cs.UNKNOWN),
@@ -196,3 +196,33 @@ def test_native_window_and_usage_come_from_same_latest_record(tmp_path, capsys):
     assert "75%" in json.loads(capsys.readouterr().out)["reason"]
     path.write_text(json.dumps(record(1000)) + "\n" + json.dumps(record(None)))
     assert cs.read(path, None).state == cs.UNKNOWN, "never reuse old capacity after a change"
+
+
+@pytest.mark.parametrize("scope", ["context_by_agent", "context_by_role"])
+def test_partial_rollout_measures_native_capacity_and_exposes_missing_window(
+        tmp_path, capsys, scope):
+    card, payload = world(tmp_path)
+    (tmp_path / "shantytown.toml").write_text(
+        f'[session_budget.{scope}.other]\ncontext_window = 2000\n')
+    assert ch.policy(tmp_path, card)[0] == sb.ContextLimits()
+    # Another agent's declaration must not disguise this Claude session's gap.
+    assert ch.emit(tmp_path, card, payload)
+    reason = json.loads(capsys.readouterr().out)["reason"]
+    assert "for reader" in reason and "UNKNOWN" in reason
+    assert "context_window" in reason and "under-threshold" in reason
+    assert not ch.emit(tmp_path, card, payload), "unknown must not trap a Stop loop"
+    from pathlib import Path
+    Path(payload["transcript_path"]).write_text(json.dumps({
+        "type": "event_msg", "payload": {"type": "token_count", "info": {
+            "model_context_window": 1000, "last_token_usage": {"input_tokens": 750}}}}))
+    assert ch.emit(tmp_path, card, payload), "native capacity resolves without a stanza"
+    reason = json.loads(capsys.readouterr().out)["reason"]
+    assert "75%" in reason and "70%" in reason
+
+
+def test_completely_unconfigured_deployment_stays_disabled(tmp_path, capsys):
+    card, payload = world(tmp_path)
+    (tmp_path / "shantytown.toml").write_text("")
+    assert not ch.emit(tmp_path, card, payload)
+    assert ch.crew_label(tmp_path, card) is None
+    assert capsys.readouterr().out == ""

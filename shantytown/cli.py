@@ -4069,6 +4069,9 @@ def _cmd_anchor(a) -> int:
         return OK
     print()
     print(p.render())
+    from . import context_hint
+    if context_label := context_hint.crew_label(a.root, registry.get(me)):
+        print(f"  {me}: {context_label}")
     print()
     return OK
 
@@ -4602,6 +4605,7 @@ def _cmd_crew(a) -> int:
     runtime = _runtime(a, panes)
     free, busy, queued, shelled = [], [], [], []
     work_unknown = []
+    context_unknown = []
     deliberate = []
     cycling_agents = []
     blocked_cycles = []
@@ -4730,6 +4734,13 @@ def _cmd_crew(a) -> int:
             from . import context_hint
             if context_label := context_hint.crew_label(a.root, ag):
                 print(f"    {context_label}")
+                if context_label.startswith("context UNKNOWN"):
+                    context_unknown.append(ag.name)
+    if context_unknown:
+        print(f"  ⚠ {len(context_unknown)} live agent(s) with UNMEASURED context: "
+              + ", ".join(context_unknown))
+        print("    Missing measurements are not under-threshold readings. "
+              "Check each agent's Stop observation and context_window declaration.")
     stale, unknown = _reach_buckets(verdicts)
     # THE SWEEP, AS A LINE (aegis-ib65p decision 6). Learning that 12 of 12
     # worktrees were behind took a hand-rolled loop across three directories,

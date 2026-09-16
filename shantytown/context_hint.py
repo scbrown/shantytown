@@ -108,7 +108,7 @@ def emit(root, card, payload=None) -> bool:
                        "<notes-file>`. This is advisory: continue safely if needed; "
                        "no cycle has been scheduled.")
         else:
-            message = (f"CONTEXT MEASUREMENT: {reading.label()}. This is not an "
+            message = (f"CONTEXT MEASUREMENT for {card.name}: {reading.label()}. This is not an "
                        "under-threshold reading. Check the transcript and "
                        "[session_budget] context_window configuration. "
                        "No cycle has been scheduled; work may continue.")
