@@ -256,7 +256,7 @@ def run(args):
                         json.dump(method, handle); handle.flush()
                         published = subprocess.run([sys.executable, config['publish_script'], handle.name,
                             '--actor', 'st-cost', '--state', str(Path(args.root) / 'cost-graph-state.json'),
-                            '--post'], capture_output=True, text=True, timeout=120)
+                            '--post', '--publish-status'], capture_output=True, text=True, timeout=120)
                     if published.returncode:
                         raise RuntimeError('Camayoc cost graph publication failed: ' + published.stderr[:300])
                 posted = comment_closed(config, result, records, Path(args.root) / 'cost-pending.json')
