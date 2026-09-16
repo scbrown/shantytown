@@ -2193,6 +2193,13 @@ def _launch(a, card, panes, runtime, *, dry_run: bool = False,
     except RuntimeError as e:
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED
+    # A bounded manifest must never launch before its private parent is ready.
+    from . import mcp_limits
+    try:
+        mcp_limits.prepare_launch(a.root, card.name, panes, session)
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
+        print(f"  refused: MCP containment preparation failed: {exc}", file=sys.stderr)
+        return REFUSED
     # Deliver through the seam. Panes stays runtime-blind — sees a finished string.
     runtime.start(card, session)
     # STAMP WHAT IT LAUNCHED ON, before we report anything. The
