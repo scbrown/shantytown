@@ -4705,7 +4705,17 @@ def _cmd_crew(a) -> int:
             lv, lv_why = roles_mod.live_verdict(ag, agents, _live)
             if lv == roles_mod.BROKEN:
                 role_drift.append((ag.name, ag.role, lv_why))
-        print(f"  {ag.name:<11} {ag.role:<14} {state:<13} {verdict:<8} "
+        # RENDER THE DECLARED STACK, NOT AN ELECTED PRIMARY (aegis-nyce0l).
+        # `role` alone is the shape-derived TREE POSITION, so a member declaring
+        # `keeper` showed as `worker` and 8 of the 11 declared CrewRoles could
+        # not appear here at all. We print every declared role instead of picking
+        # one, because aegis-cqgq1 landed precedence as per-axis-value ranking and
+        # rejected per-role ranking ("misranks multi-axis roles") — there is no
+        # datum that says keeper outranks worker, and inventing one here would
+        # reintroduce that tie-break in the renderer. An undeclared member falls
+        # back to its tree position, so an un-migrated fleet looks exactly as before.
+        role_cell = ",".join(ag.effective_roles())
+        print(f"  {ag.name:<11} {role_cell:<14} {state:<13} {verdict:<8} "
               f"{tree_cell:<9} {work:<16} {posture:<7} {ag.pane or '—'}")
         if state == "up":
             try:
