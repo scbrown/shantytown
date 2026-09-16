@@ -692,10 +692,26 @@ warn_degraded
 # but REACHABILITY can, and it is the honest test anyway: a commit already on the
 # internal forge is shared history that this push did not introduce and that the
 # pusher cannot amend away.
+# WHETHER A COMMIT IS ALREADY PUBLIC — INCLUDING ON THE REMOTE BEING PUSHED TO.
+#
+# This used to `continue` past $PUSH_REMOTE, on the reasoning that a commit already on the
+# push target could not be one this push introduces. That is true per REF and false per
+# REMOTE, and the existing-ref path below is scoped `rsha..lsha` — the commits this push adds
+# TO THAT BRANCH, not to the remote. So a commit sitting on the target's OWN main, pulled into
+# a topic branch by a merge or a rebase, was counted as introduced.
+#
+# Measured 2026-09-16 (kelly, aegis-1sehdu): a rebased PR branch was refused on 206bcc4b for
+# `/Users/<account>` in .beads/issues.jsonl:610, while `206bcc4b` was already on fork/main and
+# the push target WAS fork. The pusher had introduced nothing, could not amend shared history,
+# and the only action that would have "worked" was --no-verify — the one action that actually
+# publishes the identifier. That is the exact trap the PRE-EXISTING BLOCK message below exists
+# to prevent, and the skip was stopping that message from ever being reached.
+#
+# Dropping the skip is safe in the direction that matters: a commit genuinely introduced by
+# this push is on no remote-tracking ref at all, so it still counts as the pusher's own.
 already_elsewhere() {
   local c=$1 r tip
   for r in $(git remote 2>/dev/null); do
-    [ "$r" = "$PUSH_REMOTE" ] && continue
     for tip in $(git for-each-ref --format='%(objectname)' "refs/remotes/$r/" 2>/dev/null); do
       if git merge-base --is-ancestor "$c" "$tip" 2>/dev/null; then
         printf '%s' "$r"; return 0
