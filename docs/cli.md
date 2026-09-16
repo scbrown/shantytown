@@ -1437,4 +1437,6 @@ After 20 distinct observed shapes, sync pauses publication and writes
 `cost-active-review.json` with min/median/max dimensions. The normal producer
 receipt publishes `review_due` on the twentieth observation. The report describes
 the supplied session population, not proof of the fleet's tail distribution.
+Completed-review ticks refresh native Camayoc status metrics without source or
+graph access, so an intentional pause does not masquerade as a dead producer.
 Review must precede any new population or cap change.

@@ -106,7 +106,13 @@ def test_twentieth_shape_pauses_before_source_read_and_reports_distribution(tmp_
         raise AssertionError('sampling continued past review boundary')
     monkeypatch.setattr(sampling, 'select', forbidden)
     monkeypatch.setattr(cost, '_run_selected', forbidden)
+    calls = []
+    def status_only(command, **kwargs):
+        calls.append(command)
+        return SimpleNamespace(returncode=0)
+    monkeypatch.setattr(cost.subprocess, 'run', status_only)
     assert cost.run(args(tmp_path)) == 0
+    assert len(calls) == 1 and '--review-only' in calls[0]
     report = json.loads(capsys.readouterr().out)
     assert report['status'] == 'REVIEW_DUE'
     assert report['dimensions']['records'] == {'min': 1, 'median': 10.5, 'max': 20}
@@ -125,3 +131,19 @@ def test_one_source_selected_and_failed_publication_advances(tmp_path, monkeypat
     assert cost.run(args(tmp_path)) == 2
     assert json.loads((tmp_path / 'cost-active-rotation.json').read_text()) == {
         'last': ['a', 'current'], 'samples': []}
+
+
+@pytest.mark.parametrize('pending', [True, False])
+def test_review_cannot_hide_pending_write_or_failed_health_publication(tmp_path, monkeypatch, pending):
+    setup(tmp_path)
+    samples = [{'items': 0, 'records': n, 'body_bytes': n * 10} for n in range(1, 21)]
+    write(sampling.state_path(tmp_path).with_suffix('.budget.json'), {'distinct_samples': samples})
+    if pending:
+        write(sampling.state_path(tmp_path).with_suffix('.pending.json'), {})
+    calls = []
+    def failed(command, **kwargs):
+        calls.append(command)
+        return SimpleNamespace(returncode=2, stderr='status unavailable')
+    monkeypatch.setattr(cost.subprocess, 'run', failed)
+    assert cost.run(args(tmp_path)) == 2
+    assert len(calls) == (0 if pending else 1)

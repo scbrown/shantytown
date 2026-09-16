@@ -248,6 +248,11 @@ def run(args):
                         raise RuntimeError('indeterminate cost snapshot requires reconciliation')
                 if report := cost_sampling.review(args.root):
                     _atomic_json(Path(args.root) / 'cost-active-review.json', report)
+                    refreshed = subprocess.run([sys.executable, config['publish_script'],
+                        '--actor', 'st-cost', '--state', str(cost_sampling.state_path(args.root)),
+                        '--review-only', '--publish-status'], capture_output=True, text=True, timeout=30)
+                    if refreshed.returncode:
+                        raise RuntimeError('review status publication failed: ' + refreshed.stderr[:300])
                     print(json.dumps(report, sort_keys=True))
                     return 0
                 for state in (graph_state, cost_sampling.state_path(args.root)):
