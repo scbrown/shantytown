@@ -122,8 +122,10 @@ class Limits:
     context: ContextLimits | None = None
     context_by_role: dict[str, ContextLimits] = field(default_factory=dict)
 
-    def context_for(self, role: str) -> ContextLimits | None:
-        return self.context_by_role.get(role, self.context)
+    context_by_agent: dict[str, ContextLimits] = field(default_factory=dict)
+
+    def context_for(self, role: str, agent: str | None = None) -> ContextLimits | None:
+        return self.context_by_agent.get(agent, self.context_by_role.get(role, self.context))
 
     @property
     def active(self) -> bool:
@@ -194,7 +196,7 @@ def parse(tbl: dict) -> Limits:
     if not tbl:
         return Limits()
     known = {"max_hours", "max_items", "max_risk", "on_signal_lost",
-             "context_window", "context_threshold_pct", "context_by_role"}
+             "context_window", "context_threshold_pct", "context_by_role", "context_by_agent"}
     for k in tbl:
         if k not in known:
             raise BudgetError(
@@ -230,19 +232,23 @@ def parse(tbl: dict) -> Limits:
 
     base = (context(tbl) if any(k in tbl for k in
             ("context_window", "context_threshold_pct")) else None)
-    overrides = tbl.get("context_by_role", {})
-    if not isinstance(overrides, dict):
-        raise BudgetError("[session_budget] context_by_role must be a table")
-    by_role = {}
-    for role, values in overrides.items():
-        if (not isinstance(values, dict) or not values
-                or set(values) - {"context_window", "context_threshold_pct"}):
-            raise BudgetError(f"[session_budget.context_by_role.{role}] expected context_window/context_threshold_pct")
-        by_role[role] = context(values, base)
+    def overrides(key):
+        entries = tbl.get(key, {})
+        if not isinstance(entries, dict):
+            raise BudgetError(f"[session_budget] {key} must be a table")
+        result = {}
+        for name, values in entries.items():
+            if (not isinstance(values, dict) or not values
+                    or set(values) - {"context_window", "context_threshold_pct"}):
+                raise BudgetError(f"[session_budget.{key}.{name}] expected context_window/context_threshold_pct")
+            result[name] = context(values, base)
+        return result
+    by_role = overrides("context_by_role")
+    by_agent = overrides("context_by_agent")
     return Limits(max_hours=num("max_hours", float),
                   max_items=num("max_items", int),
                   max_risk=num("max_risk", int),
-                  on_signal_lost=sl, context=base, context_by_role=by_role)
+                  on_signal_lost=sl, context=base, context_by_role=by_role, context_by_agent=by_agent)
 
 
 # --- reading the spend -----------------------------------------------------

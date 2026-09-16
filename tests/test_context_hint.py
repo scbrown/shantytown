@@ -159,3 +159,11 @@ def test_corrupt_snapshot_is_unknown(tmp_path, data):
     card, _ = world(tmp_path)
     ch._save(ch._path(tmp_path, card), data)
     assert "UNKNOWN" in ch.crew_label(tmp_path, card)
+
+
+def test_explicit_agent_window_overrides_role_and_reaches_hook(tmp_path, capsys):
+    card, payload = world(tmp_path, extra='[session_budget.context_by_agent.reader]\ncontext_window = 500\n')
+    assert ch.policy(tmp_path, card)[0].window == 500
+    assert ch.emit(tmp_path, card, payload)
+    assert "EXCEEDS" in json.loads(capsys.readouterr().out)["reason"]
+    assert sb.parse({"context_by_agent": {"reader": {"context_window": 1000}}}).context_for("worker", "other") is None

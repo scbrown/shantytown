@@ -86,10 +86,14 @@ context_threshold_pct = 70
 
 [session_budget.context_by_role.lead]
 context_threshold_pct = 60
+
+[session_budget.context_by_agent.alice]
+context_window = 200000
 ```
 
 Declare the actual deployment window; transcript model names can omit window
-variants. A role override inherits the global settings. A threshold without a
+variants. Role and agent overrides inherit global settings; an agent override takes
+precedence over its role. Use agent declarations for mixed-model crews. A threshold without a
 window reports UNKNOWN. Omitting all context settings leaves hints disabled.
 
 Existing Stop hooks read the latest turn's input occupancy, including Claude

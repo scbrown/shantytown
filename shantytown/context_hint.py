@@ -22,7 +22,7 @@ def policy(root, card):
     cfg, error = config.load_or_default(Path(root))
     # A malformed window must not turn an armed hint silently OFF.
     return (sb.ContextLimits(), str(error)) if error else (
-        cfg.session_budget.context_for(card.role), None)
+        cfg.session_budget.context_for(card.role, card.name), None)
 
 
 def _path(root, card):
