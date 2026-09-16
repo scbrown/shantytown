@@ -2098,8 +2098,9 @@ def _launch(a, card, panes, runtime, *, dry_run: bool = False,
             return _refuse_gaming(a, gaming)
         # An override is a decision worth reading back: it degrades whatever the
         # hold was protecting, and nothing else in the log would say it happened.
+        hold_name = ", ".join(gaming.reasons) if isinstance(gaming, quiet_time_mod.Status) else "gaming"
         print(f"  ⚠ {gaming_mod.OVERRIDE_FLAG}: launching {card.name} THROUGH a "
-              f"gaming hold ({gaming.state}) — the hold stays in force for "
+              f"{hold_name} hold ({gaming.state}) — the hold stays in force for "
               "dispatch, respawns and every other launch.", file=sys.stderr)
     if not window_restore and (rc := _window_launch_gate(a)) is not None:
         return rc
