@@ -112,7 +112,7 @@ def relay(command, group, idle_seconds):
         for fd in blocking:
             os.set_blocking(fd, False)
         while not stop:
-            if time.monotonic() - last_input >= idle_seconds:
+            if idle_seconds and time.monotonic() - last_input >= idle_seconds:
                 print('MCP idle timeout: closing child cgroup', file=sys.stderr)
                 return 0
             # Backpressure bounds relay memory while leaving the idle/signal
@@ -132,7 +132,7 @@ def relay(command, group, idle_seconds):
                 return 0
             if not server_open and not pending[sys.stdout.buffer.fileno()]:
                 return process.poll() or 0
-            for key, _ in selector.select(timeout=min(1, idle_seconds)):
+            for key, _ in selector.select(timeout=1):
                 if key.data == 'write':
                     buffer = pending[key.fd]
                     try:
@@ -207,12 +207,13 @@ def project(data, root, agent):
     if any(type(x) is not int or x <= 0 for x in (cpu, memory, idle)):
         raise ValueError('MCP resource limits must be positive integers')
     out = json.loads(json.dumps(data))
-    for server in out.get('mcpServers', out).values():
+    idle_servers = policy.get('idle_servers', ['playwright'])
+    for name, server in out.get('mcpServers', out).items():
         if server.get('command'):
             command = [server['command'], *server.get('args', [])]
             server['command'] = sys.executable
             server['args'] = ['-m', 'shantytown.mcp_limits', '--cpu-percent', str(cpu),
-                '--memory-bytes', str(memory), '--idle-seconds', str(idle), '--', *command]
+                '--memory-bytes', str(memory), '--idle-seconds', str(idle if name in idle_servers else 0), '--', *command]
     return out
 
 
@@ -224,7 +225,7 @@ def main():
     ap.add_argument('--pane-pid', type=int)
     ap.add_argument('--cpu-percent', type=int, default=200)
     ap.add_argument('--memory-bytes', type=int, default=2*1024**3)
-    ap.add_argument('--idle-seconds', type=int, default=300)
+    ap.add_argument('--idle-seconds', type=int, default=0)
     ap.add_argument('command', nargs=argparse.REMAINDER)
     args = ap.parse_args()
     try:
@@ -233,7 +234,7 @@ def main():
                 raise ValueError('prepare requires root, agent and pane-pid')
             print(prepare(args.root, args.agent, args.pane_pid))
             return 0
-        if min(args.cpu_percent, args.memory_bytes, args.idle_seconds) <= 0:
+        if min(args.cpu_percent, args.memory_bytes) <= 0 or args.idle_seconds < 0:
             raise ValueError('limits must be positive')
         command = args.command[1:] if args.command[:1] == ['--'] else args.command
         if not command:

@@ -9,21 +9,24 @@ from shantytown import gaming_scopes, mcp_limits, panemem
 
 
 def test_projection_is_explicit_and_preserves_http_and_credentials(tmp_path):
-    data = {'mcpServers': {'browser': {'command': 'server', 'args': ['--headless'],
-                          'env': {'TOKEN': 'fixture'}}, 'remote': {'url': 'https://example.test'}}}
+    data = {'mcpServers': {'playwright': {'command': 'server', 'args': ['--headless'],
+                          'env': {'TOKEN': 'fixture'}}, 'remote': {'url': 'https://example.test'}, 'lookup': {'command':'lookup'}}}
     assert mcp_limits.project(data, tmp_path, 'one') == data
     (tmp_path/'provision').mkdir()
     (tmp_path/'provision/mcp-limits.json').write_text(json.dumps({'enabled': True, 'agents': ['one']}))
     assert mcp_limits.project(data, tmp_path, 'two') == data
     got = mcp_limits.project(data, tmp_path, 'one')
     assert got['mcpServers']['remote'] == data['mcpServers']['remote']
-    server = got['mcpServers']['browser']
+    server = got['mcpServers']['playwright']
     assert server['env'] == {'TOKEN': 'fixture'}
+    assert server['args'][server['args'].index('--idle-seconds')+1] == '300'
+    other=got['mcpServers']['lookup']['args']
+    assert other[other.index('--idle-seconds')+1] == '0'
     assert server['args'][-3:] == ['--', 'server', '--headless']
-    assert data['mcpServers']['browser']['command'] == 'server'
+    assert data['mcpServers']['playwright']['command'] == 'server'
     (tmp_path/'provision/mcp-limits.json').write_text(json.dumps({'enabled': True, 'agents': ['*']}))
     assert mcp_limits.enabled(tmp_path, 'future-card')
-    assert mcp_limits.project(data, tmp_path, 'future-card')['mcpServers']['browser']['command'] != 'server'
+    assert mcp_limits.project(data, tmp_path, 'future-card')['mcpServers']['playwright']['command'] != 'server'
 
 
 def test_missing_controllers_refuses_before_child_creation(tmp_path):

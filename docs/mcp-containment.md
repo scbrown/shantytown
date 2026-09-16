@@ -27,8 +27,10 @@ PIDs. Parent memory and gaming caps still constrain the entire subtree. The
 wrapper remains outside the child so it can clean up after a server OOM.
 
 The relay forwards opaque protocol bytes with bounded buffers. Client EOF,
-termination or no client input for the configured idle interval kills the whole
-child cgroup, including detached browser descendants. Inactivity is measured on
+or termination kills the whole
+child cgroup, including detached browser descendants. Inactivity cleanup defaults
+to the `playwright` server only (`idle_servers` selects names); other MCP servers
+retain their protocol sessions while idle. Inactivity is measured on
 client bytes, not browser CPU or server output: a single tool operation lasting
 longer than this interval is also terminated. The client must reconnect/restart
 its MCP server after timeout. Choose the interval with that constraint in mind.
