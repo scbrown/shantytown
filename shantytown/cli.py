@@ -1,4 +1,4 @@
-"""st — the CLI. Thirty-two commands, and the count is load-bearing: each earns its slot.
+"""st — the CLI. Thirty-three commands, and the count is load-bearing: each earns its slot.
 
     anchor [--short|--events|--harness] · go · repool · defer · inbox [--count] · task
     · crew [--count|--governor] · input [--show|--clear|--dismiss] · ask · answer
@@ -6,7 +6,7 @@
     · stop · log · context · doctor [--install] · dream [--run]
     · tend [--install|--status|--reauth|--target] · attach [-r|--no-start]
     · dashboard [admin] · subscribe · cycle [--self|--allow-loss] · worktree [--gc]
-    · push [--branch] · window {plan|drain|clear|release|abort} · stats · help <topic>
+    · push [--branch] · window {plan|drain|clear|release|abort} · stats · cost [--sync] · help <topic>
     · history <agent> · hold gaming [--clear|--status|--probe]
 
 `harness <agent> [claude|codex]` earned the thirty-first slot (aegis-6glmer, Stiwi
@@ -986,6 +986,11 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("-n", "--dry-run", action="store_true",
                        help="verify and describe the transition; change nothing")
 
+    co = sub.add_parser("cost", help="per-bead costs from Camayoc and explicit focus bindings")
+    co.add_argument("bead", nargs="?")
+    co.add_argument("--json", action="store_true")
+    co.add_argument("--sync", action="store_true", help="publish metrics and idempotent closed-bead receipts")
+
     ss = sub.add_parser("stats", help="what the crew actually did: files, "
                                       "skills, tokens, activity (local store)")
     ss.add_argument("agent", nargs="?",
@@ -1414,6 +1419,9 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_stop(a)
     if a.cmd == "log":
         return _cmd_log(a)
+    if a.cmd == "cost":
+        from . import cost
+        return cost.run(a)
     if a.cmd == "stats":
         if a.begin_task or a.task_order:
             from . import task_order

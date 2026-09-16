@@ -24,7 +24,7 @@
 *Create a work item. Tell an agent to go get it. That's the whole idea.*
 
 [![dispatch 3.4s](https://img.shields.io/badge/dispatch-3.4s-brightgreen)](#-measured-against-gas-town)
-[![32 commands](https://img.shields.io/badge/commands-32-blue)](#-the-whole-surface)
+[![33 commands](https://img.shields.io/badge/commands-33-blue)](#-the-whole-surface)
 [![tests](https://img.shields.io/badge/tests-2670%20passing-blue)](#-principles)
 [![python](https://img.shields.io/badge/python-3.11%2B-blue)](#-install)
 [![dependencies none](https://img.shields.io/badge/dependencies-none-blue)](#-install)
@@ -197,7 +197,7 @@ stop.* Here is what the gate measured.
 
 | | `gt sling` | `st go` | |
 |---|---:|---:|---|
-| Commands | ~110 | **32** | *a small, deliberate fraction of the surface, by measured use* |
+| Commands | ~110 | **33** | *a small, deliberate fraction of the surface, by measured use* |
 | dispatch (dry-run) | 51.54 s | **0.15 s** | **~344× faster** |
 | dispatch (real) | > 120 s ⏱️ | **3.40 s** | **≥35× faster** |
 | Dolt connections | 63 | **3** | **21× fewer** |
@@ -325,6 +325,7 @@ st cycle <agent> [--self]         clear context WITHOUT destroying the runtime: 
 st worktree <repo> [agent]        provision an agent's isolated worktree off a SHARED project repo
 st push <repo> [agent]            push wt/<agent> to EVERY remote; refuses if invoked from another branch
 st stats [agent]                  files/skills plus provider tokens and cache dimensions
+st cost [bead] [--sync]           parser-owned cost reads and closed-bead/metric publication
 ```
 
 Twenty, and the count is load-bearing: a test pins this block to the parser, so the next command

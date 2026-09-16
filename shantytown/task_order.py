@@ -73,6 +73,8 @@ def capture(conn, payload, now, agent):
     if event not in ('PreToolUse', 'PostToolUse', 'PostToolUseFailure'):
         return
     conn.executescript(_SCHEMA)
+    from .cost import capture_end
+    capture_end(conn, payload, now, agent)
     session = payload.get('session_id') or ''
     tool = payload.get('tool_name') or ''
     call_id = payload.get('tool_use_id') or payload.get('tool_call_id') or ''
@@ -105,7 +107,12 @@ def capture(conn, payload, now, agent):
                                  (session, agent, 'boundary_start', call_id, boundary)).fetchone() if call_id else None
             # Repeating the current declaration must not erase earlier actions.
             if task == boundary:
-                return
+                ended = conn.execute('SELECT 1 FROM cost_focus_ends WHERE session=? AND agent=? '
+                                     'AND task=? AND ts >= (SELECT ts FROM task_contexts WHERE id=?) LIMIT 1',
+                                     (session, agent, task, context)).fetchone() if conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='cost_focus_ends'").fetchone() else None
+                if not ended:
+                    return
             conn.execute('INSERT INTO task_contexts(ts,agent,session,task,paired_start) '
                          'VALUES (?,?,?,?,?)', (now, agent, session, boundary, bool(start)))
         return

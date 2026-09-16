@@ -58,6 +58,7 @@ st tend --target N            respawn only toward N LIVE agents (scale UP on los
 st attach [agent]             attach to a crew member — STARTING them if down (pane+socket resolved)
 st attach --no-start          attach only if already running; never create a session
 st stats [agent] [--files]    files/skills plus provider tokens and cache dimensions
+st cost [bead] [--sync]           parser-owned cost reads and closed-bead/metric publication
 st stats --graph              graph-context adoption: what share of dispatches carried a
                               quipu node, what share stated a reason for having none, and
                               which agents have never cited one. A read over a ledger, so
@@ -118,7 +119,7 @@ Codex input already includes its cached subset. This makes
 `cache_read / usage_in` a provider-independent prompt-cache hit rate. The fields
 are omitted—not zeroed—when every matching transcript is unknown.
 
-Thirty-two. `--dry-run` is on every command that writes, from commit one. The surface grew past the
+Thirty-three. `--dry-run` is on every command that writes, from commit one. The surface grew past the
 original eight, each slot on a specific ask — not drift: **inbox**/**task** (the dispatch/tracker
 pair, owner-directed), **context** (the bobbin Context protocol), **doctor**
 (out-of-box detect/install, Stiwi's direct ask), **subscribe** (the quipu events adapter,
@@ -1234,3 +1235,30 @@ and delivery receipts still apply; a tracker claim alone is not proof a turn beg
 Both haul triggers honour a current deliberate-stop stamp and a gaming hold before
 claiming or resuming work. A held pass spends neither delivery dedup nor the resume
 backoff. Release the hold through the existing lifecycle or gaming controls.
+
+
+## Per-bead costs
+
+`st cost <bead>` reads Camayoc's `session_usage/work_cost` retrieval method.
+This command earns a separate slot because `--sync` publishes closure receipts
+and metrics; `stats` remains an agent report. Counts are calculated only by
+Camayoc, including response deduplication and compaction, and allocated using
+paired session-local task declarations. Scope and UNKNOWN are shown explicitly.
+
+Configure `<root>/cost.json` with `rig`, `tracker_repo`, `retrieve_script`,
+`sources` (each has `agent`, `harness`, `path`) and a writable `metric_path`.
+Optional `metrics_script` and `publish_script` point at Camayoc's installed
+publication commands. Missing configuration returns UNKNOWN with exit 2.
+No credentials belong in this JSON; the scheduled environment supplies them.
+
+`st cost --sync` serializes publication, writes absolute per-kind gauges, and
+appends a content-addressed cost comment to closed items through the public
+tracker CLI. A late flush creates a marked provisional revision. An indeterminate
+comment write retains its exact body; two absent read-backs separated in time
+are required before retry. A reopened item receives no closure comment.
+
+The quantities are uncached input, cache-read input, cache-write input and output.
+Reasoning is a subset of output. Unknown fields are omitted from metrics rather
+than zeroed. Reconstructed allocations can decrease, so `st_bead_tokens_total`
+is a gauge despite its requested name; do not apply `rate()` to it. The freshness
+and coverage gauges must accompany any dashboard interpretation.
