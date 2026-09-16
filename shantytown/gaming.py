@@ -31,6 +31,10 @@ LAUNCH_GRACE = 300
 #: it runs, and one that appears after the ceiling expires re-arms the hold.
 SHADER_GRACE = 1200
 
+#: The operator's way through a hold, for ONE command. Named here rather than in
+#: the CLI so the flag and the text that advertises it cannot drift apart.
+OVERRIDE_FLAG = "--despite-hold"
+
 
 @dataclass(frozen=True)
 class Status:
@@ -52,6 +56,31 @@ class Status:
     def refusal(self) -> str:
         return ("GOVERNOR HOLD — gaming; launches, dispatch and respawns held. "
                 "Wait for the session to end or clear the manual hold.") if self.held else ""
+
+    def override_lines(self, invocation: str = "") -> tuple[str, ...]:
+        """How an OPERATOR gets past this hold — the refusal's own remedy.
+
+        A refusal that states a rule but no way through it sends the reader to
+        the source, which is exactly where this one kept sending people. The
+        right remedy DEPENDS on which hold is in force: `--clear` removes a
+        manual marker and does nothing whatever to an automatic one, because the
+        next scheduled probe re-asserts that 60 seconds later. Saying "clear the
+        manual hold" to somebody holding an automatic one is worse than silence.
+
+        Deliberately NOT folded into `refusal`: the agent-facing surfaces
+        (dispatch, feed_check) quote that string, and an agent must not be handed
+        the override for a hold that exists to protect somebody's game. The flag
+        is for the person at the keyboard, who can see whether they are playing.
+        """
+        if not self.held:
+            return ()
+        retry = f"{invocation or 'st <command>'} {OVERRIDE_FLAG}"
+        if self.state == "manual":
+            return (f"launch anyway, this once:  {retry}",
+                    "lift the hold for good:    st hold gaming --clear")
+        return (f"launch anyway, this once:  {retry}",
+                "`st hold gaming --clear` will NOT lift this one — the hold is "
+                "automatic, and the next probe re-asserts it within a minute.")
 
     def render(self) -> str:
         if self.held and self.game_present_idle and self.state != "manual":

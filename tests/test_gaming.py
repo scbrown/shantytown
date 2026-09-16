@@ -1,3 +1,4 @@
+import contextlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -76,6 +77,84 @@ def test_cli_refuses_before_touching_runtime(tmp_path, monkeypatch, capsys, cmd)
     monkeypatch.setattr(cli, '_warn_if_no_store', lambda a: None)
     assert cli.main(['--root', str(tmp_path), cmd, 'worker']) == 1
     assert 'GOVERNOR HOLD' in capsys.readouterr().err
+
+
+@pytest.mark.parametrize('cmd', ['new', 'start', 'cycle'])
+def test_refusal_names_the_override_and_echoes_the_command(tmp_path, monkeypatch,
+                                                          capsys, cmd):
+    """A refusal has to say how to proceed, in a form that can be pasted."""
+    gaming.manual(tmp_path)
+    monkeypatch.setattr(cli, '_warn_if_no_store', lambda a: None)
+    argv = ['--root', str(tmp_path), cmd, 'worker']
+    assert cli.main(argv) == 1
+    err = capsys.readouterr().err
+    assert 'GOVERNOR HOLD' in err
+    # The operator's OWN command line, with the flag appended.
+    assert f'st {" ".join(argv)} --despite-hold' in err
+    # A manual hold is the one `--clear` actually lifts, so it is offered.
+    assert 'st hold gaming --clear' in err
+
+
+@pytest.mark.parametrize('cmd', ['new', 'start', 'cycle'])
+def test_despite_hold_passes_the_command_gate(tmp_path, monkeypatch, cmd):
+    """The override must reach every launch surface, not just the one we tested."""
+    gaming.manual(tmp_path)
+    monkeypatch.setattr(cli, '_warn_if_no_store', lambda a: None)
+    reached = []
+    for name in ('_cmd_new', '_cmd_start', '_cmd_cycle'):
+        monkeypatch.setattr(cli, name, lambda a, _n=name: reached.append(_n) or 0)
+    assert cli.main(['--root', str(tmp_path), cmd, 'worker',
+                     '--despite-hold']) == 0
+    assert reached == [f'_cmd_{cmd}']
+
+
+def test_automatic_hold_does_not_offer_a_clear_that_would_not_work(tmp_path):
+    """`--clear` removes a manual marker and nothing else.
+
+    Offering it against an automatic hold sends the operator to run a command
+    that reports success and changes nothing, because the next probe re-asserts
+    the hold a minute later.
+    """
+    auto = gaming.Status('gaming').override_lines('st start')
+    assert 'st start --despite-hold' in auto[0]
+    assert not any('st hold gaming --clear' == line.strip() for line in auto)
+    assert 'will NOT lift this one' in auto[1]
+    assert gaming.Status('clear').override_lines('st start') == ()
+
+
+def test_override_reaches_the_shared_launcher_and_says_so(tmp_path, capsys):
+    """_launch is the seam `new`, `start` and `attach` share.
+
+    Internal callers hand it a namespace with no flag on it and MUST stay
+    guarded; an operator who passed the flag gets through, loudly.
+    """
+    gaming.manual(tmp_path)
+    guarded = SimpleNamespace(root=tmp_path)
+    assert cli._launch(guarded, None, None, None, window_restore=True) == 1
+
+    override = SimpleNamespace(root=tmp_path, despite_hold=True)
+    capsys.readouterr()
+    # Past the gate is all this test claims; what the stub runtime does further
+    # down the seam belongs to the launcher's own tests, not to the governor's.
+    with contextlib.suppress(Exception):
+        cli._launch(override, Agent(name='worker', pane='p-worker'), NullPanes(),
+                    SimpleNamespace(name='fake'), window_restore=True)
+    err = capsys.readouterr().err
+    assert 'GOVERNOR HOLD' not in err
+    assert '--despite-hold' in err and 'THROUGH a gaming hold' in err
+
+
+def test_agents_are_never_offered_the_override(tmp_path):
+    """Dispatch and the feed check are how an AGENT asks for work.
+
+    The governor exists so an agent cannot decide the game is over, so neither
+    surface may advertise a flag that would let it.
+    """
+    from shantytown.feed_check import governor_admits
+    gaming.manual(tmp_path)
+    a = SimpleNamespace(root=tmp_path)
+    assert '--despite-hold' not in cli._dispatch_gate(a)(None, 'worker')
+    assert '--despite-hold' not in governor_admits(tmp_path)(None)
 
 
 def test_internal_launch_and_dispatch_have_independent_gates(tmp_path):

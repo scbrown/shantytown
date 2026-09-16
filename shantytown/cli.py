@@ -894,6 +894,7 @@ def build_parser() -> argparse.ArgumentParser:
     nw = sub.add_parser("new", help="create an agent from a card")
     nw.add_argument("agent")
     nw.add_argument("-n", "--dry-run", action="store_true")
+    _add_despite_hold(nw)
 
     hz = sub.add_parser(
         "harness",
@@ -903,6 +904,7 @@ def build_parser() -> argparse.ArgumentParser:
                     help="claude | codex. Omitted: report what this card runs")
     hz.add_argument("--model", default=None,
                     help="also set the model this agent runs")
+    _add_despite_hold(hz)
     hz.add_argument("--now", action="store_true",
                     help="relaunch immediately. Default: the card takes effect "
                          "at the agent's next relaunch, so a working session is "
@@ -953,6 +955,7 @@ def build_parser() -> argparse.ArgumentParser:
     sr.add_argument("-n", "--dry-run", action="store_true",
                     help="say who WOULD start, and who is already up. Launches "
                          "nothing, clones nothing.")
+    _add_despite_hold(sr)
 
     st = sub.add_parser("stop", help="stop it")
     st.add_argument("agent")
@@ -1131,6 +1134,7 @@ def build_parser() -> argparse.ArgumentParser:
                          "observer's flag — for a script that wants to attach to "
                          "whatever is already running and must never create a "
                          "session as a side effect.")
+    _add_despite_hold(at)
 
     ib2 = sub.add_parser("input",
                          help="what is in an agent's input box: EMPTY | TYPED | "
@@ -1198,6 +1202,7 @@ def build_parser() -> argparse.ArgumentParser:
                          "destroys")
     cy.add_argument("--checkpoint-bead", default="",
                     help="durable checkpoint bead id; required for administrators and read back before a self-cycle request")
+    _add_despite_hold(cy)
     # --checkpoint-file is Stiwi's "an st command that does the needful"
     # (aegis-x6yoq). Before it, a handoff was TWO hand-composed commands — a
     # `bd comment ... --file` and then an `st cycle --self -r '...'` repeating the
@@ -1369,8 +1374,49 @@ def _cmd_history(a) -> int:
               "those are recoverable ONLY from here")
     return 0
 
+def _add_despite_hold(parser) -> None:
+    """The gaming governor's operator override, worded identically everywhere.
+
+    Every LAUNCH surface carries it (`new`, `start`, `attach`, `cycle`, and the
+    `harness --now` relaunch) because an override that only some of them accept
+    is one the operator has to remember the shape of. Dispatch (`st go`) and the
+    feed check do NOT: those are how an AGENT asks for work, and the governor
+    exists precisely so an agent cannot decide the game is over.
+    """
+    parser.add_argument("--despite-hold", action="store_true",
+                        help="launch even though the gaming governor is holding. "
+                             "Overrides the hold for THIS command only; it stays "
+                             "in force for dispatch, respawns and every other "
+                             "launch.")
+
+
+def _despite_hold(a) -> bool:
+    """Did the operator ask for this one launch despite the governor?
+
+    getattr, not attribute access: `_launch` is the shared seam, and its internal
+    callers (window restore, tend respawn) hand it a namespace that never carried
+    the flag. Those stay guarded, which is the point of putting it here.
+    """
+    return bool(getattr(a, "despite_hold", False))
+
+
+def _refuse_gaming(a, status) -> int:
+    """Refuse a launch, and say in the same breath how to proceed anyway.
+
+    The remedy is indented under the refusal, the way `st harness` already prints
+    one, so the two read as a single answer instead of a rule and a shrug.
+    """
+    print(f"  refused: {status.refusal}", file=sys.stderr)
+    for line in status.override_lines(getattr(a, "invocation", "")):
+        print(f"           {line}", file=sys.stderr)
+    return REFUSED
+
+
 def main(argv: list[str] | None = None) -> int:
     a = _parse_args(argv)
+    # Kept verbatim so a refusal can hand back the operator's OWN command line
+    # with the flag appended — a remedy they can paste, not one they translate.
+    a.invocation = "st " + " ".join(sys.argv[1:] if argv is None else argv)
     # RESOLVE THE STORE ONCE, here, so every handler downstream sees a real Path
     # and none of them re-derives one. `how` rides along so a surface that needs
     # to explain an empty or surprising store can say which leg answered.
@@ -1379,11 +1425,10 @@ def main(argv: list[str] | None = None) -> int:
 
     # Gate replacement operations before they stop a live session. The shared
     # launch seam remains guarded too for internal callers and restore paths.
-    if a.cmd in {"new", "start", "cycle"}:
+    if a.cmd in {"new", "start", "cycle"} and not _despite_hold(a):
         gaming = gaming_mod.read(Path(a.root))
         if gaming.held:
-            print(f"  refused: {gaming.refusal}", file=sys.stderr)
-            return REFUSED
+            return _refuse_gaming(a, gaming)
     if a.cmd == "hold":
         return _cmd_hold(a)
     if a.cmd == "anchor":
@@ -1921,9 +1966,10 @@ def _cmd_harness(a) -> int:
               + (f", model {plan.model}" if plan.model else ""))
         return OK
 
-    if plan.restart_now and gaming_mod.read(Path(a.root)).held:
-        print(gaming_mod.read(Path(a.root)).refusal, file=sys.stderr)
-        return REFUSED
+    if plan.restart_now and not _despite_hold(a):
+        gaming = gaming_mod.read(Path(a.root))
+        if gaming.held:
+            return _refuse_gaming(a, gaming)
 
     # BACK UP THE CARD FIRST. The five manual conversions this replaces had no
     # backups, and one had to be reverted from memory.
@@ -2047,8 +2093,13 @@ def _launch(a, card, panes, runtime, *, dry_run: bool = False,
     """
     gaming = gaming_mod.read(Path(a.root))
     if gaming.held:
-        print(f"  refused: {gaming.refusal}", file=sys.stderr)
-        return REFUSED
+        if not _despite_hold(a):
+            return _refuse_gaming(a, gaming)
+        # An override is a decision worth reading back: it degrades whatever the
+        # hold was protecting, and nothing else in the log would say it happened.
+        print(f"  ⚠ {gaming_mod.OVERRIDE_FLAG}: launching {card.name} THROUGH a "
+              f"gaming hold ({gaming.state}) — the hold stays in force for "
+              "dispatch, respawns and every other launch.", file=sys.stderr)
     if not window_restore and (rc := _window_launch_gate(a)) is not None:
         return rc
     # A dead app-server can outlive its pane behind Codex's per-card daemon and
@@ -6434,9 +6485,8 @@ def _cmd_cycle(a) -> int:
     completion, because everything after it is irreversible from here.
     """
     gaming = gaming_mod.read(Path(a.root))
-    if gaming.held:
-        print(f"  refused: {gaming.refusal}", file=sys.stderr)
-        return REFUSED
+    if gaming.held and not _despite_hold(a):
+        return _refuse_gaming(a, gaming)
     from . import cycle as cycle_mod
 
     agent_name = a.agent or os.environ.get("SHANTY_AGENT", "")

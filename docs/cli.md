@@ -46,6 +46,7 @@ st start [--mode lite|heavy]  BOOT the town by mode: the admin alone, or every c
 st start <agent>...           bring up exactly these agents (already-up is a SUCCESS, not a refusal)
 st stop <agent> [--reason]    stop it, and RECORD that it was deliberate
 st hold gaming [--clear|--status]  hold local launches during a gaming session
+st <launch cmd> --despite-hold  launch THROUGH a gaming hold, for that one command
 st window plan|drain|clear|release|abort <id>
                               transactional fleet-maintenance ledger + relaunch lease
 st log [agent]                what happened
@@ -1201,9 +1202,29 @@ even without an AppId. Shader processes participate in activity accounting. The
 hold clears only after both signals have been absent for more than two minutes
 and the five-minute grace from the first launch observation has elapsed. The
 first AppId after shader compilation starts a fresh five-minute launch grace. Shell
-commands merely mentioning either executable do not match. A probe older
+commands merely mentioning either executable do not match.
+
+Shader evidence with no AppId is bounded at twenty minutes (`SHADER_GRACE`).
+Steam runs `fossilize_replay` both as a launch precursor AND as background
+library maintenance after downloads, game updates and driver changes, and the
+second kind is unbounded — a measured run held a whole crew for 76 minutes with
+no game running at any point. Twenty minutes covers a genuine pre-launch
+precompile; past that, shader-only evidence stops holding. An AppId removes the
+ceiling entirely, so a game that launches after a long precompile is held for as
+long as it runs, and one appearing after the ceiling expires re-arms the hold. A probe older
 than three minutes is UNKNOWN and does not enforce an automatic hold; a manual
 hold remains effective. `--disable-detection` does not clear a manual override.
+
+Every launch surface — `st new`, `st start`, `st attach`, `st cycle` and the
+`st harness --now` relaunch — takes `--despite-hold`, which overrides the hold
+for that one command and says so on stderr. The hold stays in force for
+everything else. Refusals print the flag with the operator's own command line
+appended, so the remedy can be pasted rather than reconstructed; against an
+automatic hold they say plainly that `--clear` will not help, because it removes
+a manual marker only and the next probe re-asserts an automatic hold within the
+minute. Dispatch (`st go`) and the feed check deliberately do NOT offer the
+override: those are how an agent asks for work, and the governor exists so that
+an agent cannot decide the game is over.
 
 `st hold gaming --status` is a read-only gate for local build/reindex wrappers:
 exit 1 means defer, 0 means clear/off, and 2 means unknown. Never interpret 2 as
