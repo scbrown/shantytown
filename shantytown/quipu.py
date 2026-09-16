@@ -23,6 +23,7 @@ import os
 import urllib.error
 import urllib.request
 import warnings
+from dataclasses import replace
 
 # Shared ancestor for every "I could not look" (see shantytown/answer.py).
 from shantytown.answer import Answer, CouldNotLook
@@ -187,33 +188,11 @@ def _local(iri: str) -> str:
     return iri.rsplit("/", 1)[-1] if iri.startswith("http") else iri
 
 
-def derive_agents(rows: list[dict],
-                  declared: dict[str, tuple[str, ...]] | None = None) -> list[Agent]:
-    """Project `[{s, rt?}]` crew rows into Agents, DECLARED role first (aegis-nyce0l).
+def derive_agents(rows: list[dict]) -> list[Agent]:
+    """Project `[{s, rt?}]` crew rows into Agents with a DERIVED role.
 
     Pure function (no I/O), so the projection is testable without a live graph.
-
-    A DECLARED role wins over the shape. `declared` maps member -> the roles it
-    asserts via `hasRole`; shape is consulted only where nothing is declared, so a
-    graph that has not been migrated projects EXACTLY as it did before — that
-    equivalence is pinned by test_shape_is_unchanged_when_nothing_is_declared.
-
-    WHY DECLARATION IS REQUIRED AND NOT MERELY TIDIER: a solo administrator (no
-    lead, no reports) and an ORPHAN (no lead, no reports) are THE SAME SHAPE. The
-    old docstring returned `worker` for both so `roles.check` could flag BROKEN,
-    which means the projection could not tell "legitimately alone at the root"
-    from "wrongly attached to nothing" — not through carelessness, but because the
-    fact is not in the shape. hammond derives as `worker` for exactly this reason.
-
-    ONLY AN UNAMBIGUOUS DECLARATION IS HONOURED — exactly one declared role. A
-    STACK IS DELIBERATELY NOT REDUCED TO ONE NAME HERE: aegis-cqgq1 landed
-    precedence as PER-AXIS-VALUE ranking and explicitly rejected per-role ranking
-    ("option (a), which misranks multi-axis roles"), so electing a primary from
-    {worker, keeper, escalation-target} would re-introduce the tie-break that
-    decision refused. A stacked member keeps its shape-derived TREE POSITION in
-    `role`; its set lives in `roles` and is resolved per axis by traits.Catalog.
-
-    Shape, unchanged, as the fallback:
+    Role is the shape of the hierarchy:
 
       - has reports (someone reports to it) + no lead      -> administrator (root)
       - has reports + a lead                               -> lead
@@ -239,13 +218,7 @@ def derive_agents(rows: list[dict],
             role = "lead"
         else:
             role = "worker"
-        # DECLARED WINS. One asserted role is an unambiguous statement of fact and
-        # replaces the guess; a stack is not reduced here (see the docstring).
-        asserted = tuple(declared.get(name, ()) if declared else ())
-        if len(asserted) == 1:
-            role = asserted[0]
-        agents.append(Agent(name=name, role=role, reports_to=lead,
-                            roles=asserted))
+        agents.append(Agent(name=name, role=role, reports_to=lead))
     return agents
 
 
@@ -604,27 +577,18 @@ class QuipuRegistry:
         so this degrades in the direction that keeps `crew`, `tend` and the drain
         working on a graph that has not been migrated at all.
         """
-        # THE ROSTER QUERY STAYS FIRST; only the DERIVATION is deferred until the
-        # declared stack is in hand (aegis-nyce0l). Reading the stack first looked
-        # equivalent and was not: it made `all()`'s first query the role-set one,
-        # which carries no `crewStatus` filter, unpinning the aegis-wxrm exclusion
-        # that every consumer of all()/get() inherits from the ROSTER query — and
-        # it inverted the degradation contract below, so a failed ROSTER read
-        # started raising where a failed ENRICHMENT read used to degrade. Both
-        # were caught by tests/test_quipu_registry.py; keep this order.
-        rows_answer = self._query_answer(self._all)
+        roster = self._query_answer(self._all).map(derive_agents)
+        agents = roster.at_least()
         try:
             stacks = self.role_sets()
         except QuipuUnreachable:
-            roster = rows_answer.map(derive_agents)
             return Answer.capped(
-                roster.at_least(),
+                agents,
                 how=roster.how,
                 caveat="crew roster was read but stacked-role enrichment was unavailable",
             )
         stack_values = stacks.at_least()
-        roster = rows_answer.map(lambda rows: derive_agents(rows, stack_values))
-        enriched = roster.at_least()
+        enriched = [replace(a, roles=stack_values.get(a.name, ())) for a in agents]
         if not roster.complete:
             return Answer.capped(enriched, how=roster.how,
                                  caveat=roster.caveat or "roster query was incomplete")
