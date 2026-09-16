@@ -19,6 +19,7 @@ cheapest thing in this module and it is the only thing that can tell a
 coordinator which dispatches actually took.
 """
 from __future__ import annotations
+import re
 import time
 from dataclasses import dataclass, field
 
@@ -352,6 +353,17 @@ class RepoolRefused(Exception):
     never a hand-back side effect.
     """
 
+
+
+def _is_bare_date(value) -> bool:
+    """Did the caller name a DAY rather than an instant?
+
+    Used to decide how strictly a stored `defer_until` must match what was asked
+    for: a backend may pick the time of day for a date-only request, so demanding
+    an exact instant back turns every such request into a false "could not
+    confirm" (see the note in Dispatcher.defer).
+    """
+    return bool(re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(value).strip()))
 
 class DeferUnconfirmed(Exception):
     """A defer write or read failed; persisted state must be inspected."""
@@ -854,7 +866,30 @@ class Dispatcher:
             if reason not in (current.notes or ""):
                 absent["defer_reason"] = (current.notes, reason)
             if date:
-                if parse_stamp(current.defer_until) != expected:
+                # A BARE DATE MUST BE COMPARED AS A DATE, not as an instant.
+                # `--until 2026-09-23` parses here to 00:00Z, but the br backend
+                # normalises a date-only value to a time of its own choosing --
+                # measured 2026-09-16: `st defer aegis-izh4 human --until
+                # 2026-09-23` stored `2026-09-23T13:00:00Z`, and the exact-instant
+                # comparison below reported "defer_until: wanted '2026-09-23',
+                # store still says '2026-09-23T13:00:00Z'". The write had LANDED
+                # and was correct; only the check was wrong. (The same 13:00Z shape
+                # appears in the aegis-vyc3aa field note, so it is the backend's
+                # convention and not a one-off.)
+                #
+                # That false negative is the expensive direction: it raises
+                # TrackerWriteLost, so a caller that asked for a plain date always
+                # got "COULD NOT CONFIRM" and exit 2 on a write that succeeded --
+                # and the advice attached to it is to go and re-read the bead. A
+                # confirmation that cries wolf on every ordinary invocation is one
+                # people stop reading, which is the whole reason this read-back
+                # exists. When the caller named a day, the day is the promise.
+                got = parse_stamp(current.defer_until)
+                if _is_bare_date(date):
+                    ok = got is not None and got.date() == expected.date()
+                else:
+                    ok = got == expected
+                if not ok:
                     absent["defer_until"] = (current.defer_until, date)
             elif parse_condition(current.notes or "") != marker:
                 absent["resume_when"] = (current.notes, marker.render())
