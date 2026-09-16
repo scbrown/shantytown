@@ -21,6 +21,9 @@ def test_projection_is_explicit_and_preserves_http_and_credentials(tmp_path):
     assert server['env'] == {'TOKEN': 'fixture'}
     assert server['args'][-3:] == ['--', 'server', '--headless']
     assert data['mcpServers']['browser']['command'] == 'server'
+    (tmp_path/'provision/mcp-limits.json').write_text(json.dumps({'enabled': True, 'agents': ['*']}))
+    assert mcp_limits.enabled(tmp_path, 'future-card')
+    assert mcp_limits.project(data, tmp_path, 'future-card')['mcpServers']['browser']['command'] != 'server'
 
 
 def test_missing_controllers_refuses_before_child_creation(tmp_path):

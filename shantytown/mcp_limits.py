@@ -180,7 +180,7 @@ def enabled(root, agent):
     if not path.exists():
         return False
     policy = json.loads(path.read_text())
-    return bool(policy.get('enabled') and agent in policy.get('agents', []))
+    return bool(policy.get('enabled') and (agent in policy.get('agents', []) or '*' in policy.get('agents', [])))
 
 
 def prepare_launch(root, agent, panes, session):
@@ -200,7 +200,7 @@ def project(data, root, agent):
     if not policy_path.exists():
         return data
     policy = json.loads(policy_path.read_text())
-    if not policy.get('enabled') or agent not in policy.get('agents', []):
+    if not policy.get('enabled') or not (agent in policy.get('agents', []) or '*' in policy.get('agents', [])):
         return data
     cpu, memory, idle = (policy.get('cpu_percent', 200), policy.get('memory_bytes', 2*1024**3),
                          policy.get('idle_seconds', 300))

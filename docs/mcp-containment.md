@@ -9,6 +9,9 @@ in bounded children of their agent pane. Enable an explicit launch cohort in
  "memory_bytes": 2147483648, "idle_seconds": 300}
 ```
 
+After the initial cohort is verified, `"agents": ["*"]` covers every new launch,
+including newly added cards.
+
 Provisioning projects the same commands into Claude and Codex configurations.
 HTTP servers remain remote. Before starting a selected agent, st waits for its
 private pane scope and checks ownership of every process including descendants.
