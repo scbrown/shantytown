@@ -176,6 +176,44 @@ def test_recorded_shader_launch_holds_without_appid(tmp_path):
     assert gaming.probe(tmp_path, proc=proc, now=2081).state == 'clear'
 
 
+def test_background_shader_maintenance_releases_the_crew(tmp_path):
+    """The 2026-09-15 incident: Steam precompiling with no game ever launching.
+
+    Held for 76 minutes because shader evidence had no ceiling. The crew must be
+    released once the shader phase outlives any plausible pre-launch wait, even
+    though fossilize_replay is still burning cores.
+    """
+    enabled(tmp_path)
+    proc = tmp_path / 'proc'
+    process(proc, 1, '/steam/fossilize_replay')
+    assert gaming.game_appids(proc) == ()
+    # Inside the ceiling the hold stands: this may still be a launch precursor.
+    for now in range(1000, 2201, 60):
+        assert gaming.probe(tmp_path, proc=proc, now=now).state == 'gaming'
+    # Past it, the absence clock finally starts even with shaders still present.
+    assert gaming.probe(tmp_path, proc=proc, now=2260).state == 'ending'
+    assert gaming.probe(tmp_path, proc=proc, now=2380).held
+    assert gaming.probe(tmp_path, proc=proc, now=2381).state == 'clear'
+    # A game arriving after the ceiling re-arms the hold with no ceiling at all.
+    process(proc, 2, '/steam/reaper', 'SteamLaunch', 'AppId=42')
+    for now in range(2440, 4241, 60):
+        assert gaming.probe(tmp_path, proc=proc, now=now).state == 'gaming'
+
+
+def test_shader_ceiling_is_dropped_once_a_game_is_seen(tmp_path):
+    """A long precompile that DOES end in a launch keeps the uninterrupted hold."""
+    enabled(tmp_path)
+    proc = tmp_path / 'proc'
+    process(proc, 1, '/steam/fossilize_replay')
+    for now in range(1000, 2001, 60):
+        assert gaming.probe(tmp_path, proc=proc, now=now).state == 'gaming'
+    process(proc, 2, '/steam/reaper', 'SteamLaunch', 'AppId=42')
+    # The reaper lands before the ceiling; shaders keep running beside the game
+    # for well past it, and the hold never blinks.
+    for now in range(2060, 5001, 60):
+        assert gaming.probe(tmp_path, proc=proc, now=now).state == 'gaming'
+
+
 def test_shader_mentions_and_similar_names_do_not_hold(tmp_path):
     process(tmp_path, 1, 'bash', '-c', '/steam/fossilize_replay')
     process(tmp_path, 2, 'pgrep', '-af', 'fossilize_replay')
