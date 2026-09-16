@@ -98,6 +98,61 @@ def parse_condition(text: str) -> Condition | None:
     return Condition(m.group(1).lower(), m.group(2).rstrip(".,;)"))
 
 
+def parse_conditions(text: str) -> list[Condition]:
+    """EVERY `resume_when:` marker in `text`, in order, deduplicated.
+
+    `parse_condition` answers "which one does this module honour"; this answers
+    "how many did the author write". They are different questions and the gap
+    between them is the defect (aegis-4xwfzw): notes ACCUMULATE across
+    re-deferrals, so a bead can carry several markers while exactly one is
+    honoured, silently.
+
+    Order is preserved and duplicates are dropped, because the same condition
+    written twice is one condition and must not read as an ambiguity.
+    """
+    if not text:
+        return []
+    seen: list[Condition] = []
+    for kind, arg in _CONDITION.findall(text):
+        cond = Condition(kind.lower(), arg.rstrip(".,;)"))
+        if cond not in seen:
+            seen.append(cond)
+    return seen
+
+
+# A `<kind>:<arg>` token of a KNOWN kind, with or without its own `resume_when:`
+# prefix. `_CONDITION` requires the prefix on every match, so the specimen that
+# produced aegis-4xwfzw parses as ONE condition:
+#
+#     resume_when: closed:aegis-A (and closed:aegis-B — BOTH required)
+#
+# The author named two blockers and a human reads two; the structured field can
+# hold one and the regex can SEE one. Catching the second needs a pattern that
+# does not demand the prefix, which is what this is for — detection only, never
+# for deciding a condition.
+_NAMED = re.compile(
+    r"\b(" + "|".join(SUPPORTED + UNSUPPORTED) + r")\s*:\s*(\S+)", re.IGNORECASE)
+
+
+def named_conditions(text: str) -> list[Condition]:
+    """Every known-kind `<kind>:<arg>` token in `text`, deduplicated, in order.
+
+    Used at WRITE time to refuse a reason that names more conditions than the
+    field can carry. Deliberately not used at read time: a bead's notes are full
+    of prose that mentions other beads, and a detector that guessed a condition
+    out of a sentence would report work ready that is not — the rule
+    `parse_condition` already keeps.
+    """
+    if not text:
+        return []
+    seen: list[Condition] = []
+    for kind, arg in _NAMED.findall(text):
+        cond = Condition(kind.lower(), arg.rstrip(".,;)"))
+        if cond not in seen:
+            seen.append(cond)
+    return seen
+
+
 # The one label that makes "no resume condition" a DECISION rather than a strand.
 # Deliberately a single exact label, not a prefix match: `blocked:human` and
 # `blocked:external` mean "waiting on someone", which is precisely the state that
@@ -208,6 +263,20 @@ def evaluate(rows, now: datetime, is_closed=None) -> list:
         lapsed = when is not None and when <= now
         notes_text = str(row.get("notes") or "")
         cond = parse_condition(notes_text)
+        # SEVERAL MARKERS, ONE HONOURED. Notes accumulate across re-deferrals, so
+        # a bead can carry more than one `resume_when:` while `parse_condition`
+        # honours the first. Two live specimens when this was added (aegis-4xwfzw):
+        # aegis-jito (a lapsed `date:` before a `closed:`) and aegis-0sp38d, whose
+        # first marker is `human:2026-09-23` — a kind this module cannot test — in
+        # front of a perfectly testable `closed:aegis-u6mdxf`. So the sweeper
+        # reports that bead UNTESTABLE while a condition it could decide sits in
+        # the same notes.
+        #
+        # Reported, NOT silently resolved. Preferring the testable one would be
+        # this module guessing which blocker the author meant, and the wrong guess
+        # reports work ready that is not — the rule parse_condition already keeps.
+        # The remedy is a human deleting the marker that no longer applies.
+        extra = parse_conditions(notes_text)
         # A `resume_when:` that was WRITTEN but does not parse into <kind>:<arg>.
         # Measured on the live store: aegis-902vnu carries `resume_when: st`,
         # which has no colon and so yields no condition at all. Reporting that as
@@ -241,6 +310,29 @@ def evaluate(rows, now: datetime, is_closed=None) -> list:
                     met = bool(verdict)
             else:
                 untestable = cond.render()
+
+        # SEVERAL CONDITIONS MEANS CANNOT TELL, NEVER MET. Only the first was
+        # evaluated above, so this module has no verdict on the rest and must not
+        # imply one — the same rule it already keeps for a `closed:` lookup that
+        # returns None. Reporting `met` off the first marker while a second
+        # blocker stands is precisely the resume-too-early failure aegis-4xwfzw
+        # is about, and it is the expensive direction.
+        #
+        # NOT gated on `defer_until` being absent, which is how the first cut of
+        # this check missed its worst specimen: aegis-0sp38d carries a
+        # defer_until of 2026-09-17 AND three distinct conditions including two
+        # open blockers, so the date lapses first and the bead resurfaces while
+        # both stand. The ambiguity is a property of the notes, not of the date.
+        if len(extra) > 1:
+            met = False
+            untestable = (
+                f"{len(extra)} resume conditions present ("
+                + ", ".join(c.render() for c in extra)
+                + f") — only the FIRST, {extra[0].render()}, is honoured, so "
+                  "whether this is resumable CANNOT BE TOLD from the field. "
+                  "Delete the marker that no longer applies; if they must ALL "
+                  "hold, record them as dependency edges, which this field "
+                  "cannot express")
 
         if botched and when is None:
             out.append(Finding(
