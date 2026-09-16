@@ -834,7 +834,8 @@ class Dispatcher:
         condition first means that interruption cannot strand newly deferred
         work without a way back (aegis-wuy1j7).
         """
-        from .deferrals import parse_condition, parse_stamp
+        from .deferrals import (named_conditions, parse_condition,
+                                parse_conditions, parse_stamp)
 
         label = BLOCKER_KIND_LABELS.get(kind)
         if label is None:
@@ -848,6 +849,24 @@ class Dispatcher:
         if not getattr(self.tracker, "_structured_defer", False):
             raise DeferRefused("this tracker backend cannot record structured deferrals")
         date = until or item.defer_until or ""
+        # A REASON MAY NAME ONLY ONE CONDITION, because the field holds one.
+        # `resume_when` is a single `<kind>:<arg>`; a deferral genuinely blocked
+        # by two beads cannot be expressed in it. Refusing is deliberate and is
+        # the loud half of aegis-4xwfzw: the silent alternative kept ONE of the
+        # ids, so a tool read one blocker while the prose said two and nothing
+        # warned. That divergence fails toward RESUMING WORK TOO EARLY, which is
+        # the expensive direction. Dependency edges DO express conjunction and
+        # the board enforces them, so they are the answer, not this field.
+        named = named_conditions(reason)
+        if len(named) > 1:
+            raise DeferRefused(
+                "a defer reason may name only ONE resume condition; this one names "
+                + ", ".join(c.render() for c in named)
+                + ". `resume_when` holds a single condition, so the second would be "
+                  "kept only in prose and no tool would see it. Record the "
+                  "conjunction as dependency edges instead — `br dep add "
+                  f"{item_id} <blocker>` for each — and defer with the one "
+                  "condition that actually gates the restart, or with --until.")
         marker = parse_condition((item.notes or "") + "\n\n" + reason)
         if date:
             expected = parse_stamp(date)
@@ -856,6 +875,24 @@ class Dispatcher:
             condition = date
         elif marker and marker.testable() and (
                 marker.kind != "date" or parse_stamp(marker.arg) is not None):
+            # A STALE MARKER IN THE NOTES MUST NOT OUTRANK THE REASON BEING
+            # WRITTEN NOW. `marker` is parsed from notes + reason and
+            # `parse_condition` takes the FIRST match, so a bead deferred BEFORE
+            # carries its old `resume_when:` earlier in the notes and wins —
+            # measured on aegis-nrajcw, where the author's reason named
+            # `closed:aegis-mzdcm0` and st recorded the previous deferral's
+            # `closed:aegis-nt4rap`, reporting success. The author has no way to
+            # see it: the confirmation echoes the id that won, not the one they
+            # wrote. Refuse and name both, rather than silently re-deferring a
+            # bead on a condition nobody chose this time.
+            written = parse_conditions(reason)
+            if written and marker not in written:
+                raise DeferRefused(
+                    f"your reason names {written[0].render()}, but {item_id} already "
+                    f"carries an earlier `resume_when: {marker.render()}` in its notes "
+                    "and that one is what would be recorded. Clear or correct the stale "
+                    "marker in the notes first, or pass --until, so the condition that "
+                    "gates the restart is the one you just wrote.")
             condition = f"resume_when {marker.render()}"
         else:
             raise DeferRefused("a testable resume condition is required: use --until DATE "
