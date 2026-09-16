@@ -20,7 +20,9 @@ def test_discovery_proves_current_identity_not_slug_or_newest_file(tmp_path, mon
     cards = [Agent(name=n, role='worker', workspace='/workspace/has_underscore/' + n, pane=n)
              for n in ('claude', 'codex', 'down', 'stale', 'wrong')]
     monkeypatch.setattr(files.FilesRegistry, 'all', lambda _: SimpleNamespace(exact=lambda: cards))
-    monkeypatch.setattr(tmux.Tmux, 'exists', lambda _, pane: pane != 'down')
+    monkeypatch.delenv('SHANTY_TMUX_SOCKET', raising=False)
+    (tmp_path / 'shantytown.toml').write_text('[tmux]\nsocket = \"test-fleet\"\n')
+    monkeypatch.setattr(tmux.Tmux, 'exists', lambda self, pane: self.socket == 'test-fleet' and pane != 'down')
     monkeypatch.setattr(session_budget, 'current_session', lambda _, n: None if n == 'stale' else n + '-session')
     monkeypatch.setattr(harness, 'for_card', lambda c, **_: SimpleNamespace(name='codex' if c.name == 'codex' else 'claude'))
     monkeypatch.setattr(cli, '_default_settings', lambda _: lambda c: str(tmp_path / 'role/config.toml'))
