@@ -7,3 +7,7 @@ build/
 
 # Carries a bearer token — provisioned per workspace, never committed.
 .mcp.json
+
+# mdbook output
+_book/
+book/
