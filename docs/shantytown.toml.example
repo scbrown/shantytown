@@ -182,6 +182,26 @@ max_load_per_core = 4.0
 # socket = "shanty"
 
 # ---------------------------------------------------------------------------
+# [host] — WHICH RIG HOST this deployment is, on a multi-host fleet.
+#
+# Declared, never inferred from hostname(1): the value decides which cards
+# `roles sync` may write here (only members the graph places on this host; the
+# rest are listed as skipped) and where an ephemeral `st inbox <agent>` is relayed
+# when the agent lives elsewhere. A sync NEVER demotes or orphans the local
+# administrator, on a dry run or a real one. Omit it on a single-host deployment.
+#
+# [host.peers.<name>] is how to reach the OTHER host's st: `ssh` is the target
+# and `root` is the .shanty there. Both keys are required — a peer missing either
+# half looks configured and cannot be reached, which is worse than no peer.
+# ---------------------------------------------------------------------------
+[host]
+# name = "rig-a"
+
+# [host.peers.laptop]
+# ssh  = "me@laptop.example"
+# root = "/home/me/.shanty"
+
+# ---------------------------------------------------------------------------
 # [harness] — WHICH AGENT PROGRAM, for cards that do not say.
 #
 # Claude Code is ONE harness, not the shape of the world. Two ship — `claude` and

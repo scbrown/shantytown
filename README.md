@@ -2,20 +2,6 @@
 
 <img src="assets/logo.svg" alt="shantytown" width="360"/>
 
-```
-                          .-.                    .--.
-             .--.        /   \      .-.          |[]|    .-.
-            /::::\   .--|:::::|--. /   \    .--. |  |   /   \
-      .-.   |::[]:|  |==|:::::|==| |:::|   /::::\|[]|  |:::::|   .--.
-     /   \  |::::||  |  |[]:[]|  | |:::|   |::::||  |  |:::::|  /    \
-    |:::::| |[]::||  |  |:::::|  | |:[]|   |[]::||::|  |:[]:[|  |::[]|
-    |:[]:[| |::::||__|__|:::::|__|_|:::|___|::::||::|__|:::::|__|::::|
-   _|_____|_|____||__|__|_____|__|_|___|___|____||__|__|_____|__|____|_
-  ///////////////////////////////////////////////////////////////////////
-
-                          s h a n t y t o w n
-              a crew of agents, and someone running the town.
-```
 
 # shantytown
 
@@ -25,7 +11,7 @@
 
 [![dispatch 3.4s](https://img.shields.io/badge/dispatch-3.4s-brightgreen)](#-measured-against-gas-town)
 [![33 commands](https://img.shields.io/badge/commands-33-blue)](#-the-whole-surface)
-[![tests](https://img.shields.io/badge/tests-3345%20passing-blue)](#-principles)
+[![tests](https://img.shields.io/badge/tests-3489%20passing-blue)](#-principles)
 [![python](https://img.shields.io/badge/python-3.11%2B-blue)](#-install)
 [![dependencies none](https://img.shields.io/badge/dependencies-none-blue)](#-install)
 [![license MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
@@ -257,6 +243,35 @@ plus every script on one fleet. Full write-up in [`docs/vision.md`](docs/vision.
   the first N bytes of a message is the failure this prevents — the remaining sentence usually
   still scans, so nobody can tell it was cut.
 
+### Newer, and easy to miss
+
+- 🌐 **Two hosts, one fleet.** Cards carry a `host`. `st roles sync` projects only the members placed
+  on the host it runs on, prints who it skipped, and **never demotes or orphans the administrator**,
+  on a dry run or a real one. An ephemeral `st inbox` to an agent on the other host relays through
+  that host's own `st` over ssh (`[host.peers.<name>]`), or refuses by name when no peer is declared.
+- 🎛️ **A governor, not a scheduler.** `[governor]` tiers hold launches when a provider window is
+  spent and release them when it resets; `[session_budget]` bounds hours, items and risk per
+  session; `st hold gaming` pauses local launches while you use the box. All of it *asks*; none of
+  it kills.
+- 🧠 **Context is measured, and handoff comes before compaction.** Occupancy is read from the harness
+  with UNKNOWN as a real third state, hints are advisory, and the PreCompact hook checkpoints so the
+  agent returns with its hooks and its bypass intact (`st cycle --self`, never `/clear`).
+- 🐌 **Stalls self-heal before they escalate.** An idle worker holding an item with no change for
+  `SHANTY_STALL_MIN` minutes is nudged to close or release it; the coordinator hears about it only
+  if that goes unanswered.
+- 🧯 **Panes have a memory ceiling.** Each launched pane runs in its own systemd scope with
+  `MemoryMax`, so one runaway build kills that pane instead of a bystander, and every ceiling
+  outcome is logged to a file that outlives the pane.
+- 🧾 **Costs and transcripts are records.** `st cost` reads parser-owned per-bead receipts and
+  publishes them to closed beads; `st history` archives transcripts on the stop path and projects
+  them into an indexable corpus.
+- 🌿 **Worktrees, not shared checkouts.** `st worktree <repo>` gives each agent its own index and
+  HEAD off a shared project repo, installs a commit guard in the shared checkout, and `st push`
+  pushes `wt/<agent>` to every remote.
+- 🔁 **Convert a harness in one command.** `st harness <agent> codex` rewrites the card and its
+  hooks; codex workers get the deployment's MCP servers pre-approved so their writes are not refused
+  as a lost permission.
+
 ## 📮 Routing: there is nothing in the middle
 
 **`st inbox` *is* `tmux send-keys`.** That's not an implementation detail — it's the product.
@@ -370,8 +385,9 @@ pip install -e .
 st doctor            # what's installed, what's stale, what's missing
 ```
 
-Python 3.11+ and `tmux`. No third-party dependencies. A tracker backend (Beads) is optional — the
-files tracker needs nothing at all.
+Python 3.11+ and `tmux`. No third-party dependencies. A tracker backend is optional — the files
+tracker needs nothing at all; `beads`, its Rust port `br`, and a Forgejo issue tracker plug in with
+`--backend` or one line of `[env]`.
 
 ### First run — `st init` asks, and you have a town
 
@@ -428,7 +444,21 @@ crew = ["administrator", "lead"]
 [hibernate]                    # when may the admin's stop STAY stopped?
 enabled = false                # it can only go quiet when there is nothing to
 max_quiet_minutes = 60         # dispatch; Rule Zero overrides it, and says so
+
+[tmux]
+socket = "default"             # the fleet's tmux server, DECLARED, never inferred from $TMUX
+
+[host]                         # only on a multi-host fleet
+name = "rig-a"                 # which rig this is, as the graph spells it
+
+[host.peers.laptop]            # how to reach the OTHER host's st
+ssh  = "me@laptop.example"     # `st inbox <agent>` relays here when the agent lives there
+root = "/home/me/.shanty"
 ```
+
+Those are the tables most deployments touch. The rest — `[fleet]`, `[governor]` and its tiers,
+`[session_budget]`, `[hostmem]`, `[harness]`, `[model]`, `[roles.<name>]`, `[precedence.<axis>]`,
+`[dream]`, `[crew.<name>]` — are each explained where they appear in the example file.
 
 It is `shantytown.toml`, never `shanty.toml` — `shanty` is a different program on the same PATH, for
 the same reason the binary here is `st`. An unknown key is **refused**, not ignored: a silently
@@ -519,11 +549,14 @@ error, it just stops new facts from joining the old ones.
 
 - **Lean, not absent.** Orchestration is welcome — prioritization and event reactions — but it stays small: no convoys, no bus, no daemon zoo.
 - **Bring your own tracker.** Beads, GitHub issues, or a directory of markdown files. Two functions.
-- **Ship no dashboard.** A dashboard reads the tracker, not the harness.
-- **Bring your own panes.** [herdr](https://github.com/ogulcancelik/herdr), your own tmux wrapper, or
-  bare tmux.
-- **A check must be able to fail.** Anything that reports health must be shown returning red. 2404
-  tests, and the ones that matter most are the ones proving a check *can* say no.
+- **Ship no dashboard the harness feeds.** `st dashboard` exists, but it is a read of the tracker
+  and the cards; nothing on the dispatch path is written for its benefit.
+- **Bring your own panes.** Bare tmux works. With [shanty](https://github.com/scbrown/shanty) on
+  `PATH`, `st attach` opens the fleet's real panes under its themed bar without moving an agent off
+  the fleet's socket. [herdr](https://github.com/ogulcancelik/herdr) or your own wrapper fit the
+  same seam.
+- **A check must be able to fail.** Anything that reports health must be shown returning red. Nearly
+  3,500 tests, and the ones that matter most are the ones proving a check *can* say no.
 
 ## 📄 Licence
 
