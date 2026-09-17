@@ -69,7 +69,7 @@ def test_role_set_refuses_a_lead_whose_harness_cannot_host_it(tmp_path, monkeypa
     """aegis-w5l9: the capability gate fires at role-set time, BEFORE any write.
     A lead whose harness lacks blocking stop hooks stays worker and NOTHING is
     written — the refusal adapters.md documented, which previously only fired at
-    `st new` launch (after the card was already on disk)."""
+    `st agent new` launch (after the card was already on disk)."""
     from shantytown.runtime import CapabilityError
     monkeypatch.setattr("shantytown.harness.for_card", lambda card, root=None: _NonBlockingHarness())
     r = reg(tmp_path, malcolm={"role": "worker"})

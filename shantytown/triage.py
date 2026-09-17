@@ -338,7 +338,7 @@ def input_state(screen: str) -> str:
 def input_evidence(screen: str) -> str:
     """The SGR run the verdict was made on, for a human to check.
 
-    `st input --show` prints this next to the verdict because a verdict without
+    `st agent input --show` prints this next to the verdict because a verdict without
     its evidence is what got us here: a coordinator read plain `capture-pane -p`
     output, saw text in a box, and ran the stranded-input SOP on a suggestion.
     Returns the RAW prompt line (escapes intact, safe-rendered by the caller).
@@ -387,7 +387,7 @@ AUTH_DEAD = "auth-dead"       # the runtime's LOGIN EXPIRED (aegis-arma). The UI
                               # 9 crew like this, and every one printed `idle`, so
                               # feed_check counted them feedable and tend prompted
                               # into the dead panes. Not idle: BROKEN. The remedy
-                              # is a relaunch (`st tend --reauth`) after the
+                              # is a relaunch (`st fleet tend --reauth`) after the
                               # operator re-logs in — /login in the pane is an
                               # interactive browser OAuth flow nothing can drive.
 
@@ -398,7 +398,7 @@ def work_state(screen: str, ui_up: bool, awaiting: bool = False,
 
     The predicates already existed — dispatch.py has refused sends into busy
     panes since #1 — but only the dispatcher ever consulted them, and only for
-    one agent at a time. So an administrator planning a round had to run `st log`
+    one agent at a time. So an administrator planning a round had to run `st agent log`
     per agent and eyeball "Envisioning…" against an empty prompt (measured,
     sattler 2026-07-19, feeding five workers on a handoff's word). This is the
     same judgement, exposed as a value that can be printed for a whole roster.
@@ -642,10 +642,10 @@ def triage(panes, target: str, new_work: str) -> Decision:
             "past the 400k cycle threshold — checkpoint, then cycle",
             {"pane": target, "context_k": tokens, "shells": shells,
              "cycle_threshold_k": CYCLE_THRESHOLD_K,
-             # aegis-x6yoq: names `st cycle --self`, never /clear. /clear drops
+             # aegis-x6yoq: names `st agent cycle --self`, never /clear. /clear drops
              # bypass and returns the agent undispatchable, so prescribing it here
              # made the remedy need its own remedy.
-             "remedy": "checkpoint to the bead, THEN `st cycle --self "
+             "remedy": "checkpoint to the bead, THEN `st agent cycle --self "
                        "--checkpoint-file <notes>`, THEN take the task. Do NOT "
                        "/clear and do NOT auto-cycle — an unsaved checkpoint is "
                        "the one thing a cycle destroys. Unconditional on "

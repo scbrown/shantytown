@@ -129,7 +129,7 @@ references, and removes MCP definitions retired from the manifest. Native Codex
 approval policy remains controlled by the existing deployment approval setting.
 The unrelated settings and hook trust ledger survive.
 
-`st doctor` reads one fresh source snapshot per report and compares actual
+`st ops doctor` reads one fresh source snapshot per report and compares actual
 configuration values, skill destinations, and instruction content against it.
 Matching server names alone cannot pass a changed endpoint. Missing, rejected,
 malformed, ambiguous, or truncated source data reports **UNKNOWN** and refuses
@@ -158,15 +158,15 @@ codex login          # or: printenv OPENAI_API_KEY | codex login --with-api-key
 
 Order matters, and this is the step that bites. `CODEX_HOME` is not just where `config.toml`
 lives — it is also where codex keeps `auth.json`. shantytown points each role at a home *inside
-the store*, so `st roles set` **symlinks** your real `auth.json` into it. Emit before you log in
+the store*, so `st fleet roles set` **symlinks** your real `auth.json` into it. Emit before you log in
 and there is nothing to link; you get an agent that starts, looks live, and cannot call a model.
 
-`st roles set` says so at the time rather than leaving you to find out:
+`st fleet roles set` says so at the time rather than leaving you to find out:
 
 ```
 ⚠ no codex auth.json found — agents using <root>/settings/codex/worker will launch
   UNAUTHENTICATED. Run `codex login` (or set CODEX_HOME to a logged-in home before
-  emitting) and re-run `st roles set`.
+  emitting) and re-run `st fleet roles set`.
 ```
 
 A **symlink, never a copy**: the token stays in the one place you already manage, one
@@ -180,7 +180,7 @@ Either the config table above, or `harness = "codex"` on the cards you want.
 ### 3. Emit
 
 ```bash
-st roles set <agent> worker
+st fleet roles set <agent> worker
 ```
 
 On a mixed crew this writes one artifact per **(harness, role)** pair — `worker` on Claude Code
@@ -200,8 +200,8 @@ the role's file when it exists.
 ### 4. Launch
 
 ```bash
-st new <agent> --dry-run     # look at the composed line first
-st new <agent>
+st agent new <agent> --dry-run     # look at the composed line first
+st agent new <agent>
 ```
 
 ```
@@ -236,7 +236,7 @@ persisted trust record for, and the role's whole stop routing would be present, 
 ### 5. Check it landed
 
 ```bash
-st roles --check          # reads the routing back OFF DISK, in whichever format
+st fleet roles --check          # reads the routing back OFF DISK, in whichever format
 st anchor <agent> --events
 ```
 
@@ -267,7 +267,7 @@ and a card claiming a capability its process does not have is the same class of 
 launching the wrong program:
 
 ```
-$ st new ellie
+$ st agent new ellie
   refused: card 'ellie' sets chrome=True, and harness 'codex' has no browser
            integration to enable. …
 $ echo $?
@@ -287,7 +287,7 @@ TODO with no shape — each says what would close it.
 
 ### What CLOSED, and how
 
-`st doctor` now reports Codex's installed version and independently probes the
+`st ops doctor` now reports Codex's installed version and independently probes the
 hooks floor by requiring `--dangerously-bypass-hook-trust` in `codex --help`.
 The capability probe—not a version comparison—decides the verdict: missing
 Codex and a present CLI without hooks both fail loudly, while a failed help
@@ -296,7 +296,7 @@ probe is unknown rather than clean.
 Codex liveness now uses the measured persistent status line
 `<model> <effort> · <workspace>`, matched only in the pane tail. It is present in
 both idle and busy captures and absent from the directory-trust picker, so
-`st new` can observe a healthy launch without rubber-stamping a blocked process.
+`st agent new` can observe a healthy launch without rubber-stamping a blocked process.
 The same signal drives `st crew`; unclassified live panes are named and counted
 as UNKNOWN instead of disappearing between the free and busy totals. Codex
 approval bypass is read from the live process flag because its status line does
@@ -325,7 +325,7 @@ Because the vocabulary turned out to be identical, the guards themselves needed 
 `bd-store-guard` and `crew-only-guard` were run unmodified against a real codex payload and refused
 exactly what they refuse on Claude Code, while benign commands passed.
 
-`st roles --check` now reads the guard **back off disk** for a codex role, as a fourth leg beside the
+`st fleet roles --check` now reads the guard **back off disk** for a codex role, as a fourth leg beside the
 stop routing. It has three states, not two: a command, `""` for *read it, there is none*, and
 cannot-tell for *could not read*. Collapsing the last two is what makes an unguarded agent look
 healthy, which is how this gap survived — every other leg was green and printed `hooks: ok`.
@@ -354,7 +354,7 @@ Same ladder for the model, one axis over:
 
 Both config halves are validated **at load**, and each catches a different silent failure. An
 unimplemented harness name is refused, because a typo in `default` moves every card in the fleet
-and would otherwise surface as `st new` failing agent by agent — a fleet-wide config error reported
+and would otherwise surface as `st agent new` failing agent by agent — a fleet-wide config error reported
 as a per-agent launch failure. A role nobody has is refused for the reason every table in that file
 refuses unknown keys: a rule that applies to nobody reads as applied.
 
@@ -375,7 +375,7 @@ at being the wrong thing.
 | browser | `--chrome` / `--no-chrome` | none — `chrome: true` is refused |
 | pane-reading (is it live?) | measured | **not measured** — see the gaps above |
 | compaction hook (`PreCompact`) | **yes** — `shantytown.precompact` writes a checkpoint at the boundary | **none exists** |
-| so: handoff-before-compaction | automatic backstop + the st lines | the st lines ONLY, plus the `st cycle` durable gate |
+| so: handoff-before-compaction | automatic backstop + the st lines | the st lines ONLY, plus the `st agent cycle` durable gate |
 
 ### Handoff before compaction (aegis-902vnu)
 
@@ -394,7 +394,7 @@ the table above is the whole design constraint:
   wall, so a refusal removes the relief valve rather than buying time.
 * **Codex** has no such event, so it gets the two things that do not need one — a nudge at the
   pre-handoff line (`triage.PRE_CYCLE_THRESHOLD_K`, one step before the cycle prompt) and a gate in
-  `st cycle` that refuses a relaunch when the held bead carries no comment from the agent since its
+  `st agent cycle` that refuses a relaunch when the held bead carries no comment from the agent since its
   last launch. The gate has THREE states: a tracker it cannot read is *could not tell*, which warns
   and proceeds — an agent that cannot cycle keeps filling, which is the failure being fixed.
 

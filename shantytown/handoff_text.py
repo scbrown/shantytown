@@ -3,7 +3,7 @@
 Why this module exists (aegis-x6yoq, Stiwi 2026-08-29 direct):
 
     "the crew is still having trouble understanding how to switchover and handoff
-     when st tend mentions the context is high, lets make that more obvious, maybe
+     when st fleet tend mentions the context is high, lets make that more obvious, maybe
      provide an st command that does the needful."
 
 The command already existed. The problem was that the fleet shipped SIX different
@@ -11,14 +11,14 @@ answers to "your context is high", and half of them prescribed `/clear` — the
 primitive aegis-3laza measured as actively harmful (it drops the session out of
 bypass, so the agent returns undispatchable and the remedy needs its own remedy).
 Which instruction an agent got depended on which surface flagged it: the
-CycleDriver taught `st cycle --self` correctly, while the haul path — the only one
+CycleDriver taught `st agent cycle --self` correctly, while the haul path — the only one
 a BUSY agent can ever see — taught `/clear`. An agent obeying the fleet's own
 instructions therefore did the wrong thing, and doing it right required ignoring
 what it had just been told.
 
 So the fix is not better wording in six places. It is ONE wording in one place:
 
-  * every context-high remedy names `st cycle --self`, and no message anywhere
+  * every context-high remedy names `st agent cycle --self`, and no message anywhere
     instructs `/clear`;
   * the texts are POINTERS, not essays. These fire on a timer, into every pane,
     for the life of the fleet. Stiwi's second ask was to cut them: "can we shorten
@@ -27,7 +27,7 @@ So the fix is not better wording in six places. It is ONE wording in one place:
     which means a long one does not merely waste space — it trains agents to skip
     the line where the safety-critical sentence lives.
 
-WHERE THE RATIONALE WENT. It is not deleted, it is relocated to `st help handoff`
+WHERE THE RATIONALE WENT. It is not deleted, it is relocated to `st ops help handoff`
 and docs/handoff.md, written once and READ ON DEMAND. The rule for anything in
 this module: if a sentence explains WHY, it belongs in the help topic; if it names
 WHAT TO DO NEXT, it belongs here. The one exception is the `/clear` prohibition,
@@ -36,7 +36,7 @@ agent that skips the pointer must still not reach for it.
 """
 
 # The verb. Named once so a rename is a one-line change and cannot half-land.
-CYCLE_CMD = "st cycle --self"
+CYCLE_CMD = "st agent cycle --self"
 
 # The safety-critical clause. Kept SHORT enough to survive a skim, and repeated
 # inline rather than pointed at, because it is the error being prevented.
@@ -47,7 +47,7 @@ CYCLE_CMD = "st cycle --self"
 # difference between a pointer and a truncation.
 NO_CLEAR = "Do NOT run /clear — it drops bypass into MANUAL."
 
-HELP_POINTER = "Why/details: `st help handoff`."
+HELP_POINTER = "Why/details: `st ops help handoff`."
 
 
 def cycle_now(depth_k: float | int | None = None,

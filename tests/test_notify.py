@@ -95,7 +95,7 @@ def test_a_block_pushes_to_the_coordinator_without_touching_it(tmp_path):
     assert len(panes.sent) == 1
     pane, text = panes.sent[0]
     assert pane == "p-sattler"
-    assert "kelly" in text and "BLOCKED" in text and "st log kelly" in text
+    assert "kelly" in text and "BLOCKED" in text and "st agent log kelly" in text
 
 
 def test_the_push_goes_to_the_route_stop_recipient(tmp_path):

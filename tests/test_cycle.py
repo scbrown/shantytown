@@ -1,4 +1,4 @@
-"""st tend DRIVES the cycle — a saturated agent is prompted to checkpoint+/clear
+"""st fleet tend DRIVES the cycle — a saturated agent is prompted to checkpoint+/clear
 on its OWN pane, automatically (aegis-bik9).
 
 h562 detected + refused a saturated agent but had no delivery path for the remedy,
@@ -115,7 +115,7 @@ def test_the_prompt_checkpoints_BEFORE_cycling():
     # It is an INSTRUCTION, not a bare keystroke, and CHECKPOINT comes first.
     assert not msg.strip().startswith("/clear")
     assert "CHECKPOINT" in msg
-    assert msg.index("CHECKPOINT") < msg.index("st cycle"), \
+    assert msg.index("CHECKPOINT") < msg.index("st agent cycle"), \
         "checkpoint must precede the cycle"
 
 
@@ -129,10 +129,10 @@ def test_the_prompt_NO_LONGER_PRESCRIBES_CLEAR():
     handing it out on a timer, fleet-wide.
 
     The test asserts the NEGATIVE deliberately. A prompt that merely also mentions
-    `st cycle` while still telling the agent to /clear would pass a positive-only
+    `st agent cycle` while still telling the agent to /clear would pass a positive-only
     check and change nothing about what the agent actually does."""
     msg = _cycle_message()
-    assert "st cycle --self" in msg, "the prompt must name the safe verb"
+    assert "st agent cycle --self" in msg, "the prompt must name the safe verb"
     assert "Do NOT run /clear" in msg, "it must actively warn AGAINST the old remedy"
     # No surviving instruction to run it. The only permitted mention is the warning.
     for phrase in ("THEN run /clear", "then /clear", "run /clear to"):

@@ -1,4 +1,4 @@
-"""st doctor — what tools are here, what version, what's missing, what's stale.
+"""st ops doctor — what tools are here, what version, what's missing, what's stale.
 
 The out-of-box feature (Stiwi's ask: "I want `st` to facilitate
 installing these other tools"). DETECT is the product; install is a flag. Detect
@@ -46,7 +46,7 @@ STALE = "stale"         # present, version known, older than the latest release
 CURRENT = "current"     # present, version known, == latest
 PRESENT = "present"     # present, version known, latest not checked/unknown
 
-# Probes answer a narrow question and must not hang a normal `st doctor` run.
+# Probes answer a narrow question and must not hang a normal `st ops doctor` run.
 # Source installs compile a dependency graph and can legitimately take longer on
 # a cold cache; sharing the probe budget made a healthy build look broken.
 PROBE_TIMEOUT_S = 10
@@ -93,7 +93,7 @@ SPECS: tuple[ToolSpec, ...] = (
         "bobbin", "bobbin", ("bobbin", "--version"), r"(\d+\.\d+\.\d+)",
         toolchain="cargo",
         installs_via="release binary if published, else cargo build",
-        leverage="st context — semantic code search over your repos",
+        leverage="st repo context — semantic code search over your repos",
         release="github:scbrown/bobbin",
     ),
     ToolSpec(
@@ -431,7 +431,7 @@ _GLYPH = {ABSENT: "✗", UNPATHED: "!", UNKNOWN: "?", STALE: "△", CURRENT: "�
 
 
 def report(healths: list[Health], *, plans: list[InstallPlan] | None = None) -> str:
-    lines = ["st doctor — tool inventory", ""]
+    lines = ["st ops doctor — tool inventory", ""]
     for h in healths:
         g = _GLYPH.get(h.state, "?")
         if h.state == ABSENT:
@@ -484,7 +484,7 @@ def report(healths: list[Health], *, plans: list[InstallPlan] | None = None) -> 
     else:
         actionable = [h for h in healths if h.state in (ABSENT, STALE)]
         if actionable:
-            lines.append("run `st doctor --install` to install/upgrade: "
+            lines.append("run `st ops doctor --install` to install/upgrade: "
                          + ", ".join(h.spec.name for h in actionable))
     return "\n".join(lines)
 

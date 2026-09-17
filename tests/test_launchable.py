@@ -118,7 +118,7 @@ def test_every_gap_says_it_twice_short_and_long():
     """A roster line has room for two words; a refusal has room for a paragraph.
     Rendering the paragraph on the roster buries it and rendering the label at
     the refusal leaves the operator guessing — so the RULE is decided once and
-    the LENGTH is the caller's, which is how `st crew` and `st tend --unretire`
+    the LENGTH is the caller's, which is how `st crew` and `st fleet tend --unretire`
     are guaranteed to be talking about the same card."""
     for gap in launchable.launch_gaps(Agent(name="goldblum", role="worker")):
         assert len(gap.short) <= 16          # fits a column
@@ -136,7 +136,7 @@ def test_a_well_formed_card_can_still_be_unlaunchable():
     assert launchable.launch_gaps(card)      # and it still cannot work
 
 
-# --- st tend --unretire -----------------------------------------------------
+# --- st fleet tend --unretire -----------------------------------------------------
 
 class _RetireArgs:
     def __init__(self, root, unretire=None, retire=None, force=False):
@@ -308,7 +308,7 @@ def test_crew_reports_posture_from_the_pane_not_the_card(tmp_path, monkeypatch, 
 
 def test_crew_flags_a_card_that_would_be_re_armed_badly(tmp_path, monkeypatch, capsys):
     """The dormant half. goldblum is down and retired, so nothing is stalling —
-    but its card is what `st tend --unretire` re-arms, and re-arming it
+    but its card is what `st fleet tend --unretire` re-arms, and re-arming it
     manufactures the incident again. It stayed invisible for exactly this reason:
     a retired card is never launched, so its defect never becomes a symptom."""
     crew = tmp_path / "crew"; crew.mkdir()

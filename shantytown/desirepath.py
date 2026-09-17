@@ -53,14 +53,14 @@ def summary() -> dict | None:
 
     `total` is how many failed calls dp has recorded, `unique` how many distinct
     tool names, `top` the most-reached-for missing capabilities (the improvement
-    candidates). Shaped for a one-liner in `st doctor` or a tile on the dashboard;
+    candidates). Shaped for a one-liner in `st ops doctor` or a tile on the dashboard;
     the caller decides how much of `top` to show.
     """
     data = _run_json("stats", "--json")
     if not isinstance(data, dict):
         return None
     # `or []`, not a .get default: a FRESH dp (zero data — exactly the state
-    # `st doctor --install` leaves it in) emits `"top_desires": null`, and
+    # `st ops doctor --install` leaves it in) emits `"top_desires": null`, and
     # .get(key, []) returns that existing None. Found live by the aegis-v8qe
     # end-to-end: doctor crashed with a TypeError the moment the tool it had
     # just installed became visible.
@@ -77,7 +77,7 @@ def summary() -> dict | None:
 
 
 def summary_line() -> str | None:
-    """A single human line for `st doctor`, or None when dp is absent/unreadable.
+    """A single human line for `st ops doctor`, or None when dp is absent/unreadable.
 
         "321 failed tool calls captured (7 unique); top: Bash×313, Read×3"
     """

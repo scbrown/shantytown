@@ -7,7 +7,7 @@ already paid for in another form:
   same species as a settings file that was written, deployed and never read: the
   operator edits a file, sees no error, and believes a policy is in force.
 
-  A RETIRED CARD IS NEVER SELECTED, not even by `*`. `st start --mode heavy` is
+  A RETIRED CARD IS NEVER SELECTED, not even by `*`. `st fleet start --mode heavy` is
   the exact command that would resurrect a considered shutdown, which is what
   tend.py's whole retirement rule exists to prevent.
 """
@@ -114,7 +114,7 @@ def test_malformed_toml_refuses_and_names_the_file(tmp_path):
 
 
 def test_an_unknown_key_is_refused_not_ignored(tmp_path):
-    """THE typo case: a near-miss key must be a refusal at the top of `st start`,
+    """THE typo case: a near-miss key must be a refusal at the top of `st fleet start`,
     not a coordinator that mysteriously never sleeps."""
     root = _write(tmp_path, """
 [hibernate]
@@ -206,7 +206,7 @@ max_quiet_minutes = 45
 
 
 def test_zero_is_a_legitimate_bound(tmp_path):
-    """0 = only wake when something PUSHES. `st tend` pushes, and a push is a
+    """0 = only wake when something PUSHES. `st fleet tend` pushes, and a push is a
     wake with a reason, which beats a timer."""
     root = _write(tmp_path, "[hibernate]\nenabled = true\nmax_quiet_minutes = 0\n")
     assert config.load(root).hibernate.max_quiet_minutes == 0
@@ -238,7 +238,7 @@ def test_star_selects_everyone_except_the_retired():
 
 def test_a_retired_agent_named_EXPLICITLY_is_still_not_started():
     """Naming it is not authority to resurrect it. Retirement is durable and
-    deliberate; the command that undoes it is `st tend --unretire`."""
+    deliberate; the command that undoes it is `st fleet tend --unretire`."""
     r = config.resolve_crew(["ellie"], _crew())
     assert r.names == [] and r.skipped_retired == ["ellie"]
 
@@ -253,7 +253,7 @@ def test_the_boot_order_is_administrator_then_leads_then_workers():
 
 def test_a_role_selector_that_matches_nobody_is_empty_not_unknown():
     """`lite` on a store with no administrator: the selector is VALID and matched
-    nothing. That is a different fix (`st roles set`) from a typo, so it must be a
+    nothing. That is a different fix (`st fleet roles set`) from a typo, so it must be a
     different signal."""
     workers = [Agent(name="billy", role="worker", pane="p")]
     r = config.resolve_crew(["administrator"], workers)

@@ -127,8 +127,8 @@ def _journal_send(pane: str, text: str) -> None:
 journal = _journal_send
 
 
-# Provenance marker for the ownership guard. st new sets it in the
-# session environment; st stop refuses to reap any session that does not carry
+# Provenance marker for the ownership guard. st agent new sets it in the
+# session environment; st agent stop refuses to reap any session that does not carry
 # it. It is a tmux SESSION variable, so it is bound to that session's lifetime:
 # if the session dies and something else (a real gt crew launch) recreates a
 # session with the same name, the new session does not carry the marker and st
@@ -391,7 +391,7 @@ class Tmux:
         # -S -N extends the capture back N lines into scrollback. Default 0 keeps
         # the VISIBLE-only behaviour triage depends on (see the Panes protocol).
         # -e keeps the SGR sequences. Off by default because every plain-text
-        # consumer (verify's substring match, the `st log` dump) would otherwise
+        # consumer (verify's substring match, the `st agent log` dump) would otherwise
         # have to strip them; on for triage, which needs dim to tell a
         # placeholder from queued input (aegis-x6xh).
         args = ["capture-pane", "-t", pane, "-p"]
@@ -507,7 +507,7 @@ class Tmux:
     def control(self, pane: str, key: str) -> None:
         """Send ONE editing key from a fixed allowlist. Cannot submit. Ever.
 
-        `st input --clear` has to reach a pane's input buffer, and send() is the
+        `st agent input --clear` has to reach a pane's input buffer, and send() is the
         wrong tool: it appends Enter, which is the submit. So this exists — and
         it is an ALLOWLIST rather than a general key sender on purpose.
 
@@ -654,9 +654,9 @@ class Tmux:
         """Append one line about this pane's memory ceiling. Never raises.
 
         WHY A FILE AND NOT JUST stderr (aegis-0j0n1n). The refusal above goes to
-        the stream of whoever ran the launch. When that is `st tend` under
+        the stream of whoever ran the launch. When that is `st fleet tend` under
         systemd it reaches the journal and can be read later; when an operator
-        types `st new <agent>` in a pane — which is how a codex agent with a
+        types `st agent new <agent>` in a pane — which is how a codex agent with a
         stale startup lock gets repaired — it lands in that pane's scrollback and
         is gone with it.
 
@@ -752,7 +752,7 @@ class Tmux:
         invisible to `exists()`. So: capture the pane's process group BEFORE the
         kill, kill the session, then TERM the group and escalate to KILL. Best-
         effort on the tree (no such pid == already gone == success); the caller
-        (`st stop`) still VERIFIES via exists()."""
+        (`st agent stop`) still VERIFIES via exists()."""
         if not self.exists(name):
             return
         pane_pid = self._pane_pid(name)
@@ -880,7 +880,7 @@ class NullPanes:
         """Records the key; enforces the SAME allowlist as Tmux.control.
 
         The check is duplicated deliberately. A double that accepted keys the
-        real adapter refuses would let a test prove `st input` never sends Enter
+        real adapter refuses would let a test prove `st agent input` never sends Enter
         while the shipped path happily could — the double has to be as strict as
         the thing it stands in for, or the assertion is theatre.
         """
@@ -920,7 +920,7 @@ class NullPanes:
         to aegis-8p0j: a real pane's process cmdline IS the string the launcher
         typed into it. Modelling it as the last send keeps the launch-time hook
         check honest in tests — a double that always returned a well-formed
-        cmdline would make `st new`'s verification unfalsifiable, which is the
+        cmdline would make `st agent new`'s verification unfalsifiable, which is the
         one thing this check must not be.
 
         None when unseeded AND nothing was ever sent: an empty pane has no

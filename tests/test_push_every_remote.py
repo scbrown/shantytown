@@ -1,4 +1,4 @@
-"""`st push` — push to EVERY remote, refuse on non-ff, NAME the remote (aegis-96few).
+"""`st repo push` — push to EVERY remote, refuse on non-ff, NAME the remote (aegis-96few).
 
 THE BUG. shantytown has two live remotes, neither a mirror, and each agent's
 `wt/<name>` branch is configured to push to one of them — measured 2026-08-04:
@@ -360,7 +360,7 @@ def test_no_remotes_is_refused_not_silently_successful(tmp_path, capsys):
 #
 # aegis-mmq38. Surfacing the hook's stderr (aegis-l3o0x) put guard prose into the
 # same string the classifier read, and English is not a protocol: a scrub guard
-# that writes "...or fetch first from the internal forge" made `st push` announce
+# that writes "...or fetch first from the internal forge" made `st repo push` announce
 # a non-fast-forward for BOTH remotes — one of which was a clean fast-forward —
 # and prescribe a fetch-and-merge that cannot clear a content refusal at all. An
 # operator who runs that loop learns the push tool is flaky, not that they just
@@ -422,7 +422,7 @@ def test_a_real_non_fast_forward_is_STILL_diagnosed(two_remotes, capsys):
 
 
 def test_the_failure_names_what_it_actually_attempted(two_remotes, capsys):
-    """Two instruments disagreeing is what made this bug cost hours: `st push`
+    """Two instruments disagreeing is what made this bug cost hours: `st repo push`
     pushes `wt/<agent>` from the AGENT'S WORKTREE, while the operator's check was
     a bare `git push` in whatever tree they were standing in. Naming the ref and
     the directory makes st's claim reproducible with plain git."""

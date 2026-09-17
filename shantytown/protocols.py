@@ -86,7 +86,7 @@ class Agent:
     # touched. It did not have to intend it, only to not know. Absence is now
     # representable, so "I am not saying" and "I say not retired" are different
     # writes. Every consumer tests truthiness, so None reads as not-retired.
-    retired: bool | None = None   # DELIBERATELY stopped. `st tend` must never
+    retired: bool | None = None   # DELIBERATELY stopped. `st fleet tend` must never
                                   # respawn it, and finding it ALIVE is an
                                   # escalation, not a line in a log. It lives on
                                   # the CARD because a retirement held in a
@@ -126,7 +126,7 @@ class Agent:
                                   # measured: without --no-chrome a first-run
                                   # claude stops at a "Claude in Chrome extension
                                   # detected" consent prompt that BLOCKS the ready
-                                  # UI, so `st new`'s verify never sees live and
+                                  # UI, so `st agent new`'s verify never sees live and
                                   # returns could-not-tell for an agent that is
                                   # fine (aegis-84z1, the prod 0-path fix).
                                   # Per-card rather than global for a second
@@ -217,7 +217,7 @@ class WorkItem:
                                   # therefore invisible to the deferral sweeper
                                   # AND to feeders at once. Carried as data so a
                                   # write to it can be VERIFIED BY READ-BACK;
-                                  # without it, `st defer` could only confirm the
+                                  # without it, `st work defer` could only confirm the
                                   # status and label it set and would report
                                   # success on a condition that never landed.
     blocker_kind: str | None = None  # one structured defer label, or None.
@@ -393,7 +393,7 @@ class Panes(Protocol):
     def new_session(self, name: str) -> str: ...
     def kill_session(self, name: str) -> None: ...
     # Ownership provenance (dearing's safety requirement). new_session
-    # marks the session st-owned; owns() reports it. `st stop` refuses to reap a
+    # marks the session st-owned; owns() reports it. `st agent stop` refuses to reap a
     # session it does not own, even on an exact name match — the registry pane
     # names collide with the live crew, so a name match is not permission to kill.
     def owns(self, name: str) -> bool: ...

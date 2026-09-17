@@ -101,7 +101,7 @@ def test_a_clean_pull_still_returns_None(monkeypatch):
 
 
 # --- the RATCHET: no third site may blame the tree (aegis-ghedod) -----------
-# The first fix landed on the dispatch path; running `st new` during the same
+# The first fix landed on the dispatch path; running `st agent new` during the same
 # outage immediately produced the identical message from the LAUNCH path. A
 # guard fixed at one call site while an identical message stands at another is
 # the uncovered-surface class this repo keeps paying for, so this fails the

@@ -53,7 +53,7 @@ def test_compose_sets_SHANTY_AGENT_for_identity():
 
 def test_compose_carries_no_chrome():
     """--no-chrome is the prod 0-path fix: without it a first-run
-    claude stops at a Chrome-consent prompt that blocks the ready UI, so st new's
+    claude stops at a Chrome-consent prompt that blocks the ready UI, so st agent new's
     verify never sees live. Live-fire confirmed it goes straight to ready."""
     rt = ClaudeRuntime(NullPanes(), _ok_settings)
     launch = rt.compose(Agent(name="ellie", role="worker"))
@@ -231,7 +231,7 @@ def test_is_live_false_on_the_old_hallucinated_marker():
 
 def test_consent_prompt_is_waiting_not_live():
     """A first-run consent screen is a THIRD state: not live, not failed. Live-fire
-    live-fire found this is exactly why the original st new returned 2."""
+    live-fire found this is exactly why the original st agent new returned 2."""
     rt = ClaudeRuntime(NullPanes(), _ok_settings)
     screen = "  Claude in Chrome extension detected\n  ❯ 1. Yes  2. No, keep browser tools off"
     assert rt.waiting_for_human(screen)

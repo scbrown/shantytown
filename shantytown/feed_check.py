@@ -76,7 +76,7 @@ def dark_agents() -> set[str]:
     respawned gastown agent DOES carry it: aegis-b686's masked-daemon cron / gt
     handoff-respawn brings these panes back within seconds of a kill, re-primed with
     the shantytown worker settings (hence the send hook). So the wiring gate cannot
-    tell them apart, and killing them is whack-a-mole (st stop refuses them as
+    tell them apart, and killing them is whack-a-mole (st agent stop refuses them as
     not-st-owned; a raw tmux kill is undone by the respawner one interval later).
     They rendered `idle`, tripped Rule Zero on every coordinator stop, and a dispatch
     to one stranded the bead in_progress on a pane with no live consumer (8 beads
@@ -86,7 +86,7 @@ def dark_agents() -> set[str]:
 
 
 def st_launched_agents(root) -> set[str] | None:
-    """Agents with a launch stamp under <root>/launched — the ones `st new`
+    """Agents with a launch stamp under <root>/launched — the ones `st agent new`
     itself started. None = the store is missing, unreadable, or EMPTY: we
     CANNOT TELL who is ours, so the caller must apply NO ownership gate (an
     empty store proves nothing about ownership; a fresh deployment with no
@@ -99,8 +99,8 @@ def st_launched_agents(root) -> set[str] | None:
     stop event to this coordinator and stranding every bead dispatched to
     them. The name denylist (dark_agents above) shields the known eight; this
     gate is the general form: st only feeds agents st launched, and the launch
-    stamp (launched.py, written by `st new` at launch) is precisely that
-    signal — the same ownership fact behind `st stop`'s refusal to kill panes
+    stamp (launched.py, written by `st agent new` at launch) is precisely that
+    signal — the same ownership fact behind `st agent stop`'s refusal to kill panes
     it does not own. Measured at introduction: all 10 live st workers
     stamped, all 8 gastown-respawned panes unstamped — perfect separation."""
     try:
@@ -127,7 +127,7 @@ def free_feedable_workers(reg, panes, runtime, root=None, roles=("worker",)) -> 
     When `root` is given, additionally gated on the launch stamp: agents st did
     not launch are not st's to feed (st_launched_agents).
 
-    RETIRED CARDS ARE NOT FEEDABLE (aegis-w4k8n). Retiring a card stops `st tend`
+    RETIRED CARDS ARE NOT FEEDABLE (aegis-w4k8n). Retiring a card stops `st fleet tend`
     RESPAWNING that agent; it does not kill a pane that is already up. So a
     retired agent mid-turn stays live, stays idle, and — until this gate — read as
     dispatchable capacity. Measured after the roster cut: all SIX names this
@@ -483,7 +483,7 @@ def throttle(ready: list[tuple[str, str]], beads, admits) -> tuple[list, list]:
     """Split the dispatchable list into (admitted, held) by the GOVERNOR's rule.
 
     WHY THIS EXISTS (aegis-diasw). Rule Zero and the governor contradicted each
-    other in production: `st tend` reported a 50% tier admitting only P1-and-above
+    other in production: `st fleet tend` reported a 50% tier admitting only P1-and-above
     while feed_check ordered a dispatch and named three P2 beads as its top
     candidates — every one of which `st go` then refused. A blocking stop hook
     demanding an action a second mechanism forbids has exactly one easy way out,
@@ -546,7 +546,7 @@ def _reason(free: list[str], ready: list[tuple[str, str]]) -> str:
 def governor_admits(root):
     """The governor's `item -> "" | why` for this root, or None if none is
     configured. A PURE READ (`persist=False`): asking whether work is dispatchable
-    must never ratchet fleet policy — `st tend` is the one writer of the engaged
+    must never ratchet fleet policy — `st fleet tend` is the one writer of the engaged
     tier, and a stop hook that advanced hysteresis would make the governor's state
     depend on how often agents happened to stop.
 
@@ -835,7 +835,7 @@ def haul_feed_message(nid: str, title: str, rest: int, headroom: str = "",
     t = (title or "")[:80]
     # A repeat must READ as a repeat — being handed the same bead back looks like
     # an instruction to persist, when it only means you have not released it. One
-    # line; the rule itself is in `st help haul`.
+    # line; the rule itself is in `st ops help haul`.
     again = (f"(SAME bead, served {'twice' if repeats > 1 else 'once'} already — "
              f"that is the re-serve rule, not a verdict. Release it below.) "
              if repeats else "")
@@ -846,11 +846,11 @@ def haul_feed_message(nid: str, title: str, rest: int, headroom: str = "",
         f"HAUL: {nid} ({t}) — `br show {nid}`, execute, close to advance "
         f"({rest} more). {again}{authority}{instruction(nid)}"
         f"{handoff_text.deep_context_hint()}\n"
-        f"Not this one? done -> `br close {nid}` · gated -> `st defer {nid} "
+        f"Not this one? done -> `br close {nid}` · gated -> `st work defer {nid} "
         f"<bead|human|access|external|parked> --reason-file <f>` · not yours -> "
         f"`br update {nid} -a \"\"`. "
         f"(A bare status change does NOT stop the re-serve, and clearing the "
-        f"assignee only re-pools it.) Options: `st help haul`.")
+        f"assignee only re-pools it.) Options: `st ops help haul`.")
 
 
 def haul_resume_message(nid: str, title: str) -> str:
@@ -868,7 +868,7 @@ def haul_resume_message(nid: str, title: str) -> str:
         f"HAUL RESUME: {nid} ({t}) is still your active anchor. Continue it now "
         f"(`br show {nid}`), execute the remaining work, verify it, and close it "
         f"when done so the haul can advance. If it is genuinely gated, record "
-        f"the evidence, then use `st defer {nid} "
+        f"the evidence, then use `st work defer {nid} "
         f"<bead|human|access|external|parked> --reason-file <file>`; if it is not "
         f"yours, clear the assignee. "
         f"Do not stop merely because the previous model turn ended. {instruction(nid)}")

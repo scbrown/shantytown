@@ -45,7 +45,7 @@ def test_actual_stop_paths_emit_once_even_with_active_work(tmp_path, monkeypatch
     message = json.loads(capsys.readouterr().out)
     assert message["decision"] == "block"
     assert "70%" in message["reason"]
-    assert "st cycle --self --checkpoint-file <notes-file>" in message["reason"]
+    assert "st agent cycle --self --checkpoint-file <notes-file>" in message["reason"]
     assert "advisory" in message["reason"]
     assert not ch.emit(tmp_path, card, payload)
     assert capsys.readouterr().out == ""

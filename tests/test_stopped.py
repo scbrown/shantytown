@@ -1,6 +1,6 @@
 """stopped — a deliberate stop is INTENT, and st must be able to tell (GH #29 req 2).
 
-The measured bug this pins: `st stop` recorded nothing, so a pane an operator had
+The measured bug this pins: `st agent stop` recorded nothing, so a pane an operator had
 just been instructed to kill and a pane that crashed produced the SAME reading, and
 the administrator's drain demanded nine deliberate shutdowns be undone.
 
@@ -125,7 +125,7 @@ def test_a_deliberate_stop_is_REPORTED_and_never_an_item():
     # know the fleet is short, and by whose hand.
     assert "2 agent(s) STOPPED BY AN OPERATOR, not faults" in rendered
     assert "felix (14m)" in rendered and "goodnight" in rendered
-    assert "st new <agent>" in rendered
+    assert "st agent new <agent>" in rendered
 
 
 def test_a_deliberate_stop_that_ROSE_is_still_an_item():
@@ -146,7 +146,7 @@ def test_nothing_but_deliberate_stops_renders_the_note_alone():
     assert "STOPPED BY AN OPERATOR" in rendered
 
 
-# --- the writing: `st stop`, and the clearing on relaunch --------------------
+# --- the writing: `st agent stop`, and the clearing on relaunch --------------------
 
 import json                                                        # noqa: E402
 
@@ -180,7 +180,7 @@ def test_st_stop_records_the_intent(tmp_path, monkeypatch, capsys):
     rc = cli._cmd_stop(_Args(root, reason="credit budget exhausted"))
     assert rc == cli.OK
     rec = FilesStops(root / "stopped").get("ellie")
-    assert rec is not None, "st stop wrote no intent — the whole of #29 request 2"
+    assert rec is not None, "st agent stop wrote no intent — the whole of #29 request 2"
     assert rec.reason == "credit budget exhausted"
     out = capsys.readouterr().out
     assert "DELIBERATE" in out
@@ -210,7 +210,7 @@ def test_a_dry_run_stop_records_nothing(tmp_path, monkeypatch):
 
 def test_stopping_an_already_down_agent_records_nothing(tmp_path, monkeypatch):
     """st did not put it in that state and cannot know who did. Claiming the stop
-    would be a fabricated fact — `st tend --retire` is how an operator adopts an
+    would be a fabricated fact — `st fleet tend --retire` is how an operator adopts an
     agent that is already down."""
     root = _world(tmp_path)
     monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: NullPanes(live=set()))

@@ -99,7 +99,7 @@ def test_the_quiet_bound_forces_a_read_eventually():
 
 
 def test_zero_disables_the_bound():
-    """A legitimate choice: `st tend` pushes, and a push is a wake with a REASON."""
+    """A legitimate choice: `st fleet tend` pushes, and a push is a wake with a REASON."""
     v = sp.decide(_inp(pending=[_ev()], minutes_quiet=99999,
                        hibernate=Hibernate(enabled=True, max_quiet_minutes=0)))
     assert not v.block
@@ -289,7 +289,7 @@ def test_a_worker_gets_no_rule_zero_and_no_hibernate(tmp_path):
 
 def test_the_unified_entry_still_reads_as_DRAIN_wiring(tmp_path):
     """A checker that cannot see the thing it checks for is the exact defect
-    `roles --check` and `st tend` exist to catch — an administrator on the new
+    `roles --check` and `st fleet tend` exist to catch — an administrator on the new
     chain must not read as DEAF."""
     from shantytown.runtime import settings_for_role, stop_directions_in
     (tmp_path / "administrator.settings.json").write_text(

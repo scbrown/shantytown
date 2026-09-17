@@ -75,10 +75,10 @@ def test_reopened_item_gets_no_closure_comment(tmp_path):
 def test_confirmed_defer_clips_focus_and_redeclaration_reopens(tmp_path):
     conn = database(tmp_path)
     payload = {'hook_event_name': 'PostToolUse', 'tool_name': 'Bash', 'session_id': 'session',
-               'tool_use_id': 'defer1', 'tool_input': {'command': 'st defer p-c human --reason-file reason'},
+               'tool_use_id': 'defer1', 'tool_input': {'command': 'st work defer p-c human --reason-file reason'},
                'tool_response': {'stdout': 'p-c deferred as blocked:human', 'exit_code': 0}}
     task_order.capture(conn, payload, 35, 'worker')
-    start = {**payload, 'tool_use_id': 'begin2', 'tool_input': {'command': 'st stats --begin-task p-c'}}
+    start = {**payload, 'tool_use_id': 'begin2', 'tool_input': {'command': 'st agent stats --begin-task p-c'}}
     task_order.capture(conn, {**start, 'hook_event_name': 'PreToolUse'}, 40, 'worker')
     task_order.capture(conn, {**start, 'tool_response': {'stdout': task_order.marker('p-c')}}, 41, 'worker')
     conn.commit(); conn.close()

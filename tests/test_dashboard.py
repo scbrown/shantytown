@@ -1,4 +1,4 @@
-"""st dashboard — a live, tier-scoped view that REUSES the state verdicts
+"""st fleet dashboard — a live, tier-scoped view that REUSES the state verdicts
 (aegis-h4qe, Part A).
 
 The dashboard must never form a second opinion about busy/idle/waiting/saturated:
@@ -86,7 +86,7 @@ def test_render_names_the_uncaptured_stats_rather_than_faking_them():
     d = dash.gather("sattler", agents, [(agents[0], "up", triage.IDLE)],
                     lambda who: None, {}, at=1000.0)
     out = dash.render(d, now=1000.0)
-    assert "need capture" in out and "st stats" in out
+    assert "need capture" in out and "st agent stats" in out
     # it does NOT print a made-up throughput number.
     assert "throughput" in out
 

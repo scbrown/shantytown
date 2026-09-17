@@ -9,7 +9,7 @@ liveness proof; "could not reach Quipu" is never "no events".
 
 `poll_and_route` notices new transactions, asks Quipu which governed workflows the
 graph assigns (`aegis:assignsWorkflow`), and ROUTES each new one to a sink — the
-`st subscribe` command routes it to the administrator, who acts (a bead, a
+`st ops subscribe` command routes it to the administrator, who acts (a bead, a
 dispatch). The watermark + handled-set persist so a restart resumes rather than
 re-routing what it already handled.
 """
@@ -147,7 +147,7 @@ class QuipuEvents:
 
     def subscribe(self, kinds: list[str] | None = None) -> Iterator[Event]:
         """The EventSource contract: yield the transactions since watermark 0 once.
-        The `st subscribe` command uses poll_and_route for the stateful loop; this
+        The `st ops subscribe` command uses poll_and_route for the stateful loop; this
         satisfies the protocol and is handy for one-shot scripting."""
         for e in self.transactions_since(0):
             if kinds is None or (e.source and any(e.source.startswith(k) for k in kinds)):

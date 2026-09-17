@@ -13,6 +13,8 @@ import tempfile
 import time
 from datetime import datetime
 
+from .surface import ungroup
+
 
 def epoch(value):
     return datetime.fromisoformat(value.replace('Z', '+00:00')).timestamp()
@@ -65,6 +67,7 @@ def capture_end(conn, payload, now, agent):
     except (ValueError, TypeError):
         return
     response = json.dumps(payload.get('tool_response', ''))
+    args = ungroup(args)        # `st work defer` and `st defer` both close a focus
     if len(args) < 4 or Path(args[0]).name != 'st' or args[1] != 'defer' or 'deferred as' not in response:
         return
     if any(a in {';', '&&', '||', '|'} for a in args):

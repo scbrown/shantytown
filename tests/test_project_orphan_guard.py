@@ -1,4 +1,4 @@
-"""st roles sync — the guard that stops a sync from MANUFACTURING an orphan.
+"""st fleet roles sync — the guard that stops a sync from MANUFACTURING an orphan.
 
 aegis-ftmfn. Measured on the live store 2026-08-04, `roles sync --dry-run`
 printed this among seven rows:

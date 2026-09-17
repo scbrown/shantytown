@@ -28,7 +28,7 @@ THE INVARIANT (the whole ruling):
 HONEST BOUNDARY (say it so nobody over-claims):
     compose() guarantees --settings was REQUESTED (the string provably carried
     it). It does NOT guarantee hooks FIRED — that is GT's unanswerable "did I get
-    primed?". `st new`'s pane-verify proves the PROCESS is live, not that hooks
+    primed?". `st agent new`'s pane-verify proves the PROCESS is live, not that hooks
     registered. Keep the two claims apart: composition guarantees settings were
     requested; pane-verify guarantees the process came up. A green verify must
     never be read as "hooks registered" — it cannot show that.
@@ -155,7 +155,7 @@ def reads_a_question(rt, screen: str):
 
     The tolerant twin of asks_a_question, and tolerant for the same reason: pane
     reading is an OPTIONAL runtime capability (StoplessRuntime implements none of
-    it), so a hard AttributeError here would crash `st ask` over a runtime that
+    it), so a hard AttributeError here would crash `st agent ask` over a runtime that
     simply draws no pickers we know how to read.
 
     NONE IS NOT "NO QUESTION", and unlike asks_a_question that distinction has to
@@ -329,7 +329,7 @@ def _capture_cmd(root=None) -> dict:
     has no .shanty, so an unrooted capture would look for the store in the wrong
     place and silently record nothing. Wired at the call site with matcher '.*' —
     EVERY tool, including `mcp__*` (bobbin/homelab/quipu MCP) and Skill, not only
-    Bash/Read/Edit/Write — so `st stats` can actually measure tool leverage
+    Bash/Read/Edit/Write — so `st agent stats` can actually measure tool leverage
     (aegis-rcyd Phase 0). Capture is fail-open (stats.main never returns nonzero),
     so a broken stats layer is invisible to the tool call it observes.
     """
@@ -348,7 +348,7 @@ def _history_cmd(root=None) -> dict | None:
     slot — but it is a SINGLE value and this deployment has already spent it on
     its quipu session-capture dispatcher. Wiring history there would silently
     displace a live mechanism. And the archive is not a deployment concern
-    anyway: `st history` is a shantytown command and the capture scripts ship in
+    anyway: `st agent history` is a shantytown command and the capture scripts ship in
     this repo, so shantytown owning the hook is where it already lived.
 
     IDENTITY IS RESOLVED AT RUN TIME, not baked in. Settings are emitted per
@@ -832,7 +832,7 @@ def stop_capture_command(root=None) -> str | None:
 
 def settings_for_role(role: str, root=None, harness_name: str | None = None) -> dict:
     """The settings file a role needs, IN ITS HARNESS'S FORMAT — the CONTENT
-    `role set` emits and `st new`'s launch reads via --settings (#6, arnold
+    `role set` emits and `st agent new`'s launch reads via --settings (#6, arnold
     gt-wisp-w4j2af).
 
     This is now a THIN DISPATCH to harness.get(harness_name).settings(); the Claude
@@ -1031,7 +1031,7 @@ def bash_group(root=None) -> dict:
 
     ONE GROUP, not two, and the guard runs FIRST. Two groups under one matcher
     is legal for Claude Code and confusing for every reader of the emitted
-    settings — and `st roles --check` reads that shape back.
+    settings — and `st fleet roles --check` reads that shape back.
 
     The trace cannot refuse anything: `yupana hook pre-bash` is record-only by
     construction (never denies, never prints, always exit 0) and the `|| exit 0`
@@ -1112,7 +1112,7 @@ def claude_settings_for_role(role: str, root=None) -> dict:
         },
         # Pre-answer the project-MCP consent screen. A FRESH workspace makes Claude
         # Code ask "N new MCP servers found — enable?" and that prompt BLOCKS the
-        # ready UI, so is_live sees nothing and st new reports could-not-tell for an
+        # ready UI, so is_live sees nothing and st agent new reports could-not-tell for an
         # agent that is actually fine (observed on harding's first launch: it sat on
         # the picker until a human pressed Enter). Same third-state class the launch
         # already handles for chrome with --no-chrome.
@@ -1133,7 +1133,7 @@ def claude_settings_for_role(role: str, root=None) -> dict:
 # Deployment-supplied environment for emitted settings. NOT a list of values —
 # a list of NAMES to carry through, so no internal hostname ever lives in this
 # repo (that is what the public scrub was for).
-# SHANTY_CANONICAL_SOURCE rides along so every agent's `st doctor` self-check
+# SHANTY_CANONICAL_SOURCE rides along so every agent's `st ops doctor` self-check
 # audits the DEPLOYMENT's canonical checkout, pinned, rather than asking the
 # running module to vouch for itself (selfcheck.canonical_source resolution
 # order — the pin is the layer that still works for a re-point from a fully
@@ -1199,7 +1199,7 @@ def apply_carried_env(merged: dict, emitted: dict) -> dict:
     `_settings_env`'s own docstring: an agent pointed at a wrong-but-reachable
     graph or namespace gets "nobody exists" answered with a straight face, where
     an unreachable one at least raises. So the latched value is the dangerous
-    kind of wrong — and SHANTY_CANONICAL_SOURCE is the pin `st doctor` audits
+    kind of wrong — and SHANTY_CANONICAL_SOURCE is the pin `st ops doctor` audits
     against, so a stale one makes the self-check vouch for the wrong checkout.
 
     ONLY THE KEYS WE MANAGE (`_CARRIED_ENV`), never an operator's own variables
@@ -1358,7 +1358,7 @@ def live_wiring(pane: str, cmdline_reader) -> LiveWiring | None:
     because nothing guarantees the live process was launched from that artifact.
 
     Measured on the live store, 2026-07-20: dearing is role=lead, lead.settings
-    .json emits [send, drain], and `st roles --check` said `hooks: ok` — while
+    .json emits [send, drain], and `st fleet roles --check` said `hooks: ok` — while
     the process in its pane had been launched by a FOREIGN launcher (gt-crew-up)
     with gastown settings carrying no stop_event hook at all. Seven workers
     routed to it; every one of their stop events was write-only, and the checker
@@ -1417,7 +1417,7 @@ class ClaudeRuntime:
     #     ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents
     # — because that line REPLACES the shortcuts hint whenever a permission mode
     # is on, and every crew agent here runs with one. So the pinned markers
-    # matched nothing in production: `st new` could only ever return
+    # matched nothing in production: `st agent new` could only ever return
     # could-not-tell (2) for a launch that was fine, and the work column read `?`
     # for eight genuinely idle agents. The lesson from the line above it applies
     # to itself: a marker validated once, on one configuration, is evidence about
@@ -1428,7 +1428,7 @@ class ClaudeRuntime:
     DEAD_MARKERS = ("command not found", "no such file", "not found", "Traceback")
     # A first-run consent screen (e.g. "Claude in Chrome extension detected") is a
     # THIRD state: not live, not failed — WAITING FOR A HUMAN. It blocks the ready
-    # UI, so is_live correctly returns False and st new reports could-not-tell (2).
+    # UI, so is_live correctly returns False and st agent new reports could-not-tell (2).
     # The real fix is to launch past it (a settings/config that pre-answers), which
     # is entangled with what role-set emits — tracked separately, not guessed here.
     # THE CONSENT SCREEN'S WORDING CHANGED AND THESE STOPPED MATCHING (aegis-neffw).
@@ -1437,7 +1437,7 @@ class ClaudeRuntime:
     # 2026-08-05, the real screen says none of them: it reads "Claude in Chrome
     # works with the Chrome extension to let you control your..." and links
     # clau.de/chrome/permissions. So `waiting_for_human` returned FALSE while a
-    # consent screen was demonstrably blocking the ready UI, and `st new` would
+    # consent screen was demonstrably blocking the ready UI, and `st agent new` would
     # have reported could-not-tell WITHOUT being able to name the cause — the
     # third state this constant exists to make sayable.
     #
@@ -1453,7 +1453,7 @@ class ClaudeRuntime:
     # not covered by --dangerously-skip-permissions (verified: a card with
     # dangerous=True stalls on it exactly the same), and it is not the MCP
     # consent screen. So EVERY agent launched into a newly cloned directory sat
-    # on this prompt, unusable, while `st new` reported could-not-tell — the
+    # on this prompt, unusable, while `st agent new` reported could-not-tell — the
     # symptom recorded against harding's first launch, and the same one a
     # tend-respawn hits. A provisioning story that stops at files does not
     # produce a working agent.
@@ -1639,7 +1639,7 @@ class ClaudeRuntime:
     def waiting_for_human(self, screen: str) -> bool:
         """A THIRD state between live and failed: a first-run prompt (e.g. the
         Chrome-extension consent) is up and blocking the ready UI. Neither "live"
-        nor "crashed" — it needs a person. st new surfaces this specifically so a
+        nor "crashed" — it needs a person. st agent new surfaces this specifically so a
         could-not-tell (2) reads as 'go answer the prompt', not 'it died'."""
         return any(c in screen for c in self.CONSENT_MARKERS)
 
@@ -1688,7 +1688,7 @@ class ClaudeRuntime:
 
         TRUST_MARKERS COUNT TOO. The folder-trust dialog is a different dialog
         with the same consequence — a blocking chooser, before the ready UI, that
-        `st new` normally auto-answers. If one is still up when `st crew` looks,
+        `st agent new` normally auto-answers. If one is still up when `st crew` looks,
         the launcher did not answer it and that agent is stopped dead waiting for
         a person. Reporting it as `?` would be the very bug this predicate closes,
         one dialog over.

@@ -72,7 +72,7 @@ def _applied(got, want) -> bool:
     """
     g, w = ("" if got is None else str(got)).strip(), str(want).strip()
     if not w:
-        # THE CLEARING DIRECTION (aegis-ap4gm, `st repool`). A hand-back writes
+        # THE CLEARING DIRECTION (aegis-ap4gm, `st work repool`). A hand-back writes
         # an EMPTY assignee, so "did the row change" means the field is now
         # empty — None and "" are the same answer from different backends.
         # Without this clause an applied clear read back as a loss, earned the
@@ -906,7 +906,7 @@ class Dispatcher:
                 # A BARE DATE MUST BE COMPARED AS A DATE, not as an instant.
                 # `--until 2026-09-23` parses here to 00:00Z, but the br backend
                 # normalises a date-only value to a time of its own choosing --
-                # measured 2026-09-16: `st defer aegis-izh4 human --until
+                # measured 2026-09-16: `st work defer aegis-izh4 human --until
                 # 2026-09-23` stored `2026-09-23T13:00:00Z`, and the exact-instant
                 # comparison below reported "defer_until: wanted '2026-09-23',
                 # store still says '2026-09-23T13:00:00Z'". The write had LANDED

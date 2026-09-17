@@ -271,7 +271,7 @@ def _batch_is_stale(inp: Inputs) -> bool:
 
     max_quiet_minutes is NOT a schedule to wake on — it is a bound on how long a
     pending batch may sit while nothing pushes. 0 disables it, which is a
-    legitimate choice: `st tend` pushes, and a push is a wake with a REASON, which
+    legitimate choice: `st fleet tend` pushes, and a push is a wake with a REASON, which
     beats a timer every time.
     """
     cap = inp.hibernate.max_quiet_minutes if inp.hibernate else 0

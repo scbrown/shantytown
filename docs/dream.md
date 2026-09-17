@@ -12,7 +12,7 @@ min_headroom_pct = 20
 domains = ["ontology", "infra", "codebases", "fleet-config"]
 ```
 
-`st tend` schedules a cycle only when all of these are true:
+`st fleet tend` schedules a cycle only when all of these are true:
 
 1. The interval is due.
 2. At least one idle provider has no ordinary ready work it can actually accept.
@@ -42,8 +42,8 @@ does clear those gates still preempts reflection for that provider. This keeps a
 perpetually non-empty board from making the scheduler inert without turning
 DREAM into a competing priority queue.
 
-`st dream` shows the policy, last cycle, next due time, and domain rotation.
-`st dream --run -n` previews the next eligible cycle without writing. `--run`
+`st work dream` shows the policy, last cycle, next due time, and domain rotation.
+`st work dream --run -n` previews the next eligible cycle without writing. `--run`
 ignores the interval and enabled bit for an operator-requested cycle, but it does
 not bypass foreground dispatchability, signal health, headroom, or reserve
 protection.

@@ -124,7 +124,7 @@ survival = "support"
 ```
 
 ```
-st roles band <agent> <first|normal|support|last>     # --via ROLE, -n/--dry-run
+st fleet roles band <agent> <first|normal|support|last>     # --via ROLE, -n/--dry-run
 ```
 
 **It writes a role, not a card field.** `traits` composes survival from the role stack, so a
@@ -154,7 +154,7 @@ changes* — what changes is that the band is now a decision on the record.
 
 That distinction is not academic. Twenty cards on this deployment were banded by hand-editing their
 `roles` arrays and **three were missed**, and nothing detected it, because the resolved behaviour was
-identical. `roles set` could not have helped: it writes the TREE POSITION, so `st roles set billy
+identical. `roles set` could not have helped: it writes the TREE POSITION, so `st fleet roles set billy
 normal` is refused as a depth violation — correctly, since `normal` is not a place in the tree. The
 band simply had no verb.
 

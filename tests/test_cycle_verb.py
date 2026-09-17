@@ -1,8 +1,8 @@
-"""`st cycle` — the guard that decides whether clearing an agent is safe (aegis-3laza).
+"""`st agent cycle` — the guard that decides whether clearing an agent is safe (aegis-3laza).
 
 SIBLING FILE, NOT A REPLACEMENT. tests/test_cycle.py pins the automatic driver
 (notify.CycleDriver) that prompts a saturated agent on its own pane. This file
-pins the VERB: the policy behind `st cycle <agent>`, which stops and relaunches
+pins the VERB: the policy behind `st agent cycle <agent>`, which stops and relaunches
 instead of asking the agent to `/clear`.
 
 The verb exists because `/clear` is the wrong primitive three ways over, each
@@ -54,7 +54,7 @@ def test_cycle_checkpoint_defaults_to_the_single_plate_item(monkeypatch):
     """plate() returns one WorkItem, not an iterable backlog.
 
     The checkpoint fallback must preserve that one-item contract: iterating the
-    dataclass crashed ``st cycle --self --checkpoint-file`` before it could save
+    dataclass crashed ``st agent cycle --self --checkpoint-file`` before it could save
     the request.
     """
     import shantytown.cli as cli
@@ -161,7 +161,7 @@ def test_the_guard_does_not_manufacture_a_risk_the_measurement_did_not_find():
     already fetches with --prune, which also closes the opposite and worse error: a
     DELETED upstream ref laundering an orphaned commit into 'safe'. So the guard
     takes the reading it is given and the CLI passes fetch=True. A guard that
-    invented its own answer would disagree with `st crew` and `st doctor`, and
+    invented its own answer would disagree with `st crew` and `st ops doctor`, and
     three instruments giving three numbers is how a fleet learns to ignore all
     three."""
     v = assess("grant", ["/w/grant"], CHECKPOINT, _clean)
@@ -266,7 +266,7 @@ def test_a_json_non_object_also_reads_as_empty(tmp_path):
 
 
 def test_the_cycle_reason_is_a_stable_marker():
-    """`st tend` and any drain match on this to tell a deliberate cycle from a
+    """`st fleet tend` and any drain match on this to tell a deliberate cycle from a
     crash or a retirement. A constant precisely so two spellings cannot drift
     apart in two files."""
     assert CYCLE_REASON == "cycle-requested"
@@ -345,7 +345,7 @@ def test_the_untracked_report_never_says_to_commit_anything():
     for line in v.notice_lines():
         low = line.lower()
         assert "commit" not in low, line
-        assert "st push" not in low, line
+        assert "st repo push" not in low, line
         assert "git add ." not in low, line
 
 
@@ -399,7 +399,7 @@ def test_a_staleness_reading_without_the_untracked_fields_still_judges():
 # therefore cannot write a checkpoint — losing the unwritten context for good).
 #
 # During a forge outage that trade is also UNWINNABLE: the refusal advises
-# `st push`, which cannot succeed, so `st tend` re-requests the cycle forever.
+# `st repo push`, which cannot succeed, so `st fleet tend` re-requests the cycle forever.
 #
 # Every test below is about keeping this narrow. Relaxing a loss gate is only
 # defensible if it cannot be reached by accident.
@@ -425,7 +425,7 @@ def test_the_stranded_notice_still_says_to_push_them():
                reachable=lambda _t: False)
     text = "\n".join(v.notice_lines())
     assert "/w/goldblum-wt" in text
-    assert "PUSH THESE" in text and "st push" in text
+    assert "PUSH THESE" in text and "st repo push" in text
 
 
 def test_unpushed_with_a_REACHABLE_remote_STILL_REFUSES():
@@ -506,7 +506,7 @@ def test_a_dead_remote_does_NOT_refuse_a_clean_tree_with_nothing_unpushed():
     an unreadable tree — `unpushed`, `dirty` and `untracked` were all measured
     from local refs. So every agent was refused on clean trees with nothing
     unpushed, and the refusal was permanent: its stated remedy is "commit and
-    `st push` first", which cannot succeed against a remote that is down.
+    `st repo push` first", which cannot succeed against a remote that is down.
 
     The cost is the part that makes this P1 rather than a nuisance: a cycle is
     how a saturated session is recovered, so the wall that stops the cycle is
@@ -539,7 +539,7 @@ def test_an_UNREADABLE_tree_still_refuses_even_though_a_dead_remote_does_not():
 def test_a_dead_remote_does_NOT_disarm_the_gate_for_a_DIRTY_tree():
     """The loss gate must survive the fix. Uncommitted tracked work is never
     downgraded by an unreachable remote — unlike unpushed-only, which
-    aegis-tig80i already reports rather than refuses, because `st push` cannot
+    aegis-tig80i already reports rather than refuses, because `st repo push` cannot
     succeed during an outage and a permanent refusal protects nothing."""
     v = assess("ellie", ["/w/ellie"], CHECKPOINT,
                lambda t: _Stale(dirty=True, unpushed=2, unverified=DEAD))
@@ -554,7 +554,7 @@ def test_one_unpushed_commit_refuses_or_strands_BY_REACHABILITY_not_by_outage():
     holds wherever the remote can be reached — but it CONFLICTS with the landed
     ruling of aegis-tig80i (0d2bdd8, 2026-09-09), which downgrades unpushed-only
     behind a MEASURED-unreachable remote to a notice, on the ground that
-    `st push` cannot succeed and a permanent refusal protects nothing.
+    `st repo push` cannot succeed and a permanent refusal protects nothing.
 
     Both are pinned here rather than one being quietly chosen, because this fix
     is what makes the difference observable: before it, the failed-fetch `error`

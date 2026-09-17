@@ -320,7 +320,7 @@ def test_usage_in_a_window_that_has_not_started_stays_UNRATED():
 
 def test_the_TICK_LINE_reads_wide_open_at_the_boundary_not_unrated():
     """The bead's own close criterion, at the level it was reported from: the
-    line an operator reads on `st tend`. `0.00x` is the answer; the word
+    line an operator reads on `st fleet tend`. `0.00x` is the answer; the word
     `unrated` on a lane that is genuinely wide open is the bug."""
     from shantytown import governor_utilization as gu
 

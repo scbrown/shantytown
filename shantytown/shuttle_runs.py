@@ -5,7 +5,7 @@ signed, append-only runs into time-windowed OPERATIONAL graphs and maintains
 `urn:shuttle:dataset:open` — the dataset of not-yet-frozen windows. This
 module polls those runs the same way `quipu_events` polls transactions:
 a watermarked, four-state-honest pull that routes NEWLY SEEN run states to
-a sink (`st subscribe` turns them into beads and attributed nudges).
+a sink (`st ops subscribe` turns them into beads and attributed nudges).
 
 Two hazards this module exists to not have, both measured elsewhere:
 

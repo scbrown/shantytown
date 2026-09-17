@@ -1,7 +1,7 @@
-"""`st defer` must be able to write a MACHINE-TESTABLE resume condition, and must
+"""`st work defer` must be able to write a MACHINE-TESTABLE resume condition, and must
 never create an invisible deferral silently (aegis-bqcjws).
 
-THE DEFECT. `st defer` wrote status + blocker label + a prose reason into notes.
+THE DEFECT. `st work defer` wrote status + blocker label + a prose reason into notes.
 The deferral SWEEPER keys off `defer_until` (or a `resume_when:` marker), so a
 defer that set neither produced a bead that is off every automated path at once:
 feeders skip status=deferred, and the sweeper has nothing to test. st reported
@@ -86,7 +86,7 @@ def test_a_resume_when_MARKER_counts_as_a_condition(world):
     """The warning must not fire at an author who supplied the marker form the
     warning itself recommends.
 
-    Found by using the feature the day it shipped: `st defer` printed
+    Found by using the feature the day it shipped: `st work defer` printed
     "NO RESUME CONDITION ... add a `resume_when: closed:<id>` line" at a deferral
     whose reason already carried exactly that line — and the deferral sweeper was
     QUIET about that same bead, so the tool and the sweeper disagreed about one

@@ -76,7 +76,7 @@ class Status:
         lines = [f"launch anyway, this once:  {invocation or 'st <command>'} {gaming.OVERRIDE_FLAG}"]
         for name, status in self.entries:
             if status.held:
-                lines.append(f'st hold {name} --clear' if status.state == 'manual' else
+                lines.append(f'st fleet hold {name} --clear' if status.state == 'manual' else
                              f'{name} is automatic; --clear cannot lift it.')
         return tuple(lines)
 

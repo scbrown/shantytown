@@ -5,7 +5,7 @@ before the $GT_ROOT branch, so a bare name silently became `./<name>` whenever
 the cwd held a directory of that name. That is the normal case, not a corner
 one: a Python repo contains a package directory named after the repo, so
 `./shantytown` exists inside every shantytown checkout and worktree. The
-documented `st push shantytown <agent>` therefore failed specifically in the
+documented `st repo push shantytown <agent>` therefore failed specifically in the
 tree you push from, and `st go --worktree` — which does not refuse, it
 provisions — created a NESTED worktree and handed the agent a wrong path.
 
@@ -70,7 +70,7 @@ def test_gt_root_defaults_to_home_gt_when_unset(monkeypatch, tmp_path):
 
 def test_a_bare_name_that_exists_NOWHERE_still_resolves_under_gt_root(
         gt_root, monkeypatch, tmp_path):
-    """Resolution must not depend on the target existing — st worktree's whole
+    """Resolution must not depend on the target existing — st repo worktree's whole
     job is to create it. A resolver that only answers for extant paths would
     reintroduce the same class of cwd-sensitivity one call up."""
     monkeypatch.chdir(tmp_path)

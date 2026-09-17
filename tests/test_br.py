@@ -1,12 +1,12 @@
 """`shantytown.br` — the tracker primitives, and the notes-append contract.
 
-WHY THIS FILE EXISTS (aegis-cchum2). `st defer` wrote `--notes={reason}` as an
+WHY THIS FILE EXISTS (aegis-cchum2). `st work defer` wrote `--notes={reason}` as an
 unconditional REPLACE, and `br update` refuses to replace non-empty notes with
 different content. The two were individually correct and jointly broken: br was
 protecting content, st was overwriting it, and neither knew about the other. The
 population it broke on is the worst possible one — a bead that has been deferred
 before carries its `resume_when:` gate in Notes, and re-deferring is the
-commonest defer there is. st tend's self-heal told agents to run that command.
+commonest defer there is. st fleet tend's self-heal told agents to run that command.
 """
 from __future__ import annotations
 

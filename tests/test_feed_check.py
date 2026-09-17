@@ -371,7 +371,7 @@ def test_no_root_means_no_ownership_gate(tmp_path):
 def test_haul_feed_message_names_the_release_exit_with_the_actual_id():
     msg = feed_check.haul_feed_message("aegis-9z9z", "some title", 2)
     # the working mechanism, spelled with THIS bead's id so it is copy-pasteable
-    assert "st defer aegis-9z9z" in msg      # the structured truly-park exit
+    assert "st work defer aegis-9z9z" in msg      # the structured truly-park exit
     assert "bead|human|access|external|parked" in msg
     assert "br close aegis-9z9z" in msg
     # and the correction that the whole bug turned on
@@ -391,7 +391,7 @@ def test_haul_feed_message_still_carries_the_core_advance_instruction():
 def test_a_RETIRED_worker_with_a_LIVE_IDLE_pane_is_not_free(tmp_path):
     """THE aegis-w4k8n BUG, as a controlled pair.
 
-    Retiring a card stops `st tend` RESPAWNING that agent; it does not kill a
+    Retiring a card stops `st fleet tend` RESPAWNING that agent; it does not kill a
     pane already up. So a retired agent mid-turn stays live and stays idle, and
     every gate this function had — worker, pane exists, not dark, stamped, IDLE,
     send-wired — passed it straight through as dispatchable capacity.
@@ -775,7 +775,7 @@ def test_a_HELD_ceiling_also_withholds_the_agent(tmp_path):
 # ── aegis-uejki1: the feed list offered work NOBODY handed it could do ────────
 #
 # Measured against the live store 2026-09-12: `dispatchable` returned 12 beads
-# and 4 were unactionable by any agent. The resulting `st tend` "12 ready" was
+# and 4 were unactionable by any agent. The resulting `st fleet tend` "12 ready" was
 # read by an administrator as an idle agent having work, and fed a stop/relaunch
 # decision. These arms encode the four real beads, by shape.
 

@@ -64,10 +64,10 @@ RESPAWNED = "respawned"       # it was down; it is not any more
 WOULD = "would-respawn"       # --dry-run: down, and we stopped there
 RETIRED = "retired"           # deliberately retired. NOT a fault, NOT respawned
 SURVIVOR = "survivor"         # retired after this still-live session was born
-STOPPED = "stopped"           # down because somebody ran `st stop` (aegis-k9068).
+STOPPED = "stopped"           # down because somebody ran `st agent stop` (aegis-k9068).
                               # NOT a fault, NOT respawned, and NOT a retirement:
-                              # `st new <agent>` brings it straight back.
-                              # It exists because `st stop` DELETES the launch
+                              # `st agent new <agent>` brings it straight back.
+                              # It exists because `st agent stop` DELETES the launch
                               # stamp itself (cli `_launches().forget()`), so the
                               # aegis-2j2r ownership gate below catches st's own
                               # stopped agents and used to explain them with the
@@ -91,7 +91,7 @@ BACKOFF = "backoff"           # died again too soon — waiting before the next 
 CRASH_LOOP = "CRASH-LOOP"     # died repeatedly; RETIRED rather than thrashed
 AUTH_DEAD = "auth-dead"       # alive, login expired: every API call fails
                               # (aegis-arma). NOT auto-relaunched on a default
-                              # pass — see the rule in _live — `st tend --reauth`
+                              # pass — see the rule in _live — `st fleet tend --reauth`
                               # is the explicit one-command recovery.
 BELOW_TARGET = "at-target"    # down, and NOT respawned because `--target N` is
                               # already satisfied. A cap, not a fault: the
@@ -513,7 +513,7 @@ class Tender:
         if blocked := self._codex_block(card):
             return Finding(card.name, "up" if up else "down", CODEX_DAEMON_WEDGED,
                            f"{CODEX_DAEMON_WEDGED}: {blocked.reason()} — "
-                           f"`st new {card.name}` repairs it before launch")
+                           f"`st agent new {card.name}` repairs it before launch")
 
         if up:
             if self._crashes is not None:
@@ -556,7 +556,7 @@ class Tender:
         # default pass cannot know that happened. A supervisor that relaunches
         # on every pass while the credential is still stale kill-loops the whole
         # fleet, burning each agent's frozen context for nothing. The explicit
-        # command is `st tend --reauth` — one command, operator-timed.
+        # command is `st fleet tend --reauth` — one command, operator-timed.
         from .runtime import auth_expired
         plain = triage_mod.strip_attrs(self._panes.capture(card.pane, attrs=True))
         if auth_expired(self._runtime, plain):
@@ -565,7 +565,7 @@ class Tender:
                            "pane renders idle and nothing can run. Not respawned "
                            "by this pass — re-login on the operator session "
                            "FIRST (refreshing the shared credential), then "
-                           "`st tend --reauth` relaunches every auth-dead agent "
+                           "`st fleet tend --reauth` relaunches every auth-dead agent "
                            "in one command")
         wiring = live_wiring(card.pane, self._panes.cmdline)
         if wiring is None:
@@ -600,7 +600,7 @@ class Tender:
 
     def _respawn(self, card: Agent, dry_run: bool) -> Finding:
         """It is down and it was not retired. Bring it back — loudly."""
-        # OWNERSHIP GATE (aegis-2j2r). st tend was one of the dark-crew trap's
+        # OWNERSHIP GATE (aegis-2j2r). st fleet tend was one of the dark-crew trap's
         # own respawners: pilot-era registry cards for another orchestrator's
         # fleet went "down" whenever that orchestrator cycled them, and this
         # respawn brought them back primed with THIS deployment's worker
@@ -622,7 +622,7 @@ class Tender:
         if unstamped:
             # WHICH KIND of unstamped? (aegis-k9068.) The gate above proves only
             # that the stamp is GONE — it cannot say why, and the two reasons want
-            # opposite words and opposite actions. `st stop` forgets the stamp
+            # opposite words and opposite actions. `st agent stop` forgets the stamp
             # itself, so ask the stop record before speaking for it. No record =
             # the aegis-2j2r case, wording unchanged.
             stop = None
@@ -632,8 +632,8 @@ class Tender:
                 stop = None
             if stop is not None:
                 why = (f"deliberately stopped{_by_at(stop)} — st's own agent, and "
-                       f"`st stop` removed its launch stamp, so tend will not "
-                       f"bring it back. `st new {card.name}` restores it.")
+                       f"`st agent stop` removed its launch stamp, so tend will not "
+                       f"bring it back. `st agent new {card.name}` restores it.")
                 self._log(f"STOPPED {card.name}: {why}")
                 return Finding(card.name, "down", STOPPED, why)
             # (Citation lives here, not in the emittable string: aegis-2j2r.)
@@ -649,7 +649,7 @@ class Tender:
                        f"RETIRED rather than respawned again. Something about this "
                        f"agent is broken (card, workspace_source, settings), and a "
                        f"supervisor that keeps relaunching it hides that. "
-                       f"`st tend --unretire {card.name}` when it is fixed.")
+                       f"`st fleet tend --unretire {card.name}` when it is fixed.")
                 self._log(f"CRASH-LOOP {card.name}: {why}")
                 if self._retire is not None:
                     self._retire(card.name)

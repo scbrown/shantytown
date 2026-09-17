@@ -200,7 +200,7 @@ def retired_links(ws: Path, manifest: Manifest) -> list[Path]:
             # aegis-adttz8: aegis's */30 relink-skills.sh re-points the claude
             # half at the clone's OWN skills/<name>, so on every established
             # workspace a retired name's link is already NOT the receipt target.
-            # Refusing there turns retiring any skill into an `st new` refusal
+            # Refusing there turns retiring any skill into an `st agent new` refusal
             # for every live workspace at once. That target is safe to retract:
             # the source is the workspace's tracked skills/ tree, it is not
             # deleted with the link, and the cron re-creates the link if the

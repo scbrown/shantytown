@@ -30,7 +30,7 @@ first didn't leak.
 | **knowledge** *(planned — not built)* | quipu | none-adapter |
 | **shuttle runs** | quipu windowed graphs (`shuttle_runs.py`) | `NoShuttleRuns` — the negative control |
 
-**shuttle runs** is the events layer extended, not the knowledge layer built: `st subscribe`
+**shuttle runs** is the events layer extended, not the knowledge layer built: `st ops subscribe`
 polls shuttle's workflow runs out of quipu's windowed operational graphs (scope named explicitly —
 the `urn:shuttle:dataset:open` dataset — because a default-graph read returns silent zero rows) and
 routes new run states to the administrator. The reserved knowledge layer (aegis-ks9b) stays
@@ -95,7 +95,7 @@ $ st role set malcolm lead
 > refusal — a lead you could not create. Saying True means a lead on a codex *older* than the hooks
 > system is accepted and absorbs nothing, silently. That is a version floor `st` cannot check from
 > inside the gate (`codex --version` at role-set time measures a binary the agent may not even
-> launch with); it belongs in `st doctor` as a tool row, and it is not built yet.
+> launch with); it belongs in `st ops doctor` as a tool row, and it is not built yet.
 >
 > The gate itself did not change, and that is the point of keying it on the capability: the reversal
 > was one method on one class. The refusal path is still exercised — by `StoplessRuntime` and the
@@ -105,7 +105,7 @@ $ st role set malcolm lead
 The gate fires at **role-set time**, before the card or its settings are written
 (`tier.role_set`, aegis-w5l9) — so "Nothing written." is literally true, and a
 tier card the fleet could never start never lands in the registry. The same gate
-also guards the `st new` launch path as a backstop; there its message ends
+also guards the `st agent new` launch path as a backstop; there its message ends
 "Nothing launched." instead, because by then the card may already be on disk.
 
 **Which roles need it is not a fixed list — it is exactly the set of `route_stop` DESTINATIONS**
@@ -178,7 +178,7 @@ Two honest gaps, named rather than papered over:
 - **The pane-reading predicates are still Claude Code's.** `is_live`, the trust and consent screens,
   the auth-dead banner — all matched against a captured pane, all `ClaudeRuntime`'s. They are the same
   *kind* of per-program fact as the argv, but a marker never observed passing is not a marker, and
-  there is no codex on the build host to watch. The consequence is stated where it lands: `st new` on
+  there is no codex on the build host to watch. The consequence is stated where it lands: `st agent new` on
   a codex card reports **could-not-tell (2)**, not a confident wrong answer.
 - **The workspace-delivered hooks do not reach a codex agent at all.** The metrics capture, the
   untracked-work nudge and the stale guard are deliberately *not* in the emitted settings — they ride

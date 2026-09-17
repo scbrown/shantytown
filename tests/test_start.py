@@ -1,9 +1,9 @@
-"""st start — booting the town by MODE (Stiwi, owner-directed).
+"""st fleet start — booting the town by MODE (Stiwi, owner-directed).
 
 The property this whole command lives or dies on: it is IDEMPOTENT and
 DECLARATIVE. `already-up` is a SUCCESS, not a refusal, and a live agent is never
 launched over — because the operator who most needs a boot command is the one who
-does not know what is currently running. A boot built out of `st new` calls
+does not know what is currently running. A boot built out of `st agent new` calls
 reports failure for the healthy half of a half-up fleet, which is the same defect
 as a supervisor that cannot tell "died" from "was stopped on purpose".
 
@@ -181,7 +181,7 @@ def test_an_unknown_mode_is_refused_and_lists_the_real_ones(tmp_path, monkeypatc
 
 
 def test_a_malformed_config_refuses_rather_than_booting_the_wrong_set(tmp_path, monkeypatch, capsys):
-    """`st start` launches agents. Starting the WRONG SET because a key was
+    """`st fleet start` launches agents. Starting the WRONG SET because a key was
     misspelled is worse than starting nothing — so this path uses config.load
     (which raises), never load_or_default."""
     root = _world(tmp_path, {"sattler": ADMIN}, cfg="[startup\nmode = 'lite'")
@@ -238,7 +238,7 @@ def test_a_refused_launch_mid_pass_exits_could_not_tell(tmp_path, monkeypatch, c
 
 def test_an_unverified_launch_is_not_counted_as_up(tmp_path, monkeypatch, capsys):
     """The session exists; the runtime was never observed live. Reporting that as
-    started is how `st start` becomes unscriptable."""
+    started is how `st fleet start` becomes unscriptable."""
     root = _world(tmp_path, {"sattler": ADMIN})
     rc, launched = _run(monkeypatch, root, [], launch_rc=cli.CANNOT_TELL)
     assert rc == cli.CANNOT_TELL
@@ -247,7 +247,7 @@ def test_an_unverified_launch_is_not_counted_as_up(tmp_path, monkeypatch, capsys
 
 
 def test_a_card_with_no_pane_is_a_fault_not_an_invented_session(tmp_path, monkeypatch, capsys):
-    """`st new` falls back to an `st-<name>` session; a BOOT must not, because a
+    """`st agent new` falls back to an `st-<name>` session; a BOOT must not, because a
     session absent from the card is invisible to crew/stop/tend."""
     root = _world(tmp_path, {"sattler": {"role": "administrator"}})
     rc, launched = _run(monkeypatch, root, [])
@@ -274,7 +274,7 @@ def test_it_tells_the_operator_how_to_get_in(tmp_path, monkeypatch, capsys):
 
 
 def test_the_hibernate_policy_is_reported_when_it_is_on(tmp_path, monkeypatch, capsys):
-    """The operator reading `st start` output is holding the config in their head
+    """The operator reading `st fleet start` output is holding the config in their head
     at that exact moment. A policy that only manifests as 'the admin went quiet at
     3am' is one nobody connects to a file."""
     root = _world(tmp_path, {"sattler": ADMIN},
@@ -333,7 +333,7 @@ def test_the_render_is_in_LAUNCH_order_not_alphabetical():
 
 
 def test_an_unverified_launch_still_counts_as_ACTED():
-    """The session exists, so a second `st start` will find it already-up. A report
+    """The session exists, so a second `st fleet start` will find it already-up. A report
     claiming nothing happened would send the operator back to a command whose
     behaviour has already changed."""
     boot = bootstrap.Bootstrapper(

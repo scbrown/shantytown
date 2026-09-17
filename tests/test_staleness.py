@@ -582,7 +582,7 @@ def test_NO_remote_reads_None_and_not_False(tmp_path):
 
 
 def test_one_reachable_remote_is_enough(tmp_path):
-    """`st push` contacts every trusted peer, so somewhere-to-push means the
+    """`st repo push` contacts every trusted peer, so somewhere-to-push means the
     remedy the gate advises can still succeed and the gate should stand."""
     src = _repo(tmp_path / "src", "seed")
     w = _clone(src, tmp_path / "work")
@@ -729,7 +729,7 @@ def test_a_FAILED_fetch_reports_UNKNOWN_and_never_current(tmp_path: Path):
         "commits behind")
     # THE FIELD MOVED AND THE PROPERTY DID NOT (aegis-5ewwhl). A failed fetch
     # used to set `error`, which `cycle.assess` reads as "this tree could not be
-    # read at all" — so during the outage every tree became a risk and `st cycle`
+    # read at all" — so during the outage every tree became a risk and `st agent cycle`
     # refused fleet-wide on clean trees with nothing unpushed. It now sets
     # `unverified`, which says precisely which HALF was unmeasurable.
     #

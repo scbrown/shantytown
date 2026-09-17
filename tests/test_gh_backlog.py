@@ -399,7 +399,7 @@ def test_gh23_zero_disables_the_capacity_check():
 #
 # The gate half of #29 landed in 4cd6125 (`[fleet] stood_down` satisfies Rule
 # Zero). This is the OTHER half, request 2 of the issue: the admin's PRIORITIZE
-# list still read every down pane as a defect, so the same nine `st stop`ed
+# list still read every down pane as a defect, so the same nine `st agent stop`ed
 # agents came back as "re-dispatch felix — STOPPED" nine times.
 
 class _WfPanes:
@@ -423,7 +423,7 @@ def test_gh29_a_retired_card_is_never_on_the_re_dispatch_list():
 
 
 def test_gh29_a_retired_card_is_not_offered_work_even_if_it_is_alive():
-    """Retired AND alive is a fault — `st tend` escalates it as RESURRECTED. The
+    """Retired AND alive is a fault — `st fleet tend` escalates it as RESURRECTED. The
     dispatch list must not answer a retirement with 'assign work'."""
     from shantytown import workflow as wf
     agents = [Agent(name="felix", role="worker", pane="p-felix", retired=True)]

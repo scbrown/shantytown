@@ -807,7 +807,7 @@ def test_a_codex_agent_on_a_BLOCKING_PICKER_is_seen(screen, what):
     """The picker is the state the crew rules forbid an agent to sit in, and a
     codex agent could sit in it invisibly: the pane predicates run Claude Code's
     marker strings against every card, and codex's pickers share none of that
-    text — so `st crew` said `?` and `st input` said NO-BOX. `?` is honest and
+    text — so `st crew` said `?` and `st agent input` said NO-BOX. `?` is honest and
     unactionable; it does not tell a coordinator an agent is stalled on a
     question only a person can answer.
 
@@ -1097,7 +1097,7 @@ def test_emit_resolve_compose_and_read_the_routing_back(tmp_path):
 
 
 def test_role_set_emits_the_artifact_the_CARD_will_actually_read(tmp_path, capsys):
-    """MEASURED WHILE WIRING CODEX UP, on a live store: `st roles set` on a codex
+    """MEASURED WHILE WIRING CODEX UP, on a live store: `st fleet roles set` on a codex
     card wrote Claude Code's `worker.settings.json` and nothing the agent reads.
 
     The cause was one field. tier.plan_role_set builds FRESH Agents for its

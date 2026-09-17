@@ -363,7 +363,7 @@ def _waker(tmp_path, fake, clock):
 
 
 def test_sync_arms_a_transient_oneshot_that_runs_a_plain_tend(tmp_path):
-    """The unit carries NO policy. It runs `st tend`; the pass it wakes takes a
+    """The unit carries NO policy. It runs `st fleet tend`; the pass it wakes takes a
     fresh reading and that reading decides. Nothing in the scheduler knows what a
     tier is, which is what makes 're-engage on a prediction' unrepresentable
     rather than merely forbidden."""

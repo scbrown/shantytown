@@ -1,4 +1,4 @@
-"""st tend — supervision, and every branch that made it necessary.
+"""st fleet tend — supervision, and every branch that made it necessary.
 
 The acceptance list on this bead is a list of BUGS SOMEONE PAID FOR, so each
 test below is named for the failure it prevents rather than the function it
@@ -191,11 +191,11 @@ def test_the_workspace_is_ensured_before_the_launch(settings):
 
 
 def test_a_STOPPED_agent_is_refused_because_st_stop_forgot_its_stamp(tmp_path, settings):
-    """aegis-k9068. `st stop` prints "`st tend` will still respawn it" — and then
+    """aegis-k9068. `st agent stop` prints "`st fleet tend` will still respawn it" — and then
     deletes the launch stamp that tend gates on, which makes its own promise false.
 
     The bead diagnosed this as gt-launched agents never having had a stamp. The
-    mechanism is wider: `st stop` calls `_launches.forget()` on EVERY stop
+    mechanism is wider: `st agent stop` calls `_launches.forget()` on EVERY stop
     (correctly — a stamp left behind would describe a process that no longer
     exists), and tend refuses any agent without one while ANY other agent has one.
     On a live fleet that second condition is always true, so the promise is false
@@ -206,7 +206,7 @@ def test_a_STOPPED_agent_is_refused_because_st_stop_forgot_its_stamp(tmp_path, s
     never exercised — which is why no existing test caught this.
 
     NOT RESPAWNING IT IS CORRECT and unchanged — a deliberate stop must stay down
-    until asked back, which is what `st stop` now promises. What was wrong was the
+    until asked back, which is what `st agent stop` now promises. What was wrong was the
     REASON: "never launched by st … another orchestrator owns it" is false in every
     clause here (st launched it, st removed the stamp) and sends an operator
     hunting an orchestrator that does not exist. So this asserts the verdict is
@@ -227,7 +227,7 @@ def test_a_STOPPED_agent_is_refused_because_st_stop_forgot_its_stamp(tmp_path, s
     launches.record("weaver", stamp_src)
     assert launches.get("ellie") is not None
 
-    # EXACTLY what `st stop ellie` does after killing the session.
+    # EXACTLY what `st agent stop ellie` does after killing the session.
     launches.forget("ellie")
     stops.record("ellie", 1754150000.0, by="sattler", reason="governor dam")
 
@@ -242,14 +242,14 @@ def test_a_STOPPED_agent_is_refused_because_st_stop_forgot_its_stamp(tmp_path, s
     )
     why = rep.findings[0].why
     assert "deliberately stopped" in why and "sattler" in why
-    assert "st new ellie" in why, "refused without naming the one command that fixes it"
+    assert "st agent new ellie" in why, "refused without naming the one command that fixes it"
     assert "another orchestrator" not in why, (
         "still blaming a foreign orchestrator for st's own stop"
     )
     assert rt.started == [], "respawned an agent it had just refused"
     assert any("STOPPED" in m for m in said)
     # A DECISION IS NOT A FAULT — same rule RETIRED/GOVERNED/BELOW_TARGET follow.
-    # Five stood-down agents made `st tend` report "5 fault(s)" and exit non-zero,
+    # Five stood-down agents made `st fleet tend` report "5 fault(s)" and exit non-zero,
     # while `st crew` called the same five "stopped ON PURPOSE" off the same record.
     assert rep.faults == [], "a deliberate stop counted as a fault"
     assert rep.healthy
@@ -269,7 +269,7 @@ def test_stop_help_promises_the_measured_no_respawn_contract(capsys):
     assert exc.value.code == 0
     help_text = " ".join(capsys.readouterr().out.split())
     assert "will NOT respawn it" in help_text
-    assert "st new <agent>" in help_text
+    assert "st agent new <agent>" in help_text
     assert "still respawns it" not in help_text
 
 
@@ -708,7 +708,7 @@ def test_cmd_tend_dry_run_writes_no_pass_log(tmp_path, monkeypatch, capsys):
 # --- the loop's own staleness (aegis-arma follow-up): re-exec on code change
 
 def test_code_fingerprint_moves_when_a_module_changes(tmp_path):
-    """MEASURED: the live `st tend --loop` ran a two-day-old memory image while
+    """MEASURED: the live `st fleet tend --loop` ran a two-day-old memory image while
     the editable install moved under it — every fix landed on disk and reached
     nothing (the aegis-ttlr class, one level up: disk current, PROCESS stale).
     The fingerprint is what the loop watches to re-exec itself."""
@@ -799,7 +799,7 @@ class _StampedLaunches:
 
 
 def test_an_unstamped_card_is_REFUSED_a_respawn_when_stamps_exist(tmp_path):
-    """st tend was one of the dark-crew trap's own respawners: a pilot-era
+    """st fleet tend was one of the dark-crew trap's own respawners: a pilot-era
     registry card for another orchestrator's fleet reads 'down' whenever that
     orchestrator cycles it, and the respawn manufactured a pane carrying st's
     worker settings (observed live: 'RESPAWNED dearing'). No launch stamp =
@@ -840,7 +840,7 @@ def test_a_stamped_dead_worker_is_still_respawned(tmp_path):
 
 # --- --unretire is the ARMING moment, and it now has a pre-flight (internal-ref)
 #
-# THE INCIDENT. `st tend --unretire ian` re-armed a card carrying a gt-era pane
+# THE INCIDENT. `st fleet tend --unretire ian` re-armed a card carrying a gt-era pane
 # and NO workspace. Nothing warned. tend then launched it — into the
 # supervisor's cwd, not into ian's tree — producing an agent that read defunct
 # in `st crew` and live to the supervisor. It died twice before anyone
@@ -991,7 +991,7 @@ def test_a_crash_loop_retirement_names_the_RULE_not_the_ambient_process(
     cli._retire_card(_Args(root), "billy")
     card = json.loads((root / "crew" / "billy.json").read_text())
     assert card["retired"] is True
-    assert card["retired_by"] == "st tend (crash-loop)"
+    assert card["retired_by"] == "st fleet tend (crash-loop)"
 
 
 def test_the_verdicts_CARRY_the_provenance(tmp_path):
@@ -1189,10 +1189,10 @@ def test_a_normal_pass_defers_nothing(tmp_path, monkeypatch, capsys):
 
 # ── ONE SPELLING OF WHAT TEND WILL DO (aegis-5gbshs) ─────────────────────────
 #
-# `st stop` and `st crew` contradicted each other: stop said "will NOT bring it
-# back", crew's operator-stopped row said "Still respawned by `st tend`". Both
+# `st agent stop` and `st crew` contradicted each other: stop said "will NOT bring it
+# back", crew's operator-stopped row said "Still respawned by `st fleet tend`". Both
 # cannot be true, and 46+ hours of an operator-stopped agent with zero respawns
-# settled which. The flat promise had already been removed from `st stop` once
+# settled which. The flat promise had already been removed from `st agent stop` once
 # (aegis-k9068, ~2h of lost tier-1 alert cover) and survived in crew.
 
 def _launch_store(tmp_path, stamps):
@@ -1210,7 +1210,7 @@ def test_tend_fate_says_NOT_COMING_BACK_while_other_stamps_exist(tmp_path):
     from shantytown.cli import tend_fate
     out = tend_fate(_launch_store(tmp_path, ["ellie"]), "kelly")
     assert "will NOT bring it back" in out
-    assert "st new kelly" in out
+    assert "st agent new kelly" in out
 
 
 def test_tend_fate_says_RESPAWN_only_when_no_stamps_remain_at_all(tmp_path):
@@ -1221,7 +1221,7 @@ def test_tend_fate_says_RESPAWN_only_when_no_stamps_remain_at_all(tmp_path):
     from shantytown.cli import tend_fate
     out = tend_fate(_launch_store(tmp_path, []), "kelly")
     assert "will respawn it" in out
-    assert "st tend --retire kelly" in out
+    assert "st fleet tend --retire kelly" in out
 
 
 def test_tend_fate_says_UNKNOWN_rather_than_guessing_when_stamps_are_unreadable(tmp_path):

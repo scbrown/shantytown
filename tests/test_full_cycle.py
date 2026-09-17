@@ -67,7 +67,7 @@ def test_full_crew_cycle_on_st_zero_gt(workspace, monkeypatch, capsys):
         rc = main(["--root", str(root), *argv])
         return rc
 
-    # 1. role set — emits the per-role settings.json (the hooks st new reads)
+    # 1. role set — emits the per-role settings.json (the hooks st agent new reads)
     assert run("roles", "set", "ellie", "worker") == OK
     assert (root / "settings" / "worker.settings.json").is_file()
 
@@ -116,20 +116,20 @@ def test_full_crew_cycle_on_st_zero_gt(workspace, monkeypatch, capsys):
     # 9. stop — kill ellie's session, VERIFIED gone
     assert run("stop", "ellie") == OK
     assert not panes.exists("crew-ellie"), "stop left the session alive"
-    # aegis-k9068: `st stop` must not promise a respawn it has just disarmed. It
+    # aegis-k9068: `st agent stop` must not promise a respawn it has just disarmed. It
     # calls `_launches.forget()` immediately above the message, and tend refuses
     # an unstamped agent while any other agent is stamped — so the old
-    # unconditional "`st tend` will still respawn it" was false on any live fleet,
+    # unconditional "`st fleet tend` will still respawn it" was false on any live fleet,
     # and a stop taken on it silently became permanent (~2h of lost tier-1 alert
     # cover). Pinned as the ABSENCE of the unconditional promise rather than the
     # presence of one branch's wording, so this holds whichever branch fires here.
     stop_said = capsys.readouterr().out
     assert "will still respawn" not in stop_said, (
-        "st stop is promising a respawn again; it forgets the launch stamp that "
+        "st agent stop is promising a respawn again; it forgets the launch stamp that "
         "tend gates on, so the promise is false whenever another agent is stamped"
     )
-    assert "st new ellie" in stop_said or "will respawn it" in stop_said, (
-        "st stop said nothing about what happens next — the recovery path is the "
+    assert "st agent new ellie" in stop_said or "will respawn it" in stop_said, (
+        "st agent stop said nothing about what happens next — the recovery path is the "
         "whole point of the sentence"
     )
 

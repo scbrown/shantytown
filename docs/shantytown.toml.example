@@ -14,12 +14,12 @@
 # the same reason this project's binary is `st`. A config file two tools each
 # believe they own is a config file that gets edited for the wrong reader.
 #
-# AN UNKNOWN KEY IS REFUSED, not ignored. `st start` will not launch anything until
+# AN UNKNOWN KEY IS REFUSED, not ignored. `st fleet start` will not launch anything until
 # the file parses, and it names the file and the key. A silently-dropped key is how
 # an operator comes to believe a policy is in force when it is not.
 
 # ---------------------------------------------------------------------------
-# [startup] — which mode `st start` uses when you do not pass --mode.
+# [startup] — which mode `st fleet start` uses when you do not pass --mode.
 # ---------------------------------------------------------------------------
 [startup]
 mode = "lite"
@@ -36,8 +36,8 @@ mode = "lite"
 #     "sattler"          — that agent by name
 #
 # A RETIRED card is NEVER selected, not even by "*" and not even by naming it
-# explicitly. Retirement is a deliberate, durable shutdown; `st tend --unretire`
-# is what undoes it. `st start` reports every retiree it skipped, so a skipped
+# explicitly. Retirement is a deliberate, durable shutdown; `st fleet tend --unretire`
+# is what undoes it. `st fleet start` reports every retiree it skipped, so a skipped
 # line never looks like a config line that was ignored.
 #
 # Your modes MERGE OVER the built-ins: defining `night` below does not remove
@@ -84,7 +84,7 @@ crew = ["administrator", "lead"]
 # sleeping admin's backlog is intact and the next wake sees all of it. Count it
 # without consuming it: `st anchor --events <admin>`.
 #
-# IT REMOVES A SELF-WAKE, NEVER A WAKE. `st tend` pushes, an `st inbox`, a
+# IT REMOVES A SELF-WAKE, NEVER A WAKE. `st fleet tend` pushes, an `st inbox`, a
 # dispatch, or you typing in the pane all still reach it.
 #
 #   enabled            false = the stop wakes it at every turn, as it always has.
@@ -121,7 +121,7 @@ max_quiet_minutes = 60
 #                      still surface: standing the fleet down declines to hand out
 #                      work, it does not decline to ANSWER. What was withheld is
 #                      reported on the same line, never silently dropped.
-#                      A RETIRED card (`st tend --retire`) is excluded from that
+#                      A RETIRED card (`st fleet tend --retire`) is excluded from that
 #                      list unconditionally, stood down or not — down is the intent.
 #
 #   max_load_per_core  The gate compared nothing against the host: it forced
@@ -173,7 +173,7 @@ max_load_per_core = 4.0
 # Declared and never inferred from the ambient $TMUX: an env var is what an
 # operator's shell happens to hold, and a fleet whose panes are visible or not
 # depending on which pane you ran `st` from is the bug that made every agent report
-# DOWN. `st doctor` cross-checks it — if your registry's panes are alive on some
+# DOWN. `st ops doctor` cross-checks it — if your registry's panes are alive on some
 # OTHER socket, it says so rather than reporting a dead fleet.
 #
 # Omit it for the default tmux server.
@@ -216,7 +216,7 @@ max_load_per_core = 4.0
 #
 # BOTH HALVES ARE VALIDATED AT LOAD, and each catches a different silent failure. An
 # unimplemented harness NAME is refused, because a typo in `default` moves every card
-# in the fleet and would otherwise surface as `st new` failing agent by agent — a
+# in the fleet and would otherwise surface as `st agent new` failing agent by agent — a
 # fleet-wide config error reported as a per-agent launch failure. A ROLE nobody has
 # is refused for the reason every table here refuses unknown keys: a rule that
 # applies to nobody reads as applied.
@@ -229,7 +229,7 @@ max_load_per_core = 4.0
 # A codex card can hold ANY role, including lead and administrator: codex delivers
 # blocking stop hooks, which is the capability the tier gates on (docs/adapters.md
 # carries the evidence and the version caveat). Two things it does not get yet, both
-# named there: `st new`'s liveness verify reads Claude Code's pane markers, so a
+# named there: `st agent new`'s liveness verify reads Claude Code's pane markers, so a
 # codex launch reports could-not-tell rather than live; and the matcher-scoped
 # guards are not emitted for it.
 # ---------------------------------------------------------------------------
@@ -275,7 +275,7 @@ max_load_per_core = 4.0
 #
 # ATTACHMENT = "unattached" IS THE UNLOCK. Such a role needs no reports_to, is given
 # none, is exempt from the depth-2 rules, cannot take reports (that refuses rather
-# than silently dropping the routing), and `st roles --check` reports it as `ok —
+# than silently dropping the routing), and `st fleet roles --check` reports it as `ok —
 # unattached by role` instead of ORPHAN.
 #
 # A role may also be declared in the GRAPH (`CrewRole` + `hasRole`; see the

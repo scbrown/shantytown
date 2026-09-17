@@ -320,7 +320,7 @@ def test_crew_NAMES_a_lead_running_settings_that_lack_drain(tmp_path, monkeypatc
         "a promoted-but-not-relaunched lead was not named — the tier is inert "
         "and st crew reports it as fine")
     assert "mal" in out
-    assert "st stop" in out and "st new" in out, "named the fault but not the fix"
+    assert "st agent stop" in out and "st agent new" in out, "named the fault but not the fix"
 
 
 def test_crew_is_SILENT_when_the_live_process_matches_the_card(tmp_path, monkeypatch, capsys):
@@ -362,7 +362,7 @@ def test_an_agent_alive_under_another_namespace_is_not_reported_as_plain_down():
     note = _alive_elsewhere_note(agents, panes)
     assert "ALIVE ELSEWHERE" in note
     assert "muldoon" in note and "aegis-crew-muldoon" in note
-    assert "st new" in note, "said the problem without the recovery"
+    assert "st agent new" in note, "said the problem without the recovery"
 
 
 def test_a_genuinely_dead_agent_says_nothing():

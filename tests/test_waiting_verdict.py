@@ -148,7 +148,7 @@ def test_a_runtime_that_cannot_answer_degrades_to_unsure_not_to_a_guess():
 
 
 def test_a_stuck_FOLDER_TRUST_dialog_is_also_waiting():
-    """A different dialog, the same consequence. `st new` auto-answers this one at
+    """A different dialog, the same consequence. `st agent new` auto-answers this one at
     launch, so seeing it in `st crew` means the launcher did NOT — and that agent
     is stopped dead. Reporting it `?` would be this same bug one dialog over."""
     trust = (

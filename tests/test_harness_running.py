@@ -3,7 +3,7 @@
 `harness.name_for` reads the CARD and answers what an agent WILL launch as.
 `harness.running_name` reads a live launch line and answers what one IS. They
 agree for a settled fleet and differ for exactly as long as a conversion is
-un-relaunched — a window `st harness` (aegis-6glmer) turned from a by-hand rarity
+un-relaunched — a window `st agent harness` (aegis-6glmer) turned from a by-hand rarity
 into routine.
 
 The bug this pins: governor lane ACCOUNTING resolved through the card, so during

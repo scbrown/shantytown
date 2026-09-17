@@ -24,7 +24,7 @@ WHERE IT IS CALLED, AND WHY NOT INSIDE compose():
 The bead sketched "called by Runtime.start before compose delivers". It is called
 by the CLI instead, between compose's refusals and the tmux mutation. compose()
 is a PURE STRING BUILDER whose invariant is asserted on its own return value; a
-clone inside it would make composing — including `st new --dry-run`, which
+clone inside it would make composing — including `st agent new --dry-run`, which
 composes and prints — mutate the disk. Dry-run must create NOTHING, and that is
 exactly the property design.md names as a must-have test. So: compose stays pure,
 the CLI ensures.
@@ -205,7 +205,7 @@ def unlaunchable(card: Agent) -> str | None:
     re-armed for respawn into a directory it does not live in.
 
     Consequently this is a question about ARMING, not about launching. It is
-    the check `st tend --unretire` runs, because un-retiring is the moment a
+    the check `st fleet tend --unretire` runs, because un-retiring is the moment a
     card goes from "the supervisor ignores it" to "the supervisor will start
     it", and that transition had no pre-flight at all: `--unretire` re-armed
     whatever it was pointed at and nothing warned.
@@ -390,7 +390,7 @@ def git_worktree_add(shared: Path, dest: Path, agent: str, base: str) -> None:
     # bug that was fixed: against a dead forge it does not hang for 60s, it
     # hangs until someone notices. Tolerating a FAILED fetch (the docstring's
     # deliberate choice) is not the same as tolerating one that never returns:
-    # this is the provisioning path `st worktree` and `st go --worktree` run, so
+    # this is the provisioning path `st repo worktree` and `st go --worktree` run, so
     # a hang here blocks dispatch itself.
     # The timeout is TOLERATED exactly like a non-zero exit: `run_with_group_timeout`
     # RAISES TimeoutExpired (after killing the group), and letting that escape here
@@ -535,7 +535,7 @@ GitRunner = Callable[..., "tuple[int, str]"]
 # refused publication — necessary, and it is why the merged string must never be
 # the thing CLASSIFIED. Once hook prose shares a buffer with Git's ref status, a
 # guard that writes an ordinary English "fetch first" votes on the diagnosis and
-# `st push` prescribes a fetch-and-merge for a content refusal that no merge can
+# `st repo push` prescribes a fetch-and-merge for a content refusal that no merge can
 # clear. Both streams are still SHOWN verbatim; only stdout is READ.
 PushRunner = Callable[..., "tuple[int, str, str]"]
 
@@ -662,7 +662,7 @@ def upstream_ref(dest: Path | str, run: GitRunner = _git
     # `forge/master`, and `forge/master` is a TOMBSTONE — one commit reading
     # "shanty has moved to github" — while `forge/main` carries the live work.
     # Same remote, different branch, so the old check was blind to it and
-    # `st worktree` would have reported "current with forge/master" while sitting
+    # `st repo worktree` would have reported "current with forge/master" while sitting
     # on a dead branch.
     #
     # Config-resolution alone does NOT save you here, and that is the honest
@@ -1251,7 +1251,7 @@ def tree_staleness(dest: Path | str, run: GitRunner = _git,
             # RETURNING HERE COST THE FLEET ITS CYCLE PATH (aegis-5ewwhl).
             # This used to `return` with `error` set. `cycle.assess` treats a
             # tree it could not READ as a risk — correctly — so during the forge
-            # sshd outage EVERY tree became a risk and `st cycle` refused
+            # sshd outage EVERY tree became a risk and `st agent cycle` refused
             # fleet-wide, on clean trees with nothing unpushed. Sessions then
             # grew past the context wall with the cycle wall itself refusing the
             # remedy, and the refusal was permanent: no amount of committing or

@@ -851,7 +851,7 @@ def test_97_broadcasts_a_drain_to_every_live_agent(tmp_path):
         live=lambda a: True)
     assert sorted(who for who, _ in inbox.sent) == ["ellie", "tim"]
     body = inbox.sent[0][1]
-    for step in ("commit", "push", "st stop", gov.DRAIN_OK, gov.DRAIN_FAIL):
+    for step in ("commit", "push", "st agent stop", gov.DRAIN_OK, gov.DRAIN_FAIL):
         assert step in body, f"the drain instruction omits {step!r}"
     assert all(r.state == gov.PENDING for r in rows), (
         "reported drained before any agent said it pushed")

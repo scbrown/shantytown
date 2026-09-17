@@ -49,7 +49,7 @@ def test_role_set_refuses_a_lead_the_harness_cannot_host_and_writes_nothing(tmp_
     """aegis-w5l9 verify recipe: `st role set <it> lead` on a card whose harness
     lacks blocking stop hooks exits 1, the card on disk still reads worker, and
     NO lead settings.json was emitted — the gate fires before any write, not at
-    `st new` launch after the card already landed."""
+    `st agent new` launch after the card already landed."""
     monkeypatch.setattr("shantytown.harness.for_card", lambda card, root=None: _NonBlockingHarness())
     root = crew(tmp_path, arnold={"role": "administrator"}, malcolm={"role": "worker"})
 

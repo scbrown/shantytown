@@ -1,4 +1,4 @@
-"""`st help <topic>` — where the rationale went when the pane texts were cut.
+"""`st ops help <topic>` — where the rationale went when the pane texts were cut.
 
 aegis-x6yoq. The recurring pane messages were essays because the WHY had nowhere
 else to live: every reason anyone might need was pushed into every pane, every few
@@ -6,28 +6,28 @@ minutes, forever. That is the wrong trade. A rationale is read ONCE, by an agent
 who wants it, at a moment of its choosing; an instruction is read every time.
 
 So the instructions got short and the rationale came here. This is the other half
-of that change and it is not optional: a one-line message pointing at `st help
+of that change and it is not optional: a one-line message pointing at `st ops help
 handoff` is strictly worse than the essay if that command does not exist.
 """
 
 from . import handoff_text
 
 _HANDOFF = f"""\
-HANDOFF / CYCLE — what to do when st tend says your context is high
+HANDOFF / CYCLE — what to do when st fleet tend says your context is high
 
   THE COMMAND
     Write your notes to a file, then ONE command:
 
-      st cycle --self --checkpoint-file <notes>
+      st agent cycle --self --checkpoint-file <notes>
 
     It posts the file as a comment on your checkpoint bead (or your active anchor),
-    uses its first line as the reason, and records the request. `st tend` performs
+    uses its first line as the reason, and records the request. `st fleet tend` performs
     the actual stop + relaunch on its next pass. You keep working until it fires,
     and nothing is lost if it never does.
 
     Carrying graph context across the cycle:
 
-      st cycle --self --checkpoint-file <notes> --quipu-node <name> --quipu-node <name>
+      st agent cycle --self --checkpoint-file <notes> --quipu-node <name> --quipu-node <name>
 
     The nodes are named in your resume dispatch, so the fresh session starts by
     querying the graph instead of re-deriving what you just shed.
@@ -39,7 +39,7 @@ HANDOFF / CYCLE — what to do when st tend says your context is high
     agent fixed the context and created a second blocker, and a driver was handing
     that instruction out on a timer, fleet-wide, twelve times in one session.
 
-    `st cycle` stops and relaunches instead, which RESTORES what /clear destroys:
+    `st agent cycle` stops and relaunches instead, which RESTORES what /clear destroys:
     bypass, the MCP kit, skills, journaling, hooks, and your plate re-dispatch.
 
   IF IT IS REFUSED
@@ -54,9 +54,9 @@ HANDOFF / CYCLE — what to do when st tend says your context is high
     after it is a handoff written from the summary. Three surfaces now fire in
     this order, and only the last is automatic:
 
-      ~320k  st tend nudges you to WRITE your handoff. You keep working. This is
+      ~320k  st fleet tend nudges you to WRITE your handoff. You keep working. This is
              the one that matters on codex, which has no compaction hook at all.
-      ~400k  the cycle prompt (idle) — checkpoint, then `st cycle --self`.
+      ~400k  the cycle prompt (idle) — checkpoint, then `st agent cycle --self`.
       ~600k  the haul handoff (mid-haul). Do not start the next item.
       at the harness boundary, on CLAUDE ONLY: a PreCompact hook writes a
              checkpoint onto your held bead from the transcript tail, and tells
@@ -66,7 +66,7 @@ HANDOFF / CYCLE — what to do when st tend says your context is high
     cannot know which of your changes are pushed or what you had decided to do
     next. If you already wrote one, it stays out of the way. Write yours.
 
-    ON CODEX there is no such event, which is why `st cycle` REFUSES a relaunch
+    ON CODEX there is no such event, which is why `st agent cycle` REFUSES a relaunch
     when your held bead carries no comment from you since this session launched.
     That refusal is not a bug and not a reason to reach for /clear — write the
     comment and it clears. (`--allow-loss` overrides and spends the reasoning.)
@@ -88,7 +88,7 @@ HAUL — the self-feeding queue
 
   RELEASING AN ITEM — a bare status change does NOT stop the re-serve
     done            br close <id>
-    gated           st defer <id> <bead|human|access|external|parked> --reason-file <f>
+    gated           st work defer <id> <bead|human|access|external|parked> --reason-file <f>
     not yours       br update <id> -a ""
 
   Why defer rather than just closing or unassigning: `defer` records the KIND of
@@ -102,7 +102,7 @@ HAUL — the self-feeding queue
     not yours, act on that judgement rather than re-reading the bead.
 
   CONTEXT HIGH MID-HAUL
-    See `st help handoff`. Your haul resumes itself after a cycle.
+    See `st ops help handoff`. Your haul resumes itself after a cycle.
 """
 
 _INBOX = """\
@@ -143,7 +143,7 @@ def render(topic: str) -> str | None:
 
 def index() -> str:
     names = sorted(set(TOPICS))
-    return ("st help <topic>\n  topics: " + ", ".join(names) +
+    return ("st ops help <topic>\n  topics: " + ", ".join(names) +
             "\n\n  handoff/cycle — what to do when your context is high\n"
             "  haul          — the self-feeding queue, and how to release an item\n"
             "  inbox         — the pointer channel and its cap\n")

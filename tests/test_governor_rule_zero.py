@@ -2,7 +2,7 @@
 
 MEASURED IN PRODUCTION 2026-08-01, inside sixty seconds:
 
-    st tend -n   governor  usage 57% · 50% tier · dispatch only P1 and above
+    st fleet tend -n   governor  usage 57% · 50% tier · dispatch only P1 and above
     st go <P2>   refused: the 50% tier is engaged and <bead> is P2
     feed_check   RULE ZERO — 1 feedable worker IDLE and 15 DISPATCHABLE beads.
                  Top ready: <P2>; <P2>; <P2>

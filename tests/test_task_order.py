@@ -24,7 +24,7 @@ def record(tmp_path, monkeypatch):
 
 
 def boundary(record, task='test-1', session='s1', paired=True):
-    command = f'st stats --begin-task {task}'
+    command = f'st agent stats --begin-task {task}'
     if paired:
         record('Bash', 'PreToolUse', session, call=task, command=command)
     record('Bash', session=session, call=task, command=command,
@@ -138,9 +138,9 @@ def test_failure_hook_records_no_legacy_success(record, tmp_path):
     assert conn.execute('SELECT count(*) FROM events').fetchone()[0] == 2
 
 
-@pytest.mark.parametrize('command', ['st stats --begin-task test-1 && touch x',
-                                    'echo st stats --begin-task test-1',
-                                    'st stats --begin-task bad/id'])
+@pytest.mark.parametrize('command', ['st agent stats --begin-task test-1 && touch x',
+                                    'echo st agent stats --begin-task test-1',
+                                    'st agent stats --begin-task bad/id'])
 def test_no_compound_or_invalid_boundaries(record, tmp_path, command):
     record('Bash', command=command, response={'stdout': task_order.marker('test-1')})
     assert not task_order.report(tmp_path)['contexts']
@@ -171,8 +171,8 @@ def test_boundary_cli_does_not_guess_session(tmp_path, capsys):
 
 def test_haul_prompts_name_task_boundary():
     from shantytown.feed_check import haul_feed_message, haul_resume_message
-    assert 'st stats --begin-task test-1' in haul_feed_message('test-1', 'work', 0)
-    assert 'st stats --begin-task test-2' in haul_resume_message('test-2', 'work')
+    assert 'st agent stats --begin-task test-1' in haul_feed_message('test-1', 'work', 0)
+    assert 'st agent stats --begin-task test-2' in haul_resume_message('test-2', 'work')
 
 
 def test_partial_capture_failure_cannot_leave_a_passing_scope(record, tmp_path, monkeypatch):

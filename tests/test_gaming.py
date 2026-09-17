@@ -92,7 +92,7 @@ def test_refusal_names_the_override_and_echoes_the_command(tmp_path, monkeypatch
     # The operator's OWN command line, with the flag appended.
     assert f'st {" ".join(argv)} --despite-hold' in err
     # A manual hold is the one `--clear` actually lifts, so it is offered.
-    assert 'st hold gaming --clear' in err
+    assert 'st fleet hold gaming --clear' in err
 
 
 @pytest.mark.parametrize('cmd', ['new', 'start', 'cycle'])
@@ -115,11 +115,11 @@ def test_automatic_hold_does_not_offer_a_clear_that_would_not_work(tmp_path):
     that reports success and changes nothing, because the next probe re-asserts
     the hold a minute later.
     """
-    auto = gaming.Status('gaming').override_lines('st start')
-    assert 'st start --despite-hold' in auto[0]
-    assert not any('st hold gaming --clear' == line.strip() for line in auto)
+    auto = gaming.Status('gaming').override_lines('st fleet start')
+    assert 'st fleet start --despite-hold' in auto[0]
+    assert not any('st fleet hold gaming --clear' == line.strip() for line in auto)
     assert 'will NOT lift this one' in auto[1]
-    assert gaming.Status('clear').override_lines('st start') == ()
+    assert gaming.Status('clear').override_lines('st fleet start') == ()
 
 
 def test_override_reaches_the_shared_launcher_and_says_so(tmp_path, capsys):

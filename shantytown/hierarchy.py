@@ -1,7 +1,7 @@
 """hierarchy — WHERE the tier comes from (aegis-t4eve, st-redesign 3/4).
 
 quipu DESCRIBES the tier (`aegis:CrewMember` + `aegis:reports_to`). This module
-decides WHICH source answers `st roles sync`, and makes it SAY SO.
+decides WHICH source answers `st fleet roles sync`, and makes it SAY SO.
 
     --from quipu          force the graph.  Unreachable => REFUSE.
     --from file:<path>    force that file.  Unreadable  => REFUSE.

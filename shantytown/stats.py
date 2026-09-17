@@ -11,7 +11,7 @@ Three faces, one file:
             locked db, missing dir, no stdin — it exits 0. A telemetry hook that
             can block a tool call is a control inversion nobody signed up for,
             so the ONLY unguarded line in main() is the exit itself.
-  st stats  the query surface (cli.py wires it): files touched, skills used,
+  st agent stats  the query surface (cli.py wires it): files touched, skills used,
             activity from the capture store; token consumption from each
             harness's local session records, labelled by provider.
   export    OPTIONAL push to a Prometheus pushgateway, and only when
@@ -627,7 +627,7 @@ def _maybe_export(root: Path, agent: str) -> None:
     urllib.request.urlopen(req, timeout=3).read()
 
 
-# --- query surface (st stats) ---------------------------------------------
+# --- query surface (st agent stats) ---------------------------------------------
 
 def _codex_cwd(path: Path) -> str | None:
     """The workspace Codex records in its session metadata, if readable.
@@ -772,7 +772,7 @@ def _render_usage(by_provider: dict[str, tuple[Usage, int, int]]) -> str:
 
 def stats_report(root: Path, agent: str | None = None, since_h: float = 24.0,
                  out=sys.stdout) -> int:
-    """The default `st stats` answer: per-agent activity, files, skills,
+    """The default `st agent stats` answer: per-agent activity, files, skills,
     and provider-labelled transcript consumption from local sources."""
     p = Path(root) / "stats.sqlite"
     observed = session_usage(root, since_h=since_h)
@@ -784,12 +784,12 @@ def stats_report(root: Path, agent: str | None = None, since_h: float = 24.0,
         # refusing to show it would make Codex consumption disappear behind an
         # unrelated empty SQLite file.
         if observed:
-            print(f"st stats — last {since_h:g}h", file=out)
+            print(f"st agent stats — last {since_h:g}h", file=out)
             for ag in sorted(observed):
                 print(f"  {ag:<14} events=? files=? stops=? tokens=? (no capture store)"
                       f"{_render_usage(observed[ag])}", file=out)
             return 0
-        print("st stats — no capture store yet (.shanty/stats.sqlite absent).\n"
+        print("st agent stats — no capture store yet (.shanty/stats.sqlite absent).\n"
               "The capture hook writes it on the first tool call after the\n"
               "hooks are wired (settings PostToolUse/Stop).", file=out)
         return 1
@@ -802,7 +802,7 @@ def stats_report(root: Path, agent: str | None = None, since_h: float = 24.0,
             f" SUM(kind='stop') FROM events WHERE ts>? {where}"
             f" GROUP BY agent ORDER BY 2 DESC", [cutoff] + args).fetchall()
         row_by_agent = {row[0]: row for row in rows}
-        print(f"st stats — last {since_h:g}h", file=out)
+        print(f"st agent stats — last {since_h:g}h", file=out)
         if not rows and not observed:
             print("  (no activity captured in the window)", file=out)
         measured = 0
@@ -810,7 +810,7 @@ def stats_report(root: Path, agent: str | None = None, since_h: float = 24.0,
             _, ev, files, stops = row_by_agent.get(ag, (ag, 0, 0, 0))
             # BOUNDED BY THE SAME WINDOW AS THE EVENTS BESIDE IT (aegis-u5u98).
             # This query had NO time filter while the events query had one, so
-            # the line read `st stats — last 24h` and printed ALL-TIME token
+            # the line read `st agent stats — last 24h` and printed ALL-TIME token
             # totals next to 24h event counts. That is what turned a total,
             # fleet-wide, 12-day capture outage into something that looked like
             # a per-agent quirk: the only agents showing tokens were the four
@@ -844,7 +844,7 @@ def stats_report(root: Path, agent: str | None = None, since_h: float = 24.0,
                   " recorded only on the Stop hook; events (above) come from"
                   " PostToolUse and prove the store itself is healthy. Check that"
                   " `shantytown.stats capture` is registered on Stop —"
-                  " `st doctor` reports it.", file=out)
+                  " `st ops doctor` reports it.", file=out)
         sk = conn.execute(
             f"SELECT skill, COUNT(*) FROM events WHERE skill IS NOT NULL"
             f" AND ts>? {where} GROUP BY skill ORDER BY 2 DESC LIMIT 10",
@@ -964,7 +964,7 @@ def precompact_wiring(agents) -> tuple[str, str]:
     CLAUDE ONLY, by construction: codex has no PreCompact event. A codex card
     counted as `missing` here would be a permanent false alarm about a hook that
     cannot exist, so cards declaring another harness are skipped rather than
-    failed — their arm is the pre-handoff nudge and the `st cycle` durable gate.
+    failed — their arm is the pre-handoff nudge and the `st agent cycle` durable gate.
     """
     claude = [ag for ag in agents
               if (getattr(ag, "harness", "claude") or "claude") == "claude"]
@@ -1003,7 +1003,7 @@ def capture_wiring(agents) -> tuple[str, str]:
     registration on every launch, so a corrected st only reaches an agent when
     that agent RELAUNCHES. Between the deploy and the relaunch, the code is right
     and the fleet still captures nothing — and that interval is indistinguishable,
-    from `st stats` alone, from the bug not being fixed.
+    from `st agent stats` alone, from the bug not being fixed.
 
     So this reads the ARTIFACT EACH AGENT IS ACTUALLY RUNNING WITH rather than
     asking the emitter what it would write. The emitter's answer is already

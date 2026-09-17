@@ -1,4 +1,4 @@
-"""`st roles --check` reports the SURVIVAL BAND the governor will resolve (aegis-upo93).
+"""`st fleet roles --check` reports the SURVIVAL BAND the governor will resolve (aegis-upo93).
 
 THE LOAD-BEARING TEST IS `test_the_roster_and_the_governor_AGREE_about_who_is_shed`.
 Everything else is a specimen; that one is the invariant, and it is written against

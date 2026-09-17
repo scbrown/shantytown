@@ -1,9 +1,9 @@
-"""selfcheck — `st doctor` asking the question about ITSELF (aegis-daoh, q9eh).
+"""selfcheck — `st ops doctor` asking the question about ITSELF (aegis-daoh, q9eh).
 
 doctor reports installed-vs-available for beads, bobbin, quipu and reactor, and
 has never once asked it about `st`. The tool that audits deployment drift was the
 only tool exempt from the audit — and it is the one whose staleness silently
-corrupts every other answer it gives, because a stale `st doctor` reports a stale
+corrupts every other answer it gives, because a stale `st ops doctor` reports a stale
 world with total confidence.
 
 THE INCIDENT (2026-07-20). `st` is pipx-installed NON-EDITABLE, so the venv holds a

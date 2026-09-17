@@ -215,7 +215,7 @@ def test_the_tell_does_not_fire_on_an_EMPTY_window(tmp_path):
 
 # --- the tell must point at a command that ANSWERS -----------------------------
 #
-# `stats_report`'s fleet-wide warning tells the reader to run `st doctor`. When
+# `stats_report`'s fleet-wide warning tells the reader to run `st ops doctor`. When
 # that line was first written, doctor said NOTHING about the capture wiring — a
 # tell pointing at a dead end, in the exact place it was meant to help. These pin
 # the check that made the sentence true.

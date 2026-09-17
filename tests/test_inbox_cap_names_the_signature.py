@@ -94,9 +94,9 @@ def test_refusal_names_the_signature_and_the_senders_own_budget(tmp_path, capsys
     assert rc == REFUSED
     err = capsys.readouterr().err
     # everything it always said
-    # The rationale moved to `st help inbox` (aegis-x6yoq): the refusal fires on
+    # The rationale moved to `st ops help inbox` (aegis-x6yoq): the refusal fires on
     # every over-cap send, and the sender already knows what an inbox is.
-    assert "cap 493" in err and "st help inbox" in err
+    assert "cap 493" in err and "st ops help inbox" in err
     # and the part that makes it actionable
     assert "'[from arnold] '" in err
     assert "budget is 479" in err and "you typed 491" in err

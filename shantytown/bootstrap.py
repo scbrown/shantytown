@@ -1,11 +1,11 @@
-"""bootstrap — bringing the town UP. `st start`.
+"""bootstrap — bringing the town UP. `st fleet start`.
 
 `start` is the DECLARATIVE launch surface: it takes "the crew I want tonight" and
 converges the fleet on it. It is IDEMPOTENT — running it twice is not an error and
 does not touch a live agent, the one property a boot command has to have, because
 the operator who most needs it is the one who does not know what is currently up.
 
-WHY IT IS NOT `st tend` AND NOT `st new`, since both also launch agents:
+WHY IT IS NOT `st fleet tend` AND NOT `st agent new`, since both also launch agents:
 
   tend is a SUPERVISOR. It answers "did something die?", it is driven by a timer,
   and it refuses to touch an agent it has no launch stamp for (aegis-2j2r:
@@ -16,7 +16,7 @@ WHY IT IS NOT `st tend` AND NOT `st new`, since both also launch agents:
   new is a PRIMITIVE, and its clobber guard is load-bearing: it REFUSES when the
   session already exists ("never replace a live agent"). That is right for one
   explicit launch and wrong for a boot, where "already up" is a SUCCESS. A boot
-  built out of `st new` calls reports failure for the healthy half of a half-up
+  built out of `st agent new` calls reports failure for the healthy half of a half-up
   fleet — the same defect as a supervisor that cannot tell "died" from "was
   stopped on purpose".
 
@@ -34,7 +34,7 @@ WHAT IT WILL NOT DO:
 
   It will not report a launch it could not verify as a launch. An agent whose
   runtime never appeared in the pane is UNVERIFIED, exits could-not-tell, and is
-  never counted in the started tally. `st start` returning 0 has to mean the
+  never counted in the started tally. `st fleet start` returning 0 has to mean the
   fleet is up, or nobody will ever be able to script a boot on it.
 
   It will not attach. Attaching is `st attach` (which launches on demand), and a
@@ -139,7 +139,7 @@ class BootReport:
 
 
 class Bootstrapper:
-    """One `st start` pass. Every dependency injected, for the same reason
+    """One `st fleet start` pass. Every dependency injected, for the same reason
     tend.Tender's are: the branch that MATTERS is the one that launches, and a
     test that cannot reach it tests the report renderer instead.
 
@@ -175,10 +175,10 @@ class Bootstrapper:
                            f"neither `roles sync` nor `roles set` assigns one")
 
         # ALREADY UP IS THE FIRST QUESTION, and it is asked before anything can
-        # decide to act. This is the difference between a boot and N `st new`
+        # decide to act. This is the difference between a boot and N `st agent new`
         # calls: a live agent is a success and is not touched. We deliberately do
         # NOT judge whether it is busy, wired or stale — those are `st crew` and
-        # `st tend`'s verdicts, and a boot writing a second opinion about a
+        # `st fleet tend`'s verdicts, and a boot writing a second opinion about a
         # running agent is how two surfaces start disagreeing about who is
         # healthy.
         if self._panes.exists(card.pane):
@@ -196,7 +196,7 @@ class Bootstrapper:
                            acted=True)
         # A launch that got as far as creating a session but could not be VERIFIED
         # still acted — the session exists, and a report that says otherwise sends
-        # the operator to `st start` again, which will now find a live pane and
+        # the operator to `st fleet start` again, which will now find a live pane and
         # call it already-up. acted=True keeps the two runs consistent.
         self._log(f"{verdict.upper()} {card.name}: {why}")
         return Started(card.name, verdict, why, acted=(verdict == UNVERIFIED))

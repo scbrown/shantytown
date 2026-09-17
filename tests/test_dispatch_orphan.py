@@ -81,7 +81,7 @@ def test_an_ORDINARY_open_item_is_not_flagged(world):
 
 def test_an_in_progress_item_WITH_an_owner_is_not_an_orphan(world):
     """in_progress alone is not the defect — it is in_progress with NOBODY. A
-    re-dispatch to the existing holder (the `st cycle` path) must stay quiet."""
+    re-dispatch to the existing holder (the `st agent cycle` path) must stay quiet."""
     d, _ = world(status="in_progress", assignee="ellie")
     p = d.plan("item-1", "ellie")
     assert p.orphaned_in_progress is False

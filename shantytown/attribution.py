@@ -36,20 +36,20 @@ TESTED instead (tests/test_attribution_inventory.py), and the transport stays
 dumb.
 
 Naming the sender of an AUTOMATED push matters as much as naming an agent. A
-`st tend` sweep writes prose in the imperative — "CYCLE NOW", "close-or-release"
+`st fleet tend` sweep writes prose in the imperative — "CYCLE NOW", "close-or-release"
 — which is exactly the register an operator instruction arrives in.
 """
 from __future__ import annotations
 
 # The automated supervisor sweeps (notify.py). Every one of them is constructed
-# in `st tend` and nowhere else (verified: cli.py's `_sweep` block is the only
+# in `st fleet tend` and nowhere else (verified: cli.py's `_sweep` block is the only
 # construction site of Notifier / CycleDriver / IdleFleetAlerter /
 # BlockedStaleAlerter / StalledAlerter), so this constant is a fact about the
 # code rather than a guess about the caller. If a sweep is ever driven from
 # another command, this stops being true and the sender must come from the
-# caller — attributing a `st crew`-driven push to `st tend` would be the exact
+# caller — attributing a `st crew`-driven push to `st fleet tend` would be the exact
 # wrong-name failure the module exists to prevent.
-ST_TEND = "st tend"
+ST_TEND = "st fleet tend"
 
 # The quipu governed-workflow router (`st events`), the other non-agent sender.
 ST_EVENTS = "st quipu-events"

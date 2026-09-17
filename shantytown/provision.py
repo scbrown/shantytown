@@ -145,7 +145,7 @@ def servers_in(path) -> list[str]:
 
 def expected_servers(root) -> list[str]:
     """What a fully-equipped agent has, per the template. The comparison target
-    for `st new`'s claim and for tend's gap report."""
+    for `st agent new`'s claim and for tend's gap report."""
     manifest = tooling.load(root)
     if manifest is not None:
         return sorted(manifest.mcp)

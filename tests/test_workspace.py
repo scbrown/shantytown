@@ -330,7 +330,7 @@ def test_real_clone_of_the_WRONG_repo_is_refused_end_to_end(tmp_path):
 # UNATTENDED respawn of this card land in its own tree" — and must answer it
 # without touching anything, because it runs in front of an interactive command.
 #
-# The case it exists for: `st tend --unretire` re-armed ian, whose card carried
+# The case it exists for: `st fleet tend --unretire` re-armed ian, whose card carried
 # NO workspace, and nothing warned. workspace=None is a legitimate election for
 # a hand launch ("the cwd I am standing in") and a silent gap for a supervisor
 # launch (systemd's cwd, which nobody chose). Same value, two worlds — so the

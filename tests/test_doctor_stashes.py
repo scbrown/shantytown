@@ -1,4 +1,4 @@
-"""`st doctor` surfaces stashes in SHARED repos (aegis-pxzi4).
+"""`st ops doctor` surfaces stashes in SHARED repos (aegis-pxzi4).
 
 `refs/stash` is shared across every linked worktree — the isolation that makes a
 worktree safe covers the index, HEAD and the branch, and stops there. So one

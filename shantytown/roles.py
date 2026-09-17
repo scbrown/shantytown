@@ -31,7 +31,7 @@ ROOT_ROLE = "administrator"
 
 # WHAT AN UNBANDED CARD PRINTS AS — a NAME, so the one place that has to ask "is
 # this the same band the governor already resolved?" cannot do it by re-spelling
-# the string. `st roles band billy normal` is behaviourally a no-op against this
+# the string. `st fleet roles band billy normal` is behaviourally a no-op against this
 # value and a real change against any other, and getting that comparison wrong
 # in either direction is a lie: silence about a throttle that just changed, or a
 # claim of change where there was none.
@@ -159,7 +159,7 @@ class Report:
 def required_stop_directions(a: Agent, agents: list[Agent]) -> set[str]:
     """What stop directions THIS agent's position in the graph requires.
 
-    PUBLIC because `st new` asks the same question at LAUNCH time (internal-ref
+    PUBLIC because `st agent new` asks the same question at LAUNCH time (internal-ref
     gap 1) that `--check` asks after the fact. There must be exactly ONE
     definition of "what does this agent need": if the launcher and the checker
     computed it separately, a disagreement between them would be unattributable —
@@ -181,7 +181,7 @@ def live_verdict(a: Agent, agents: list[Agent], live) -> tuple[str, str]:
     """The THIRD leg (internal-ref): does the RUNNING PROCESS match the graph?
 
     PUBLIC for the same reason required_stop_directions is: it now has a second
-    consumer. `st crew` asks this continuously, `st roles --check` asks it on
+    consumer. `st crew` asks this continuously, `st fleet roles --check` asks it on
     demand, and if the two computed it separately a disagreement between them
     would be unattributable — you could not tell real drift from two
     implementations of one rule. One definition, two callers.
@@ -570,7 +570,7 @@ def band_of(catalog, a: Agent) -> str:
     text to print. "" when nothing was measured.
 
     PUBLIC for the reason `required_stop_directions` and `live_verdict` are:
-    `st roles band` now asks the identical question, to print what a card
+    `st fleet roles band` now asks the identical question, to print what a card
     resolves to before and after a write. Two implementations of "what band is
     this card" would let the verb report a band the roster does not show.
 

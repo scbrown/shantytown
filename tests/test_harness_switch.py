@@ -62,7 +62,7 @@ class ConversionPlanner(unittest.TestCase):
         joined = " ".join(got.warnings)
         self.assertIn("FORCED", joined)
         # The consequence, not just the fact: require_role_harness runs at launch,
-        # so a forced card is refused by `st new` until something changes.
+        # so a forced card is refused by `st agent new` until something changes.
         self.assertIn("refuse to launch", joined)
 
     def test_moving_ONTO_a_held_lane_is_refused(self):
@@ -111,7 +111,7 @@ class CrossLaneRecommendation(unittest.TestCase):
         self.assertIn("codex -1", line)
         self.assertIn("base +3", line)
         # The lane is called `base`; the thing you convert TO is `claude`, which
-        # is what `st harness` takes. A line naming the lane is unactionable.
+        # is what `st agent harness` takes. A line naming the lane is unactionable.
         self.assertIn("convert up to 3 codex workers to claude", line)
         self.assertIn("candidates: a, b, c", line)
         # capped by the RECEIVER's room, so the fourth candidate is not offered

@@ -1,11 +1,11 @@
-"""`st roles band <agent> <band>` — the verb the survival band never had.
+"""`st fleet roles band <agent> <band>` — the verb the survival band never had.
 
 aegis-ftmfn. The band decides whether an agent is still running after a usage
 throttle. Twenty cards were banded by hand-editing their `roles` arrays and
 three were missed — billy, franklin, gennaro — and nothing detected it, because
 an unbanded card and a card decided-`normal` resolve identically at the
 governor. `roles set` could not do it: it writes the TREE POSITION, so
-`st roles set billy normal` is refused as a depth violation, correctly.
+`st fleet roles set billy normal` is refused as a depth violation, correctly.
 
 The contract these pin:
   · the band is written as a declared ROLE, never as a card field — `traits`

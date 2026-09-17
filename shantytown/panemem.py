@@ -127,7 +127,7 @@ DEFAULT_MAX_GIB = 20.0
 #: nothing outside it notices.
 #:
 #: So the trade this module makes, stated plainly: ONE pane dies, in its own
-#: scope, attributably, and st tend respawns it — instead of an arbitrary pane
+#: scope, attributably, and st fleet tend respawns it — instead of an arbitrary pane
 #: dying to oomd's victim policy. Lower this knob only with a pressure
 #: measurement in hand; `scripts/test-panemem.sh` arm 2b asserts the band is
 #: still harmful, so it will tell you if this ever stops being true.
@@ -329,8 +329,8 @@ def launch_env() -> dict[str, str]:
 def own_scope() -> str | None:
     """The scope THIS process is running in — i.e. the LAUNCHER'S OWN PANE.
 
-    st launches panes from inside other panes (`st go`, `st new`) and from
-    `st tend`. So a scope misresolution here is never aimed at nothing: it is
+    st launches panes from inside other panes (`st go`, `st agent new`) and from
+    `st fleet tend`. So a scope misresolution here is never aimed at nothing: it is
     aimed at a live agent, usually the one doing the launching. That is not a
     hypothetical — it is what happened (aegis-0j0n1n, 2026-09-04 17:07:57): the
     launch path bounded its own pane, the kernel memcg-OOMed it, and st had to
@@ -401,7 +401,7 @@ def scope_is_exclusive_to(pane_pid: int | str, cgroup_path: str) -> tuple[bool, 
     not the property this needs. It is structurally blind to a THIRD PARTY's
     scope.
 
-    Measured: with tmux's per-pane scope creation broken, `st new malcolm`
+    Measured: with tmux's per-pane scope creation broken, `st agent new malcolm`
     resolved the new pane to `ptyxis-spawn-<uuid>.scope` — the long-running crew
     tmux server's own cgroup, inherited because no per-pane scope was made. That
     is not the launcher's scope, so the refusal passed, and panemem put

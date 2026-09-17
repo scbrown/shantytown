@@ -1,6 +1,6 @@
 """stop_event — the hook entry. `python -m shantytown.stop_event send|drain`.
 
-NOT an `st` subcommand (arnold's #6 ruling): `st stop` is taken and the twelve-
+NOT an `st` subcommand (arnold's #6 ruling): `st agent stop` is taken and the twelve-
 command surface is pinned + tested. This is PLUMBING the emitted Stop hook calls,
 so the command-count test never sees it. Identity comes from $SHANTY_AGENT, which
 the launcher (Runtime.start) already exports — the same identity `st prime` reads.
@@ -224,7 +224,7 @@ def _lead_is_up(reg: FilesRegistry, panes) -> "callable":
             return LeadStatus(False, f"{name} is UP but CANNOT DRAIN: it "
                                      f"{carries}{whence}. Its card says lead; "
                                      f"the process was launched before that. "
-                                     f"RELAUNCH it (`st stop {name} && st new "
+                                     f"RELAUNCH it (`st agent stop {name} && st agent new "
                                      f"{name}`) — restarting is not the fix")
         return LeadStatus(True)
     return up
@@ -907,7 +907,7 @@ def _drain(events: FilesEvents, me: str, reg=None, panes=None,
     `stood_down` IS here, and that is not the same mistake: it never decides
     whether to block, it only stops the enrichment demanding dispatch the operator
     has already declined (#29). The events themselves are delivered either way.
-    `stopped` is the same shape, per agent — a `st stop` record reader (stopped.py).
+    `stopped` is the same shape, per agent — a `st agent stop` record reader (stopped.py).
     """
     now = time.time()
     verdicts: dict[str, str] = {}

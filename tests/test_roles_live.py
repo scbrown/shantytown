@@ -9,7 +9,7 @@ for the entire time leg two existed:
               ...while the process in its pane had been launched by a FOREIGN
               launcher (gt-crew-up) with gastown settings carrying no stop_event
               hook at all. Seven workers routed to it. Every one of their stop
-              events was write-only, and `st roles --check` exited 0 throughout.
+              events was write-only, and `st fleet roles --check` exited 0 throughout.
 
 An artifact is a statement of INTENT. `st` does not own every process that answers
 to a name in its registry, so intent is not evidence. tmux.py already states this
