@@ -168,8 +168,11 @@ def test_readme_command_badge_matches_the_wired_count():
     )
 
 
+WHY = ROOT / "docs" / "why.md"     # the comparison and the measured table live in the book now
+
+
 def test_readme_versus_table_matches_the_wired_count():
-    m = re.search(r"\| Commands \| ~110 \| \*\*(\d+)\*\* \|", README.read_text())
+    m = re.search(r"\| Commands \| ~110 \| \*\*(\d+)\*\* \|", WHY.read_text())
     assert m, "the Versus Gas Town command row is gone"
     assert int(m.group(1)) == _leaf_count()
 
@@ -272,14 +275,14 @@ def _shanty_env_names_in_code() -> set[str]:
     return names
 
 
+CONFIG = ROOT / "docs" / "configuration.md"   # the Configuration chapter of the book
+
+
 def _config_table_names() -> set[str]:
-    """The env-var names in backticks inside the README Configuration table."""
-    text = README.read_text()
-    start = text.index("### Configuration")
-    # The table ends at the next heading.
-    end = text.index("\n## ", start)
-    block = text[start:end]
-    return set(re.findall(r"`([A-Z][A-Z0-9_]+)`", block))
+    """The env-var names in backticks inside the book's Configuration chapter
+    (docs/configuration.md — it moved out of the README when the README was cut
+    to a pitch; the completeness claim moved with it)."""
+    return set(re.findall(r"`([A-Z][A-Z0-9_]+)`", CONFIG.read_text()))
 
 
 def test_config_table_lists_every_shanty_env_var_the_code_reads():
@@ -307,7 +310,7 @@ def test_env_allowlist_has_not_rotted():
             f"from _ENV_ALLOWLIST."
         )
         assert name not in documented, (
-            f"{name} is on the internal allowlist but is now in the README table — "
+            f"{name} is on the internal allowlist but is now in the Configuration chapter — "
             f"pick one."
         )
 

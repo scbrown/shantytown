@@ -9,9 +9,9 @@
 
 *Create a work item. Tell an agent to go get it. That's the whole idea.*
 
-[![dispatch 3.4s](https://img.shields.io/badge/dispatch-3.4s-brightgreen)](#-measured-against-gas-town)
+[![dispatch 3.4s](https://img.shields.io/badge/dispatch-3.4s-brightgreen)](docs/why.md#measured-against-gas-town)
 [![33 commands](https://img.shields.io/badge/commands-33-blue)](#-the-whole-surface)
-[![tests](https://img.shields.io/badge/tests-3489%20passing-blue)](#-principles)
+[![tests](https://img.shields.io/badge/tests-3489%20passing-blue)](docs/principles.md)
 [![python](https://img.shields.io/badge/python-3.11%2B-blue)](#-install)
 [![dependencies none](https://img.shields.io/badge/dependencies-none-blue)](#-install)
 [![license MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
@@ -26,7 +26,7 @@ st crew                              # → who's up, who's on what
 
 Three steps: **create → send → fetch.** No resident daemon. No broker. No queue — just a
 thin harness plus an orchestration layer that prioritizes work and reacts to
-governed events (see [Workflows & events](#-workflows--events)).
+governed events (see [Workflows & events](docs/workflows.md)).
 
 > **Where this came from.** Shantytown was written by someone who runs a
 > [Gas Town](https://github.com/gastownhall/gastown) fleet daily — it is not a rival pitch from
@@ -34,9 +34,7 @@ governed events (see [Workflows & events](#-workflows--events)).
 > with an orchestration tier. Some days the job is just *"give that agent this ticket"*, and on
 > those days a whole town is more than the work needs. This is what's left when you keep only that.
 
-## 🖥️ See It In Action
-
-Create work and hand it to an agent. The id is the product — it's what step two has to say.
+## 🖥️ One dispatch, end to end
 
 ```text
 $ st task "fix the login timeout"
@@ -45,26 +43,7 @@ $ st task "fix the login timeout"
 $ st go st-1 ada
   st-1 -> ada          in progress
   sent to pane crew-ada
-```
 
-Every writing command has a `--dry-run`, and dispatch shows you triage's verdict before it commits
-to anything:
-
-```text
-$ st go st-1 ada --dry-run
-  would: tracker.update(st-1, status=in_progress, assignee=ada)
-  would: send-keys -> pane crew-ada
-  would NOT: create a convoy, spawn a session, wait for ack
-
-  triage: NUDGE    healthy
-         inputs: context_high=False context_k=None pane='crew-ada' screen_lines=24
-  0 writes. 1 tracker call, 1 send-keys.
-```
-
-When the agent is mid-task, `st go` **refuses** rather than typing over its work — and it shows you
-the input it judged on, so you can disagree with it:
-
-```text
 $ st go st-2 ada
   refused: pane not ready — REFUSE   in-flight work
          inputs: marker='esc to interrupt' pane='crew-ada'
@@ -72,235 +51,10 @@ $ echo $?
 1
 ```
 
-`st crew` answers the only question a dispatcher actually has — *who can take the next item?*
-
-```text
-$ st crew
-
-  ada         worker         up       current  idle    crew-ada
-  bo          worker         up       current  busy    crew-bo
-  cy          lead           up       stale    idle    crew-cy
-  di          worker         down     —        —       crew-di
-
-  2 free: ada, cy
-  1 busy: bo
-
-  ⚠ 1 agent(s) are running settings OLDER than the file on disk: cy
-    Their hooks are whatever the file said AT LAUNCH. Rewriting a settings file is not deploying it — only a relaunch
-    (`st agent stop <agent> && st agent new <agent>`) re-reads it.
-```
-
-And every session starts from the anchor — identity, one item, and where your stop events go:
-
-```text
-$ st anchor ada
-
-  You are ada — worker, reports to cy.
-
-  ON YOUR PLATE
-    ▶ st-1  fix the login timeout        (in_progress)
-
-  YOUR LEAD
-    cy (lead) — up. Your stop events go to them.
-```
-
-A message to an agent that isn't there is **never** reported as delivered:
-
-```text
-$ st inbox di "protocol step 3"
-  could not tell: pane crew-di is not there (agent down?)
-$ echo $?
-2
-```
-
-### Cold start — one command, and only the crew you're paying for
-
-`st fleet start` takes a **mode**, and `lite` — the default — brings up the administrator **alone**: one
-agent's context, one agent's bill, and the one agent that can decide who else is needed.
-
-```text
-$ st fleet start
-  mode 'lite' from the built-in defaults (no config file) — 1 agent(s): sattler
-
-  + sattler      started      launched into 'shanty-sattler', hooks verified
-
-  mode 'lite' · 1 selected · started 1 · 1 up · 0 fault(s)
-
-  attach: `st attach sattler`   ·   roster: `st crew`
-
-$ st attach                          # the admin's pane. starts it first if it's down
-```
-
-`--mode heavy` brings up every card. It is **idempotent** — `already-up` is a success, a live agent is
-never launched over, and a retired one is never resurrected — so it is safe to run when you don't know
-what's already running, which is the only time you need it. Modes are named crew sets in
-[`shantytown.toml`](docs/shantytown.toml.example), where the admin can also be told to
-[**hibernate**](docs/cli.md#hibernate--when-the-administrators-stop-may-stay-stopped): stop waking
-itself at every turn boundary once it has handed the work out.
-
-## 🤔 Why Shantytown?
-
-Be honest about the alternatives first, because two of them are good.
-
-**Raw tmux and a few shell scripts** is genuinely the right answer for one or two agents. Everything
-here started as that. What it never grows on its own is a memory of *what state a pane is in* before
-you type into it.
-
-**[Gas Town](https://github.com/gastownhall/gastown)** is the serious tool in this space, and it
-earned its size honestly: a mayor, a deacon, convoys, formulas, quotas, scheduling — a real
-orchestration tier for running a real fleet. If you want a town, use the town. Shantytown does not
-try to replace any of that and never will.
-
-Shantytown's whole claim is *smallness*: stdlib-only Python, no resident daemon, no server, and a
-tracker you can swap in two functions. The one scheduled thing is `st fleet tend --install`, which asks
-your systemd user timer to run a one-shot `st fleet tend` pass every five minutes; nothing of
-shantytown's stays running between passes.
-
-|  | **raw tmux + shell scripts** | **[Gas Town](https://github.com/gastownhall/gastown)** | **shantytown** |
-|--|:---:|:---:|:---:|
-| Dispatch work into an agent's pane | ✅ | ✅ | ✅ |
-| Agent identity, roles, hierarchy | ❌ | ✅ | ✅ |
-| Stop events routed up a tier | ❌ | ✅ | ✅ |
-| Orchestration tier (mayor, deacon, convoys, formulas) | ❌ | ✅ | ❌ *by design* |
-| Scheduling, quotas, fleet-scale ops | ❌ | ✅ | ❌ |
-| Refuses to type into a busy pane | ❌ | ❌ | ✅ |
-| Pluggable work tracker (files, beads, yours) | ❌ | ❌ *beads* | ✅ |
-| Runs with no resident daemon (`st fleet tend` is a one-shot on a systemd timer) | ✅ | ❌ | ✅ |
-| No database or data plane to stand up | ✅ | ❌ *Dolt* | ✅ |
-| Third-party runtime dependencies | none | Dolt | **none** |
-
-The two ❌s in shantytown's column are the point, not an omission. If it grows an orchestration tier,
-we got it wrong.
-
-*Two rows deserve their sources. "Refuses to type into a busy pane": `gt nudge --mode immediate`
-says of itself, in its own help text, "Send directly via `tmux send-keys`. Interrupts in-flight
-work." "No data plane": measured — a single `gt sling --dry-run` opened 63 sequential Dolt
-connections on our host. Everything else in the Gas Town column is from its own documented feature
-set; if we have any of it wrong, open an issue and we'll fix the table.*
-
-## ⚡ Measured against Gas Town
-
-The project had a gate: *time it against `gt sling`, and if it isn't dramatically faster, say so and
-stop.* Here is what the gate measured.
-
-| | `gt sling` | `st go` | |
-|---|---:|---:|---|
-| Commands | ~110 | **33** | *a small, deliberate fraction of the surface, by measured use* |
-| dispatch (dry-run) | 51.54 s | **0.15 s** | **~344× faster** |
-| dispatch (real) | > 120 s ⏱️ | **3.40 s** | **≥35× faster** |
-| Dolt connections | 63 | **3** | **21× fewer** |
-
-**Method, so you can argue with it:** one host, one data plane, one beads store, same day. `gt sling`
-was timed twice and exceeded a 120-second timeout both times, so **≥35× is a floor, not a
-measurement** of its true cost. Of `st go`'s 3.4 s, essentially all of it is the tracker's own
-`bd update` write — shantytown's own overhead is ~0.2 s. The command-usage figure is shell history
-plus every script on one fleet. Full write-up in [`docs/vision.md`](docs/vision.md) and
-[`docs/design.md`](docs/design.md); numbers on your fleet will differ.
-
-## ✨ Features
-
-- 🛖 **A town with no town hall.** No resident daemon, no broker, no message bus, no scheduler.
-  `st` is a process that runs, does one thing, and exits — including `st fleet tend`, which a systemd user
-  timer starts every five minutes and which exits when its pass is over.
-- 📮 **`st inbox` *is* `tmux send-keys`.** Nothing sits between you and the agent — which is exactly
-  why an undeliverable message can't be quietly queued and reported as sent.
-- 📋 **`st task` gives you an id.** Create work, get `st-1` back. That id is the whole reason step
-  two has anything to say.
-- 🎯 **`st go` is the one that matters.** Bind an item to an agent, tell them, confirm it landed,
-  *then* record it. In that order, on purpose.
-- 🚦 **Triage before every dispatch.** Refuse · nudge · clear · restart, judged from what the runtime
-  actually prints on screen. Not a command you remember to run — `st go` consults it and refuses
-  rather than interrupt a working agent.
-- 🧭 **`st anchor` is a pure read.** Who you are, the one item on your plate, and whether the agent
-  your stop events route to will actually receive them — `up` means *will drain*, not "a pane
-  answers to that name". It never writes, and a test asserts that against the filesystem rather
-  than trusting the docstring.
-- 👥 **`st crew` reports work, not just liveness.** `up` is a launch fact; an agent three hours into
-  a refactor and one sitting at an empty prompt both print `up`. The work column tells them apart.
-- 🔀 **Stop events route up a tier.** worker → lead → administrator. A lead absorbs what it can and
-  escalates what it can't; an unreachable lead does not swallow anything — the event RISES to the
-  administrator with a reason, and is on disk before anyone reads it.
-- 🔌 **Pluggable trackers.** A tracker is two functions. Files, beads, `br`, and Forgejo are
-  available today; another backend uses the *same dispatch code*, proven by swap tests rather
-  than by an interface alone.
-- 🤖 **Bring your own agent program.** Claude Code is *a* harness, not the shape of the world —
-  `codex` ships too, and a crew can mix them: pick per card, per role, or fleet-wide. The tier is
-  program-blind, so a codex worker's stop event reaches a Claude Code lead unchanged. What codex
-  does *not* do yet is written down rather than discovered ([`docs/harnesses.md`](docs/harnesses.md)).
-- 🖥️ **tmux-native, socket-aware.** Bring your own panes. Named sockets are first-class, because bare
-  tmux cannot see them and will confidently report every live agent as down.
-- 🧪 **`--dry-run` on every writing command**, from commit one.
-- 🔢 **Exit codes a script can branch on** — `0` did it · `1` refused · `2` couldn't tell. *Couldn't
-  tell* is a first-class answer, never rounded up to success.
-- ⚰️ **A retired agent that is still alive gets two different verdicts, not one.** `st fleet tend`
-  compares when the session was born against when the card was retired: born *before* the
-  decision is a `survivor` — it outlived the retirement without a respawn, which is not a fault.
-  Born at or after it means something started it *after* we decided to stop it, and that is the
-  alarm. When it cannot prove which, it raises the alarm rather than the reassuring one.
-- 📏 **`st inbox -d` refuses an oversized body instead of truncating it.** The cap is on **bytes**,
-  not characters, so prose with em dashes or arrows is longer than it looks; the refusal says so,
-  reports both numbers, and subtracts the signature it adds on your behalf. Silently delivering
-  the first N bytes of a message is the failure this prevents — the remaining sentence usually
-  still scans, so nobody can tell it was cut.
-
-### Newer, and easy to miss
-
-- 🌐 **Two hosts, one fleet.** Cards carry a `host`. `st fleet roles sync` projects only the members placed
-  on the host it runs on, prints who it skipped, and **never demotes or orphans the administrator**,
-  on a dry run or a real one. An ephemeral `st inbox` to an agent on the other host relays through
-  that host's own `st` over ssh (`[host.peers.<name>]`), or refuses by name when no peer is declared.
-- 🎛️ **A governor, not a scheduler.** `[governor]` tiers hold launches when a provider window is
-  spent and release them when it resets; `[session_budget]` bounds hours, items and risk per
-  session; `st fleet hold gaming` pauses local launches while you use the box. All of it *asks*; none of
-  it kills.
-- 🧠 **Context is measured, and handoff comes before compaction.** Occupancy is read from the harness
-  with UNKNOWN as a real third state, hints are advisory, and the PreCompact hook checkpoints so the
-  agent returns with its hooks and its bypass intact (`st agent cycle --self`, never `/clear`).
-- 🐌 **Stalls self-heal before they escalate.** An idle worker holding an item with no change for
-  `SHANTY_STALL_MIN` minutes is nudged to close or release it; the coordinator hears about it only
-  if that goes unanswered.
-- 🧯 **Panes have a memory ceiling.** Each launched pane runs in its own systemd scope with
-  `MemoryMax`, so one runaway build kills that pane instead of a bystander, and every ceiling
-  outcome is logged to a file that outlives the pane.
-- 🧾 **Costs and transcripts are records.** `st work cost` reads parser-owned per-bead receipts and
-  publishes them to closed beads; `st agent history` archives transcripts on the stop path and projects
-  them into an indexable corpus.
-- 🌿 **Worktrees, not shared checkouts.** `st repo worktree <repo>` gives each agent its own index and
-  HEAD off a shared project repo, installs a commit guard in the shared checkout, and `st repo push`
-  pushes `wt/<agent>` to every remote.
-- 🔁 **Convert a harness in one command.** `st agent harness <agent> codex` rewrites the card and its
-  hooks; codex workers get the deployment's MCP servers pre-approved so their writes are not refused
-  as a lost permission.
-
-## 📮 Routing: there is nothing in the middle
-
-**`st inbox` *is* `tmux send-keys`.** That's not an implementation detail — it's the product.
-
-```
-st inbox ada "go read st-1"
-   │
-   ├─ registry.get("ada")        → identity: role, reports_to, pane
-   ├─ pane = "crew-ada"          → the address IS the pane
-   ├─ panes.exists(pane)?        → NO  → exit 2 "could not tell". nothing sent.
-   └─ tmux send-keys -t <pane>   → the message. that's the delivery.
-```
-
-**No message bus. No queue. No delivery guarantee — because there's nothing to guarantee.** The pane
-is either there or it isn't, and you're told which.
-
-| routing outcome | exit | what it means |
-|---|---|---|
-| delivered | **0** | the keys went into a live pane |
-| no such agent / no pane | **1** | refused. nothing sent. |
-| pane named but gone | **2** | *could not tell* — never a cheerful success |
-
-For the messages that must survive a dead recipient — a handoff, a protocol step — `--durable`
-persists to the tracker **first** and only then attempts the live send, so the recipient picks it up
-on their next anchor.
-
-**Identity resolves through the registry, not through a config file you hand-edit.** The graph is the
-truth; the agent card is a projection of it. Writes go to the graph, reads may come from the card,
-never the reverse — so an agent's address can't quietly drift from reality.
+Dispatch consults triage and **refuses** rather than typing over an agent's in-flight work. Every
+writing command has `--dry-run`, and exit codes mean one thing each: `0` did it, `1` refused, `2`
+could not tell. The longer walk-through, including boot modes and the anchor, is in the
+[book](docs/tour.md).
 
 ## 🧱 The whole surface
 
@@ -357,218 +111,47 @@ both or fails CI. A group is a namespace, not a command; it earns no slot. The f
 before the grouping (st cycle for st agent cycle, and so on) still work for two releases and say so on
 stderr.
 
-## 🔀 Workflows & events
-
-Shantytown doesn't just dispatch — it **prioritizes** and **reacts**.
-
-- **Prioritized workflows.** At the administrator's stop, the drain composes a
-  ranked workflow from fleet state — a stopped worker to re-dispatch, an idle
-  worker to give work, an escalation to decide — and injects it straight into the
-  admin's terminal. Blast-radius weighting (via Hank) is opt-in; it runs with no
-  backend at all.
-- **Governed events.** Shantytown subscribes to Quipu entity events — a governed
-  `aegis:Workflow` required by a code change, a policy effect, a doc gone stale —
-  and acts on them: creating and dispatching work, or routing it to the admin
-  (`st ops subscribe`).
-
-The administrator is a real coordinator: it may assign and dispatch autonomously,
-not just advise.
-
-## 🧭 Where this fits
-
-- **Use Gas Town** when you want the tier — convoys, formulas, scheduling, quotas, a mayor
-  coordinating work you did not personally hand out. It does things shantytown does not attempt.
-- **Use raw tmux** when you have one or two agents and dispatch is something you do by hand anyway.
-  Honestly, that's fine.
-- **Use shantytown** when you have a handful of agents, you want *create → send → fetch* and nothing
-  else, and you would rather add a tracker than run a daemon.
-- **Use both.** Nothing here conflicts with Gas Town — shantytown talks to panes and a tracker, so it
-  can sit beside a fleet rather than in front of one.
-
 ## 📦 Install
 
 ```bash
 git clone https://github.com/scbrown/shantytown && cd shantytown
 pip install -e .
 st ops doctor            # what's installed, what's stale, what's missing
+st fleet init              # five questions, then a town: cards, hooks, config
+st fleet start && st attach
 ```
 
 Python 3.11+ and `tmux`. No third-party dependencies. A tracker backend is optional — the files
 tracker needs nothing at all; `beads`, its Rust port `br`, and a Forgejo issue tracker plug in with
-`--backend` or one line of `[env]`.
+`--backend` or one line of `[env]`. Everything after that — modes, hibernate, the tmux socket, a
+second host, the governor, every environment variable — is in
+[Getting started](docs/getting-started.md) and [Configuration](docs/configuration.md).
 
-### First run — `st fleet init` asks, and you have a town
+## 📚 The book
 
-```bash
-st fleet init
-```
+Everything the README used to say, and more, lives in [`docs/`](docs/SUMMARY.md) as an mdbook:
 
-Five questions, each with a default that Enter accepts: the administrator's name, worker names, where
-agents should work, the startup mode, and whether the admin may
-[hibernate](docs/cli.md#hibernate--when-the-administrators-stop-may-stay-stopped). It shows every path
-it would write, waits for a yes, then creates:
-
-```text
-  crew/<name>.json                   one card per agent, each with a generated pane (st-<name>)
-  settings/<role>.settings.json      the role's stop hooks
-  shantytown.toml                    startup mode + hibernate policy
-  events/  launched/                 the ledgers
-```
-
-Then the town runs:
-
-```bash
-st fleet start             # mode lite: the administrator ALONE
-st attach            # its pane (starts it if it's down)
-st crew              # who exists, who's up
-```
-
-Scripted installs skip the questions — `st fleet init -y --admin boss --crew ada,bo`. `-y` is **required**
-when stdin isn't a terminal, so an init inside a script or a hook refuses instead of hanging on a
-prompt. `-n` shows every path and writes nothing.
-
-`st fleet init` refuses a store that already has cards or a config — a second init is far more likely to be
-a mistyped `--root` than an intent. To add one agent to a store that exists, `st fleet roles set <name>
-<role>` writes the card and its hooks in the same operation.
-
-### Configuration
-
-Two files and a table, and every default is local. Nothing here needs to be set to run the harness on
-the files tracker.
-
-**`<root>/shantytown.toml` — what to bring up, and when the admin may sleep.** The one thing that is
-*not* an environment variable, because a mode is a named set of crew plus a policy and that does not
-flatten into `KEY=value` without inventing a syntax nobody can read. Absent → the built-in defaults
-(`lite`, hibernate off). A copy-pasteable, fully commented example is
-[`docs/shantytown.toml.example`](docs/shantytown.toml.example).
-
-```toml
-[startup]
-mode = "lite"                  # lite = the administrator ALONE. heavy = every card.
-
-[modes.night]                  # your own modes MERGE over the built-ins
-crew = ["administrator", "lead"]
-
-[hibernate]                    # when may the admin's stop STAY stopped?
-enabled = false                # it can only go quiet when there is nothing to
-max_quiet_minutes = 60         # dispatch; Rule Zero overrides it, and says so
-
-[tmux]
-socket = "default"             # the fleet's tmux server, DECLARED, never inferred from $TMUX
-
-[host]                         # only on a multi-host fleet
-name = "rig-a"                 # which rig this is, as the graph spells it
-
-[host.peers.laptop]            # how to reach the OTHER host's st
-ssh  = "me@laptop.example"     # `st inbox <agent>` relays here when the agent lives there
-root = "/opt/st/.shanty"
-```
-
-Those are the tables most deployments touch. The rest — `[fleet]`, `[governor]` and its tiers,
-`[session_budget]`, `[hostmem]`, `[harness]`, `[model]`, `[roles.<name>]`, `[precedence.<axis>]`,
-`[dream]`, `[crew.<name>]` — are each explained where they appear in the example file.
-
-It is `shantytown.toml`, never `shanty.toml` — `shanty` is a different program on the same PATH, for
-the same reason the binary here is `st`. An unknown key is **refused**, not ignored: a silently
-dropped key is how an operator comes to believe a policy is in force when it is not.
-
-**`<root>/shantytown.toml` `[env]` and the environment — where the plumbing lives.** Flat values,
-read in that order, every one of them also settable as an env var:
-
-| variable | what it points at | default |
-|---|---|---|
-| `SHANTY_ROOT` | **which store `st` reads and writes** — the single most consequential setting. Precedence: `--root` > `$SHANTY_ROOT` > a `.shanty` found walking UP from the cwd > this box's pointer (`~/.config/shantytown/root`, written by `st fleet init`) > `cwd/.shanty`. The CLI and the Stop hook resolve it identically. The walk-up cannot help from a directory that is a SIBLING of the store rather than under it — an agent workspace, typically — which is what the pointer is for; with neither, `st` says so before the command runs rather than reporting "no such agent: <your own name>". | discovered; else `./.shanty` |
-| `SHANTY_AGENT` | who you are, so `st anchor` needs no argument | — |
-| `SHANTY_TEND_SWEEP_BUDGET_S` | seconds a `st fleet tend` pass may spend on the BEST-EFFORT sweeps that follow respawn (aegis-qwadc). Spending it SKIPS the next sweep; it never interrupts one in flight, because a wall-clock kill lands mid-write. Respawn runs before any of them and is never shed. Raise it on a deployment with slow notifiers; a recurring deferral is a slow store, not failing supervision. | `120` |
-| `SHANTY_HOSTMEM_FLOOR_GIB` | a ONE-RUN override of `[hostmem] floor_gib`, the physical admission floor (aegis-do672). `0` disables the brake for this invocation. It exists because the alternative an operator reaches for under a brake they need to get past is commenting out the table — which disarms it for everyone and stays disarmed. | the `[hostmem]` table |
-| `SHANTY_PANE_MEMORY` | set to `off`/`0`/`false` to launch panes with NO memory ceiling at all. The escape hatch has to exist: a wrong ceiling that cannot be switched off kills every pane, including the one you would fix it from. It is the only setting here that disables `panemem` outright — the two `_GIB` knobs only move the ceiling. | on |
-| `SHANTY_PANE_MAX_GIB` | `MemoryMax` on each agent pane's own systemd scope — the KILL line. Sits above measured normal peak (an agent plus a Rust build runs 10-13 GiB) and below the runaway that caused this to exist (31.8 GiB in ten minutes, which tripped host-wide oomd and killed an unrelated agent). Lowering it toward normal peak does not make the host safer: a pane held near its limit reclaims continuously, and that reclaim is itself what raises slice pressure. | `20` |
-| `SHANTY_PANE_HIGH_GIB` | `MemoryHigh` on the same scope — the THROTTLE line, where a pane is slowed rather than killed. Defaults to the same value as `SHANTY_PANE_MAX_GIB`, i.e. no throttle band, because a band is only useful when you have measured where the workload actually sits. A value above `MAX` is clamped to it rather than refused: a throttle that can never fire before the kill is meaningless, and a misconfigured pair should still get a working ceiling. | `SHANTY_PANE_MAX_GIB` |
-| `SHANTY_PANE_SWAP_MAX` | `MemorySwapMax` on the scope. `0` — no swap — is deliberate and is a HYPOTHESIS, not a settled default: a capped scope with swap to thrash into grinds against its limit and raises pressure on the whole user slice, which is how a correctly-capped pane still got a bystander killed. With no swap it is killed promptly instead. On a host carrying resident swap use that trades a short hard failure for a long soft one, so raise it if panes start dying that used to survive. | `0` |
-| `SHANTY_BACKEND` | the deployment's default tracker backend (`files`\|`beads`\|`br`\|`forgejo`) when `--backend` is not given. Set it ONCE (under `[env]` in `<root>/shantytown.toml`, or the env) on a fleet whose plates live in a shared tracker and every plain `st anchor`/`st crew` call — including the status-bar segment and the session picker, which by design pass no flags — resolves the real tracker instead of rendering an empty files plate. An unrecognized value refuses; it never silently means files. Explicit `--backend` always wins. | per-command (`files`; `inbox -d` → `beads`) |
-| `SHANTY_BEADS_REPO` | the bead store directory for `--backend beads` when `--repo` is not given (bd's `-C`). Same one-time deployment setting as `SHANTY_BACKEND`; explicit `--repo` wins, and unset falls back to the `.beads` walk-up. | the `.beads` walk-up |
-| `SHANTY_BR_REPO` | the SQLite+JSONL store directory for `--backend br` when `--repo` is not given. Explicit `--repo` wins; when unset, the beads repo setting and then the `.beads` walk-up remain compatible migration fallbacks. | migration fallback |
-| `SHANTY_BR_BIN` | the `br` executable used by the br tracker backend. Primarily useful for hermetic rehearsals and installations where `br` is not yet on `PATH`. | `br` |
-| `SHANTY_BEADS_REPOS_EXTRA` | ADDITIONAL bead stores to read plates and hauls from, beyond `SHANTY_BEADS_REPO`. A `,`/newline/`os.pathsep`-separated list (a JSON array is also accepted). **In `shantytown.toml` write a STRING, not a TOML array** — `deployment_default()` is `str | None`, so an array value is silently dropped and the setting appears to do nothing. Set this when an agent's work lives in a repo's own embedded store: without it that agent can never **self-feed**, because `hauls()` cannot see its queue, so it never advances at its own stop *and* reads as having no work — landing back on the coordinator for a hand dispatch every cycle. Reads are unioned and **raise** if any listed store is unreadable (a partial union is indistinguishable from "no work"). Writes and the inbox still go to the primary store only. A malformed value degrades to single-store rather than failing. | none (single store) |
-| `SHANTY_TMUX_SOCKET` | the named tmux server your agents live on. **A `socket` declared under `[tmux]` in `<root>/shantytown.toml` wins over this** — a socket declared in the store is read from there, not from your shell's ambient env, so the answer cannot change with which pane you ran `st` from. | bare tmux |
-| `SHANTY_HOST` | WHICH RIG HOST this deployment is, as the graph and the cards spell it (`vati`, `macbookair-stiwi`). **A `name` declared under `[host]` in `<root>/shantytown.toml` wins over this.** Never inferred from `hostname(1)`: the value decides which cards `roles sync` may write and where an ephemeral `st inbox` is relayed (`[host.peers.<name>] ssh/root`). Unset = single-host deployment. | unset |
-| `SHANTY_CREEL_ADMISSION_PROBE` | path to Creel's headless `tools/creel-admission.js` reader. `st crew --governor` and `st fleet tend` pass their measured usage snapshot to this executable and display its canonical `controller_line`; they do not implement the controller. Missing Node/probe dependencies render an explicit `advisory unavailable`, never a zero recommendation. | unavailable |
-| `SHANTY_BASH_GUARD` | a command emitted as a PreToolUse Bash hook in every role's settings — the deployment's host-policy guard (e.g. blocking another orchestrator's start verbs on a shared host). Claude Code contract: exit 2 blocks, else allows. Unset = no hook emitted; shantytown ships no guard and hardcodes no path. | — |
-| `SHANTY_MCP_GUARD` | a command emitted as a PreToolUse hook on matcher `mcp__.*` in every role's settings — the deployment's policy guard for the MCP tool surface, which is otherwise entirely ungoverned (hook matchers match TOOL NAMES, and no edit/Bash matcher covers `mcp__*`). Matchers cannot see arguments, so the guard filters itself. Separate from `SHANTY_BASH_GUARD` because the payload shapes differ — a command string vs a tool name plus an arbitrary argument object. Claude Code contract: exit 2 blocks, else allows. Unset = no hook emitted; shantytown ships no guard and hardcodes no path. | — |
-| `SHANTY_CODEX_MCP_APPROVE` | MCP server names (comma- or space-separated) whose tools a **codex** worker may call without approval — rendered as `mcp_servers.<name>.default_tools_approval_mode = "approve"` in that role's `config.toml`. codex judges an MCP tool from its ANNOTATIONS (`destructive_hint`/`open_world_hint`, both defaulting to TRUE when absent), so a server that ships none has EVERY tool — read or write — judged approval-requiring, which under `approval_policy = never` is a flat refusal. A server named here but absent from the config is skipped, never created, and the key is merged into the existing table so a server definition is never replaced. Unset = nothing emitted. `writes` is deliberately not offered: without annotations it narrows nothing while looking as though it does. | — |
-| `SHANTY_PANEMEM_LOG` | file the launcher appends one line to for every pane memory-ceiling outcome, applied or refused (default `~/.local/log/panemem.log`). The stderr warning goes to whoever ran the launch, which for an interactive `st agent new <agent>` is a pane scrollback that is gone with the pane — so the reason a pane is unbounded was unrecoverable for most cases. This is the record that outlives the pane it describes. | `~/.local/log/panemem.log` |
-| `SHANTY_REMOTE_CONTROL` | whether Claude-harness sessions launch with `--remote-control <agent>` and register through Anthropic's relay for access from claude.ai or the Claude app. Accepts `true`/`false` (and common boolean spellings); an invalid value refuses launch rather than guessing the off-host exposure posture. Codex cards are unchanged: Codex Remote Control is a separate app-server daemon, not a per-session Claude.ai flag. | `true` (compatibility with the original default-on launcher) |
-| `SHANTY_STOP_CAPTURE` | a command appended LAST to every role's Stop hook list — the deployment's session-end knowledge-capture hook. Runs after the role's own stop machinery (send/drain/haul/feed-gate) settles. Solicitation etiquette (block-once, markers) is the command's own responsibility. Unset = nothing appended; shantytown ships no capture hook and hardcodes no path. | — |
-| `SHANTY_HIERARCHY_FILE` | the hierarchy file `st fleet roles sync` falls back to when the graph cannot be read (`.ttl`\|`.yaml`\|`.json` describing `CrewMember` + `reports_to`). Unset = look for `hierarchy.*` beside the crew root; if that is absent too, `sync` REFUSES rather than projecting an empty crew. Only the ontology-first *default* falls back — an explicit `--from quipu` that cannot reach the graph refuses instead of silently substituting this file. | `<root>/hierarchy.*` if present |
-| `SHANTY_SHARED_CHECKOUT_OK` | set to `1` to allow ONE deliberate `git commit`/`rebase`/`merge` in a SHARED project checkout, past the guard `st repo worktree` installs there. Read by the hook, not by `st` — it is the maintenance escape hatch, not a mode. Everyday work belongs in `st repo worktree <repo>`, where index and HEAD are per-agent; the guard exists because a shared checkout's index is shared, so one session's commit can carry another's staged files and its reset can drop the other's commit, with git reporting success to both. Note the guard fires at COMMIT only — `git reset` has no hook and is not guarded, so this is a seatbelt, not a cage. | unset (guard active) |
-| `SHANTY_GRAPH_CONTEXT` | how hard `st go` and `st agent cycle` insist on graph context: `advise` (default) warns and RECORDS the gap, `require` refuses a dispatch that names neither a `--quipu-node` nor a `--no-graph-context` reason. Advise is the default because this landed on a fleet whose scripts and crons already call `st go`, and a flag that refuses every existing caller the day it ships is a fleet-stopping change dressed as a measurement — so the ledger measures the habit first and the flip is one line once the callers carry it. Independent of the mode: a node the graph positively does NOT hold is refused either way (a wrong claim, not an absent one), while a graph that cannot be reached never refuses. Read the numbers with `st agent stats --graph`. | `advise` |
-| `SHANTY_STALL_MIN` | minutes an idle worker may hold an in_progress item with zero pane/item/shell change before tend acts on the neglected anchor. At this threshold tend NUDGES the agent itself to close-or-release it (self-heal); the coordinator is only escalated to if that goes unanswered. Default 15 — ~30 consecutive unchanged 30s passes: far above prompt-render lag, far below the measured hours-long parked failure. | `15` |
-| `SHANTY_STALL_ESCALATE_MIN` | minutes a still-frozen anchor waits AFTER the self-heal nudge before tend escalates it to the coordinator (aegis-es1tt). Default = `SHANTY_STALL_MIN`: the agent gets the same grace to act on the nudge that it got to be noticed. Any progress in the window re-arms the episode, so an agent that acts is never escalated; a decision/blocked-labelled anchor is never nudged or escalated at all. | `SHANTY_STALL_MIN` |
-| `SHANTY_GOVERNOR_WAKE` | **set by `st`, not by you** — the window name (`five_hour`\|`seven_day`) on the tend pass a governor reset-wake timer started. tend prints it when a tier is released, so the log says whether the crew came back via the one-shot wake or via the ordinary five-minute pass. Setting it by hand only mislabels a line; it changes no decision, because the timer never decides anything — it schedules a READING, and the reading releases the tier. Unset = an ordinary pass. | unset |
-| `SHANTY_DARK_AGENTS` | names (space/comma-separated) Rule Zero and tend must never count feedable — panes another orchestrator keeps respawning with this deployment's worker settings, which carry the stop-event wiring but route nothing here. The launch-stamp ownership gate excludes unstamped agents structurally; this list is the explicit override/belt for named ghosts. | the gastown-dark crew |
-
-What `st` puts INTO an agent's session at launch — read by the agent, not by `st`:
-
-| variable | what it carries |
+| chapter | what it answers |
 |---|---|
-| `SHANTY_AGENT` | its own name |
-| `BOBBIN_ROLE` / `BEADS_ACTOR` | its tree position, and who its tracker writes are attributed to |
-| `ST_ROLES` | its **stacked role set**, comma-separated — the trait-presets it holds, which a single tree position cannot express. Carried **opaquely**: `st` passes the set through and draws no conclusion from it. Emitted for every agent, including one whose set is just its tree position, so an agent's view of itself does not depend on whether its card has been migrated. |
-| `ST_ROLE_DOMAIN` | which domain a domain-scoped role owns — a per-member parameter, so `keeper` stays reusable and the member supplies what it keeps. Omitted when absent, never emitted empty. |
-| `ST_REPORTS_TO` | its lead, for an agent that wants it without re-reading its card. Omitted when absent. |
-| `QUIPU_SERVER` | quipu, for `--registry quipu`, `st fleet roles sync`, or `st ops subscribe` | `http://localhost:3030` |
-| `SHANTY_ONTO_NS` | the ontology IRI base your graph is keyed under | `http://shantytown.example/ontology/` |
-| `SHANTY_TOOLING_MANIFEST` | Absolute Quipu entity IRI whose single `rdf:value` is the canonical MCP, skills, and tooling-instructions JSON. Provision and doctor read it fresh; unavailable or ambiguous data refuses rather than falling back. See [harness tooling](docs/harnesses.md#canonical-tooling-from-quipu). | unset (legacy local kit) |
-| `SHANTY_ONTO_CREW_CLASS` | the class local-name your graph uses for a crew member, resolved under `SHANTY_ONTO_NS`. Point st at your own vocabulary instead of adopting ours. | `CrewMember` |
-| `SHANTY_ONTO_REPORTS_PRED` | the predicate local-name for the supervisor edge. | `reports_to` |
-| `SHANTY_ONTO_STATUS_PRED` | the predicate local-name marking a non-live crew member (its ABSENCE means active, so a forgotten mark leaves a retiree visible rather than hiding a live agent). | `crewStatus` |
-| `SHANTY_ONTO_ROLE_CLASS` | the class local-name for a declared ROLE — a trait preset your deployment defines rather than one st ships. | `CrewRole` |
-| `SHANTY_ONTO_HAS_ROLE_PRED` | the predicate local-name for the member→role edge. Multi-valued: roles STACK on one agent. | `hasRole` |
-| `SHANTY_ONTO_HOST_PRED` | the predicate local-name for the member→host edge (which rig host a member runs on). Its ABSENCE on a member reads as UNSCOPED, never as "this host"; once any member is placed, `roles sync` projects only the members placed on the declared local host (aegis-5du1bz). | `runsOn` |
-| `SHANTY_ONTO_ROLE_NAME_PRED` | the predicate local-name holding a role's own name. | `crewRoleName` |
-| `SHANTY_ONTO_TRAIT_PREFIX` | the shared prefix of the trait-axis predicates (`traitAttachment`, `traitScope`, …). One knob for the convention, not six for the axes. | `trait` |
-| `SHANTY_ONTO_TRAIT_VALUE_CLASS` | the class local-name of the rows that RANK trait values, so a stacked role set with a conflicting single-valued axis resolves from declared data instead of a tie-break in code. | `TraitValue` |
-| `BOBBIN_SERVER` | bobbin, for `st repo context` | `http://localhost:8080` |
-| `SHANTY_RANKER` | `policy` to weight the admin workflow by Hank blast radius; else rule-based | — |
-| `SHANTY_FORGEJO_URL` | a self-hosted forge: `st ops doctor`'s release checks, and the base URL for `--backend forgejo` (issues as work items; pair with `SHANTY_FORGEJO_TOKEN` and `--repo owner/name`) | `http://localhost:3000` |
-| `SHANTY_FORGEJO_TOKEN` | API token for `--backend forgejo` (issue read/write on the repo) | — |
-| `SHANTY_REACTOR_URL` | reactor, if you use it as an event source | `http://localhost:8075` |
-| `SHANTY_CANONICAL_SOURCE` | the checkout a fleet deploy must be built from, for `st ops doctor`'s self-check. Unset and not in a git checkout → the check is `CANNOT_TELL`, never OK. | the MAIN working tree of the running package's checkout (a linked worktree resolves to its primary, never itself) |
-| `SHANTY_DEFER_MAX_AGE_S` | ceiling on how long a stop event may be held back because its sender is still mid-flight. The defer gate measures "busy" at the coordinator's drain, so an agent that stops and immediately takes the next item is busy at every later drain and its events were deferred indefinitely while the pending count kept reporting them (aegis-d1qko). Past this age the event is delivered regardless. | `1800` (30m) |
-
-⚠️ **`SHANTY_ONTO_NS` is data identity, not cosmetics.** Every triple in a graph is keyed under it.
-Pick one per graph, set it before the first write, and never change it — repointing it does not
-error, it just stops new facts from joining the old ones.
-
-## 📚 Docs
-
-| doc | what it answers |
-|---|---|
-| [`docs/vision.md`](docs/vision.md) | what this replaces, and how we'll know it failed |
-| [`docs/design.md`](docs/design.md) | the shape: dispatch, triage, trackers, panes |
-| [`docs/cli.md`](docs/cli.md) | the commands, the boot modes, and the anchor |
-| [`docs/agent-card.md`](docs/agent-card.md) | identity — the graph is the truth, the card is a projection |
-| [`docs/roles.md`](docs/roles.md) | worker / lead / administrator, and why a lead absorbs |
-| [`docs/adapters.md`](docs/adapters.md) | first-class defaults, pluggable everything |
-| [`docs/harnesses.md`](docs/harnesses.md) | running more than one agent program — claude, codex, and setting one up |
-| [`docs/integrations.md`](docs/integrations.md) | the rest of the toolbox — and why we ship no dashboard |
-
-## 🧭 Principles
-
-- **Lean, not absent.** Orchestration is welcome — prioritization and event reactions — but it stays small: no convoys, no bus, no daemon zoo.
-- **Bring your own tracker.** Beads, GitHub issues, or a directory of markdown files. Two functions.
-- **Ship no dashboard the harness feeds.** `st fleet dashboard` exists, but it is a read of the tracker
-  and the cards; nothing on the dispatch path is written for its benefit.
-- **Bring your own panes.** Bare tmux works. With [shanty](https://github.com/scbrown/shanty) on
-  `PATH`, `st attach` opens the fleet's real panes under its themed bar without moving an agent off
-  the fleet's socket. [herdr](https://github.com/ogulcancelik/herdr) or your own wrapper fit the
-  same seam.
-- **A check must be able to fail.** Anything that reports health must be shown returning red. Nearly
-  3,500 tests, and the ones that matter most are the ones proving a check *can* say no.
+| [Why Shantytown?](docs/why.md) | the honest comparison, and the numbers measured against `gt sling` |
+| [Features](docs/features.md) | what it does, including what landed after the pitch was written |
+| [Routing](docs/routing.md) | `st inbox` *is* `tmux send-keys`, and what that buys |
+| [Workflows & events](docs/workflows.md) | prioritized workflows at the admin's stop; governed Quipu events |
+| [Getting started](docs/getting-started.md) · [Configuration](docs/configuration.md) | `st fleet init`, boot modes, every table and env var |
+| [The CLI](docs/cli.md) | every command, the stop decision, exit codes |
+| [Design](docs/design.md) · [Vision](docs/vision.md) · [Principles](docs/principles.md) | the shape, what it replaces, and how we'd know it failed |
+| [Roles](docs/roles.md) · [Agent card](docs/agent-card.md) · [Harnesses](docs/harnesses.md) · [Adapters](docs/adapters.md) · [Integrations](docs/integrations.md) | identity, the tier, more than one agent program, pluggable everything |
 
 ## 📄 Licence
 
 MIT — see [LICENSE](LICENSE).
+
+---
+
+<div align="center"><sub>
+Every number here was measured on one host, not estimated.<br>
+<i>A crew of agents, and someone running the town.</i>
+</sub></div>
 
 ---
 

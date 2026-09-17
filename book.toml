@@ -1,0 +1,10 @@
+[book]
+title = "shantytown"
+authors = ["scbrown"]
+language = "en"
+src = "docs"
+description = "A small harness for running a crew of coding agents."
+
+[output.html]
+git-repository-url = "https://github.com/scbrown/shantytown"
+edit-url-template = "https://github.com/scbrown/shantytown/edit/main/{path}"
