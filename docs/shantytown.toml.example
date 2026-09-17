@@ -199,7 +199,7 @@ max_load_per_core = 4.0
 
 # [host.peers.laptop]
 # ssh  = "me@laptop.example"
-# root = "/home/me/.shanty"
+# root = "/opt/st/.shanty"
 
 # ---------------------------------------------------------------------------
 # [harness] — WHICH AGENT PROGRAM, for cards that do not say.

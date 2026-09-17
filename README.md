@@ -453,7 +453,7 @@ name = "rig-a"                 # which rig this is, as the graph spells it
 
 [host.peers.laptop]            # how to reach the OTHER host's st
 ssh  = "me@laptop.example"     # `st inbox <agent>` relays here when the agent lives there
-root = "/home/me/.shanty"
+root = "/opt/st/.shanty"
 ```
 
 Those are the tables most deployments touch. The rest — `[fleet]`, `[governor]` and its tiers,
