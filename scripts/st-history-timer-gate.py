@@ -106,7 +106,7 @@ def decide(live, stale, unknown, fired):
         out += ["",
                 "NOT SAFE to remove the */30 timer — it is the only capture "
                 "those agents have.",
-                "Relaunch them (`st stop <agent> && st new <agent>`), let each "
+                "Relaunch them (`st agent stop <agent> && st agent new <agent>`), let each "
                 "stop once, re-run this."]
         return 1, out
     out += ["",

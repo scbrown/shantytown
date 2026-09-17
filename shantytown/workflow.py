@@ -9,7 +9,7 @@ routed to it with a PRIORITIZED WORKFLOW built from fleet state:
 
 A DOWN AGENT IS NOT AUTOMATICALLY A FAULT (GitHub #29). Three states here are
 DELIBERATE and none belongs on a re-dispatch list: a RETIRED card, a pane killed by
-`st stop` (stopped.py), and a fleet that is STOOD DOWN. The measured bug: an
+`st agent stop` (stopped.py), and a fleet that is STOOD DOWN. The measured bug: an
 operator out of usage credits stopped
 nine of eleven crew on instruction, and every surface then told them to put all
 nine back — "re-dispatch felix — STOPPED" nine times. A mechanism that can only
@@ -47,7 +47,7 @@ class AgentState(Enum):
     WORKING = "working"     # pane up, holding a plate item
     NO_PANE = "no-pane"     # no pane on the card — cannot tell
     RETIRED = "retired"     # the CARD says deliberately stopped — down BY INTENT
-    STOPPED_BY_OPERATOR = "stopped-by-operator"   # `st stop` said so (stopped.py).
+    STOPPED_BY_OPERATOR = "stopped-by-operator"   # `st agent stop` said so (stopped.py).
                             # Down by intent, but UNLIKE retired it may come back —
                             # tend still respawns it. So it is reported as a fact,
                             # never demanded as a fix.
@@ -65,7 +65,7 @@ class Candidate:
     rose: bool = False                # did its stop rise past a down lead?
     weight: float = 0.0               # structural weight (blast radius); 0 = none
     why: str = ""                     # ranker's note
-    stopped_ago: float | None = None  # seconds since `st stop` (STOPPED_BY_OPERATOR)
+    stopped_ago: float | None = None  # seconds since `st agent stop` (STOPPED_BY_OPERATOR)
 
 
 @dataclass
@@ -80,7 +80,7 @@ class PrioritizedWorkflow:
     steps: list[WorkflowStep]
     held: list[Candidate] = field(default_factory=list)   # withheld by stand-down
     stood_down: bool = False
-    deliberate: list[Candidate] = field(default_factory=list)   # `st stop`ped
+    deliberate: list[Candidate] = field(default_factory=list)   # `st agent stop`ped
 
     def render(self) -> str:
         """The block appended into the admin's drain prompt. '' when nothing is
@@ -101,7 +101,7 @@ class PrioritizedWorkflow:
         declared, temporary state with a way to clear it, so naming it is
         actionable. RETIRED cards are omitted SILENTLY — a retirement is steady
         state, and repeating a permanent fact at every single stop is the noise
-        that gets whole blocks skipped. `st crew` and `st start` are where the
+        that gets whole blocks skipped. `st crew` and `st fleet start` are where the
         retired roster is reported.
         """
         if not (self.stood_down and self.held):
@@ -118,7 +118,7 @@ class PrioritizedWorkflow:
     def _deliberate_note(self) -> str:
         """The agents an operator stopped, stated as FACT and never as an item.
 
-        Reported rather than omitted, because unlike a retirement an `st stop` is
+        Reported rather than omitted, because unlike a retirement an `st agent stop` is
         not "and do not bring it back" — the admin should know the fleet is short,
         and by whose hand. It carries no rank and no imperative verb: the whole
         defect was a mechanism telling an operator to undo a shutdown they had just
@@ -129,7 +129,7 @@ class PrioritizedWorkflow:
         who = ", ".join(f"{c.agent}{f' ({_ago(c.stopped_ago)})' if c.stopped_ago else ''}"
                         for c in self.deliberate)
         return (f"  {len(self.deliberate)} agent(s) STOPPED BY AN OPERATOR, not "
-                f"faults: {who}. `st new <agent>` if one is wanted back.")
+                f"faults: {who}. `st agent new <agent>` if one is wanted back.")
 
 
 def classify(
@@ -145,12 +145,12 @@ def classify(
 
     A RETIRED card reads RETIRED whatever its pane says, and RETIRED is never
     actionable here (#29). Down is the INTENT, not a fault. Alive is a fault — but
-    `st tend` is the surface that owns it (it escalates RESURRECTED), and the one
+    `st fleet tend` is the surface that owns it (it escalates RESURRECTED), and the one
     thing the admin's dispatch list must not do with a retirement is answer it with
     "assign work".
 
     `stopped` (stopped.py, injected — this module does no I/O) answers "was this
-    agent's pane killed BY `st stop`, and when?". A down pane with a record is not a
+    agent's pane killed BY `st agent stop`, and when?". A down pane with a record is not a
     defect. It is only consulted for a pane that is actually DOWN: a record for a
     live agent describes a stop that has since been undone, and reading it as
     current would be the launch-stamp mistake — one past fact asserted as a

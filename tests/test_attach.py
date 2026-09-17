@@ -164,7 +164,7 @@ def test_no_start_refuses_a_down_agent_by_name_not_a_raw_tmux_error(tmp_path, mo
 def _run_launching(monkeypatch, a, live, *, launch_rc=cli.OK, comes_up=True):
     """_cmd_attach with a STUBBED launcher. Returns (rc, argv, launched-names).
 
-    The launcher is stubbed rather than exercised because `_launch` is `st new`'s
+    The launcher is stubbed rather than exercised because `_launch` is `st agent new`'s
     whole seam (workspace, provisioning, hooks verification) and it has its own
     tests; what THIS module has to pin is that attach calls it, honours its
     verdict, and hands off to the same argv builder afterwards.

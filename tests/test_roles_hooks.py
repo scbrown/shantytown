@@ -2,7 +2,7 @@
 
 The complaint this file answers, quoted from the issue:
 
-    "`st roles --check` can say `hooks: ok` in a world where no hook has ever been
+    "`st fleet roles --check` can say `hooks: ok` in a world where no hook has ever been
      emitted; the check currently verifies reporting *lines*, not that stop events
      actually flow along them."
 
@@ -389,7 +389,7 @@ def test_the_bash_guard_and_the_mcp_guard_are_INDEPENDENT(tmp_path):
 #
 # Emitted by SHANTYTOWN, not by the deployment: `SHANTY_STOP_CAPTURE` is a
 # single-valued slot this deployment already spends on its quipu session-capture
-# dispatcher, and `st history` is a shantytown command whose scripts ship here.
+# dispatcher, and `st agent history` is a shantytown command whose scripts ship here.
 
 def _with_checkout(monkeypatch, tmp_path, script=True):
     """Point canonical_source at a tmp checkout, optionally containing the

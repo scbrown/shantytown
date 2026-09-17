@@ -1,7 +1,7 @@
 """Multi-host st: cards carry a host, sync is host-scoped, delivery routes by host
 (aegis-5du1bz, Steve 2026-09-16).
 
-What produced this, measured on the MacBook before it existed: `st roles sync
+What produced this, measured on the MacBook before it existed: `st fleet roles sync
 --dry-run` there would have minted 13 cards for vati's ENTIRE crew, demoted the
 Mac's administrator (hammond) to worker and orphaned it — because neither the
 card nor the graph said which host anyone runs on, so "the graph's crew" and

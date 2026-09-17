@@ -85,7 +85,7 @@ def test_summary_line_without_top(monkeypatch):
 
 
 def test_fresh_dp_with_null_top_desires_does_not_crash(monkeypatch):
-    """A FRESH dp — zero data, exactly the state `st doctor --install` leaves it
+    """A FRESH dp — zero data, exactly the state `st ops doctor --install` leaves it
     in — emits `"top_desires": null`. `.get(key, [])` returns that existing None,
     and iterating it crashed doctor with a TypeError the moment its own install
     became visible (aegis-v8qe, found live in the e2e sandbox)."""

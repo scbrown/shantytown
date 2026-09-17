@@ -6,7 +6,7 @@ thing that stays true when someone adds a third budget.
 
 The bug this pins was not a wrong number, it was TWO ANSWERS TO ONE QUESTION.
 `Verdict.floor` took the strictest floor across every engaged tier — correct — and
-`st crew --governor` / `st tend` rendered `engaged[-1]`, a POSITIONAL pick carrying
+`st crew --governor` / `st fleet tend` rendered `engaged[-1]`, a POSITIONAL pick carrying
 the comment "cumulative, so the last one is the most restrictive". That was true
 while every tier read one budget. The two-budget change (aegis-59hao) made
 `engaged` span WINDOWS, and across windows position stopped implying strictness —

@@ -133,7 +133,7 @@ class Verdict:
     """What the hook decided, and WHY — the why is not decoration. Every SILENT
     outcome here has a different cause (exempt / holding work / could not look /
     on cooldown) and collapsing them is how you end up unable to tell a working
-    guard from a dead one. `st doctor` and the tests both read it."""
+    guard from a dead one. `st ops doctor` and the tests both read it."""
     action: str                    # SILENT | WARN | ESCALATE
     why: str
     text: str = ""                 # what the AGENT is told (WARN/ESCALATE)
@@ -355,7 +355,7 @@ def _stranded_text(me: str, strikes: int, elapsed: float, why: str) -> str:
         f"and your card has no reachable lead or administrator. That is a "
         f"misconfiguration in the tier itself — your stop events have nowhere to "
         f"go either. Put your work on a bead, then get your card's reports_to "
-        f"fixed (`st roles show`)."
+        f"fixed (`st fleet roles show`)."
     )
 
 

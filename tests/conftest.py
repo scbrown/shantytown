@@ -52,6 +52,16 @@ def pytest_configure(config):
 
 
 @pytest.fixture(autouse=True)
+def _quiet_aliases(monkeypatch):
+    """The suite drives many commands by their OLD top-level spelling (`main(
+    ["cycle", ...])`), which is the aliased path and prints one notice line to
+    stderr. Silence it here — a test asserting on stderr should see what the
+    command wrote, not the deprecation. The alias tests in test_command_count.py
+    delenv this to check the notice itself. os.environ, so subprocesses inherit."""
+    monkeypatch.setenv("ST_QUIET_ALIASES", "1")
+
+
+@pytest.fixture(autouse=True)
 def _no_real_store(request, monkeypatch):
     """Make a `bd` invocation fail loudly inside the suite.
 

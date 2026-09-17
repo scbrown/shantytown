@@ -1,7 +1,7 @@
 """The blocking PICKER as a surface you can READ and ANSWER — aegis-w30p2.
 
 WHY THIS EXISTS
-`st input --show` (aegis-c6hli) can already tell a coordinator that an agent is
+`st agent input --show` (aegis-c6hli) can already tell a coordinator that an agent is
 sitting on a PICKER. It cannot tell them WHAT IT ASKS, and it gives them no way
 to answer it. So the coordinator dropped back to raw tmux — six times in one
 evening across five agents:
@@ -58,7 +58,7 @@ _WINDOW = 40
 # the option list (the AskUserQuestion "Chat about this" escape hatch sits below
 # one), so a rule must never end the option scan. That is not hypothetical: it
 # is option 4 on a live specimen, and stopping at the rule would have made
-# `st answer <agent> 4` refuse an option that is really there.
+# `st agent answer <agent> 4` refuse an option that is really there.
 _RULE = re.compile(r"^[\s─━—–_=-]*$")
 
 # `❯ 1. Yes` / `  2. No, exit`. The selection glyph is the SAME `❯` an input box
@@ -323,7 +323,7 @@ def answer(panes, pane: str, n: int, *, awaiting: bool,
             "REFUSED: this pane is not on a picker. A digit sent to an agent "
             "that is idle or working does not select anything — it types a "
             "stray character into its INPUT BOX, which the agent then carries "
-            "into whatever it submits next. Check with `st input --show`."))
+            "into whatever it submits next. Check with `st agent input --show`."))
     screen = panes.capture(pane, attrs=True)
     q = parse(screen)
     if q is None:

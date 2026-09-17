@@ -173,7 +173,7 @@ def test_the_override_works_and_is_the_documented_one(shared):
 def test_the_refusal_names_the_worktree_remedy(shared):
     guard.install(shared)
     err = _commit(shared, "blocked").stderr
-    assert "st worktree" in err, "a refusal with no remedy is a dead end"
+    assert "st repo worktree" in err, "a refusal with no remedy is a dead end"
     assert "NEVER force" in err
     assert guard.DEFAULT_OVERRIDE_ENV in err, (
         "the refusal must name its own escape hatch, or the only way past it is "

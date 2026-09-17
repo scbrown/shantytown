@@ -142,7 +142,7 @@ def is_unfeedable(title, labels) -> bool:
         aegis-jyvtts  handoff         a kelly session handoff RECORD
         aegis-9l283s  ANCHOR          "ANCHOR (do not close)" in its own title
 
-    Why this matters more than a tidy list: `st tend`'s feed signal reported
+    Why this matters more than a tidy list: `st fleet tend`'s feed signal reported
     "12 ready" and an administrator read it as gennaro having work, which fed a
     stop/relaunch decision at the lead tier. A feed count that includes items
     nobody can action does not merely waste a dispatch — it answers "does this
@@ -508,13 +508,13 @@ class TrackerInbox:
             # warning text its hilariously long and fires all the time." It fires on
             # every over-cap durable send, and the sender already knows what an inbox
             # is — what they need is the number and the way out, not the design
-            # rationale. That moved to `st help inbox`. The byte-vs-character NOTE
+            # rationale. That moved to `st ops help inbox`. The byte-vs-character NOTE
             # stays: it is the non-obvious half, and without it a sender trims to the
             # character count and is refused a second time.
             raise MessageTooLong(
                 f"too long: {typed_size} {unit}, cap {budget}. Put it in a bead and "
                 f"send the pointer: `st inbox {to} 'see <bead-id>'` "
-                f"(`br comments add <id> --file` for the body). `st help inbox`."
+                f"(`br comments add <id> --file` for the body). `st ops help inbox`."
                 f"{note}",
                 budget=budget,
                 unit=unit,

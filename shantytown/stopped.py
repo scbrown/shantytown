@@ -2,7 +2,7 @@
 
 WHY THIS EXISTS (GitHub #29 request 2, measured 2026-07-25).
 
-`st stop` killed a pane and recorded nothing. So every surface that asks "is this
+`st agent stop` killed a pane and recorded nothing. So every surface that asks "is this
 agent down?" got the same answer for two opposite facts — an operator stopped it,
 or it died — and read both as a defect. The night that mattered: an operator out
 of usage credits stopped nine of eleven crew on instruction, and the administrator's
@@ -12,16 +12,16 @@ were indistinguishable *because nothing wrote the distinction*.
 
 THIS IS NOT RETIREMENT, and the difference is the whole design.
 
-  retired (on the CARD)   "and do not bring it back" — `st tend` never respawns it.
+  retired (on the CARD)   "and do not bring it back" — `st fleet tend` never respawns it.
   stopped (HERE)          "I stopped it, now" — automatic feeding stays paused.
 
-Making `st stop` set `retired` would have been the cheap fix and it is wrong: every
+Making `st agent stop` set `retired` would have been the cheap fix and it is wrong: every
 ordinary stop/restart cycle would then need an un-retire, and respawn-on-loss would
 be off for anything an operator ever stopped by hand.
 
 WHO MAY READ IT: reporting surfaces and automatic haul consumers. Stop hooks and
 idle tend feeds honour a current stamp before claiming or resuming work. Respawn
-ownership remains a separate launch-stamp decision: `st stop` removes that stamp;
+ownership remains a separate launch-stamp decision: `st agent stop` removes that stamp;
 an explicit relaunch restores ownership and clears this stop record.
 
 CLEARED ON RELAUNCH, beside the launch stamp and for the same reason: the record
@@ -47,9 +47,9 @@ from .answer import Answer
 @dataclass(frozen=True)
 class Stop:
     """One deliberate stop."""
-    at: float                    # epoch seconds, when st stop killed it
+    at: float                    # epoch seconds, when st agent stop killed it
     by: str = ""                 # who ran it, when we can tell ($SHANTY_AGENT)
-    reason: str = ""             # `st stop --reason`, free text, may be empty
+    reason: str = ""             # `st agent stop --reason`, free text, may be empty
 
 
 class FilesStops:

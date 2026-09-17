@@ -237,7 +237,7 @@ def test_a_pointer_to_a_MISSING_directory_is_not_an_answer(monkeypatch, tmp_path
 
 
 def test_init_never_adopts_the_pointed_deployment(monkeypatch, tmp_path):
-    """`st init` answers cwd/.shanty even with a pointer set. Creating is not the
+    """`st fleet init` answers cwd/.shanty even with a pointer set. Creating is not the
     same act as finding: init in a new project must not resolve to somebody else's
     deployment and then refuse as 'already a deployment'."""
     from shantytown.deployment import BY_CWD, resolve_root

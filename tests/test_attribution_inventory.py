@@ -43,7 +43,7 @@ BARE = "bare-by-design"                      # not prose; signing it would break
 INVENTORY: dict[tuple[str, str], tuple[str, str]] = {
     ("notify.py", "wake_recipient"): (
         ATTRIBUTED_HERE,
-        "blocked-worker push into a coordinator's pane; sender is `st tend`."),
+        "blocked-worker push into a coordinator's pane; sender is `st fleet tend`."),
     ("notify.py", "push_to_own_pane"): (
         ATTRIBUTED_HERE,
         "cycle prompt + haul feed/handoff into an agent's own pane. The chokepoint "
@@ -74,7 +74,7 @@ INVENTORY: dict[tuple[str, str], tuple[str, str]] = {
     ("cli.py", "_dream_sweep"): (
         ATTRIBUTED_HERE,
         "scheduled dream assignment into the selected agent's pane; sender is "
-        "the st dream scheduler, not a person."),
+        "the st work dream scheduler, not a person."),
     ("cli.py", "route"): (
         ATTRIBUTED_HERE,
         "governed-workflow assignment from the quipu event router; sender is the "

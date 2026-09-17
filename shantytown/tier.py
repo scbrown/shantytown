@@ -42,7 +42,7 @@ from .protocols import Agent, Registry
 # membership test is now "is this role described, and what are its traits?".
 #
 # Kept as a name because plenty of code legitimately means THESE THREE — the tier
-# order `st start` boots in, the modes' role selectors, the capability gate. Those
+# order `st fleet start` boots in, the modes' role selectors, the capability gate. Those
 # are statements about the built-in process, not about the vocabulary.
 VALID_ROLES = ("worker", "lead", "administrator")
 
@@ -262,7 +262,7 @@ def role_set(registry: MutableRegistry, agent_name: str, role: str,
     that answer lives under the root. The gate below must ask the program the
     LAUNCHER will resolve, not the one a card-only reading implies — otherwise a
     fleet whose config puts leads on a stopless program passes role set and
-    refuses at `st new`, which is aegis-85ox with a config file in the middle.
+    refuses at `st agent new`, which is aegis-85ox with a config file in the middle.
     None keeps the card-only answer, which is what every caller without a root
     already got."""
     plan = plan_role_set(registry, agent_name, role, reports, catalog=catalog)
@@ -274,7 +274,7 @@ def role_set(registry: MutableRegistry, agent_name: str, role: str,
     # it exactly as it does the hierarchy refusals. Gating here (the write path)
     # rather than only in `_cmd_role` protects every caller of role_set, not one
     # command; adapters.md documented the gate firing at role-set time and it
-    # never did — the check lived only on the `st new` launch path.
+    # never did — the check lived only on the `st agent new` launch path.
     _require_writes_hostable(plan, root)
     if not dry_run:
         for a in plan.writes:

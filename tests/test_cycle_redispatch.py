@@ -1,4 +1,4 @@
-"""Regression coverage for the re-dispatch leg of ``st cycle`` (aegis-wjnf3)."""
+"""Regression coverage for the re-dispatch leg of ``st agent cycle`` (aegis-wjnf3)."""
 from __future__ import annotations
 
 import json

@@ -1,9 +1,9 @@
-"""Panes session surface + st stop/log — shantytown #5.
+"""Panes session surface + st agent stop/log — shantytown #5.
 
 Arnold's ruling (his mail): new_session creates an EMPTY named session and RAISES
 if it already exists (never clobber a live agent); kill_session is idempotent;
-`st log` is capture() on the session pane. The launch of the agent-with-hooks is
-a runtime send() OUTSIDE Panes — so `st new` (which needs that launch) is NOT
+`st agent log` is capture() on the session pane. The launch of the agent-with-hooks is
+a runtime send() OUTSIDE Panes — so `st agent new` (which needs that launch) is NOT
 built here; it waits on arnold's launch-command contract. This covers the
 session primitives + stop + log, both outcomes for each, as he specified.
 """
@@ -62,7 +62,7 @@ def test_new_then_kill_round_trip():
     assert p.exists("x")
 
 
-# --- st stop, both outcomes -------------------------------------------------
+# --- st agent stop, both outcomes -------------------------------------------------
 
 def _world(tmp_path: Path, pane="crew-ellie"):
     crew = tmp_path / "crew"; crew.mkdir()
@@ -93,7 +93,7 @@ def test_stop_reports_not_running_when_absent(tmp_path, monkeypatch, capsys):
 
 def test_stop_kills_and_verifies_when_present(tmp_path, monkeypatch, capsys):
     root = _world(tmp_path)
-    # owned: a session st launched — the only kind st stop acts on.
+    # owned: a session st launched — the only kind st agent stop acts on.
     panes = NullPanes(live={"crew-ellie"}, owned={"crew-ellie"})
     monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: panes)
     rc = cli._cmd_stop(_Args(root=root))
@@ -117,7 +117,7 @@ def test_stop_returns_2_if_the_kill_did_not_take(tmp_path, monkeypatch, capsys):
     assert "still there" in capsys.readouterr().err
 
 
-# --- st log = capture, both outcomes ----------------------------------------
+# --- st agent log = capture, both outcomes ----------------------------------------
 
 def test_log_reads_the_session_pane(tmp_path, monkeypatch, capsys):
     root = _world(tmp_path)
@@ -137,11 +137,11 @@ def test_log_says_not_running_when_no_session(tmp_path, monkeypatch, capsys):
 
 
 # --- the ownership guard (dearing's safety requirement) ----------
-# st stop must NEVER reap a session it did not launch. The registry pane names
+# st agent stop must NEVER reap a session it did not launch. The registry pane names
 # COLLIDE with a session somebody else already started under the same name,
 # so on a shared socket a name match must not be
 # permission to kill. Proven at three levels: the marker mechanism (owns), the
-# CLI policy (st stop refuses), and real tmux (a foreign session survives).
+# CLI policy (st agent stop refuses), and real tmux (a foreign session survives).
 
 def test_new_session_marks_ownership_kill_clears_it():
     p = NullPanes(live=set())
@@ -280,7 +280,7 @@ def test_null_panes_carries_seeded_session_birth_and_forgets_it_on_kill():
 def test_real_foreign_session_is_refused_by_st_stop_and_survives(sock, tmp_path, monkeypatch):
     """The proof dearing required, on real tmux: a session st did NOT launch (no
     marker) — the stand-in for the live crew behind the colliding name — is
-    refused by `st stop` and is still alive after the refusal."""
+    refused by `st agent stop` and is still alive after the refusal."""
     foreign = "crew-ellie"
     subprocess.run(["tmux", "-L", sock, "new-session", "-d", "-s", foreign, "sleep 300"],
                    check=True)
@@ -296,7 +296,7 @@ def test_real_foreign_session_is_refused_by_st_stop_and_survives(sock, tmp_path,
 
 @pytestmark_tmux
 def test_real_kill_session_stays_idempotent_and_tree_killing(sock):
-    """The guard is at the st stop POLICY layer; the kill_session adapter contract
+    """The guard is at the st agent stop POLICY layer; the kill_session adapter contract
     (idempotent, orphan-proof) is unchanged — a second reap does not raise."""
     t = Tmux(socket=sock)
     t.new_session("st-idem")

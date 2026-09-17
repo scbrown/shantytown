@@ -50,7 +50,7 @@ def _card(ws) -> Agent:
 # --- the metrics-capture hook lands on EVERY provisioned agent (aegis-rcyd) --
 
 def test_capture_hook_injected_with_real_interpreter_and_root(root, ws):
-    """Every provisioned agent must get the PostToolUse capture hook so st stats
+    """Every provisioned agent must get the PostToolUse capture hook so st agent stats
     collects mcp__*/Skill/CLI from launch — baked with an interpreter that can
     import shantytown (never a bare 'python') and THIS store's root."""
     P.provision(_card(ws), root)
@@ -368,7 +368,7 @@ def test_missing_kit_NAMES_the_unlinked_skills(root, ws):
 # legitimately source a skill from OUTSIDE the workspace, and on the aegis deployment
 # every one does (all 24 from the ownership-neutral skills-src clone), so the check
 # reported 0 of 24 on 13 of 13 live agents WHILE codex was loading all 24 through
-# those very links — the loudest thing `st tend` says about an agent, true of every
+# those very links — the loudest thing `st fleet tend` says about an agent, true of every
 # agent by construction. The fix must not cost the teeth: a link to a path this
 # workspace never projected still reads unlinked (aegis-y0ky6).
 

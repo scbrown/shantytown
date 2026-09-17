@@ -139,7 +139,7 @@ def test_option_two_means_something_different_on_every_specimen():
 def test_an_option_below_a_horizontal_rule_is_still_an_option():
     """AskUserQuestion draws a rule between the real options and "Chat about
     this", so a scan that stops at the first rule loses option 4 — and then
-    `st answer <agent> 4` refuses an option that is really on the screen.
+    `st agent answer <agent> 4` refuses an option that is really on the screen.
 
     A rule is also what DELIMITS the block above, so it cannot simply be ignored
     either; it ends the header, never the option list.

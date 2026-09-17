@@ -160,7 +160,7 @@ def test_role_set_names_the_live_agents_the_rewrite_did_not_reach(tmp_path, monk
     stale, unknown = _reported(out)
     assert "ellie" in stale              # stamped, then the rewrite changed the file
     assert "ian" in unknown              # no stamp -> UNKNOWN, reported separately
-    assert "st stop" in out              # and it says how to actually deploy it
+    assert "st agent stop" in out              # and it says how to actually deploy it
 
 
 def test_a_down_agent_is_never_listed(tmp_path, monkeypatch, capsys):

@@ -146,7 +146,7 @@ def test_a_carried_key_the_deployment_STOPS_asking_for_is_REMOVED(monkeypatch, c
     dangerous kind of wrong rather than a merely stale one — `_settings_env`'s own
     docstring records that a wrong-but-REACHABLE graph or namespace answers
     "nobody exists" with a straight face, where an unreachable one at least
-    raises, and SHANTY_CANONICAL_SOURCE is the pin `st doctor` audits against.
+    raises, and SHANTY_CANONICAL_SOURCE is the pin `st ops doctor` audits against.
     """
     out = _render_twice(monkeypatch, {carried: "http://old.example"}, {})
     assert carried not in out["env"], (

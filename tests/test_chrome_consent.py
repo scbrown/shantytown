@@ -23,7 +23,7 @@ repair.
 **2. `CONSENT_MARKERS` had ROTTED.** It looked for "Claude in Chrome extension
 detected" and "keep browser tools off" — wording this claude no longer prints. So
 `waiting_for_human` returned a confident False while a consent screen was
-demonstrably up, and `st new` would have returned could-not-tell WITHOUT being
+demonstrably up, and `st agent new` would have returned could-not-tell WITHOUT being
 able to name the cause, which is the entire reason that third state exists.
 
 A marker list is a claim about somebody ELSE'S UI text. It cannot fail loudly on
@@ -62,7 +62,7 @@ def test_the_real_consent_screen_is_recognised(rt, consent_screen):
 
 def test_the_real_consent_screen_is_NOT_live(rt, consent_screen):
     """The consequence that matters: a blocked pane must not read as live, or
-    `st new` reports success for an agent sitting on a prompt."""
+    `st agent new` reports success for an agent sitting on a prompt."""
     assert rt.is_live(consent_screen) is False
     assert rt.shows_ready_ui(consent_screen) is False
 

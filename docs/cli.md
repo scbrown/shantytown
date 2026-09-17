@@ -13,68 +13,74 @@
 st anchor [--short|--events|--harness]
                               who am I, what's on my plate         <- the anchor
 st go <item> <agent>          dispatch. this is the one that matters. the agent is required.
-st repool <item>              hand an item back to the pool: status -> open AND
-                              assignee cleared, one verified write. Clearing the
-                              assignee alone leaves it in_progress — off `bd ready`,
-                              every haul, and every plate at once.
-st defer <item> <kind> --reason-file <path|->
-                              park work with exactly one structured blocker kind
-                              (`bead|human|access|external|parked`) and a durable
-                              reason naming its referent/re-test condition
 st inbox <agent> <message>    put a message in an agent's inbox (send-keys; -d persists)
 st inbox [--count|--read|--read-id ID]
                               read or acknowledge your own inbox
 st task <title>               create a work item
 st crew [--count] [--wide]    who exists, state, role, assigned title, WHO IS FREE
-st input <agent>              what's in their input box: EMPTY | TYPED | GHOST, with the
-                              SGR evidence. --clear (typed only) --dismiss. NEVER submits.
-st ask <agent>                the QUESTION they're blocked on: prompt, the command being
-                              approved, and the numbered options VERBATIM. read-only.
-st answer <agent> <N>         select option N. refuses on a pane that isn't on a picker,
-                              echoes what it selected, and records who answered.
-st roles [--check|set|band|sync]
-                              the hierarchy: show it, verify it, write it, import it.
-                              `band <agent> <first|normal|support|last>` writes the
-                              SURVIVAL band — which agents a usage throttle spares.
-st init                       scaffold a NEW deployment (wizard): store, cards, hooks, config
-st new <agent>                create an agent from a card
-st harness <agent> [claude|codex]
+st attach [agent]             attach to a crew member — STARTING them if down (pane+socket resolved)
+st attach --no-start          attach only if already running; never create a session
+st work                       the item and the board
+  repool <item>               hand an item back to the pool: status -> open AND
+                              assignee cleared, one verified write. Clearing the
+                              assignee alone leaves it in_progress — off `bd ready`,
+                              every haul, and every plate at once.
+  defer <item> <kind> --reason-file <path|->
+                              park work with exactly one structured blocker kind
+                              (`bead|human|access|external|parked`) and a durable
+                              reason naming its referent/re-test condition
+  cost [bead] [--sync]        parser-owned cost reads and closed-bead/metric publication
+  dream [--run]               inspect or run one bounded spare-capacity reflection cycle
+st agent                      one agent
+  new <agent>                 create an agent from a card
+  stop <agent> [--reason]     stop it, and RECORD that it was deliberate
+  harness <agent> [claude|codex]
                               convert one agent to another harness: writes the card (with a
                               .bak), refuses a role the deployment pins, and relaunches with
                               `--now`. Omit the target to report what the card runs
-st start [--mode lite|heavy]  BOOT the town by mode: the admin alone, or every card. idempotent
-st start <agent>...           bring up exactly these agents (already-up is a SUCCESS, not a refusal)
-st stop <agent> [--reason]    stop it, and RECORD that it was deliberate
-st hold gaming [--clear|--status]  hold local launches during a gaming session
-st <launch cmd> --despite-hold  launch THROUGH a gaming hold, for that one command
-st window plan|drain|clear|release|abort <id>
-                              transactional fleet-maintenance ledger + relaunch lease
-st log [agent]                what happened
-st context <query>            what code should I be looking at? (bobbin)
-st doctor [--install]         what's installed, stale, missing (out-of-box)
-st dream [--run]              inspect or run one bounded spare-capacity reflection cycle
-st tend                       supervise the crew: respawn what DIED, never what was RETIRED
-st tend --reauth              relaunch every AUTH-DEAD agent (run AFTER the operator re-logs in)
-st tend --target N            respawn only toward N LIVE agents (scale UP on loss; never stops a surplus)
-st attach [agent]             attach to a crew member — STARTING them if down (pane+socket resolved)
-st attach --no-start          attach only if already running; never create a session
-st stats [agent] [--files]    files/skills plus provider tokens and cache dimensions
-st cost [bead] [--sync]           parser-owned cost reads and closed-bead/metric publication
-st stats --graph              graph-context adoption: what share of dispatches carried a
-                              quipu node, what share stated a reason for having none, and
-                              which agents have never cited one. A read over a ledger, so
-                              it is a flag here rather than a verb of its own.
-st dashboard [admin]          live, tier-scoped view: roster/state/work, self-refreshing
-st subscribe                  watch quipu entity events; route governed workflows to the admin
-st help <topic>               rationale pages: handoff/cycle, haul, inbox
-st history <agent>            captured transcripts, and whether the source survives
-st cycle <agent> [--self]     clear an agent's context WITHOUT destroying its runtime:
+  cycle <agent> [--self]      clear an agent's context WITHOUT destroying its runtime:
                               checkpoint -> stop -> relaunch -> re-dispatch. `/clear`
                               drops bypass into MANUAL; this keeps it. --self REQUESTS
                               your own cycle (an agent cannot stop itself), honoured
-                              by `st tend`. --allow-loss to cycle over unsaved work.
-st worktree <repo> [agent]    provision an agent's isolated worktree off a SHARED project repo
-st push <repo> [agent]        push wt/<agent> to EVERY remote; refuses if invoked from another branch
+                              by `st fleet tend`. --allow-loss to cycle over unsaved work.
+  input <agent>               what's in their input box: EMPTY | TYPED | GHOST, with the
+                              SGR evidence. --clear (typed only) --dismiss. NEVER submits.
+  ask <agent>                 the QUESTION they're blocked on: prompt, the command being
+                              approved, and the numbered options VERBATIM. read-only.
+  answer <agent> <N>          select option N. refuses on a pane that isn't on a picker,
+                              echoes what it selected, and records who answered.
+  log [agent]                 what happened
+  history <agent>             captured transcripts, and whether the source survives
+  stats [agent] [--files]     files/skills plus provider tokens and cache dimensions
+  stats --graph               graph-context adoption: what share of dispatches carried a
+                              quipu node, what share stated a reason for having none, and
+                              which agents have never cited one. A read over a ledger, so
+                              it is a flag here rather than a verb of its own.
+st fleet                      the whole crew
+  start [--mode lite|heavy]   BOOT the town by mode: the admin alone, or every card. idempotent
+  start <agent>...            bring up exactly these agents (already-up is a SUCCESS, not a refusal)
+  tend                        supervise the crew: respawn what DIED, never what was RETIRED
+  tend --reauth               relaunch every AUTH-DEAD agent (run AFTER the operator re-logs in)
+  tend --target N             respawn only toward N LIVE agents (scale UP on loss; never stops a surplus)
+  roles [--check|set|band|sync]
+                              the hierarchy: show it, verify it, write it, import it.
+                              `band <agent> <first|normal|support|last>` writes the
+                              SURVIVAL band — which agents a usage throttle spares.
+  init                        scaffold a NEW deployment (wizard): store, cards, hooks, config
+  hold gaming [--clear|--status]
+                              hold local launches during a gaming session
+  window plan|drain|clear|release|abort <id>
+                              transactional fleet-maintenance ledger + relaunch lease
+  dashboard [admin]           live, tier-scoped view: roster/state/work, self-refreshing
+st repo                       a shared project repo
+  worktree <repo> [agent]     provision an agent's isolated worktree off a SHARED project repo
+  push <repo> [agent]         push wt/<agent> to EVERY remote; refuses if invoked from another branch
+  context <query>             what code should I be looking at? (bobbin)
+st ops                        the installation
+  doctor [--install]          what's installed, stale, missing (out-of-box)
+  subscribe                   watch quipu entity events; route governed workflows to the admin
+  help <topic>                rationale pages: handoff/cycle, haul, inbox
+st <launch cmd> --despite-hold  launch THROUGH a gaming hold, for that one command
 ```
 
 Context occupancy hints are opt-in in `shantytown.toml`:
@@ -102,7 +108,7 @@ context settings leaves hints disabled.
 
 Existing Stop hooks read the latest turn's input occupancy, including Claude
 cache tokens, and give one advisory per threshold crossing or session change.
-They name `st cycle --self --checkpoint-file <notes-file>`; they never schedule
+They name `st agent cycle --self --checkpoint-file <notes-file>`; they never schedule
 that cycle or latch a work ceiling. Finish critical work before checkpointing.
 `st anchor` shows context measurement at startup, and `st crew` shows occupancy
 from that session's most recent hook transcript plus a named summary of live
@@ -120,7 +126,7 @@ are rendered as spaces so tracker text cannot move the terminal cursor. The
 bead-backed roster shares one store/readiness snapshot across its assigned rows;
 a new invocation reads fresh work.
 
-In an interactive `st dashboard`, **Left/Right** scroll assigned work eight
+In an interactive `st fleet dashboard`, **Left/Right** scroll assigned work eight
 characters at a time; **Home/End** show its beginning/end. `‹` marks hidden text
 to the left and `…` hidden text to the right. Shorter rows clamp independently,
 so End reveals each row's suffix. Agent/state metadata stays fixed; narrower
@@ -140,7 +146,7 @@ is reported without waiting for a doomed fetch. Refresh your own refs before
 acting on an apparent unpushed count. These display qualifications do not
 change the raw counts used by the cycle work-protection checks.
 
-`st go` and `st cycle` take `--quipu-node NAME` (repeatable) or
+`st go` and `st agent cycle` take `--quipu-node NAME` (repeatable) or
 `--no-graph-context REASON`, and every dispatch writes one row to
 `<root>/logs/graph-adoption.jsonl`. `SHANTY_GRAPH_CONTEXT=require` turns the
 default warning into a refusal; a node the graph positively does not hold is
@@ -148,7 +154,7 @@ refused under either setting, while a graph that cannot be reached never
 refuses — absence and silence are different answers, and only one of them is
 the dispatcher's problem.
 
-`st stats` keeps its row extensible through `key=value` fields. When at least
+`st agent stats` keeps its row extensible through `key=value` fields. When at least
 one local transcript has a usage snapshot, the row includes
 `usage_known=1 usage_in=N usage_out=N cache_read=N`. `usage_in` is normalized
 prompt traffic: Claude's base, cache-read and cache-creation fields are summed;
@@ -156,7 +162,12 @@ Codex input already includes its cached subset. This makes
 `cache_read / usage_in` a provider-independent prompt-cache hit rate. The fields
 are omitted—not zeroed—when every matching transcript is unknown.
 
-Thirty-three. `--dry-run` is on every command that writes, from commit one. The surface grew past the
+Thirty-three. Six verbs at the top level and twenty-seven grouped commands under five groups
+(`work`, `agent`, `fleet`, `repo`, `ops`). A group is a namespace and runs nothing, so it earns no
+slot; the count is the leaves. The flat spellings from before the grouping (st cycle for
+st agent cycle, and so on) still parse into the same handler, print one line on stderr saying
+where the command went, and go away in two releases; `ST_QUIET_ALIASES=1` silences the line.
+`--dry-run` is on every command that writes, from commit one. The surface grew past the
 original eight, each slot on a specific ask — not drift: **inbox**/**task** (the dispatch/tracker
 pair, owner-directed), **context** (the bobbin Context protocol), **doctor**
 (out-of-box detect/install, Stiwi's direct ask), **subscribe** (the quipu events adapter,
@@ -179,7 +190,7 @@ rotation, and capacity refusal without running supervision.
 
 The twenty-seventh is **defer**: the tracker already knew how to hide work, but bare
 deferral did not require the deferrer to state whether the blocker was a bead, human,
-access capability, external event, or no blocker at all. `st defer` records that kind
+access capability, external event, or no blocker at all. `st work defer` records that kind
 and requires a testable resume condition: `--until <ISO date>`, an existing
 `defer_until`, or a `resume_when: closed:<id>` / `date:<ISO date>` marker. It
 writes and verifies the reason and condition before changing status, then verifies
@@ -464,7 +475,7 @@ Measured 2026-07-22: an operator re-login rotated the shared credential and **al
 empty, which is `idle` to every other predicate. So the dead fleet stayed on the free list, Rule
 Zero held the coordinator's stop hostage to nine unfeedable corpses, and tend's cycle driver
 prompted a saturated dead pane over and over into the very banner it could not see. Recovery was
-nine by-hand `st stop` + `st new`.
+nine by-hand `st agent stop` + `st agent new`.
 
 Now it is a named verdict. The banner is runtime chrome, so `ClaudeRuntime.auth_dead()` owns the
 markers (tail-only, trailing blanks dropped, **line-anchored** — a `grep -n` over a dead pane's
@@ -474,7 +485,7 @@ flag like `ui_up`/`awaiting`; `AUTH_DEAD` outranks everything but busy/wedged (a
 computing has working auth by construction). It falls out of `free`, out of feed_check's feedable
 set, and out of the cycle driver's saturated set — one verdict, every consumer.
 
-Recovery is **one command**: `st tend --reauth`, run **after** the operator re-logs in — `/login`
+Recovery is **one command**: `st fleet tend --reauth`, run **after** the operator re-logs in — `/login`
 in a pane is an interactive browser OAuth flow nothing can drive, so a relaunch (which re-reads
 the refreshed credential) is the whole remedy. Deliberately a flag on `tend`, not an auto-heal on
 the default pass: a pass cannot know whether the operator re-logged in yet, and relaunching against
@@ -543,7 +554,7 @@ next one belongs there too rather than in a third place.
 | no `dangerous` | **says it loudly, proceeds** | `dangerous` is opt-in *by design* here, and an attended agent that wants a prompt per call is making a real choice |
 
 ```
-$ st tend --unretire ian
+$ st fleet tend --unretire ian
   ⚠ ian carries no `dangerous`, so it launches in MANUAL MODE — a human must approve EVERY
     bash call. […] If that is deliberate, nothing here is wrong. If it is not: `dangerous` on
     the card AND a relaunch (the mode is read at launch).
@@ -562,10 +573,10 @@ down; nothing is stalling) is still visible **before** someone walks into it. Ea
 short label for that column and a full sentence for the refusal: the rule is decided once, the
 length is the caller's, and the two surfaces cannot end up talking about different cards.
 
-## `st roles --check` — the hierarchy, verified
+## `st fleet roles --check` — the hierarchy, verified
 
 ```
-$ st roles --check
+$ st fleet roles --check
 
   arnold      administrator  reports: malcolm         hooks: ok live: ok
   malcolm     lead           reports: ellie, ian      hooks: ok live: ok
@@ -599,18 +610,18 @@ A **down** pane is not a fault: `route_stop` already rises to the administrator 
 unreachable, loudly and with a reason. The `live:` leg catches what that path cannot see — pane
 **up**, wiring **wrong**, so nothing rises and nothing drains.
 
-## `st init` — the scaffold wizard
+## `st fleet init` — the scaffold wizard
 
 A fresh clone could not reach a runnable state without hand-authoring JSON. Four artifacts had four
 different origins — the store directory was a `mkdir`, the crew cards came from a hierarchy file fed to
 `roles sync`, the settings files were a side effect of `roles set`, the config was hand-written — and
 nothing assigned the `pane` field that every launch, attach, stop and supervise path resolves an agent
-through. `st roles set` cannot help: it *refuses* an agent that has no card yet.
+through. `st fleet roles set` cannot help: it *refuses* an agent that has no card yet.
 
 ```text
-$ st init
+$ st fleet init
 
-  st init — a few questions. Enter accepts the [default].
+  st fleet init — a few questions. Enter accepts the [default].
 
   Administrator name (the coordinator) [admin]
   > sattler
@@ -640,7 +651,7 @@ $ st init
 ### It writes through the existing seams, and adds none
 
 Cards go in through the registry — which is where a card gets its generated pane. Roles and stop-hook
-routing go through `tier.role_set`, the same generative operation `st roles set` uses, so a crew's cards
+routing go through `tier.role_set`, the same generative operation `st fleet roles set` uses, so a crew's cards
 and its hooks cannot disagree. The settings files come from the same emitter. Nothing here is a second
 way to declare a crew; every artifact is one you would otherwise have written by hand, in the same
 place and format.
@@ -669,15 +680,15 @@ No terminal and no `-y` is a **refusal**, not an `input()` that hangs. A wizard 
 inside a script or a hook is worse than one that says it cannot ask.
 
 ```bash
-st init -y --admin boss --crew ada,bo --mode lite     # scripted: asks nothing
-st init -n                                            # every path it would write; writes nothing
+st fleet init -y --admin boss --crew ada,bo --mode lite     # scripted: asks nothing
+st fleet init -n                                            # every path it would write; writes nothing
 ```
 
 A rejected answer is re-asked with the reason, and the rejection goes out on a channel *separate* from
 the asking — routed through the same door it would call `input()` again and eat your next line as the
 answer to a question nobody asked, shifting every later answer by one.
 
-Finally, it **loads the config it just wrote**. A file this command emits but `st start` would refuse is
+Finally, it **loads the config it just wrote**. A file this command emits but `st fleet start` would refuse is
 the worst possible handoff.
 
 ### Generated pane names
@@ -692,13 +703,13 @@ was when it was written. A fleet whose live sessions are `shanty-*` must not hav
 `st-*` by a projection, which would leave every card addressing a session that does not exist while the
 real ones ran on.
 
-## `st start` — booting the town, by mode
+## `st fleet start` — booting the town, by mode
 
 One command that takes *"the crew I want tonight"* and makes it true, with an exit code that says
 whether it did.
 
 ```
-$ st start
+$ st fleet start
   mode 'lite' from the built-in defaults (no config file) — 1 agent(s): sattler
 
   + sattler      started      launched into 'shanty-sattler', hooks verified
@@ -715,11 +726,11 @@ brings up every card. A mode is a *named set* of crew in
 you make once and re-use.
 
 ```bash
-st start                      # the configured mode (default: lite = the admin)
-st start --mode heavy         # every non-retired card, admin first
-st start --mode night         # a mode your config defined
-st start billy harding        # exactly these two
-st start --mode heavy -n      # who WOULD start, and who is already up. launches nothing
+st fleet start                      # the configured mode (default: lite = the admin)
+st fleet start --mode heavy         # every non-retired card, admin first
+st fleet start --mode night         # a mode your config defined
+st fleet start billy harding        # exactly these two
+st fleet start --mode heavy -n      # who WOULD start, and who is already up. launches nothing
 ```
 
 ### It is idempotent, and that is the whole point
@@ -728,18 +739,18 @@ st start --mode heavy -n      # who WOULD start, and who is already up. launches
 who most needs a boot command is the one who does not know what is currently running — so running it
 twice is not an error, and the second run launches nothing.
 
-That is why it is not `st new` in a loop and not a flag on `st tend`. Both of those have a guard that
+That is why it is not `st agent new` in a loop and not a flag on `st fleet tend`. Both of those have a guard that
 is load-bearing where it is and wrong here: `new` **refuses** a live session ("never replace a live
 agent"), which for a boot is exactly backwards; `tend` refuses to respawn an agent it has no launch
 stamp for (another orchestrator's crew), and a cold host has no stamps for anyone.
 
-It launches through the *same* seam as `st new` — workspace ensured, MCP kit provisioned, skills
+It launches through the *same* seam as `st agent new` — workspace ensured, MCP kit provisioned, skills
 linked, stop hooks verified on the live process — so an agent booted this way is not a cheaper agent.
 
 ### What it will not do
 
 - **It will not start a `retired` agent** — not under `heavy`, not when a mode names it explicitly.
-  Retirement is a deliberate, durable shutdown; `st tend --unretire` is what undoes it. Every
+  Retirement is a deliberate, durable shutdown; `st fleet tend --unretire` is what undoes it. Every
   skipped retiree is *reported*, so silence never looks like a config line that was ignored.
 - **It will not call an unverified launch a launch.** An agent whose runtime never appeared in the
   pane is `unverified`, is not counted in `up`, and the command exits 2.
@@ -771,7 +782,7 @@ st attach                     # brings up the administrator and drops you in its
 `--no-start` keeps the old behaviour for the caller that needs it — a script attaching to whatever is
 running must be able to promise it creates nothing. A card with **no pane** is still refused rather
 than launched into an invented session: a session absent from the card is invisible to `st crew`,
-`st stop` and `st tend`.
+`st agent stop` and `st fleet tend`.
 
 A launch that could not be *verified* still attaches, loudly. The session exists; what could not be
 established is that the runtime came up. Putting your eyes on that pane is the useful next action —
@@ -779,7 +790,7 @@ exiting instead would hide the evidence behind a second command.
 
 ## Deliberate-stop metrics
 
-The crew census published by `st tend` includes
+The crew census published by `st fleet tend` includes
 `st_agents_stopped_deliberate{harness="…"}` for every observed harness. A complete
 stop-store read with no deliberate stops publishes zero. An unreadable or partial
 stop-store read omits that count, preserving the distinction between zero and an
@@ -810,7 +821,7 @@ answerable from this table alone, which is the property the old chain lacked.
 Measured live, within sixty seconds of itself:
 
 ```
-st tend -n     governor  usage 57% · 50% tier · dispatch only P1 and above
+st fleet tend -n     governor  usage 57% · 50% tier · dispatch only P1 and above
 st go <P2> tim refused: the usage governor's 50% tier is engaged and <bead> is P2
 feed_check     RULE ZERO — 1 feedable worker IDLE and 15 DISPATCHABLE bead(s).
                Top ready: <P2>; <P2>; <P2>
@@ -878,7 +889,7 @@ Four properties make this a policy rather than a work-loss bug:
 - **Nothing is consumed.** Rank 3 allows the stop without reaching the drain that
   marks events delivered, so the backlog is intact and the next wake sees all of
   it. Count it without consuming it: `st anchor --events sattler`.
-- **It removes a self-wake, never a wake.** `st tend`'s pushes, an `st inbox`, a
+- **It removes a self-wake, never a wake.** `st fleet tend`'s pushes, an `st inbox`, a
   dispatch, or you typing in the pane all still reach it.
 
 `max_quiet_minutes` is **not** a schedule to wake on — it bounds how long waiting
@@ -899,8 +910,8 @@ Three ways to say it, in increasing strength:
 
 | | what it says | who honours it |
 |---|---|---|
-| `st stop <agent> --reason "…"` | *I stopped this one, now.* Recorded durably; **not** a retirement | `st crew` and the administrator's drain report it as deliberate. Stop hooks and idle haul feeds honour the stop stamp. The removed launch stamp keeps `st tend` from respawning it; `st new <agent>` brings it back |
-| `st tend --retire <agent>` | *…and do not bring it back.* Lives on the card | `st tend` never respawns it; `st start` skips it; the drain never lists it |
+| `st agent stop <agent> --reason "…"` | *I stopped this one, now.* Recorded durably; **not** a retirement | `st crew` and the administrator's drain report it as deliberate. Stop hooks and idle haul feeds honour the stop stamp. The removed launch stamp keeps `st fleet tend` from respawning it; `st agent new <agent>` brings it back |
+| `st fleet tend --retire <agent>` | *…and do not bring it back.* Lives on the card | `st fleet tend` never respawns it; `st fleet start` skips it; the drain never lists it |
 | `[fleet] stood_down = true` | *the whole fleet is quiet by decision* | Rule Zero yields (rank 2), and the drain withholds every dispatch step |
 
 All three **announce themselves** rather than going quiet. A gate that silently
@@ -913,10 +924,10 @@ A stop record is **cleared on relaunch**, beside the launch stamp and for the sa
 reason: it describes a stop that is current. One left behind would make the agent's
 next real crash read as somebody's decision.
 
-## `st doctor` — the out-of-box feature
+## `st ops doctor` — the out-of-box feature
 
 ```
-$ st doctor
+$ st ops doctor
   • beads    1.0.5 installed
   • bobbin   0.3.1 installed — 0.6.0 available (STALE)
   ? quipu    present, but cannot report version (known upstream bug: --version opens a store)
@@ -992,7 +1003,7 @@ can be selective: repeat `--read-id ID` for messages already absorbed while leav
 an open question unread. The command preflights every ID and changes nothing if any
 named ID is not currently unread for that recipient.
 
-`st new` (including the shared relaunch path used by start, attach, and cycle) now
+`st agent new` (including the shared relaunch path used by start, attach, and cycle) now
 drains that offline case without turning startup into an acknowledgment. After the
 runtime and its hooks are verified, the launcher snapshots the recipient's unread
 messages and injects one marked startup-context block. It closes exactly those IDs
@@ -1053,7 +1064,7 @@ Two consequences worth knowing before you put `"harness": "codex"` on a card:
 - **A codex card can be a lead or an administrator.** codex's Stop hook delivers `decision: block`
   with a reason to the model, so it declares the capability the tier gates on. That reverses what
   this repo used to say, and `docs/adapters.md` carries the evidence and the version caveat.
-- **`st new`'s liveness verify does not understand codex panes yet.** The ready-UI markers are
+- **`st agent new`'s liveness verify does not understand codex panes yet.** The ready-UI markers are
   Claude Code's, and a marker nobody has watched pass is not a marker — so a codex launch reports
   *could-not-tell* (2) rather than a confident wrong answer. The agent is launched; the verify is
   the part that cannot see it.
@@ -1077,14 +1088,14 @@ never written back onto the card (that would be a claim nobody made, and it woul
 config being changed back).
 
 Both halves are validated at load. An unimplemented harness name is refused, because a typo in
-`default` moves every card in the fleet and would otherwise surface as `st new` failing agent by
+`default` moves every card in the fleet and would otherwise surface as `st agent new` failing agent by
 agent. A role nobody has is refused too — a rule that applies to nobody reads as applied.
 
 Mixed fleets work because the tier is program-blind: a codex worker sends its stop event with
 `python -m shantytown.stop_event send` and a Claude Code lead drains it, since those hook commands
 are shantytown's own CLI rather than either program's. The artifacts are per **(harness, role)**,
-so `st roles set` on a mixed crew writes `worker.settings.json` *and*
-`codex/worker/config.toml`, and `st roles --check` reads both formats back.
+so `st fleet roles set` on a mixed crew writes `worker.settings.json` *and*
+`codex/worker/config.toml`, and `st fleet roles --check` reads both formats back.
 
 Every codex fact in the implementation was read out of codex's own source, with the file named
 beside it (`shantytown/codex.py`), because a guess about another CLI's flags is exactly the kind of
@@ -1172,7 +1183,7 @@ The contract, because a program depends on it:
 - **No orchestration tier.** No mayor, deacon, witness, refinery, polecat. That tier is switched off
   on our host by directive and nothing broke — the strongest evidence we have that it isn't needed.
 - **No convoys.** `gt sling` auto-creates one per dispatch. It's a write on the hot path for
-  dashboard visibility. `st log` reads the tracker.
+  dashboard visibility. `st agent log` reads the tracker.
 - **No `st handoff`.** Gas Town's drops the settings flag and silently produces a hookless
   session. If cycling a session is needed, it's `stop` then `new`, and the card carries the identity.
 
@@ -1190,7 +1201,7 @@ CLEAR. **"I could not look" must never render as "fine."**
 
 ### Task read ordering
 
-Run `st stats --begin-task test-123` as a **standalone tool command** before
+Run `st agent stats --begin-task test-123` as a **standalone tool command** before
 starting a task, including after changing tasks in the same session. Then call
 Quipu search/query/ask through the Homelab MCP tools with `task="test-123"`.
 Dispatch and haul prompts include this declaration step. The CLI prints a request
@@ -1198,7 +1209,7 @@ marker; the post-tool hook records it with the harness session ID. Invoking the
 CLI outside a hooked tool call does not create a binding. Repeating the current
 declaration preserves earlier actions.
 
-`st stats --task-order [agent] --since 24` prints JSON with one row per observed
+`st agent stats --task-order [agent] --since 24` prints JSON with one row per observed
 session-local declaration and a count of unbound events. PASS means a successful,
 task-matched MCP read completed before the first definite material tool started
 in that scope. FAIL means the definite action started before the first recorded
@@ -1223,14 +1234,14 @@ this command.
 
 ### Gaming hold
 
-`st hold gaming` sets a persistent local manual hold; `st hold gaming --clear`
+`st fleet hold gaming` sets a persistent local manual hold; `st fleet hold gaming --clear`
 clears that override without overriding a detected game. The hold refuses new
 launches, replacement cycles, dispatch and tend respawns. Existing sessions stay
 running; the coordinator gets a deduplicated recommendation to keep leads only
 and defer heavy local work. Clearing the hold resumes normal budget policy.
 
-Automatic detection is opt-in: `st hold gaming --enable-detection`, then schedule
-`st hold gaming --probe` every minute using the deployment's normal scheduler.
+Automatic detection is opt-in: `st fleet hold gaming --enable-detection`, then schedule
+`st fleet hold gaming --probe` every minute using the deployment's normal scheduler.
 The probe only reads process argv: the executable must be `reaper`, followed by
 `SteamLaunch` and a numeric `AppId`. A Steam helper without an AppId is excluded.
 The exact `fossilize_replay` executable also holds during shader compilation,
@@ -1251,8 +1262,8 @@ long as it runs, and one appearing after the ceiling expires re-arms the hold. A
 than three minutes is UNKNOWN and does not enforce an automatic hold; a manual
 hold remains effective. `--disable-detection` does not clear a manual override.
 
-Every launch surface — `st new`, `st start`, `st attach`, `st cycle` and the
-`st harness --now` relaunch — takes `--despite-hold`, which overrides the hold
+Every launch surface — `st agent new`, `st fleet start`, `st attach`, `st agent cycle` and the
+`st agent harness --now` relaunch — takes `--despite-hold`, which overrides the hold
 for that one command and says so on stderr. The hold stays in force for
 everything else. Refusals print the flag with the operator's own command line
 appended, so the remedy can be pasted rather than reconstructed; against an
@@ -1262,7 +1273,7 @@ minute. Dispatch (`st go`) and the feed check deliberately do NOT offer the
 override: those are how an agent asks for work, and the governor exists so that
 an agent cannot decide the game is over.
 
-`st hold gaming --status` is a read-only gate for local build/reindex wrappers:
+`st fleet hold gaming --status` is a read-only gate for local build/reindex wrappers:
 exit 1 means defer, 0 means clear/off, and 2 means unknown. Never interpret 2 as
 proof of absence. `--probe --metrics <path.prom>` writes an atomic textfile for
 Prometheus, including hold state, probe freshness and session start. The probe
@@ -1296,7 +1307,7 @@ backoff. Release the hold through the existing lifecycle or gaming controls.
 
 ## Per-bead costs
 
-`st cost <bead>` reads Camayoc's `session_usage/work_cost` retrieval method.
+`st work cost <bead>` reads Camayoc's `session_usage/work_cost` retrieval method.
 This command earns a separate slot because `--sync` publishes closure receipts
 and metrics; `stats` remains an agent report. Counts are calculated only by
 Camayoc, including response deduplication and compaction, and allocated using
@@ -1308,7 +1319,7 @@ Optional `metrics_script` and `publish_script` point at Camayoc's installed
 publication commands. Missing configuration returns UNKNOWN with exit 2.
 No credentials belong in this JSON; the scheduled environment supplies them.
 
-`st cost --sync` serializes publication, writes absolute per-kind gauges, and
+`st work cost --sync` serializes publication, writes absolute per-kind gauges, and
 appends a content-addressed cost comment to closed items through the public
 tracker CLI. A late flush creates a marked provisional revision. An indeterminate
 comment write retains its exact body; two absent read-backs separated in time
@@ -1324,7 +1335,7 @@ and coverage gauges must accompany any dashboard interpretation.
 
 Declare additional holds in `<root>/shantytown.toml`; the same registry drives
 launch/dispatch/tend gates, coordinator advice and exclusive crew scope quotas.
-`st hold all --probe --slowdown --metrics <path.prom>` samples every detector.
+`st fleet hold all --probe --slowdown --metrics <path.prom>` samples every detector.
 Schedule it every minute. The legacy `hold gaming --probe` and `--status` also
 use the aggregate, so existing heavy-work wrappers honour new detectors.
 One active reason keeps the hold in force even when another reason clears or
@@ -1407,7 +1418,7 @@ already active hold while the matched process/session remains present, even if
 inactive. Steam requires `absent` and zero entry delay; its bounded shader phase
 and AppId launch grace retain their existing semantics.
 
-`st hold <name>` creates a persistent manual hold for that configured detector;
+`st fleet hold <name>` creates a persistent manual hold for that configured detector;
 `--clear` removes only that manual marker. `--disable-detection` suppresses its
 automatic observations without clearing manual holds; `--enable-detection`
 removes that runtime suppression. An explicit `enabled = false` in TOML still
@@ -1421,7 +1432,7 @@ new detector, and verify at least one run from the installed timer path.
 ### Bounded active-session cost sampling
 
 For a reviewed sampling population, set `sample_active_sources: true` in
-`cost.json`. Only `st cost --sync` rotates: one source per invocation, round-robin
+`cost.json`. Only `st work cost --sync` rotates: one source per invocation, round-robin
 by agent/session, requiring a live pane, a recent stats session and transcript
 metadata matching that session and workspace. Display commands keep their
 configured sources and never advance sampling. No capacity or token count is

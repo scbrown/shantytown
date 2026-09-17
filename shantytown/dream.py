@@ -1,4 +1,4 @@
-"""Bounded spare-capacity reflection for ``st tend`` (aegis-2o5n2).
+"""Bounded spare-capacity reflection for ``st fleet tend`` (aegis-2o5n2).
 
 Dreaming creates reviewed work artifacts; it never edits the systems it studies.
 The planner is pure.  Its state advances only after the caller observes a tracker
@@ -123,7 +123,7 @@ def plan(policy: Policy, state: dict, ready: list[dict], candidates: list[dict],
         f"Scheduled bounded {mode} cycle for domain {domain}. Quipu is the source "
         f"of truth. {outcome} Query Quipu before analysis; carry commands and "
         f"observations as evidence; stop after this one bounded domain pass. "
-        f"Provenance: st dream selected {chosen['harness']} with "
+        f"Provenance: st work dream selected {chosen['harness']} with "
         f"{float(chosen['headroom']):.0f}% measured headroom.")
     return Plan(agent=chosen["agent"], harness=chosen["harness"],
                 headroom=float(chosen["headroom"]), mode=mode, domain=domain,

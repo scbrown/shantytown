@@ -33,7 +33,7 @@ TWO LOADERS, because the two callers have opposite failure needs, and rounding
 them to one answer is a bug in whichever direction you round:
 
   load()            RAISES ConfigError on malformed TOML or an unknown key. For
-                    `st start` — an operator ran a command that launches agents,
+                    `st fleet start` — an operator ran a command that launches agents,
                     and silently starting the WRONG SET because a comma was
                     misplaced is worse than not starting. Refuse and say where.
   load_or_default() Never raises. For the STOP-HOOK path, which runs inside a
@@ -106,7 +106,7 @@ class Hibernate:
     whatever arrived, which is what keeps a coordinator awake (and billing) all
     night. Hibernating means that block is SKIPPED while the fleet has nothing
     for the coordinator to decide, so the admin's turn actually ends. It is woken
-    the way it is already woken today: `st tend`'s pushes, an `st inbox`, a
+    the way it is already woken today: `st fleet tend`'s pushes, an `st inbox`, a
     dispatch. Hibernate removes a self-wake; it never removes a wake.
 
     WHY THE UNDELIVERED EVENTS ARE SAFE. Declining to drain does NOT consume
@@ -117,7 +117,7 @@ class Hibernate:
     """
     enabled: bool = False
     # NOT a schedule to wake ON — a BOUND on how long a pending batch may sit
-    # unread while nothing pushes. 0 disables it, which is legitimate: `st tend`
+    # unread while nothing pushes. 0 disables it, which is legitimate: `st fleet tend`
     # pushes, and a push is a wake with a REASON, which beats a timer.
     #
     # There was an `idle_percent` here, and it is gone (spec 8.2): once Rule Zero
@@ -281,7 +281,7 @@ def load(root) -> Config:
     failure mode this repo has already paid for elsewhere (a hook file that was
     written, deployed, and never read): the operator edits a file, sees no error,
     and believes a policy is in force. `hibernate_percent` instead of
-    `idle_percent` must be a refusal at the top of `st start`, not a coordinator
+    `idle_percent` must be a refusal at the top of `st fleet start`, not a coordinator
     that mysteriously never sleeps.
     """
     path = config_path(root)
@@ -348,7 +348,7 @@ def _resolve(data: dict, path: Path) -> Config:
     _refuse_unknown(path, "startup", startup, _STARTUP_KEYS)
 
     # Operator modes are MERGED OVER the built-ins, never a replacement: a config
-    # that defines only `[modes.night]` still has lite and heavy, so `st start
+    # that defines only `[modes.night]` still has lite and heavy, so `st fleet start
     # --mode lite` cannot stop working because somebody added a third mode. A
     # config MAY redefine lite/heavy — that is a deliberate override of a default,
     # which is what a config file is for.
@@ -443,7 +443,7 @@ def _harness(path: Path, tbl: dict,
 
       the harness NAME, against what this build implements. A typo in
       `default` moves EVERY card in the fleet onto a program that does not
-      exist, and without this the first symptom is `st new` refusing agent by
+      exist, and without this the first symptom is `st agent new` refusing agent by
       agent with UnknownHarness — a fleet-wide config error reported as a
       per-agent launch failure.
 
@@ -814,7 +814,7 @@ def _crew(path: Path, tbl: dict, declared: set[str] | None = None) -> dict:
     (GitHub #37). Without it this gate read `role not in VALID_ROLES`, and that
     was the last place the closed enum still decided what may exist: a deployment
     could declare `[roles.advisor]` and then be REFUSED for assigning it to a crew
-    member three lines further down, while `st roles set <agent> advisor` — which
+    member three lines further down, while `st fleet roles set <agent> advisor` — which
     goes through the catalog — succeeded. Two paths to one fact, disagreeing, and
     the file-authored one lost.
 
@@ -955,7 +955,7 @@ class Roster:
 
     `skipped_retired` and `unknown` are carried rather than dropped because both
     are things the operator needs told: a mode that names a retired agent is not
-    starting it (and must say so, or `st start` looks like it silently ignored a
+    starting it (and must say so, or `st fleet start` looks like it silently ignored a
     line of config), and a mode that names an agent with no card is a typo the
     command should refuse on rather than start a smaller fleet than asked for.
     """
@@ -983,7 +983,7 @@ def resolve_crew(selectors, agents: list[Agent]) -> Roster:
     A RETIRED CARD IS NEVER SELECTED, whatever the selector said — including `*`.
     Retirement is a durable, deliberate shutdown (tend.py: a watchdog that could
     not tell "died" from "was killed on purpose" reverted a considered shutdown of
-    eight agents in about sixty seconds). `st start --mode heavy` is the exact
+    eight agents in about sixty seconds). `st fleet start --mode heavy` is the exact
     command that would resurrect a retiree, so the exclusion lives here, in the
     resolver both the command and the config path share, and it is REPORTED.
     """

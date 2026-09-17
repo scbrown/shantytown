@@ -77,9 +77,9 @@ class Status:
         retry = f"{invocation or 'st <command>'} {OVERRIDE_FLAG}"
         if self.state == "manual":
             return (f"launch anyway, this once:  {retry}",
-                    "lift the hold for good:    st hold gaming --clear")
+                    "lift the hold for good:    st fleet hold gaming --clear")
         return (f"launch anyway, this once:  {retry}",
-                "`st hold gaming --clear` will NOT lift this one — the hold is "
+                "`st fleet hold gaming --clear` will NOT lift this one — the hold is "
                 "automatic, and the next probe re-asserts it within a minute.")
 
     def render(self) -> str:

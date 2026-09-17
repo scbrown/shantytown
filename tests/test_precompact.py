@@ -7,7 +7,7 @@ These tests pin the three things that close it:
 
   * the Claude-side PreCompact hook MEASURES the boundary and WRITES a checkpoint
     there, and never blocks compaction;
-  * the codex-side `st cycle` gate refuses a relaunch when the held bead carries
+  * the codex-side `st agent cycle` gate refuses a relaunch when the held bead carries
     no handoff since the last launch — and, crucially, does NOT refuse when it
     merely could not tell;
   * the hook is delivered through provision (self-healing on every launch) and is
@@ -125,7 +125,7 @@ def test_the_refusal_names_the_remedy_and_the_override():
     g = cycle_mod.durable_gate("dearing", "aegis-902vnu", "2026-09-04T01:00:00Z", [])
     text = g.render()
     assert "br comments add aegis-902vnu" in text
-    assert "st cycle --self --checkpoint-file" in text
+    assert "st agent cycle --self --checkpoint-file" in text
     assert "--allow-loss" in text
 
 
@@ -513,7 +513,7 @@ def test_no_window_still_yields_a_floor_so_absence_is_not_taken_as_a_handoff():
 
 def test_the_SHARED_predicate_is_untouched_by_the_bound():
     """THE CONSTRAINT aegis-ugztez names explicitly: `cycle.checkpoint_since` is
-    the ONE predicate, shared with the codex `st cycle` gate, where a recency
+    the ONE predicate, shared with the codex `st agent cycle` gate, where a recency
     bound would refuse a cycle for a merely-old handoff and strand a saturated
     agent. The bound must therefore live in the CALLER's floor, never in the
     predicate."""

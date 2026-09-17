@@ -233,7 +233,7 @@ def worst_exit(rows) -> int:
 
 
 def render(rows) -> str:
-    """Human-readable block for `st doctor`. Only the findings are loud; the
+    """Human-readable block for `st ops doctor`. Only the findings are loud; the
     healthy rows are one line each so the block is scannable."""
     if not rows:
         return ("untracked-hook liveness: no non-admin agents to check "

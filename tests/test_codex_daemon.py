@@ -93,7 +93,7 @@ def test_old_lock_with_recorded_dead_control_server_is_repaired(tmp_path):
 
 def test_a_FRESH_lock_is_stale_when_the_recorded_pid_does_not_EXIST(tmp_path):
     """aegis-h5wki0 defect 1, reproduced: the repair would not fire inside ten
-    minutes, so `st stop` + `st new` — the one sequence an operator actually runs
+    minutes, so `st agent stop` + `st agent new` — the one sequence an operator actually runs
     — could not clear the lock it had just been blocked by.
 
     The recovery was to fail once, wait, and retry, i.e. to let the clock pass the
@@ -222,10 +222,10 @@ def test_the_failed_launch_line_NAMES_THE_LOCK_not_remote_control(tmp_path):
 
 
 def test_the_failed_launch_line_NAMES_THE_STOP_THEN_NEW_RECOVERY():
-    """Defect 3. `st new` refuses over the shell prompt its own failed launch
+    """Defect 3. `st agent new` refuses over the shell prompt its own failed launch
     left behind, so the obvious retry costs a round trip with the agent down."""
     line = _report(inspect=lambda _a: codex_daemon.Health("ian"))
-    assert "st stop ian" in line and "st new ian" in line
+    assert "st agent stop ian" in line and "st agent new ian" in line
     assert "refuses" in line
 
 
@@ -249,7 +249,7 @@ def test_a_THROWING_inspector_still_produces_the_report():
         raise RuntimeError("/proc unreadable")
     line = _report(inspect=boom)
     assert "could not tell" in line
-    assert "st stop ian" in line
+    assert "st agent stop ian" in line
     assert codex_daemon.FLAG not in line
 
 

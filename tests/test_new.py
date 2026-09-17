@@ -1,4 +1,4 @@
-"""st new — bring up a HOOKED agent session. shantytown #5.
+"""st agent new — bring up a HOOKED agent session. shantytown #5.
 
 The command chains the two seams: new_session (empty pane) -> Runtime.start
 (compose w/ --settings, send) -> verify PROCESS live -> 0/1/2. Every exit code
@@ -22,7 +22,7 @@ READY = "… Welcome to Claude Code …\n? for shortcuts"
 
 class _NonBlockingHarness:
     """Registered but cannot deliver blocking stop hooks — lets the capability gate
-    be exercised end-to-end through `st new` on a program the CARD names. That path
+    be exercised end-to-end through `st agent new` on a program the CARD names. That path
     is the one aegis-85ox says a directly-constructed StoplessRuntime never covers."""
     name = "stopless-test"
 
@@ -94,7 +94,7 @@ def test_new_starts_and_verifies_live(tmp_path, monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "started ellie" in out
     # the seam actually delivered a launch carrying --settings + identity
-    assert panes.sent, "st new claimed started but sent nothing"
+    assert panes.sent, "st agent new claimed started but sent nothing"
     _, text = panes.sent[-1]
     assert "SHANTY_AGENT=ellie" in text and "--settings" in text
     assert panes.exists("crew-ellie")
@@ -206,7 +206,7 @@ def test_new_refuses_unknown_agent(tmp_path, monkeypatch, capsys):
 
 def test_new_refuses_a_card_naming_an_unknown_harness(tmp_path, monkeypatch, capsys):
     """The traceback bug (aegis-85ox): an unimplemented harness is a REFUSAL, so
-    st new must exit 1 with `refused:` like every other refusal, never crash with a
+    st agent new must exit 1 with `refused:` like every other refusal, never crash with a
     stack trace. --dry-run, the bead's stated verification — and it must still
     create and launch nothing."""
     root = _world(tmp_path, harness="nonesuch")
@@ -342,7 +342,7 @@ def test_new_dry_run_prints_and_creates_nothing(tmp_path, monkeypatch, capsys):
 #
 # arnold: "the NEGATIVE control is the deliverable here. A test that only proves
 # the happy path is not evidence." That is literal — while this bug was live,
-# `st new` returned 0 and every happy-path test was green. The bug WAS the
+# `st agent new` returned 0 and every happy-path test was green. The bug WAS the
 # happy path. So each test below launches an agent whose graph position REQUIRES
 # a direction, and varies only what the live process actually carries.
 
@@ -435,20 +435,20 @@ def test_a_FAILED_verification_still_leaves_the_pane_for_inspection(tmp_path, mo
     """Documented choice, pinned so it cannot change silently: we do NOT reap on
     a verdict. The pane is the evidence of what went wrong, and a launcher that
     kills on a bad verdict is one bad verdict away from killing healthy agents.
-    The operator is told to run `st stop`."""
+    The operator is told to run `st agent stop`."""
     root = _hooked_world(tmp_path, directions=())
     panes = NullPanes(screen=READY, live=set())
     monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: panes)
 
     assert cli._cmd_new(_Args(root=root)) == cli.REFUSED
     assert panes.exists("crew-ellie"), "reaped the evidence"
-    assert "st stop ellie" in capsys.readouterr().err, "did not name the remedy"
+    assert "st agent stop ellie" in capsys.readouterr().err, "did not name the remedy"
 
 def test_new_falls_back_to_an_st_prefixed_session_when_the_card_names_no_pane(
         tmp_path, monkeypatch, capsys):
     """A card without a `pane` still has to land somewhere, and WHERE matters.
 
-    The fallback name is the one thing `st new` invents rather than reads, so it
+    The fallback name is the one thing `st agent new` invents rather than reads, so it
     is the one name that can collide with a session somebody else's tooling is
     already running under. `st-` is reserved for sessions st created; anything
     more generic (or borrowed from whatever crew convention happens to be local)

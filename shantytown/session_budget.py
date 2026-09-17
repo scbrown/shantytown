@@ -447,7 +447,7 @@ def current_session(root: Path, agent: str) -> str | None:
 # states occur and are cleanly separable — and arnold's incident gap
 # (23:12:13 -> 00:33:29, 81.3 min) is one of the 89.
 #
-# WHAT THIS DELIBERATELY DOES NOT CLAIM. A relaunch — `st cycle --self`, the
+# WHAT THIS DELIBERATELY DOES NOT CLAIM. A relaunch — `st agent cycle --self`, the
 # haul's own context handoff — DOES mint a new session id, so a held ceiling
 # does not survive one. That path is not made any worse than it is today (the
 # stretch survives a /clear, so `verdict` still trips there on its own), and it

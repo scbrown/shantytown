@@ -11,6 +11,8 @@ import re
 import shlex
 import sqlite3
 
+from .surface import ungroup
+
 _TASK = re.compile(r'[A-Za-z][A-Za-z0-9_]*-[A-Za-z0-9][A-Za-z0-9_.-]{0,95}\Z')
 _READS = frozenset('mcp__homelab__quipu_' + name for name in ('search', 'query', 'ask'))
 _MATERIAL = frozenset(('Edit', 'Write', 'MultiEdit', 'apply_patch'))
@@ -43,6 +45,7 @@ def boundary_task(payload):
         args = shlex.split((payload.get('tool_input') or {}).get('command', ''))
     except (ValueError, TypeError, AttributeError):
         return None
+    args = ungroup(args)        # `st agent stats` and `st stats` both declare
     if (len(args) == 4 and Path(args[0]).name == 'st'
             and args[1:3] == ['stats', '--begin-task'] and valid_task(args[3])):
         return args[3]
@@ -206,5 +209,5 @@ def instruction(task):
     """Name the explicit declaration on dispatch and autonomous haul paths."""
     if not valid_task(task):
         return ''
-    return (f"Before task work, run `st stats --begin-task {task}` as a standalone "
+    return (f"Before task work, run `st agent stats --begin-task {task}` as a standalone "
             f"tool command, then query Quipu with task={task}. ")

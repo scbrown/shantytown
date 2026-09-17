@@ -5,7 +5,7 @@ Stiwi 2026-08-02: "lets configure st to enable the --chrome parameter".
 WHY THIS IS NOT A ONE-CHARACTER CHANGE, and why the default test below matters
 more than the feature test. `harness.py` passes `--no-chrome` on every crew launch
 because without it a first-run claude stops at a "Claude in Chrome extension
-detected" consent prompt that BLOCKS the ready UI — so `st new`'s verify never
+detected" consent prompt that BLOCKS the ready UI — so `st agent new`'s verify never
 sees live and returns could-not-tell (2) for an agent that is perfectly fine.
 That is aegis-84z1, live-fire confirmed, and it was a production 0-path failure.
 
@@ -42,7 +42,7 @@ def _launch(**card_kw):
 
 
 def test_the_default_is_no_chrome():
-    """THE LOAD-BEARING TEST. If this ever goes red, `st new`'s liveness verify is
+    """THE LOAD-BEARING TEST. If this ever goes red, `st agent new`'s liveness verify is
     about to return could-not-tell for every healthy agent on the fleet — that is
     what aegis-84z1 measured and fixed. A green feature test beside a red default
     test is still a broken fleet."""

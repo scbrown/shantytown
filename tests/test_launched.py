@@ -43,7 +43,7 @@ def test_a_REWRITTEN_settings_file_makes_the_live_agent_STALE(tmp_path):
 
 def test_an_unstamped_agent_is_UNKNOWN_and_never_current(tmp_path):
     """An agent launched before stamping existed, or by something other than
-    `st new`, has no stamp. The honest answer is that we cannot tell.
+    `st agent new`, has no stamp. The honest answer is that we cannot tell.
 
     This is the load-bearing test. The failure this whole module exists to catch
     is a false clean bill of health; if absence of a stamp read as CURRENT, the
@@ -132,7 +132,7 @@ def test_relaunch_on_the_new_file_clears_STALE(tmp_path):
     lx.record("kelly", s)
     s.write_text('{"hooks": "new"}')
     assert lx.verdict("kelly") == STALE
-    lx.record("kelly", s)                    # st stop && st new
+    lx.record("kelly", s)                    # st agent stop && st agent new
     assert lx.verdict("kelly") == CURRENT
 
 

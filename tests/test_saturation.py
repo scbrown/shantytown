@@ -78,7 +78,7 @@ def test_st_go_REFUSES_a_saturated_pane():
     # NO "% of limit" and NO relatedness — 400k is a cycle point, not the ceiling,
     # and the rule is unconditional (Stiwi's correction).
     assert "ratio" not in d.inputs and "overlap" not in d.inputs
-    assert "checkpoint" in d.inputs["remedy"] and "st cycle --self" in d.inputs["remedy"]
+    assert "checkpoint" in d.inputs["remedy"] and "st agent cycle --self" in d.inputs["remedy"]
     assert "/clear" not in d.inputs["remedy"].replace("Do NOT /clear", "")
 
 

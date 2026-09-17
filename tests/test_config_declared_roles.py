@@ -10,7 +10,7 @@ did not, so one file could declare a role and then be refused for using it:
     [crew.malcolm]
     role = "advisor"             # ...and REFUSED here, three lines down
 
-while `st roles set malcolm advisor` succeeded, because that path goes through the
+while `st fleet roles set malcolm advisor` succeeded, because that path goes through the
 catalog. Two paths to one fact, disagreeing, and the file-authored one lost — which
 is the shape the trait model exists to kill, surviving in the last place nobody
 looked because `VALID_ROLES` still lived at the top of tier.py and still read like

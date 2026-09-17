@@ -90,7 +90,7 @@ def read_pointer() -> Path | None:
 
 
 def write_pointer(root) -> Path:
-    """Point this box at `root`. Written by `st init`; the file is one line so it
+    """Point this box at `root`. Written by `st fleet init`; the file is one line so it
     can be read and corrected with `cat` and an editor."""
     path = pointer_path()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -102,7 +102,7 @@ def resolve_root(explicit=None, *, cwd=None, discover: bool = True) -> tuple[Pat
     """(root, how) — THE resolver. See the chain above.
 
     `discover=False` stops after the environment and answers cwd/.shanty. That is
-    for `st init`, which must never adopt a store it merely FOUND: init in a new
+    for `st fleet init`, which must never adopt a store it merely FOUND: init in a new
     project directory, silently resolving to the deployment the pointer names,
     would refuse as "already a deployment" while pointing at somebody else's.
     Creating is not the same act as finding.

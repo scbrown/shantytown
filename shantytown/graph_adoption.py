@@ -1,6 +1,6 @@
 """graph_adoption — make graph context a REQUIREMENT and a MEASUREMENT.
 
-`aegis-x6yoq` shipped `--quipu-node` on `st go` and `st cycle`, so a dispatch
+`aegis-x6yoq` shipped `--quipu-node` on `st go` and `st agent cycle`, so a dispatch
 *can* carry what the graph already knows. This module is the half that decides
 whether anyone does it: an eligible dispatch carries an exact existing node or a
 stated `no_graph_context` reason, and every decision lands in a ledger so the

@@ -309,7 +309,7 @@ def with_workspace_hooks(existing: str, role: str, root=None) -> str:
     """Add the launch-time workspace hooks to an existing Codex config.
 
     These are deliberately not part of :func:`settings_for_role`: role settings
-    are emitted only by ``st roles set`` while workspace provisioning runs on
+    are emitted only by ``st fleet roles set`` while workspace provisioning runs on
     every launch.  Keeping the transform here also keeps TOML ownership in the
     Codex adapter; provision.py must not learn Codex's serialization format.
 

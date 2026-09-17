@@ -6,7 +6,7 @@ carried it. This adds the storage half: model on the card, read by get, and
 PRESERVED by set (a role change must not wipe it, same as pane).
 
 The honor-at-launch half (new/restart reads agent.model and launches with it) is
-gated on #5 (st new is unbuilt), and tracked separately. These tests prove the field
+gated on #5 (st agent new is unbuilt), and tracked separately. These tests prove the field
 survives, which is the "persisted" in "not persisted, lost on restart".
 """
 from __future__ import annotations

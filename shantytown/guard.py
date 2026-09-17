@@ -1,6 +1,6 @@
 """guard — is the SHARED CHECKOUT of each project repo actually protected?
 
-st already ASSISTS the worktree protocol: `st worktree <repo>` provisions an
+st already ASSISTS the worktree protocol: `st repo worktree <repo>` provisions an
 agent's isolated worktree, and `st go --worktree` delivers the path in the
 dispatch. This module is the other half — ENFORCEMENT — and it exists because
 the assisted half was real while the enforced half was a script somebody had to
@@ -314,7 +314,7 @@ def render(rows: list[Coverage]) -> str:
     lines.append("")
     if bad:
         lines.append(f"    {len(guarded)}/{real} guarded · {len(bad)} unguarded — "
-                     f"`st worktree <repo>` installs it")
+                     f"`st repo worktree <repo>` installs it")
         if inert:
             lines.append(f"    {len(inert)} INERT: a guard is present and cannot "
                          f"run. This is NOT 'missing' — somebody already 'fixed' "
@@ -343,7 +343,7 @@ def guard_body(override_env: str = DEFAULT_OVERRIDE_ENV) -> str:
     be in a worktree and be caught, or be in the shared checkout and slip past.
     """
     return f"""#!/bin/sh
-# {MARKER} — installed by `st worktree`. Refuses history-mutating git
+# {MARKER} — installed by `st repo worktree`. Refuses history-mutating git
 # operations in the MAIN working copy of a repo that concurrent sessions share;
 # passes silently in a linked worktree, where index and HEAD are per-agent.
 #
@@ -382,11 +382,11 @@ BLOCKED: '$hook' in the SHARED checkout $root
 
   Work in your own worktree instead:
 
-      st worktree $repo $me
-      cd "\\$(st worktree $repo $me)"
+      st repo worktree $repo $me
+      cd "\\$(st repo worktree $repo $me)"
       git fetch origin && git rebase origin/main
       ... work, commit ...
-      st push $repo $me                # EVERY remote — pushing just one forks a
+      st repo push $repo $me                # EVERY remote — pushing just one forks a
                                        # repo that has two. Rejected? fetch that
                                        # remote, merge, retry. NEVER force.
 

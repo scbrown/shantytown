@@ -24,7 +24,7 @@ shown to work. It has been shown that nobody has run it. This module is what let
 
 THE ANSWER HAS THREE VALUES, NOT TWO. `unknown` is a first-class result and is
 never rounded down to "fine": an agent launched before stamping existed, or by
-something other than `st new`, has no stamp, and the honest report is that we
+something other than `st agent new`, has no stamp, and the honest report is that we
 cannot tell. The whole bug being detected here is a false clean bill of health;
 a detector that invented one would be the same disease in a new place.
 
@@ -110,7 +110,7 @@ class FilesLaunches:
     def forget(self, agent: str) -> None:
         """Drop the stamp — the agent is no longer running on it.
 
-        `st stop` calls this. A stamp left behind after a stop would describe a
+        `st agent stop` calls this. A stamp left behind after a stop would describe a
         process that no longer exists, and the next `st crew` would happily report
         `current` for a dead agent's settings. Stamps describe LIVE launches only.
         """

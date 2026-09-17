@@ -2,7 +2,7 @@
 
 MEASURED 2026-09-16 on the live store, deferring the aegis-izh4 P0:
 
-    st defer aegis-izh4 human --reason-file … --until 2026-09-23
+    st work defer aegis-izh4 human --reason-file … --until 2026-09-23
     ⚠ COULD NOT CONFIRM: tracker reported success and the read-back disagrees
       after 1 attempt(s) — defer_until: wanted '2026-09-23',
       store still says '2026-09-23T13:00:00Z'

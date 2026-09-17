@@ -149,7 +149,7 @@ class QuipuNotQuipu(QuipuUnreachable):
     A SUBCLASS of QuipuUnreachable on purpose. The VERDICT was never wrong — a
     wrong service is still "I could not look", so every existing
     `except QuipuUnreachable` arm (roles --check's exit 2, `st project`,
-    `st subscribe`) keeps behaving correctly with no edit. What was wrong is the
+    `st ops subscribe`) keeps behaving correctly with no edit. What was wrong is the
     MESSAGE, and therefore the operator's next move: they were sent to check the
     network, or to rewrite a perfectly good query, when the remedy is to fix
     QUIPU_SERVER.
@@ -163,7 +163,7 @@ class QuipuNotQuipu(QuipuUnreachable):
 
     which turns ANY 200 that is not a query answer into ZERO ROWS. `all()`
     returned [], `roles.check` built an empty Report, and an empty Report's
-    verdict is OK — so `st roles --check --registry quipu` printed a clean bill of
+    verdict is OK — so `st fleet roles --check --registry quipu` printed a clean bill of
     health for a graph it had never spoken to. That is the "reported CLEAR when it
     couldn't reach its target" failure this module's docstring is written against,
     arriving through the one door nobody had nailed shut: a reachable stranger.
@@ -391,7 +391,7 @@ def catalog_query(onto: str = None) -> str:
     read with no code change. That generality is FALSE — `traits.Traits` has six
     fields, so a seventh axis has nowhere to land whatever the query returns. So the
     open form bought extensibility the rest of the code cannot use, at 50x the
-    latency, on the path `st roles set` validates against. Generating from AXES puts
+    latency, on the path `st fleet roles set` validates against. Generating from AXES puts
     the coupling where it already was and says so: to add an axis, add it to AXES.
     """
     from .traits import AXES

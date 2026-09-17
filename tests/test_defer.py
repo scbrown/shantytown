@@ -1,4 +1,4 @@
-"""`st defer` records blocker KIND at the moment work leaves the ready pool."""
+"""`st work defer` records blocker KIND at the moment work leaves the ready pool."""
 from __future__ import annotations
 
 import json

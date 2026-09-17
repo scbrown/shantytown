@@ -1,4 +1,4 @@
-"""`st tend --target N` — respawn TOWARD a count (aegis-9brfz, the st touchpoint).
+"""`st fleet tend --target N` — respawn TOWARD a count (aegis-9brfz, the st touchpoint).
 
 The elastic-scaling thread of the st-redesign epic has exactly one mechanism half:
 respawn toward a number. Everything else about scaling — WHICH agents a fleet should

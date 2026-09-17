@@ -6,7 +6,7 @@ Stiwi, 2026-09-03 17:36 EDT, verbatim to sattler:
      st agents"
 
 st already had a handoff mechanism (handoff_text, aegis-x6yoq): the 400k idle
-cycle line and the 600k mid-haul handoff line, both naming `st cycle --self
+cycle line and the 600k mid-haul handoff line, both naming `st agent cycle --self
 --checkpoint-file`. **The gap was never absence, it was ORDERING** (aegis-902vnu,
 sattler): those lines are "before compaction" only if every harness compacts
 LATER than they fire. Neither harness's own compaction threshold is read by st,
@@ -61,7 +61,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 # The marker that makes an auto-written checkpoint recognisable — to a reader, to
-# `st cycle`'s gate, and to this module's own "did I already do this" check. One
+# `st agent cycle`'s gate, and to this module's own "did I already do this" check. One
 # string, named once, because a marker written under one spelling and searched
 # under another is a checkpoint that exists and cannot be found.
 CHECKPOINT_MARKER = "[st precompact checkpoint]"
@@ -168,7 +168,7 @@ def _checkpoint_floor(window: str | None, now: str | None = None) -> "str | None
     """The later of the boundary window and `now - CHECKPOINT_MAX_AGE_S`.
 
     WHY THE BOUND LIVES HERE AND NOT IN `cycle.checkpoint_since` (aegis-ugztez).
-    That predicate is THE one shared with the codex-side `st cycle` gate, and the
+    That predicate is THE one shared with the codex-side `st agent cycle` gate, and the
     two callers want opposite things from staleness. The hook writing a duplicate
     checkpoint costs a comment; the GATE refusing a cycle over a merely-old
     handoff strands a saturated agent, which is the failure aegis-902vnu's
@@ -458,7 +458,7 @@ def main(argv: list[str] | None = None) -> int:
     window = _last_boundary(log, session_id) or _session_started(records)
     # Bound the window by recency too (aegis-ugztez). See _checkpoint_floor:
     # the tighter floor is passed by THIS caller so the shared predicate —
-    # and the codex `st cycle` gate that depends on it — is unchanged.
+    # and the codex `st agent cycle` gate that depends on it — is unchanged.
     since = _checkpoint_floor(window)
 
     _record(log, {"at": _now(), "agent": me, "harness": "claude",

@@ -3,8 +3,8 @@
 aegis-ay3gv2, the residue of aegis-xfmon3 step 3.
 
 The transcript archiver is a Stop hook, so it fires on a NATURAL turn end. Three
-paths take a runtime down without one: `st stop`, the cycle `st tend` performs
-THROUGH `st stop`, and the auth-dead relaunch. While the `*/30` capture timer
+paths take a runtime down without one: `st agent stop`, the cycle `st fleet tend` performs
+THROUGH `st agent stop`, and the auth-dead relaunch. While the `*/30` capture timer
 existed it covered them at a 30-minute worst case. Retiring that timer once the
 hook was proven was right for the natural-stop path and left these three with
 nothing behind them.

@@ -1,4 +1,4 @@
-"""supervisor — the systemd --user units `st tend --install` writes, and the
+"""supervisor — the systemd --user units `st fleet tend --install` writes, and the
 health signal it leaves behind.
 
 Split from tend.py on purpose: tend.py decides WHAT to do about agents and can
@@ -23,7 +23,11 @@ from pathlib import Path
 # "ours" answerable: a name match is not ownership (tmux.py states the same rule
 # for the kill path), so a unit at our path WITHOUT this marker is somebody
 # else's and we refuse rather than overwrite it.
-MARKER = "# written-by: st tend --install"
+MARKER = "# written-by: st fleet tend --install"
+# The spelling before `tend` moved under `st fleet`. A unit written by that
+# release is still OURS — `ours()` must keep answering yes for it, or the first
+# `--install`/`--uninstall` after the upgrade refuses its own file as foreign.
+_OLD_MARKER = "# written-by: st tend --install"
 
 SERVICE = "st-tend.service"
 TIMER = "st-tend.timer"
@@ -113,14 +117,14 @@ def resolve_st_bin(which=None, argv0=None) -> str | None:
 def _service(st_bin: str, root: Path) -> str:
     return f"""{MARKER}
 [Unit]
-Description=shantytown crew supervision (st tend)
+Description=shantytown crew supervision (st fleet tend)
 Documentation=man:st(1)
 
 [Service]
 Type=oneshot
 # One pass. Non-zero means it found a FAULT (a resurrected retiree, a deaf
 # agent, a refusal) — not that it failed to run, which is what systemd's own
-# failure state means. Both are visible in `st tend --status`.
+# failure state means. Both are visible in `st fleet tend --status`.
 #
 # ...AND THAT COMMENT USED TO BE THE WHOLE FIX, WHICH IS WHY THIS LINE EXISTS.
 # Naming the mismatch in a comment did not stop systemd making
@@ -139,7 +143,7 @@ Type=oneshot
 # So systemd's failure state is handed back its ONE job — did the pass run.
 # The exit code keeps carrying the finding for anything that reads it directly;
 # only systemd's interpretation changes. Faults already alert on their own
-# channel (st tend messages the coordinator), so nothing is lost by this.
+# channel (st fleet tend messages the coordinator), so nothing is lost by this.
 # 1 (REFUSED — install collision, unknown agent) stays a failure: that IS a
 # run that did not happen.
 SuccessExitStatus=2
@@ -155,7 +159,7 @@ SuccessExitStatus=2
 # The one process on this host that types into the most panes was the one
 # recording none of it.
 Environment=SHANTY_ROOT={root}
-ExecStart={st_bin} --root {root} tend
+ExecStart={st_bin} --root {root} fleet tend
 """
 
 
@@ -180,7 +184,8 @@ WantedBy=timers.target
 def ours(path: Path) -> bool:
     """Did WE write this unit? Content, not filename."""
     try:
-        return MARKER in path.read_text()
+        text = path.read_text()
+        return MARKER in text or _OLD_MARKER in text
     except OSError:
         return False
 
@@ -261,7 +266,7 @@ def install(st_bin: str, root: Path, *, interval: str = "5min", run=None,
     for p in (svc, tmr):
         if p.exists() and not ours(p):
             return False, (
-                f"REFUSED: {p} exists and was NOT written by st tend (no "
+                f"REFUSED: {p} exists and was NOT written by st fleet tend (no "
                 f"{MARKER!r}). Refusing to overwrite a unit somebody else "
                 f"installed."
             )
@@ -292,7 +297,7 @@ def uninstall(*, run=None) -> tuple[bool, str]:
     foreign = [p for p in present if not ours(p)]
     if foreign:
         return False, (f"REFUSED: {', '.join(str(p) for p in foreign)} was not "
-                       f"written by st tend. Leaving it alone.")
+                       f"written by st fleet tend. Leaving it alone.")
     if run is not None:
         run(["systemctl", "--user", "disable", "--now", TIMER])
     for p in present:
@@ -315,7 +320,7 @@ class GovernorWake:
     supervision feature that could stop supervision is a bad trade, and the
     governor's own module says so in the fail-safe it opens with.
 
-    IT NEVER DECIDES ANYTHING. The unit runs a plain `st tend`; the pass it wakes
+    IT NEVER DECIDES ANYTHING. The unit runs a plain `st fleet tend`; the pass it wakes
     takes a fresh reading and that reading decides. Nothing in this class knows
     what a tier is. That separation is decision 1 of the bead, expressed as
     structure rather than as a rule somebody has to remember: re-engaging on a

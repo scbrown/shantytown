@@ -249,7 +249,7 @@ def test_live_agents_bucket_by_governor_not_by_harness_name():
     by harness name sent every Claude agent to a key no governor line reads:
 
         st crew --governor   base live 0/6    (five agents were up)
-        st tend              base live 5/6    (codex counted into base too)
+        st fleet tend              base live 5/6    (codex counted into base too)
 
     Two surfaces, one fleet, one minute apart, wrong in opposite directions.
     Harmless while the number only fed Creel's `--running`; not harmless once it

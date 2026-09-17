@@ -39,7 +39,7 @@ def test_an_agent_between_the_lines_is_nudged_to_write_its_handoff(tmp_path):
     sent = "\n".join(m for _, m in panes.sent)
     assert "HANDOFF SOON" in sent
     assert "br comments add" in sent
-    assert "st cycle" not in sent, (
+    assert "st agent cycle" not in sent, (
         "the pre-line asks for the WRITE, not the stop — telling it to cycle "
         "here delivers the remedy at the same moment as the problem")
 

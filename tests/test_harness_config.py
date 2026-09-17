@@ -105,7 +105,7 @@ def test_an_unreadable_config_means_the_deployment_DID_NOT_SAY(tmp_path):
 
 def test_an_unimplemented_harness_name_is_REFUSED_at_load(tmp_path):
     """A typo in `default` moves EVERY card in the fleet. Without this the first
-    symptom is `st new` refusing agent by agent — a fleet-wide config error
+    symptom is `st agent new` refusing agent by agent — a fleet-wide config error
     reported as a per-agent launch failure."""
     root = _store(tmp_path, '[harness]\ndefault = "cdoex"\n')
     with pytest.raises(config.ConfigError, match="not a harness this build implements"):
@@ -185,7 +185,7 @@ def test_the_capability_gate_asks_the_program_the_CONFIG_resolves(tmp_path,
     """THE ONE THAT WOULD HAVE BEEN aegis-85ox AGAIN. The gate runs inside
     tier.role_set, which had no root at all — so a config that put leads on a
     program with no blocking stop hooks would have passed role set and refused
-    at `st new`, after the card was already on disk."""
+    at `st agent new`, after the card was already on disk."""
     class _Stopless:
         name = "stopless-test"
         def hooks(self, card):

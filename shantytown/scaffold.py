@@ -1,4 +1,4 @@
-"""scaffold — what `st init` creates, and the questions it asks to decide.
+"""scaffold — what `st fleet init` creates, and the questions it asks to decide.
 
 A fresh clone could not reach a runnable state without hand-authoring JSON. The
 store directory, the crew cards, the role settings files and the config each had a
@@ -7,7 +7,7 @@ different origin: a `mkdir`, a hierarchy file fed to `roles sync`, a side effect
 and a pane field that nothing assigned — so the first honest instruction to a new
 user was "edit these files by hand".
 
-`st init` asks instead. Everything it writes is something the operator was going to
+`st fleet init` asks instead. Everything it writes is something the operator was going to
 have to write anyway, in the same format, in the same place — this creates no new
 config surface and no second way to declare a crew.
 
@@ -53,7 +53,7 @@ class ScaffoldError(ValueError):
 
 @dataclass(frozen=True)
 class Answers:
-    """Everything `st init` needs to know. One object, so the interactive path and
+    """Everything `st fleet init` needs to know. One object, so the interactive path and
     the flags path cannot diverge in what they produce."""
     admin: str = DEFAULT_ADMIN
     workers: tuple[str, ...] = ()
@@ -122,7 +122,7 @@ def make_answers(*, admin, workers=(), workspaces=None, mode=config.DEFAULT_MODE
     if not (isinstance(max_quiet_minutes, int) and max_quiet_minutes >= 0):
         raise ScaffoldError(f"max quiet minutes must be a non-negative integer "
                             f"(0 disables the bound), got {max_quiet_minutes!r}")
-    # The mode must exist, or `st start` would refuse immediately after init told
+    # The mode must exist, or `st fleet start` would refuse immediately after init told
     # the operator everything was ready. Only the built-ins can exist at init time.
     if mode not in config.BUILTIN_MODES:
         raise ScaffoldError(f"startup mode {mode!r} is not one of "
@@ -242,12 +242,12 @@ def config_text(answers: Answers) -> str:
     which keys exist. The full annotated reference is the example file.
     """
     lines = [
-        "# shantytown.toml — written by `st init`.",
+        "# shantytown.toml — written by `st fleet init`.",
         "# The fully annotated reference: docs/shantytown.toml.example",
         "#",
         "# THIS IS THE ONE FILE YOU HAND-EDIT. crew/ and settings/ are GENERATED",
-        "# (`st role set`, `st project`, `st new` rewrite them); hierarchy files are",
-        "# an import SOURCE for `st roles sync`; and the ~/.config pointer is a",
+        "# (`st role set`, `st project`, `st agent new` rewrite them); hierarchy files are",
+        "# an import SOURCE for `st fleet roles sync`; and the ~/.config pointer is a",
         "# locator, not config. Deployment plumbing that used to live in env.json",
         "# goes in [env] here.",
         "",

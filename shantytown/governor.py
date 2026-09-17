@@ -23,10 +23,10 @@ st already makes:
   st go      already triage-gated, and already REFUSES rather than typing into a
              pane it should not. A priority floor is one more refusal, and it
              names the tier and the reading that caused it.
-  st tend    already runs every ~5 min and already decides who comes up
+  st fleet tend    already runs every ~5 min and already decides who comes up
              (`--target N` fills the tier from the root down). The governor
              withholds a respawn the same way the target cap does.
-  st stop    already RECORDS INTENT (stopped.py), so a governor-drained agent is
+  st agent stop    already RECORDS INTENT (stopped.py), so a governor-drained agent is
              distinguishable from a crashed one and tend will not fight the
              governor by respawning what the governor just asked to stand down.
 
@@ -2064,7 +2064,7 @@ class Verdict:
 
         This exists because the display and the enforcement disagreed, and the
         display was the one that lied (aegis-yc864). `st crew --governor` and
-        `st tend` named `engaged[-1]` — a POSITIONAL pick, justified by a comment
+        `st fleet tend` named `engaged[-1]` — a POSITIONAL pick, justified by a comment
         reading "cumulative, so the last one is the most restrictive". That was
         true when every tier was read against one budget. The two-budget change
         (aegis-59hao) made `engaged` span WINDOWS, and across windows position no
@@ -2309,7 +2309,7 @@ class Verdict:
         return f"the usage governor's {t.at}% tier is engaged ({seen})"
 
     def render(self, now: float | None = None) -> str:
-        """One line for `st tend` / `st tend --status`.
+        """One line for `st fleet tend` / `st fleet tend --status`.
 
         WITH A TIER ENGAGED IT NAMES THE RESET (aegis-9mehy decision 7). "we are
         throttled" and "we are throttled for another 1h35m" are different
@@ -2424,7 +2424,7 @@ def carries_any(agent, traits, catalog=None) -> tuple[bool, bool]:
 
 class Governor:
     """Read the number, decide the tier. Nothing else — the ACTING lives in the
-    surfaces that already act (`st go` refuses, `st tend` withholds, the Drainer
+    surfaces that already act (`st go` refuses, `st fleet tend` withholds, the Drainer
     asks). Every dependency is injected so a test drives 45/55/75/85/97 through
     the whole decision with no Prometheus, no clock and no filesystem.
     """
@@ -2445,7 +2445,7 @@ class Governor:
 
         `persist=False` is the READ path (`st go`). It honours a hold that is
         already recorded but never extends one — a dispatch command must not
-        ratchet fleet policy as a side effect of being run. `st tend` is the
+        ratchet fleet policy as a side effect of being run. `st fleet tend` is the
         evaluation point (it is the pass that already decides who lives), so it
         is the writer.
         """
@@ -2821,7 +2821,7 @@ class Drained:
 
 DRAINED, PENDING, FAILED = "drained", "pending", "failed"
 
-# The marker an agent puts in `st stop --reason` so the report can read its
+# The marker an agent puts in `st agent stop --reason` so the report can read its
 # outcome. A protocol needs one word both ends agree on, and free text does not
 # make one — the drain message below tells the agent exactly what to write.
 DRAIN_OK = "drained:"
@@ -2883,15 +2883,15 @@ def drain_message(agent: str, tier: int, pct: float | None) -> str:
     return (
         f"DRAIN ({tier}% usage tier, at {seen}): stop taking new work. "
         f"1) commit WIP in your OWN worktree/branch; "
-        # `st push` and not `git push`: a repo can have two live remotes, and
+        # `st repo push` and not `git push`: a repo can have two live remotes, and
         # `git push <one>` forks it — measured twice in one day (aegis-96few).
         # A drain is the worst moment for that: the work goes to one remote and
         # the agent stops, so nobody is left to notice the half that is dark.
-        f"2) st push <repo> {agent} — pushes EVERY remote (rejected? fetch that "
-        f"remote, merge, retry; NEVER force); "
-        f"3) st stop {agent} --reason '{DRAIN_OK} <repo>@<sha> ...' — that reason "
+        f"2) st repo push <repo> {agent} — pushes EVERY remote (rejected? fetch, "
+        f"merge, retry; NEVER force); "
+        f"3) st agent stop {agent} --reason '{DRAIN_OK} <repo>@<sha> ...' — that reason "
         f"IS the report, and unreported counts as NOT drained. "
-        f"Cannot push? st stop {agent} --reason '{DRAIN_FAIL} <why>' and escalate "
+        f"Cannot push? st agent stop {agent} --reason '{DRAIN_FAIL} <why>' and escalate "
         f"— never die silently on unpushed work."
     )
 

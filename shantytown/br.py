@@ -111,11 +111,11 @@ NOTES_SEPARATOR = "\n\n"
 def merge_notes(existing: str | None, addition: str) -> tuple[str, bool]:
     """(notes to write, whether --force is required) for APPENDING a defer reason.
 
-    `st defer` used to write `--notes={reason}` unconditionally, and `br update`
+    `st work defer` used to write `--notes={reason}` unconditionally, and `br update`
     refuses to replace non-empty notes with different content (beads #467). So
     defer failed on exactly the population it is most often aimed at: a bead that
     has been deferred BEFORE carries `resume_when:` in its Notes, and re-deferring
-    after a cycle of work is the commonest defer there is. st tend's self-heal
+    after a cycle of work is the commonest defer there is. st fleet tend's self-heal
     told agents to run that very command (aegis-c14kn6 is a sibling of this: a
     tool advising an action it makes impossible).
 

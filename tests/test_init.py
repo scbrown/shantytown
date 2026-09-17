@@ -1,4 +1,4 @@
-"""st init — the scaffold wizard.
+"""st fleet init — the scaffold wizard.
 
 What it has to get right, and why each one is load-bearing:
 
@@ -16,7 +16,7 @@ What it has to get right, and why each one is load-bearing:
   input() that hangs inside a script or a hook.
 
   WHAT IT PRODUCES IS RUNNABLE. The generated config must parse, and the cards
-  must be startable — an init that ends in `st start` refusing has failed at the
+  must be startable — an init that ends in `st fleet start` refusing has failed at the
   one thing it is for.
 """
 from __future__ import annotations
@@ -98,7 +98,7 @@ def test_the_admin_cannot_also_be_a_worker():
 
 def test_a_mode_that_does_not_exist_yet_is_refused():
     """init can only write a config naming a BUILT-IN mode — a custom one has
-    nowhere to be defined yet, and `st start` would refuse right after init said
+    nowhere to be defined yet, and `st fleet start` would refuse right after init said
     everything was ready."""
     with pytest.raises(scaffold.ScaffoldError):
         scaffold.make_answers(admin="a", mode="night")
@@ -193,7 +193,7 @@ def test_every_card_it_writes_has_a_GENERATED_pane(tmp_path):
 
 
 def test_the_config_it_writes_PARSES(tmp_path):
-    """A config this command writes but `st start` would refuse is the worst
+    """A config this command writes but `st fleet start` would refuse is the worst
     possible handoff."""
     root = tmp_path / ".shanty"
     cli._cmd_init(_Args(root, yes=True, admin="sattler", mode="heavy",
@@ -314,7 +314,7 @@ def test_the_interactive_path_writes_what_was_answered(tmp_path):
 # --- and then the town starts ----------------------------------------------
 
 def test_init_then_start_brings_up_the_admin(tmp_path, monkeypatch, capsys):
-    """The end-to-end claim: a fresh store, one wizard, and `st start` works —
+    """The end-to-end claim: a fresh store, one wizard, and `st fleet start` works —
     with no hand-edited JSON anywhere in between."""
     root = tmp_path / ".shanty"
     assert cli._cmd_init(_Args(root, yes=True, admin="sattler",

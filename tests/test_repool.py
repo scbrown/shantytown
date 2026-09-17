@@ -1,4 +1,4 @@
-"""`st repool` — the whole hand-back (aegis-ap4gm fix #1).
+"""`st work repool` — the whole hand-back (aegis-ap4gm fix #1).
 
 The defect: `bd update -a ""` clears the assignee and LEAVES the status at
 in_progress, so the item is in no haul, on no plate, and outside `bd ready` —

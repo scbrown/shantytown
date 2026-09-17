@@ -22,7 +22,7 @@ the settings column already exists for. Never report the card as if it were the
 posture: that incident's fix was verified by the footer flipping, NOT by the
 card content, and that distinction is the only reason we know the fix took.
 
-The rule lives HERE, once, so `st crew` and `st tend --unretire` cannot come to
+The rule lives HERE, once, so `st crew` and `st fleet tend --unretire` cannot come to
 different conclusions about the same card — the same reason `_settings_verdict`
 is shared between the roster column and `role set`.
 """
@@ -41,7 +41,7 @@ class Gap(NamedTuple):
     person who has just been stopped. Rendering the paragraph on the roster
     buries it, and rendering the label at the refusal leaves the operator to
     guess the remedy. So the RULE is decided once and the wording is chosen by
-    the caller — which is the only way `st crew` and `st tend --unretire` can be
+    the caller — which is the only way `st crew` and `st fleet tend --unretire` can be
     guaranteed to be talking about the same card.
     """
     short: str      # roster label, e.g. "no workspace"

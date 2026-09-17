@@ -48,7 +48,7 @@ live on ClaudeRuntime and are matched against a captured pane. They are the same
 KIND of per-program fact as the argv — but a marker is a claim about a UI's
 literal text, and this repo's own rule (runtime.READY_MARKERS' comment) is that a
 marker never observed passing is not a marker. There is no codex on this host to
-watch, so none are written. The honest consequence: `st new` on a codex card
+watch, so none are written. The honest consequence: `st agent new` on a codex card
 verifies liveness with Claude Code's markers, matches nothing, and reports
 could-not-tell (2) for an agent that may be fine. That is a WRONG-BUT-LOUD
 answer, which is the one this repo prefers to a confident wrong one.
@@ -353,7 +353,7 @@ class ClaudeHarness:
     def launch(self, card: Agent, settings_path: str, root=None) -> str:
         # --no-chrome: crew agents do not use the Chrome integration, and WITHOUT
         # this a first-run claude stops at a "Claude in Chrome extension detected"
-        # consent prompt that BLOCKS the ready UI — so st new's verify never sees
+        # consent prompt that BLOCKS the ready UI — so st agent new's verify never sees
         # live and returns could-not-tell (2) for an agent that would be fine.
         # Live-fire confirmed (aegis-84z1): `claude --no-chrome` goes straight to
         # the ready UI, is_live True. This is the prod 0-path fix.
@@ -367,7 +367,7 @@ class ClaudeHarness:
         # OPT-IN PER CARD (aegis-neffw, Stiwi asked for the capability). The
         # DEFAULT stays --no-chrome, so every agent that does not ask for a
         # browser keeps the aegis-84z1 fix: flipping this globally re-breaks
-        # `st new`'s liveness verify fleet-wide, which is the exact 0-path
+        # `st agent new`'s liveness verify fleet-wide, which is the exact 0-path
         # failure 84z1 was filed to repair. `--chrome` is one agent's decision on
         # one card, never a default anybody inherits.
         chrome = "--chrome" if card.chrome else "--no-chrome"
@@ -498,7 +498,7 @@ class ClaudeHarness:
                     # The unified entry PROVIDES the drain direction (rank 4
                     # delivers through the same stop_event drain). Without this
                     # line every administrator on the new chain reads as DEAF to
-                    # `roles --check` and `st tend` — a checker that cannot see
+                    # `roles --check` and `st fleet tend` — a checker that cannot see
                     # the thing it is checking for is the exact defect those
                     # surfaces exist to catch.
                     if "shantytown.stop_policy" in cmd:
@@ -655,7 +655,7 @@ def codex_sessions_setup(daemon_home: Path, durable: Path) -> str:
        rather than retiring them once this lands.
 
     Returned as shell rather than done in Python because compose() must stay
-    free of side effects -- `st new --dry-run` renders this string and must not
+    free of side effects -- `st agent new --dry-run` renders this string and must not
     touch the filesystem.
     """
     dh = shlex.quote(str(daemon_home / "sessions"))
@@ -1231,11 +1231,11 @@ class CodexHarness:
                     f"no independent codex auth.json found — preserved the "
                     f"existing credential file at {link} instead of replacing "
                     f"it with a self-link. Log in under an operator CODEX_HOME "
-                    f"and re-run `st roles set` to restore shared refreshes."]
+                    f"and re-run `st fleet roles set` to restore shared refreshes."]
             return notes + [
                 f"no codex auth.json found — agents using {home} will launch "
                 f"UNAUTHENTICATED. Run `codex login` (or set CODEX_HOME to a "
-                f"logged-in home before emitting) and re-run `st roles set`."]
+                f"logged-in home before emitting) and re-run `st fleet roles set`."]
         try:
             if link.is_symlink() and link.readlink() == source:
                 return notes
@@ -1268,7 +1268,7 @@ class CodexHarness:
         the gate exists to prevent, so it is not hidden here — it is a version
         floor we cannot check from inside st (`codex --version` at role-set time
         would be measuring a binary the agent may not even launch with), and it
-        belongs in `st doctor` as a tool row, not in a guess made here.
+        belongs in `st ops doctor` as a tool row, not in a guess made here.
         """
         from .runtime import HookSpec
         return HookSpec(blocking_stop=True)
@@ -1471,7 +1471,7 @@ def running_name(cmdline: str | None) -> str | None:
     `name_for` reads the CARD and answers what an agent WILL launch as; this
     reads a live launch line and answers what one IS. They are the same for a
     settled fleet and differ for exactly as long as a conversion is un-relaunched
-    (aegis-93fajy) — a window `st harness` made routine.
+    (aegis-93fajy) — a window `st agent harness` made routine.
 
     Asked of each harness in turn via its own `settings_in_cmdline`, the same
     format-anchored, first-match discipline `runtime.settings_path_in_cmdline`

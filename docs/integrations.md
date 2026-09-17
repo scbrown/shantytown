@@ -71,7 +71,7 @@ here costs zero lines**, because the coupling point is a database that already h
 
 ### What this forbids
 
-- **No dashboard that the harness feeds.** `st dashboard` exists, and it is allowed precisely
+- **No dashboard that the harness feeds.** `st fleet dashboard` exists, and it is allowed precisely
   because it obeys the obligation above: a self-refreshing READ of an admin's tier from the store,
   with nothing written for its benefit. Gas Town's dashboard is the other kind; it is not running;
   nobody filed a bead.
@@ -129,14 +129,14 @@ duplicates, directive conflicts, known failure patterns, relitigated decisions. 
 knowledge base, and it is exactly `docs/design.md`'s triage layer — *which must be able to refuse, not
 just nudge.* Design it as a **consumer of events**, never as a thing reactor hardcodes.
 
-### The events source we DID build: quipu (`st subscribe`)
+### The events source we DID build: quipu (`st ops subscribe`)
 
 The `events` row above sat empty for a reason: reactor, the intended source, has **no honest pull
 surface** (`/events`, `/subscribe` all 503), so a `subscribe()` on it would be an invented endpoint —
 the exact defect this repo refuses. **Quipu has one.** `GET /transactions?since=<tx>` is a real,
 cursored transaction log, so the first true `EventSource` (`shantytown/quipu_events.py`) is a
 **watermarked poll** over it: honest about being a pull, four-state liveness (the watermark advancing
-is the proof, "could not reach quipu" is never "no events"). `st subscribe` runs the loop — on new
+is the proof, "could not reach quipu" is never "no events"). `st ops subscribe` runs the loop — on new
 transactions it asks quipu which governed workflows the graph assigns (`aegis:assignsWorkflow`) and
 routes each new one to the administrator, who acts (a bead + a nudge). The watermark + handled set
 persist, so a restart resumes rather than re-routing. This is the bead-advisor's substrate: a consumer

@@ -33,7 +33,7 @@ TWO INVARIANTS, both learned expensively in this repo:
 
   PUSH ONLY WHAT WAS MEASURED. `waiting` is a live pane verdict; a worker read as
   blocked was blocked at scrape time, and the message says so plainly with the
-  route to look (`st log <worker>`). It never asserts a state it did not see.
+  route to look (`st agent log <worker>`). It never asserts a state it did not see.
 """
 from __future__ import annotations
 import json
@@ -118,9 +118,9 @@ def wake_recipient(reg, panes, worker: str, message: str) -> str | None:
 
 def _message(worker: str, state: str) -> str:
     return (f"⚠ {worker} is BLOCKED ({state}) and needs you — it will NOT time out "
-            f"or self-resolve. Look: `st log {worker}`. Answer the prompt, or tell "
+            f"or self-resolve. Look: `st agent log {worker}`. Answer the prompt, or tell "
             f"it to put the decision on its bead with a recommendation and carry "
-            f"on. (auto-notice from st tend; you were not asked to sweep.)")
+            f"on. (auto-notice from st fleet tend; you were not asked to sweep.)")
 
 
 def saturated_agents(agents, panes, runtime):
@@ -219,7 +219,7 @@ def _cycle_message() -> str:
     # this driver was handing it out on a timer, fleet-wide, twelve times in one
     # session.
     #
-    # `st cycle --self` records a request that `st tend` honours by STOP + RELAUNCH
+    # `st agent cycle --self` records a request that `st fleet tend` honours by STOP + RELAUNCH
     # instead, which restores what /clear destroys: bypass, the MCP kit, skills,
     # journaling, and a verification that the stop hooks are live on the new
     # process. The agent keeps working until tend picks the request up — nothing is
@@ -228,7 +228,7 @@ def _cycle_message() -> str:
     # SHORTENED and moved to handoff_text (aegis-x6yoq). This was ~110 words and
     # fires on a timer; Stiwi's ask was to cut the recurring pane essays. The
     # rationale above is preserved HERE, in the code, and for agents it now lives
-    # in `st help handoff` — written once and read on demand, rather than
+    # in `st ops help handoff` — written once and read on demand, rather than
     # re-pushed into every pane every few minutes. A message that long is skimmed,
     # which is how the one safety-critical sentence in it gets skipped.
     from . import handoff_text
@@ -453,7 +453,7 @@ class CycleDriver:
                 continue
             ledger[agent] = "saturated"
             prompted.append(agent)
-            self._log(f"cycle: prompted {agent} to checkpoint + st cycle --self")
+            self._log(f"cycle: prompted {agent} to checkpoint + st agent cycle --self")
 
         self._save(ledger)
         return prompted
@@ -477,7 +477,7 @@ class CycleDriver:
 class CycleBlockedNotifier:
     """TELL THE AGENT its requested cycle was REFUSED (aegis-7xptd5).
 
-    `st cycle --self` records a request and tells the agent "you stay up until
+    `st agent cycle --self` records a request and tells the agent "you stay up until
     tend does it; nothing is lost if it never fires." That sentence is true and it
     is also why a refusal is silent: the agent has been told not to expect
     anything, so it keeps working on a context it already judged full, and the
@@ -538,9 +538,9 @@ class CycleBlockedNotifier:
             where = paths[0] if paths else "an unreadable tree"
             more = (f" (+{len(paths) - 1} more)" if len(paths) > 1 else "")
             msg = (f"your requested context cycle is BLOCKED on {where}{more}: "
-                   f"commit + `st push` there, or the request stays pending and "
+                   f"commit + `st repo push` there, or the request stays pending and "
                    f"you keep running on the context you asked to shed. "
-                   f"`st cycle {agent}` shows every blocking tree.")
+                   f"`st agent cycle {agent}` shows every blocking tree.")
             if self._push(self._reg, self._panes, agent, msg) is None:
                 continue        # unreachable pane: retried next sweep, not swallowed
             ledger[agent] = sig
@@ -997,7 +997,7 @@ class IdleFleetAlerter:
                                        attempted=True, refused=True,
                                        reason=f"{verdict}: {detail}".rstrip())
                     self._log(f"haul: {worker} input preflight is {verdict} — "
-                              "NOT fed; inspect with `st input " + worker +
+                              "NOT fed; inspect with `st agent input " + worker +
                               " --show` and act explicitly")
                     continue
                 self._audit.record(window_id, leg="input", backend=backend,
@@ -1099,11 +1099,11 @@ def _idle_fleet_message(free: list[str], newly: list[str], ready) -> str:
     top = "; ".join(f"{bid} {title}"[:60] for bid, title in ready[:3])
     fresh = f" (newly idle: {', '.join(newly)})" if newly != free else ""
     return (
-        f"⚠ st tend — RULE ZERO: {len(free)} feedable worker(s) IDLE "
+        f"⚠ st fleet tend — RULE ZERO: {len(free)} feedable worker(s) IDLE "
         f"({', '.join(free)}){fresh} with {len(ready)} dispatchable bead(s) ready. "
         f"DISPATCH — a free worker while work is ready is the coordinator's stall. "
         f"`st go <bead> <worker>`. Top ready: {top}. "
-        f"(auto-alert from st tend; you were not asked to sweep.)")
+        f"(auto-alert from st fleet tend; you were not asked to sweep.)")
 
 
 class StalledAlerter:
@@ -1300,11 +1300,11 @@ class StalledAlerter:
     @staticmethod
     def _nudge_message(items, mins) -> str:
         one = items[0]
-        return (f"⚠ st tend (self-heal) — you are idle holding {', '.join(items)} "
+        return (f"⚠ st fleet tend (self-heal) — you are idle holding {', '.join(items)} "
                 f"with no progress for {mins:.0f}m. An in_progress bead DAMS your "
                 f"haul until you resolve it. If it is DONE: `br close {one}`. If "
                 f"it is blocked or gated (nobody should work it yet): put why on "
-                f"the bead, then `st defer {one} "
+                f"the bead, then `st work defer {one} "
                 f"<bead|human|access|external|parked> --reason-file <file>` — "
                 f"that records the blocker kind and takes it OUT of the ready "
                 f"pool (clearing the assignee alone only re-pools it for the next "
@@ -1313,7 +1313,7 @@ class StalledAlerter:
 
     @staticmethod
     def _escalation_message(name, items, mins) -> str:
-        return (f"⚠ st tend — NEGLECTED anchor unresolved: {name} has held "
+        return (f"⚠ st fleet tend — NEGLECTED anchor unresolved: {name} has held "
                 f"{', '.join(items)} idle with no progress for {mins:.0f}m and "
                 f"did NOT act on a self-heal nudge. The haul is dammed. Reclaim "
                 f"the item or close it on the agent's behalf — a held bead nobody "

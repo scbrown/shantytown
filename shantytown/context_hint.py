@@ -104,7 +104,7 @@ def emit(root, card, payload=None) -> bool:
         if category == "high":
             message = (f"CONTEXT HINT: {reading.label()}; configured hint at "
                        f"{limits.threshold_pct:g}%. Finish any critical operation, write "
-                       "a checkpoint, then request `st cycle --self --checkpoint-file "
+                       "a checkpoint, then request `st agent cycle --self --checkpoint-file "
                        "<notes-file>`. This is advisory: continue safely if needed; "
                        "no cycle has been scheduled.")
         else:

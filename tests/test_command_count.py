@@ -3,59 +3,134 @@
 cli.py's docstring once said "Ten commands" while the code had eleven (context
 landed unannounced) and docs/cli.md said "nine" and "eight" — a three-way drift in
 the one repo whose entire pitch is the exact command count. A number nobody enforces
-is a comment. This test makes the docstring and the code prove each other: the set
-of commands named in the docstring must equal the set of subparsers actually wired.
-Add a command without updating the docstring (or vice versa) and this goes red.
+is a comment. This test makes the docstring and the code prove each other: the
+surface named in the docstring must equal the surface actually wired. Add a command
+without updating the docstring (or vice versa) and this goes red.
+
+SINCE 2026-09-17 THE SURFACE HAS SHAPE, not just size (Stiwi's ruling): six verbs
+stay top-level and the other twenty-seven live under five groups. So this file
+pins three things that have to move together:
+
+  * the STRUCTURE — which names are verbs, which are groups, which leaf lives
+    under which group — in cli.SURFACE, in the parser, and in the docstring;
+  * the COUNT — thirty-three LEAVES (6 verbs + 27 grouped commands). That is the
+    number: a group runs no handler and earns no slot. Every English copy of it
+    (the docstring's first line, README, docs/cli.md — the latter two are pinned
+    in test_docs_drift.py) is checked against the parser;
+  * the ALIAS CONTRACT — every old top-level spelling still parses the same
+    arguments into the same handler, prints exactly one line to stderr, and is
+    hidden from `st --help`. Hidden matters: an alias that shows IS a top-level
+    command to anyone reading the surface, which is how `role`/`project` once
+    held the count at 19 (below).
 """
 from __future__ import annotations
 import argparse
 import re
 
+import pytest
+
 import shantytown.cli as cli
 
 
-def _actual_subcommands() -> set[str]:
-    parser = cli.build_parser()
+# --- reading the parser --------------------------------------------------------
+
+def _top(parser=None) -> argparse._SubParsersAction:
+    parser = parser or cli.build_parser()
     for action in parser._actions:
         if isinstance(action, argparse._SubParsersAction):
-            return set(action.choices)
-    return set()
+            return action
+    raise AssertionError("st has no subcommands?")
 
 
-def _documented_commands() -> set[str]:
-    """Parse the `prime · go · ...` command line(s) from the module docstring.
-    Each token's first word is the command name (roles [--check] -> roles,
-    role set -> role, doctor [--install] -> doctor)."""
+def _actual_surface() -> dict[str, frozenset[str] | None]:
+    """{verb: None, group: frozenset(leaves)} — VISIBLE names only, read off the
+    wired parser, not off cli.SURFACE (the point is to check that table)."""
+    out: dict[str, frozenset[str] | None] = {}
+    top = _top()
+    for name in top.choices:                  # iteration sees only the visible
+        sub = next((ac for ac in top.choices[name]._actions
+                    if isinstance(ac, argparse._SubParsersAction)), None)
+        is_group = name in cli.SURFACE and cli.SURFACE[name] is not None
+        # `roles` and `window` carry sub-verbs of their own; only a GROUP's
+        # subparsers count as leaves of the surface.
+        out[name] = frozenset(sub.choices) if (sub is not None and is_group) else None
+    return out
+
+
+def _actual_leaves() -> set[str]:
+    surface = _actual_surface()
+    return {name for name, leaves in surface.items() if leaves is None} | {
+        leaf for leaves in surface.values() if leaves for leaf in leaves}
+
+
+def _hidden_aliases() -> set[str]:
+    return set(_top().choices.hidden)
+
+
+# --- reading the docstring -----------------------------------------------------
+
+def _documented_surface() -> dict[str, frozenset[str] | None]:
+    """Parse the surface lines at the top of the module docstring.
+
+    Two line shapes, both separating commands with `·` and carrying NO prose:
+      `task · go · inbox [--count]`            verbs (a line NOT starting with `·`)
+      `agent → new · stop · cycle [--self]`    a group and its leaves
+      `        · ask · answer`                 continues the line above
+    Each token's first word is the command name (`hold gaming [...]` -> hold).
+    The justification bullets ALSO start with `·` but each has an em-dash
+    description (`· doctor — ...`); excluding em-dash lines keeps this from
+    scraping a command name out of prose and masking a real drift.
+    """
     doc = cli.__doc__ or ""
-    names: set[str] = set()
+    out: dict[str, set[str] | None] = {}
+    current: str | None = None                  # the group being continued
     for line in doc.splitlines():
-        # The command-list lines separate commands with `·` and carry NO prose.
-        # The justification bullets ALSO start with `·` but each has an em-dash
-        # description (`· doctor — ...`); excluding em-dash lines keeps this from
-        # scraping a command name out of prose and masking a real drift.
         if "·" not in line or "—" in line:
             continue
-        for token in line.split("·"):
+        stripped = line.strip()
+        if "→" in stripped:
+            group, rest = stripped.split("→", 1)
+            current = group.strip()
+            out[current] = set()
+        elif stripped.startswith("·"):
+            rest = stripped                     # continuation of `current`
+        else:
+            current, rest = None, stripped      # a verbs line
+        for token in rest.split("·"):
             token = token.strip()
             if not token:
                 continue
             first = token.split()[0]
-            if re.fullmatch(r"[a-z]+", first):
-                names.add(first)
-    return names
+            if not re.fullmatch(r"[a-z]+", first):
+                continue
+            if current is None:
+                out[first] = None
+            else:
+                out[current].add(first)         # type: ignore[union-attr]
+    return {k: (frozenset(v) if v is not None else None) for k, v in out.items()}
 
 
-def test_docstring_and_code_agree_on_the_command_set():
-    documented = _documented_commands()
-    actual = _actual_subcommands()
+# --- the structure: docstring == table == parser -------------------------------
+
+def test_docstring_and_code_agree_on_the_surface():
+    documented = _documented_surface()
+    actual = _actual_surface()
     assert documented == actual, (
-        f"command surface drifted — docstring lists {sorted(documented)} but the "
-        f"parser wires {sorted(actual)}. Update BOTH the cli.py docstring and this "
-        f"is deliberate friction: the count is the product."
+        f"command surface drifted — the docstring lists {documented} but the parser "
+        f"wires {actual}. Update BOTH cli.SURFACE and the cli.py docstring; this is "
+        f"deliberate friction: the count is the product."
     )
 
 
-def test_the_surface_is_twenty():
+def test_the_table_is_the_parser():
+    """cli.SURFACE is what build_parser() wires FROM, so it cannot drift from the
+    parser by construction — this pins that the construction still holds (a leaf
+    added with sub.add_parser instead of leaf() would show up here)."""
+    table = {k: (frozenset(v) if v else None) for k, v in cli.SURFACE.items()}
+    assert table == _actual_surface()
+
+
+def test_six_verbs_five_groups_twenty_seven_leaves():
     """A bare number check too, so 'the docs claim N' is itself pinned.
 
     Grew to 13 with `project` — materialize the crew cards from the graph (the
@@ -70,161 +145,92 @@ def test_the_surface_is_twenty():
     triggers by running the safe-looking thing. The verb gets its own slot so the
     mutation shows up in shell history, in `--help`, and here.
 
-    Grew to 20 with `input` — the input box as a surface you can ASK. Same
-    argument as `tend` above and it lands the same way: this could have been a
-    flag on `crew`, but `crew` is a READ over the whole roster and `input`
-    targets one agent AND can mutate its buffer (--clear/--dismiss). A
+    Grew to 15 with `attach`, 16 with `dashboard`, 17 with `subscribe`, 18 with
+    `worktree`, 19 with `stats`, 20 with `start` and `input`, 21 with `init`;
+    SHRANK to 19 when the `role`/`project` aliases were deleted; grew to 22 with
+    `ask` + `answer`, 23 with `push`, and on to 31 with `harness` and 33 with
+    `hold`/`window`/`cost`/`dream`. Each argument is in git history at the
+    commit that grew the number; the one this file keeps applying is: a
     consequence hidden behind a flag on a read command is a consequence someone
-    triggers by running the safe-looking thing. It earns its slot for a second
-    reason too: a coordinator about to run the stranded-input SOP needs a verb
-    to type, and "run st crew and read the fourth column" is not one.
+    triggers by running the safe-looking thing, so a WRITE gets its own verb.
 
-    Grew to 15 with `attach` — attach to a crew member by name. A tool that
-    manages the crew but cannot attach to one is missing its most basic verb, and
-    the manual path (`tmux -L gt-ae5f35 attach -t shanty-weaver`) leaks the two
-    internal details — the socket name and the pane prefix — that st already hides
-    in crew/go/tend. It is not a flag on `crew` for the same reason `tend` is not:
-    `crew` is a read, and `attach` hands the terminal to a live agent's pane. It
-    earns the slot the way go/stop do — a core, frequent operator action with its
-    own refusal discipline (unknown or down agent refused by name), and it is
-    where "use shanty, not bare tmux" becomes the default: attach goes THROUGH
-    shanty (themed) when present, bare tmux only when absent.
-
-    Grew to 16 with `dashboard` — a live, self-refreshing view of ONE admin's
-    tier: roster, current work, the REUSED state verdicts, last activity, tallies.
-    It is not `crew` with a flag: `crew` is a one-shot flat roster of the whole
-    fleet; `dashboard` is tier-scoped, composed (crew + anchor + the event
-    ledger), and always-on — the operator keeps it in a second pane. Different
-    lifetime, different scope, different composition; it earns its own verb the
-    way an observability panel is not a status line.
-
-    Grew to 17 with `subscribe` — watch quipu entity events and route assigned
-    workflows to the admin (the events adapter integrations.md sketched, finally
-    built first-class on Quipu's cursored transaction log). Owner-directed; the
-    count is deliberate friction, not a ceiling. (15-vs-16 note: attach/dashboard
-    and subscribe landed on DIVERGED remotes — origin and github each grew a
-    disjoint surface off 14, and both sides' "15" claims were true in their own
-    world. This merge is where the two worlds reconciled to 17.)
-
-    Grew to 18 with `worktree` — provision an agent's isolated worktree off a
-    SHARED project repo. A shared checkout shares its index and HEAD, so two agents
-    committing there corrupt each other silently; st gives each its own worktree so
-    the shared tree is never the write surface for two writers. It is not a flag on
-    another command because it MUTATES the working set (creates a worktree, or
-    removes one under --gc) — the same reason tend and attach earn their own slots:
-    a consequence hidden behind a flag on a read is a consequence someone triggers
-    by running the safe-looking thing. Owner-directed (the worktrees bug).
-
-    Grew to 19 with `stats` (aegis-5lwl, PART B of st observability): the query
-    surface over the LOCAL capture store (.shanty/stats.sqlite) that the
-    PostToolUse/Stop hooks append to — files touched, skills used, tokens per
-    agent. It is a command and not a dashboard pane because it answers OFFLINE
-    questions (what did kelly touch last night) that the live tier view never
-    holds, and it is a command and not a flag on `log` because log reads the
-    narrative ledger while stats reads the capture store — two stores, two
-    reads, and hiding one behind the other's flag would imply they agree.
-
-    Grew to 20 with `start` — BOOT the town, by token-conservation MODE (Stiwi,
-    owner-directed). The declarative launch surface: it takes "the crew I want
-    tonight" and makes it true, with an exit code that says whether it did.
-
-    It is not a flag on either neighbour, and both refusals are about a guard that
-    is load-bearing WHERE IT IS and wrong here. `new`'s clobber guard REFUSES a
-    live session ("never replace a live agent") — correct for one explicit launch,
-    and for a boot exactly backwards, since "already up" is the most common
-    success. `tend` refuses to respawn an agent it has no launch stamp for
-    (aegis-2j2r: another orchestrator's crew), and a cold host has no stamps for
-    anyone — loosening that gate to fit a boot would loosen it for the 5-minute
-    timer too. So `start` is the declarative, idempotent one: it converges the
-    fleet on a named mode, leaves live agents untouched, and never attaches
-    (attaching is `attach`, which now launches on demand — the systemd/cron caller
-    cannot afford a foreground tmux client).
-
-    Grew to 21 with `init` — the scaffold wizard (Stiwi, owner-directed). Nothing
-    created a store: the crew cards came from a hand-authored hierarchy file fed to
-    `roles sync`, the settings files were a side effect of `roles set`, the config
-    was hand-written, and `roles set` REFUSES an agent with no card — so the first
-    instruction to a new user was "edit this JSON".
-
-    It earns a slot rather than becoming `roles sync --interactive` because sync
-    PROJECTS an existing authority (the graph, or a hierarchy file) onto cards and
-    is idempotent against it, while init ASKS and creates the authority — including
-    two artifacts sync has no opinion about at all, the settings files and
-    shantytown.toml. Hanging "invent a crew" off the flag of a command whose
-    contract is "mirror what is already declared" would make sync's most dangerous
-    property (it overwrites cards to match a source) reachable from a prompt.
-
-    SHRANK to 19: the `role` and `project` ALIASES are gone (deprecated
-    2026-07-24, deleted after the one-week window). This is the only direction of
-    change this file has ever recorded, and it is worth stating why the earlier
-    consolidation did not achieve it: `roles set`/`roles sync` subsumed the two
-    old spellings while KEEPING them as aliases, and the count stayed put —
-    because an alias is a top-level command to argparse, to `st --help`, and to
-    anyone reading the surface. Deletion is the lever; consolidation alone was
-    not.
-
-    Grew to 22 with `ask` and `answer` — the blocking PICKER as a surface you can
-    read and act on (aegis-w30p2). `input` above gave the coordinator a verb for
-    what is in an agent's BUFFER; neither it nor anything else could say what a
-    blocked agent was being ASKED, so the coordinator went back to raw
-    `capture-pane`/`send-keys` at other agents' panes — six times in one evening
-    across five agents, hand-typing a socket name and a pane name every time.
-
-    They are TWO slots and not one flag, on the rule this file keeps applying:
-    `ask` is a read over one agent, `answer` acts inside another agent's decision.
-    That is the widest consequence any verb here carries, and it does not get to
-    hide behind a flag on the safe-looking command. There is deliberately no third
-    slot for `cancel` — Escape already cancels a tool call, and `input --dismiss`
-    already sends Escape.
-
-    Grew to 23 with `push` — push the agent's branch to EVERY remote. This is the
-    one case where a verb exists because `git` cannot be told the truth about the
-    repo: a checkout can have two LIVE remotes that are peers rather than
-    mirrors, and `git push <one>` is then a correct-looking command that forks it.
-    Measured twice in one day, and the commits left dark by the first fork were
-    fixes to the staleness detector itself — the mechanism whose whole job is to
-    notice a tree is behind.
-
-    It is not a flag on `worktree` for the reason `tend` is not a flag on `crew`:
-    `worktree` provisions and reports, `push` publishes. And it cannot be a
-    documentation fix, because the recipe was already correct — each agent's
-    branch is configured to a different remote, so the same recipe lands in
-    different places depending on whose tree runs it and nobody is doing anything
-    wrong.
-
-    Grew to 31 with `harness` — convert one agent from one harness to another
-    (aegis-6glmer; Stiwi 2026-09-04: "it should be easy for you to convert crew to
-    claude and governor should recommend"). The evening that produced the directive
-    ran three Claude leads while nine codex workers sat governor-held, and the
-    conversion was five hand edits of `.shanty/crew/<agent>.json` in one night —
-    one reverted, one briefly wrong in both directions.
-
-    It is not a flag on `new` for the reason `push` is not a flag on `worktree`:
-    `new` LAUNCHES what the card already says, this DECIDES what the card says, and
-    the two have opposite safety defaults. `new` refuses a live session because
-    replacing one is a mistake; `harness` must be usable on a live agent precisely
-    because that is the fleet you want to convert, so it writes the card and leaves
-    the restart to `--now`.
+    REGROUPED at 33 (2026-09-17): the count did not move, the shape did. Six
+    verbs stay top-level — task, go, inbox, crew, anchor, attach — and the other
+    twenty-seven live under work / agent / fleet / repo / ops. The count is
+    LEAVES: a group runs nothing, so it earns nothing. Thirty-eight names on the
+    tree, thirty-three commands.
 
     Each command still earns its slot."""
-    assert len(_actual_subcommands()) == 33, (
-        "the command count changed. If that's intended, update the number here and "
-        "the cli.py docstring together — and say why the surface grew in docs/cli.md."
+    surface = _actual_surface()
+    verbs = [n for n, leaves in surface.items() if leaves is None]
+    groups = {n: leaves for n, leaves in surface.items() if leaves is not None}
+    assert len(verbs) == 6, verbs
+    assert len(groups) == 5, sorted(groups)
+    assert sum(len(l) for l in groups.values()) == 27
+    assert len(_actual_leaves()) == 33, (
+        "the command count changed. If that's intended, update the number here, "
+        "cli.SURFACE and the cli.py docstring together — and say why the surface "
+        "grew in docs/cli.md."
     )
 
 
-def test_the_deleted_aliases_are_really_gone():
-    """The negative control for the deletion above.
+def test_the_grouping_is_the_one_ruled():
+    """The specific assignment, verbatim from the ruling, so a leaf cannot quietly
+    migrate between groups."""
+    assert _actual_surface() == {
+        "task": None, "go": None, "inbox": None, "crew": None, "anchor": None,
+        "attach": None,
+        "work": frozenset({"repool", "defer", "cost", "dream"}),
+        "agent": frozenset({"new", "stop", "harness", "cycle", "input", "ask",
+                            "answer", "log", "history", "stats"}),
+        "fleet": frozenset({"start", "tend", "roles", "init", "hold", "window",
+                            "dashboard"}),
+        "repo": frozenset({"worktree", "push", "context"}),
+        "ops": frozenset({"doctor", "subscribe", "help"}),
+    }
 
-    Both old spellings must be UNKNOWN COMMANDS, not silently-accepted ones: an
-    alias that still parses keeps the surface at 21 no matter what the docstring
-    claims, and this file exists because a number nobody enforces is a comment.
+
+def test_the_prose_numbers_in_the_docstring_match_the_parser():
+    """THE ONE COPY OF THE COUNT NOTHING WAS CHECKING (found while adding `cycle`).
+
+    This file pins the SET of commands (docstring list vs parser) and bare integers
+    above. It never pinned the ENGLISH WORDS in the first line of cli.py's
+    docstring — and that word had silently drifted to "Twenty-two" while the
+    parser wired twenty-three. 'A number nobody enforces is a comment.' The list
+    was enforced, so the drift hid in the sentence ABOVE the list — the line a
+    reader actually quotes. Now every number in that line is checked: verbs,
+    groups, grouped commands and the total."""
+    words = {5: "five", 6: "six", 7: "seven", 20: "twenty", 21: "twenty-one",
+             22: "twenty-two", 23: "twenty-three", 24: "twenty-four",
+             25: "twenty-five", 26: "twenty-six", 27: "twenty-seven",
+             28: "twenty-eight", 29: "twenty-nine", 30: "thirty",
+             31: "thirty-one", 32: "thirty-two", 33: "thirty-three",
+             34: "thirty-four", 35: "thirty-five", 36: "thirty-six"}
+    surface = _actual_surface()
+    n_verbs = sum(1 for l in surface.values() if l is None)
+    n_groups = sum(1 for l in surface.values() if l is not None)
+    n_grouped = sum(len(l) for l in surface.values() if l is not None)
+    first = (cli.__doc__ or "").splitlines()[0].lower()
+    for n, what in ((n_verbs, "verbs"), (n_groups, "groups"),
+                    (n_grouped, "grouped commands"), (n_verbs + n_grouped, "in all")):
+        assert re.search(rf"\b{words[n]}\b", first), (
+            f"the parser wires {n} {what} but cli.py's docstring opens with "
+            f"{first!r} — update the words, not just the list.")
+
+
+# --- the deleted aliases stay deleted -----------------------------------------
+
+def test_the_deleted_aliases_are_really_gone():
+    """The negative control for the deletion of `role`/`project` (2026-07-24).
+
+    Both old spellings must be UNKNOWN COMMANDS, not silently-accepted ones — and
+    not hidden aliases either: the two-release alias window below is for the
+    regrouping, and these two had theirs.
     """
-    import pytest
     from shantytown.cli import main
 
-    assert "role" not in _actual_subcommands()
-    assert "project" not in _actual_subcommands()
+    assert "role" not in _top().choices and "role" not in _hidden_aliases()
+    assert "project" not in _top().choices and "project" not in _hidden_aliases()
     for gone in (["role", "set", "ellie", "worker"], ["project", "-n"]):
         with pytest.raises(SystemExit) as e:
             main(gone)
@@ -234,28 +240,124 @@ def test_the_deleted_aliases_are_really_gone():
 def test_the_canonical_spellings_still_work():
     """...and the handlers behind them are UNTOUCHED. Only the alias parsers went;
     `roles set` / `roles sync` dispatch to the same functions they always did."""
-    assert {"roles"} <= _actual_subcommands()
+    assert "roles" in _actual_surface()["fleet"]
     assert cli._cmd_role is not None and cli._cmd_project is not None
 
 
-def test_the_prose_number_in_the_docstring_matches_the_parser():
-    """THE ONE COPY OF THE COUNT NOTHING WAS CHECKING (found while adding `cycle`).
+# --- the alias contract for the regrouping ------------------------------------
 
-    This file pins two things: the SET of commands (docstring list vs parser) and a
-    bare integer in the test above. It never pinned the ENGLISH WORD in the first
-    line of cli.py's docstring — and that word had silently drifted to "Twenty-two"
-    while the parser wired twenty-three.
+def test_every_old_spelling_is_a_hidden_alias_of_the_same_parser():
+    """The 27 grouped commands each keep their old top-level spelling: the SAME
+    parser object (so the arguments cannot drift between the two spellings),
+    resolvable by name, and invisible to every rendering."""
+    top = _top()
+    assert _hidden_aliases() == set(cli.GROUP_OF) == {
+        leaf for leaves in cli.SURFACE.values() if leaves for leaf in leaves}
+    for leaf, group in cli.GROUP_OF.items():
+        group_sub = next(ac for ac in top.choices[group]._actions
+                         if isinstance(ac, argparse._SubParsersAction))
+        assert top.choices[leaf] is group_sub.choices[leaf], leaf
+        assert leaf not in list(top.choices), f"{leaf} leaks into iteration"
+    assert not [a.dest for a in top._choices_actions if a.dest in cli.GROUP_OF]
 
-    That is precisely the defect this file was written to prevent, one level up:
-    'a number nobody enforces is a comment.' The list was enforced, so the drift
-    hid in the sentence ABOVE the list — the line a reader actually quotes. Now the
-    word is checked too, so all three copies have to move together."""
-    words = {20: "twenty", 21: "twenty-one", 22: "twenty-two", 23: "twenty-three",
-             24: "twenty-four", 25: "twenty-five", 26: "twenty-six",
-             27: "twenty-seven", 28: "twenty-eight", 29: "twenty-nine",
-             30: "thirty", 31: "thirty-one", 32: "thirty-two", 33: "thirty-three"}
-    n = len(_actual_subcommands())
-    doc_first_line = (cli.__doc__ or "").splitlines()[0].lower()
-    assert words[n] in doc_first_line, (
-        f"the parser wires {n} commands but cli.py's docstring opens with "
-        f"{doc_first_line!r} — update the word, not just the list.")
+
+def test_st_help_lists_exactly_the_six_verbs_and_five_groups(capsys):
+    with pytest.raises(SystemExit) as e:
+        cli.main(["--help"])
+    assert e.value.code == 0
+    out = capsys.readouterr().out
+    listed = re.findall(r"^    ([a-z]+) ", out, re.M)
+    assert listed == list(cli.SURFACE), listed
+    # The choice braces on the usage line and the header, too — not just the rows.
+    braces = set(re.findall(r"\{([a-z,]+)\}", out))
+    command_braces = {b for b in braces if b.split(",")[0] in cli.SURFACE}
+    assert command_braces == {",".join(cli.SURFACE)}, braces
+
+
+def test_a_group_help_lists_its_leaves_in_the_declared_order(capsys):
+    with pytest.raises(SystemExit) as e:
+        cli.main(["agent", "--help"])
+    assert e.value.code == 0
+    out = capsys.readouterr().out
+    assert re.findall(r"^    ([a-z]+) ", out, re.M) == list(cli.SURFACE["agent"])
+
+
+def test_both_spellings_parse_to_the_same_namespace(monkeypatch):
+    monkeypatch.setenv(cli.QUIET_ALIASES_ENV, "1")
+    cases = [
+        (["cycle", "ada", "--self", "-r", "x"], ["agent", "cycle", "ada", "--self", "-r", "x"]),
+        (["roles", "sync", "--dry-run"], ["fleet", "roles", "sync", "--dry-run"]),
+        (["hold", "gaming", "--status"], ["fleet", "hold", "gaming", "--status"]),
+        (["window", "plan", "w1"], ["fleet", "window", "plan", "w1"]),
+        (["stats", "--files", "ada"], ["agent", "stats", "--files", "ada"]),
+        (["defer", "i1", "human", "--reason", "r"], ["work", "defer", "i1", "human", "--reason", "r"]),
+        (["help", "haul"], ["ops", "help", "haul"]),
+        (["push", "repo", "--branch", "b"], ["repo", "push", "repo", "--branch", "b"]),
+    ]
+    for old, new in cases:
+        a, b = vars(cli._parse_args(old)), vars(cli._parse_args(new))
+        b.pop(f"{new[0]}_cmd")              # the group's own dest; the alias has none
+        assert a == b, (old, new)
+        assert a["cmd"] == old[0] and a["group"] == new[0]
+
+
+def test_the_old_spelling_prints_exactly_one_line_to_stderr(monkeypatch, capsys):
+    """The notice, verbatim, and NOTHING else on stderr — `--help` still exits 0
+    and stdout is the leaf's help, so the alias changes only the spelling."""
+    monkeypatch.delenv(cli.QUIET_ALIASES_ENV, raising=False)
+    with pytest.raises(SystemExit) as e:
+        cli.main(["cycle", "--help"])
+    assert e.value.code == 0
+    out, err = capsys.readouterr()
+    assert err == "st cycle is now st agent cycle; the old spelling goes away in two releases.\n"
+    assert out.startswith("usage: st agent cycle")
+
+    with pytest.raises(SystemExit):
+        cli.main(["--root", "/nowhere", "roles", "sync", "--help"])
+    _, err = capsys.readouterr()
+    assert err == "st roles is now st fleet roles; the old spelling goes away in two releases.\n"
+
+    # The new spelling says nothing at all.
+    with pytest.raises(SystemExit):
+        cli.main(["agent", "cycle", "--help"])
+    assert capsys.readouterr().err == ""
+
+
+def test_the_notice_is_silenced_by_the_env(monkeypatch, capsys):
+    monkeypatch.setenv(cli.QUIET_ALIASES_ENV, "1")
+    with pytest.raises(SystemExit) as e:
+        cli.main(["cycle", "--help"])
+    assert e.value.code == 0
+    assert capsys.readouterr().err == ""
+
+
+def test_an_unknown_option_on_a_nested_leaf_is_a_usage_error(capsys):
+    """On Python 3.14 `st fleet roles set lex worker --reports-to hammond` raised a
+    TypeError out of parse_intermixed_args (a parser with subparsers cannot be
+    intermixed-parsed) instead of a usage error. Now the intermixed re-parse
+    walks down to the LEAF parser, so this is exit 2 with a usage line, under
+    either spelling."""
+    for argv in (["roles", "set", "lex", "worker", "--reports-to", "hammond"],
+                 ["fleet", "roles", "set", "lex", "worker", "--reports-to", "hammond"]):
+        with pytest.raises(SystemExit) as e:
+            cli.main(argv)
+        assert e.value.code == 2
+        err = capsys.readouterr().err
+        assert "unrecognized arguments: --reports-to hammond" in err
+        assert "usage: st fleet roles set" in err
+
+
+def test_the_intermixed_path_still_reopens_a_variadic_positional():
+    """The case _parse_args exists for: a flag BEFORE the trailing positional."""
+    a = cli._parse_args(["inbox", "ian", "-n", "hi"])
+    assert a.cmd == "inbox" and a.message == ["hi"] and a.dry_run
+
+
+def test_the_machine_readable_flags_stay_top_level():
+    """An external status bar shells out to these; they are the part of the
+    surface that must not move at all."""
+    for argv, flag in ((["anchor", "--short"], "short"), (["anchor", "--events"], "events"),
+                       (["anchor", "--harness"], "harness"), (["crew", "--count"], "count"),
+                       (["crew", "--governor"], "governor"), (["inbox", "--count"], "count")):
+        a = cli._parse_args(argv)
+        assert a.cmd == argv[0] and a.group is None and getattr(a, flag) is True

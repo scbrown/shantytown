@@ -177,7 +177,7 @@ Each is a test, and each fails on today's code.
 5. Any raised exception in ranks 1–5 **allows** the stop and emits no payload.
 6. A worker's own stop event is persisted **before** any verdict is computed, and a
    verdict that blocks does not double-persist it.
-7. `st doctor` / `roles --check` still detect an agent whose live process lacks the
+7. `st ops doctor` / `roles --check` still detect an agent whose live process lacks the
    required stop wiring — the direction names change, so the wiring checker must
    be updated in the same change or it silently passes everything.
 
@@ -241,7 +241,7 @@ max_quiet_minutes = 60    # 0 = no heartbeat: wake only when something pushes
   not a schedule to wake *on*; it is a **bound on how long a pending batch may go
   unread** when nothing else pushes. That is a real safety valve — without it, a
   fleet with no new work could leave reports pending indefinitely — so it stays,
-  named honestly. `0` means "no valve", which is legitimate: `st tend` pushes, and
+  named honestly. `0` means "no valve", which is legitimate: `st fleet tend` pushes, and
   a push is a wake with a reason, which is always better than a timer.
 
 ### 8.3 Code: what moves and what dies
@@ -264,7 +264,7 @@ tests are the valuable ones and they survive verbatim, retargeted at rank 3.
 
 ```text
 # TODAY — the knob appears broken, and nothing explains it
-$ st start --mode heavy
+$ st fleet start --mode heavy
   hibernate 'schedule': the administrator's stop will NOT wake it until 30 min elapsed.
   ... admin never goes quiet. No output anywhere says why.
 

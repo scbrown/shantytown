@@ -10,7 +10,7 @@ was six stalls.
 The two states are the same OBSERVABLE — a record in cycle-requests.json — and
 they need opposite responses: a cycle in flight is waited out; a refused one needs
 somebody to commit a tree. Worse, nobody told the AGENT, which is the one party
-that can clear a dirty tree, and `st cycle --self` had explicitly told it to
+that can clear a dirty tree, and `st agent cycle --self` had explicitly told it to
 expect nothing ("you stay up until it does").
 
 These tests pin three things: the refusal is RECORDED, `st crew` renders it
@@ -52,7 +52,7 @@ def test_a_refusal_is_recorded_on_the_pending_request(tmp_path):
 
 
 def test_marking_an_agent_that_never_REQUESTED_a_cycle_mints_nothing(tmp_path):
-    """An operator's ad-hoc `st cycle <agent>` refusing must not create a request.
+    """An operator's ad-hoc `st agent cycle <agent>` refusing must not create a request.
 
     Otherwise the display this bead fixes would start inventing stalls: every
     refused hand-run cycle would appear in `st crew` as an agent waiting for a
@@ -156,7 +156,7 @@ def test_the_agent_is_told_which_path_blocks_its_cycle(tmp_path):
     (pane, text), = panes.sent
     assert pane == "shanty-malcolm"
     assert "/home/x/quipu-wt/malcolm" in text
-    assert "st push" in text, "the message must name the remedy, not just the fault"
+    assert "st repo push" in text, "the message must name the remedy, not just the fault"
 
 
 def test_the_same_refusal_is_NOT_repeated_every_pass(tmp_path):

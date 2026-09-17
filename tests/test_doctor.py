@@ -1,4 +1,4 @@
-"""st doctor. Every state is reached from injected probes, and each
+"""st ops doctor. Every state is reached from injected probes, and each
 one that could hide a lie is tested for BOTH outcomes:
 
   - absent AND present (a doctor that only ever says "healthy" is indistinguishable

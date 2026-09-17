@@ -66,7 +66,7 @@ def test_restart_verdict_names_the_commands_that_fix_it(tmp_path, monkeypatch, c
     assert rc == REFUSED
     err = capsys.readouterr().err
     assert "RESTART" in err
-    assert "st stop ellie" in err and "st new ellie" in err, (
+    assert "st agent stop ellie" in err and "st agent new ellie" in err, (
         "a RESTART verdict that does not name the remedy is the #5 dead end"
     )
     assert "never handoff" in err
@@ -85,7 +85,7 @@ def test_the_remedy_line_is_specific_to_RESTART(tmp_path, monkeypatch, capsys):
     assert rc == REFUSED
     err = capsys.readouterr().err
     assert "REFUSE" in err
-    assert "st stop" not in err, "told the operator to kill an agent that is mid-flight"
+    assert "st agent stop" not in err, "told the operator to kill an agent that is mid-flight"
 
 
 def test_a_successful_dispatch_publishes_the_agents_plate(tmp_path, monkeypatch):

@@ -239,7 +239,7 @@ def test_dispatch_is_SILENT_when_the_two_remotes_agree(tmp_path, monkeypatch, ca
 
 
 def test_st_worktree_reports_a_second_remote_that_is_ahead(tmp_path, capsys):
-    """`st worktree` is the command that prints the bare 'current with <ref>'
+    """`st repo worktree` is the command that prints the bare 'current with <ref>'
     line — the one a human reads as an all-clear before starting work."""
     repo = _two_remotes_second_ahead(tmp_path)
     root = _root(tmp_path)
@@ -247,7 +247,7 @@ def test_st_worktree_reports_a_second_remote_that_is_ahead(tmp_path, capsys):
     assert rc == OK
     cap = capsys.readouterr()
     assert "forge/main" in cap.out + cap.err, \
-        f"st worktree did not report the divergence: {cap.out + cap.err!r}"
+        f"st repo worktree did not report the divergence: {cap.out + cap.err!r}"
 
 
 def test_st_worktree_is_SILENT_when_the_two_remotes_agree(tmp_path, capsys):

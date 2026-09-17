@@ -17,10 +17,10 @@ facts, each measured (aegis-3laza):
 
 The sequence that DOES work was found by hand five times in one session:
 
-    st stop <agent> --reason '<checkpoint>'
-    st new <agent>
+    st agent stop <agent> --reason '<checkpoint>'
+    st agent new <agent>
 
-`st new` restores in one step what `/clear` destroys — bypass permissions, the MCP
+`st agent new` restores in one step what `/clear` destroys — bypass permissions, the MCP
 kit, skills, journaling wiring, and it verifies stop hooks on the live process.
 This module makes that a verb instead of tribal knowledge held by whoever last
 debugged it.
@@ -41,7 +41,7 @@ from pathlib import Path
 
 
 # The stop reason prefix that marks a deliberate cycle, so a drain can tell one
-# from a crash or a retirement. `st tend` matches on it.
+# from a crash or a retirement. `st fleet tend` matches on it.
 CYCLE_REASON = "cycle-requested"
 
 
@@ -80,7 +80,7 @@ class TreeUntracked:
     and relaunches into the SAME clone, so untracked files are not touched by it
     and are at risk from nothing it does; folding them into TreeRisk is what made
     the guard refuse on strays. The refusal was survivable. Its stated remedy was
-    not: "commit and `st push` first" answered with `git add .` commits whatever
+    not: "commit and `st repo push` first" answered with `git add .` commits whatever
     the stray happened to be, and on the night this was filed one agent's stray
     was a `.mcp.json.bak-mcpfix` holding a live bearer token (aegis-3v10dt) — the
     guard's own exit path was the leak.
@@ -159,8 +159,8 @@ class TreeStranded:
     strictly weaker one than losing them.
 
     So during a forge outage the old behaviour traded the weaker risk for the
-    stronger one. `st push` cannot succeed, the refusal is therefore permanent,
-    `st tend` re-requests forever, and the agent keeps filling until it hits the
+    stronger one. `st repo push` cannot succeed, the refusal is therefore permanent,
+    `st fleet tend` re-requests forever, and the agent keeps filling until it hits the
     hard context wall — at which point it cannot compact, so it cannot write a
     checkpoint either, and the UNWRITTEN context is lost for good (aegis-902vnu).
     Refusing to cycle a saturated agent to protect commits that a cycle does not
@@ -179,7 +179,7 @@ class TreeStranded:
             f"{self.path}: {self.unpushed} commit(s) on no remote ref, and the "
             f"push remote is UNREACHABLE — not blocking this cycle, because a "
             f"cycle relaunches this same clone and does not touch commits",
-            f"    PUSH THESE when the remote returns: cd {self.path} && st push",
+            f"    PUSH THESE when the remote returns: cd {self.path} && st repo push",
         ]
 
 
@@ -191,7 +191,7 @@ class TreeUnverified:
     Currency is a DUPLICATION risk — "somebody may have built this already" —
     and this gate exists for LOSS. During the forge sshd outage a failed fetch
     set `Staleness.error`, `assess` read that as a tree it could not read, and
-    `st cycle` refused fleet-wide on clean trees with nothing unpushed. The
+    `st agent cycle` refused fleet-wide on clean trees with nothing unpushed. The
     refusal was permanent by construction: committing and pushing cannot revive
     a dead remote, so the one remedy the refusal names was unavailable, and
     sessions grew past the context wall with the cycle wall refusing the cycle.
@@ -283,7 +283,7 @@ def assess(agent: str, trees, checkpoint: str, staleness,
     2026-09-03, because `Staleness.dirty` folded them in with tracked
     modifications. Three cycles were refused in one night on strays — a
     `.playwright-mcp/` directory, a stale png, a `server.pid` — and the refusal
-    handed each agent "commit and `st push` first" as the way out. An agent that
+    handed each agent "commit and `st repo push` first" as the way out. An agent that
     does that with `git add .` commits the stray, and one of those strays was a
     `.mcp.json.bak-mcpfix` carrying a live bearer token. A guard whose exit path
     is "commit everything" is a leak mechanism when the dirt is a secret backup.
@@ -359,7 +359,7 @@ def assess(agent: str, trees, checkpoint: str, staleness,
     if risks and not allow_loss:
         return Verdict(
             agent, False,
-            "work would be lost or stranded. Commit and `st push` first, or pass "
+            "work would be lost or stranded. Commit and `st repo push` first, or pass "
             "--allow-loss if you have decided it is expendable (NOT --dry-run and "
             "NOT a general --force: this override is named on its own so that "
             "reaching past some other refusal cannot disarm it).",
@@ -386,7 +386,7 @@ def checkpoint_since(comments, who: str, since) -> bool:
     """Has `who` written anything on this bead since `since`?
 
     THE ONE PREDICATE, shared by the two mechanisms that need it — the codex-side
-    `st cycle` gate below and the Claude-side PreCompact hook (precompact.py).
+    `st agent cycle` gate below and the Claude-side PreCompact hook (precompact.py).
     Two spellings of "is there a checkpoint" would be two answers, and the one
     that decides is whichever ran; keeping it here also means the Claude hook
     borrows the harness-neutral policy rather than inventing a parallel one.
@@ -452,7 +452,7 @@ class DurableGate:
             f"terminal; the next session reads the BEAD. Write one first:\n"
             f"    br comments add {self.bead} --file <notes>\n"
             f"  (state, landed-vs-local, exact next step, rollback). Or "
-            f"`st cycle --self --checkpoint-file <notes>`, which posts it for "
+            f"`st agent cycle --self --checkpoint-file <notes>`, which posts it for "
             f"you. --allow-loss overrides, and spends the reasoning.")
 
 
@@ -480,7 +480,7 @@ class Requests:
 
     An agent cannot cycle itself in-process: the stop kills the session, which
     kills the `st` invocation doing the stopping. So `--self` cannot BE a cycle; it
-    can only be a request that something outside the session honours. `st tend`
+    can only be a request that something outside the session honours. `st fleet tend`
     is that something, and it already runs on a timer.
 
     This removes three of the five measured failures without touching the hard
@@ -538,7 +538,7 @@ class Requests:
         and a coordinator read that as progress.
 
         NO-OP WITHOUT A PENDING REQUEST, and that is the point rather than a
-        convenience: an operator's ad-hoc `st cycle <agent>` on an agent that never
+        convenience: an operator's ad-hoc `st agent cycle <agent>` on an agent that never
         asked must not mint a request record. Only a refusal of something already
         pending is a stall. Returns whether anything was recorded.
         """
@@ -591,7 +591,7 @@ def refusal_summary(record) -> tuple[str, str]:
 
     FIRST path, not all of them: `st crew` is a one-line-per-agent table, and an
     agent with eight dirty trees would otherwise wrap the roster. The first is
-    enough to act on — the operator runs `st cycle <agent>` for the full list, and
+    enough to act on — the operator runs `st agent cycle <agent>` for the full list, and
     the refusal itself already names every one.
     """
     refused = (record or {}).get("refused") or {}

@@ -129,7 +129,7 @@ def plan_switch(*, agent: str, current: str, target: str, role: str,
     if pinned is not None and pinned != target and force:
         warnings.append(
             f"FORCED past the {role!r} -> {pinned!r} pin; this agent now "
-            "violates the deployment's own admission rule and `st new` will "
+            "violates the deployment's own admission rule and `st agent new` will "
             "refuse to launch it until the pin or the card changes")
 
     if lane_held and not force:
@@ -168,13 +168,13 @@ class Lane:
     #: They differ for the compatibility lane: the governor is called `base` and
     #: the program is `claude`. An operator converts an agent to a HARNESS, so a
     #: sentence reading "convert 3 codex workers to base" names something that
-    #: is not a valid argument to `st harness` — which is how a recommendation
+    #: is not a valid argument to `st agent harness` — which is how a recommendation
     #: becomes unactionable while looking complete.
     harness: str | None = None
 
     @property
     def program(self) -> str:
-        """What to actually pass to `st harness`."""
+        """What to actually pass to `st agent harness`."""
         return self.harness or self.name
 
     @property

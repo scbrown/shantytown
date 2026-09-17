@@ -245,7 +245,7 @@ class Catalog:
                                 for k, v in axes.items()}
         # DEFAULTS UNDERNEATH, the deployment's on top. A deployment that ranks
         # its own survival values wins outright; one that ranks none still has a
-        # total order, so `st tend --target N` and the usage governor cannot fall
+        # total order, so `st fleet tend --target N` and the usage governor cannot fall
         # back to alphabetical. Only when `builtin` is on — a catalog built with
         # builtin=False is asking for exactly what it was handed.
         self.precedence = dict(DEFAULT_PRECEDENCE) if builtin else {}

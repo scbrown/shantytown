@@ -1,8 +1,8 @@
-"""st doctor asking the question about ITSELF (aegis-daoh, dearing's ruling).
+"""st ops doctor asking the question about ITSELF (aegis-daoh, dearing's ruling).
 
 doctor reported installed-vs-available for beads/bobbin/quipu/reactor and never
 once about `st`. The tool that audits deployment drift was the only tool exempt
-from the audit — and a stale `st doctor` reports a stale world confidently.
+from the audit — and a stale `st ops doctor` reports a stale world confidently.
 
 The tests that matter are NOT the ok-path one. They are:
 

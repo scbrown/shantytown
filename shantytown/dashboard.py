@@ -180,7 +180,7 @@ def render(d: Dashboard, now: float, *, width: int | None = None,
 
     # Honest about the gap: throughput/timing/files/skills/tokens need Part B.
     lines.append("  stats: throughput · time-on-item · files · skills · tokens — "
-                 "need capture (st stats, Part B; not yet measured, not faked).")
+                 "need capture (st agent stats, Part B; not yet measured, not faked).")
     return "\n".join(lines)
 
 

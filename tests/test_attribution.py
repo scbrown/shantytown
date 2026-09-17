@@ -1,7 +1,7 @@
 """AN UNSIGNED PANE MESSAGE READS AS THE OPERATOR — the rest of the send paths.
 
 aegis-5vxmz. `st inbox` was signed first (eb26be0); this covers the two classes
-the bead deliberately left open — DISPATCH (`st go`) and the automated `st tend`
+the bead deliberately left open — DISPATCH (`st go`) and the automated `st fleet tend`
 PUSHES — plus the one format function they now share.
 
 EVERY TEST HERE IS HALF OF A DIFFERENTIAL. A test that only asserts the prefix
@@ -62,7 +62,7 @@ def test_a_dispatch_names_the_coordinator_who_sent_it(world):
     panes = NullPanes(screen="")
     Dispatcher(reg, trk, panes, sender="arnold").go("item-1", "ellie")
     assert panes.sent == [
-        ("%5", "[from arnold] Work is on your hook: item-1 — Restore the den — Before task work, run `st stats --begin-task item-1` as a standalone tool command, then query Quipu with task=item-1. ")]
+        ("%5", "[from arnold] Work is on your hook: item-1 — Restore the den — Before task work, run `st agent stats --begin-task item-1` as a standalone tool command, then query Quipu with task=item-1. ")]
 
 
 def test_an_unattributable_dispatch_stays_BARE(world):
@@ -72,7 +72,7 @@ def test_an_unattributable_dispatch_stays_BARE(world):
     reg, trk = world
     panes = NullPanes(screen="")
     Dispatcher(reg, trk, panes).go("item-1", "ellie")
-    assert panes.sent == [("%5", "Work is on your hook: item-1 — Restore the den — Before task work, run `st stats --begin-task item-1` as a standalone tool command, then query Quipu with task=item-1. ")]
+    assert panes.sent == [("%5", "Work is on your hook: item-1 — Restore the den — Before task work, run `st agent stats --begin-task item-1` as a standalone tool command, then query Quipu with task=item-1. ")]
 
 
 def test_the_prefix_is_on_the_payload_plan_hands_to_triage_and_the_send(world):
@@ -116,7 +116,7 @@ def test_the_prefix_does_not_break_the_send_verify(world):
     assert trk.get("item-1").status == "in_progress"
 
 
-# --- st tend: pushes nobody composed by hand ---------------------------------
+# --- st fleet tend: pushes nobody composed by hand ---------------------------------
 # These are the ones most easily mistaken for the operator. They arrive in the
 # imperative — "CYCLE NOW", "close-or-release", "<worker> is BLOCKED and needs
 # you" — which is exactly the register an operator instruction arrives in, and

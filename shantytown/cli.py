@@ -1,13 +1,38 @@
-"""st — the CLI. Thirty-three commands, and the count is load-bearing: each earns its slot.
+"""st — the CLI. Six verbs, five groups, twenty-seven grouped commands: thirty-three, and the count is load-bearing: each earns its slot.
 
-    anchor [--short|--events|--harness] · go · repool · defer · inbox [--count] · task
-    · crew [--count|--governor] · input [--show|--clear|--dismiss] · ask · answer
-    · roles [--check|set|band|sync] · init · new · harness · start [--mode]
-    · stop · log · context · doctor [--install] · dream [--run]
-    · tend [--install|--status|--reauth|--target] · attach [-r|--no-start]
-    · dashboard [admin] · subscribe · cycle [--self|--allow-loss] · worktree [--gc]
-    · push [--branch] · window {plan|drain|clear|release|abort} · stats · cost [--sync] · help <topic>
-    · history <agent> · hold gaming [--clear|--status|--probe]
+    task · go · inbox [--count] · crew [--count|--governor]
+    · anchor [--short|--events|--harness] · attach [-r|--no-start]
+    work  → repool · defer · cost [--sync] · dream [--run]
+    agent → new · stop · harness · cycle [--self|--allow-loss]
+            · input [--show|--clear|--dismiss] · ask · answer · log · history <agent> · stats
+    fleet → start [--mode] · tend [--install|--status|--reauth|--target]
+            · roles [--check|set|band|sync] · init · hold gaming [--clear|--status|--probe]
+            · window {plan|drain|clear|release|abort} · dashboard [admin]
+    repo  → worktree [--gc] · push [--branch] · context
+    ops   → doctor [--install] · subscribe · help <topic>
+
+THE SURFACE WAS REGROUPED, and the count did not move (Stiwi, 2026-09-17). Six
+verbs stay top-level — the ones typed all day, and the ones an external status
+bar shells out to (`anchor --short|--events|--harness`, `crew --count|--governor`,
+`inbox --count` are untouched). The other twenty-seven live under five groups:
+`work` (the item and the board), `agent` (one agent), `fleet` (the whole crew),
+`repo` (a shared project repo) and `ops` (the installation). A grouped command
+keeps exactly its arguments, its help, its handler, its stdout and its exit
+codes; only its spelling moved — `st cycle ada --self` is `st agent cycle ada
+--self`. The table is SURFACE below, and build_parser() wires from it.
+
+Every OLD spelling still works, as a HIDDEN alias of the same parser object: it
+parses the same arguments into the same handler and prints one line to stderr
+(`st cycle is now st agent cycle; the old spelling goes away in two releases.`),
+silenced by $ST_QUIET_ALIASES. Hidden means hidden — `st --help` lists the six
+verbs and the five groups and nothing else — because an alias that shows is a
+command to anyone reading the surface, which is how `role`/`project` once held
+the count at 19 (see tests/test_command_count.py).
+
+The count is thirty-three LEAVES: the six verbs plus the twenty-seven grouped
+commands, i.e. everything that runs a handler. A group runs nothing and earns
+no slot; it is a namespace, and the discipline this file argues is about what
+gets a handler.
 
 `harness <agent> [claude|codex]` earned the thirty-first slot (aegis-6glmer, Stiwi
 2026-09-04: "it should be easy for you to convert crew to claude"). It is a command
@@ -97,7 +122,7 @@ grew well past the original ten, each slot on a specific ask — not drift:
               spare provider capacity. It is not a tend flag because operators
               need a read/preview surface for its due state and safety gates.
 The count is PINNED by a test (tests/test_command_count.py): the next command
-either updates this number or fails CI. This docstring used to say "ten" while the
+either updates SURFACE, this docstring and this number together, or fails CI. This docstring used to say "ten" while the
 code had eleven (context landed unannounced) — a count nobody enforces is a
 comment, and in a repo whose whole thesis is the exact count, that is the bug.
 """
@@ -179,7 +204,7 @@ from .workspace import (WorkspaceError, agent_worktrees, cleanup_worktree,
                         upstream_ref, worktree_for)
 from .provision import ProvisionError, provision as provision_ws
 
-# `st new` liveness poll: how long to wait for the runtime to appear in the pane
+# `st agent new` liveness poll: how long to wait for the runtime to appear in the pane
 # before returning could-not-tell (2). Module constants so tests can shrink them
 # to (1, 0) — a real launch takes a few seconds, a test must not.
 _LIVE_ATTEMPTS = 20
@@ -504,7 +529,7 @@ def _dispatch_gate(a):
     """The `st go` half of the governor: `item -> "" | refusal`.
 
     A PURE READ (`persist=False`). Dispatching must not RATCHET fleet policy as a
-    side effect of being run — `st tend` is the pass that already decides who
+    side effect of being run — `st fleet tend` is the pass that already decides who
     lives and it is the one writer of the engaged tier. A dispatch that extended
     a hysteresis hold would mean the governor's state depended on how often
     somebody typed `st go`.
@@ -657,6 +682,76 @@ def _default_root() -> Path:
     return resolve_root()[0]
 
 
+# THE SURFACE lives in surface.py (one copy, importable by the hook-side
+# matchers without importing this module); build_parser() wires FROM it and
+# tests/test_command_count.py checks the parser, the docstring and the docs
+# against it. Re-exported here because this is where a reader looks for it.
+from .surface import SURFACE, GROUP_OF  # noqa: E402
+
+_GROUP_HELP = {
+    "work": "the item and the board: repool, defer, cost, dream",
+    "agent": "one agent: new, stop, harness, cycle, input, ask, answer, log, history, stats",
+    "fleet": "the fleet: start, tend, roles, init, hold, window, dashboard",
+    "repo": "a shared project repo: worktree, push, context",
+    "ops": "the installation: doctor, subscribe, help",
+}
+#: Set to silence the one-line notice an old spelling prints. For tests and
+#: hooks — an operator typing `st cycle` is exactly who the line is for.
+QUIET_ALIASES_ENV = "ST_QUIET_ALIASES"
+
+
+class _Choices(dict):
+    """The top-level `choices` map, with HIDDEN entries: the old spellings.
+
+    argparse RESOLVES a command through `in` and `[]`, which see every entry, and
+    RENDERS usage, the help listing and "invalid choice (choose from ...)" by
+    iterating, which sees only the visible ones. So `st cycle` still parses and
+    dispatches, and appears nowhere a reader would take it for the surface.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.hidden: set[str] = set()
+        self.order: list[str] = []      # SURFACE's order, for the usage line
+
+    def __iter__(self):
+        visible = [name for name in super().__iter__() if name not in self.hidden]
+        return iter(sorted(visible, key=lambda n: (n not in self.order,
+                                                   self.order.index(n) if n in self.order else 0)))
+
+    def keys(self):
+        return list(iter(self))
+
+    def __len__(self) -> int:
+        return sum(1 for _ in iter(self))
+
+
+class _TopLevel(argparse._SubParsersAction):
+    """The top-level subparsers action, able to carry a hidden alias.
+
+    An alias is the SAME parser object registered under a second name — not a
+    second parser wired to look alike, which is how `role`/`project` once held
+    the surface at 19 and how two spellings drift. It is hidden from `st --help`
+    (see _Choices) and it never becomes a `_choices_actions` entry, so the help
+    formatter has nothing to list.
+    """
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._name_parser_map = self.choices = _Choices()
+
+    def add_alias(self, name: str, parser: argparse.ArgumentParser) -> None:
+        self._name_parser_map[name] = parser
+        self._name_parser_map.hidden.add(name)
+
+
+def _order_help(subs: argparse._SubParsersAction, order: list[str]) -> None:
+    """Sort a subparsers action's `--help` listing (and usage line) into `order`."""
+    subs._choices_actions.sort(key=lambda a: order.index(a.dest))
+    if isinstance(subs.choices, _Choices):
+        subs.choices.order = order
+
+
 def build_parser() -> argparse.ArgumentParser:
     """The full `st` parser. Exposed so tests/test_command_count.py can introspect
     the command surface and pin it to the docstring — the count is the thesis."""
@@ -705,7 +800,25 @@ def build_parser() -> argparse.ArgumentParser:
                          "quipu (the graph), or toml ([crew.<name>] in "
                          "<root>/shantytown.toml — hand-authored, read-only, for a "
                          "deployment that wants no ontology).")
-    sub = ap.add_subparsers(dest="cmd", required=True)
+    sub = ap.add_subparsers(dest="cmd", required=True, action=_TopLevel)
+    group_subs: dict[str, argparse._SubParsersAction] = {}
+    for group, leaves in SURFACE.items():
+        if not leaves:
+            continue
+        gp = sub.add_parser(group, help=_GROUP_HELP[group])
+        # The metavar is what the default would render, spelled out so the
+        # "arguments are required" message names the choices, not `agent_cmd`.
+        group_subs[group] = gp.add_subparsers(
+            dest=f"{group}_cmd", required=True,
+            metavar="{" + ",".join(leaves) + "}")
+
+    def leaf(name: str, **kw) -> argparse.ArgumentParser:
+        """Wire a grouped command under its group, and its OLD top-level spelling
+        as a hidden alias of the SAME parser object — one set of arguments, one
+        handler, two spellings. `st cycle` and `st agent cycle` cannot drift."""
+        p = group_subs[GROUP_OF[name]].add_parser(name, **kw)
+        sub.add_alias(name, p)
+        return p
 
     an = sub.add_parser("anchor", help="who am I, what's on my plate")
     an.add_argument("me", nargs="?", help="defaults to $SHANTY_AGENT")
@@ -766,7 +879,7 @@ def build_parser() -> argparse.ArgumentParser:
     # The whole hand-back, in one verified write (aegis-ap4gm fix #1): the
     # documented `bd update -a ""` clears the assignee and LEAVES the status at
     # in_progress, dropping the item off every feed mechanism at once.
-    rp = sub.add_parser(
+    rp = leaf(
         "repool",
         help="hand an item back to the pool: status -> open AND assignee "
              "cleared, in one verified write. Clearing the assignee alone "
@@ -775,7 +888,7 @@ def build_parser() -> argparse.ArgumentParser:
     rp.add_argument("item")
     rp.add_argument("-n", "--dry-run", action="store_true")
 
-    hold = sub.add_parser("hold", help="configurable quiet-time holds and scheduled observation")
+    hold = leaf("hold", help="configurable quiet-time holds and scheduled observation")
     hold.add_argument("kind", help="configured detector name, or all for aggregate status/probe")
     actions = hold.add_mutually_exclusive_group()
     actions.add_argument("--clear", action="store_true", help="clear manual override only")
@@ -786,7 +899,7 @@ def build_parser() -> argparse.ArgumentParser:
     hold.add_argument("--slowdown", action="store_true", help="with --probe, bound exclusive crew scopes and restore on lift")
     hold.add_argument("--metrics", type=Path, help="atomic Prometheus textfile (with --probe)")
 
-    df = sub.add_parser(
+    df = leaf(
         "defer",
         help="park an item with a required blocker kind and durable reason")
     df.add_argument("item")
@@ -828,9 +941,9 @@ def build_parser() -> argparse.ArgumentParser:
                          "unattended. A stopped but launchable keeper is silent.")
 
     # aegis-fagvi: the roles/role footgun (plural-vs-singular) is consolidated
-    # into ONE noun with verbs: `st roles {show|set|sync}`. The old `role` and
+    # into ONE noun with verbs: `st fleet roles {show|set|sync}`. The old `role` and
     # `project` top-level commands stay as ALIASES below so nothing breaks.
-    rl = sub.add_parser("roles", help="the role hierarchy: show | set | sync")
+    rl = leaf("roles", help="the role hierarchy: show | set | sync")
     # `roles --check` / bare `roles` == `roles show [--check]` (back-compat).
     rl.add_argument("--check", action="store_true")
     rl_sub = rl.add_subparsers(dest="roles_sub", required=False)
@@ -850,7 +963,7 @@ def build_parser() -> argparse.ArgumentParser:
     rl_set.add_argument("--reports", default="", help="comma-separated reports for a lead/administrator")
     rl_set.add_argument("-n", "--dry-run", action="store_true")
     # aegis-ftmfn: THE BAND HAD NO VERB. `roles set` writes the TREE POSITION, so
-    # `st roles set billy normal` is refused as a depth violation and the only way
+    # `st fleet roles set billy normal` is refused as a depth violation and the only way
     # to band a card was to hand-edit its `roles` array. Three of twenty were
     # missed that way — not decided differently, just never written down.
     rl_band = rl_sub.add_parser(
@@ -887,17 +1000,17 @@ def build_parser() -> argparse.ArgumentParser:
                               "graph cannot be read (and it tells you)")
 
     # The `role set ...` alias lived here and is GONE (deprecated 2026-07-24,
-    # removed after the one-week window). `st roles set` is the spelling. Deletion
+    # removed after the one-week window). `st fleet roles set` is the spelling. Deletion
     # is what lands the count drop: consolidating and keeping an alias held the
     # surface at 19, because an alias IS a top-level command to argparse and to
     # anyone reading `st --help`.
 
-    nw = sub.add_parser("new", help="create an agent from a card")
+    nw = leaf("new", help="create an agent from a card")
     nw.add_argument("agent")
     nw.add_argument("-n", "--dry-run", action="store_true")
     _add_despite_hold(nw)
 
-    hz = sub.add_parser(
+    hz = leaf(
         "harness",
         help="convert an agent to another harness (claude|codex), one command")
     hz.add_argument("agent")
@@ -915,7 +1028,7 @@ def build_parser() -> argparse.ArgumentParser:
                          "the refusal it overrides is printed anyway")
     hz.add_argument("-n", "--dry-run", action="store_true")
 
-    it = sub.add_parser("init",
+    it = leaf("init",
                         help="scaffold a NEW deployment: asks a few questions, "
                              "then writes the store, the crew cards, their hooks "
                              "and shantytown.toml")
@@ -942,7 +1055,7 @@ def build_parser() -> argparse.ArgumentParser:
                     help="ask the questions, show every path it would write, "
                          "write nothing")
 
-    sr = sub.add_parser("start",
+    sr = leaf("start",
                         help="bring the town UP by MODE: lite (the administrator "
                              "alone) or heavy (every card). Idempotent; never attaches")
     sr.add_argument("agent", nargs="*",
@@ -958,7 +1071,7 @@ def build_parser() -> argparse.ArgumentParser:
                          "nothing, clones nothing.")
     _add_despite_hold(sr)
 
-    st = sub.add_parser("stop", help="stop it")
+    st = leaf("stop", help="stop it")
     st.add_argument("agent")
     st.add_argument("-n", "--dry-run", action="store_true")
     st.add_argument("--reason", default="", metavar="TEXT",
@@ -966,12 +1079,12 @@ def build_parser() -> argparse.ArgumentParser:
                          "stop is INTENT, not a fault: `st crew` and the "
                          "administrator's drain report it as such instead of "
                          "demanding a re-dispatch. It also removes the launch "
-                         "stamp, so `st tend` will NOT respawn it. Use `st new "
-                         "<agent>` to bring it back. `st tend --retire` is the "
-                         "stronger card-level state that also makes `st start` "
+                         "stamp, so `st fleet tend` will NOT respawn it. Use `st agent new "
+                         "<agent>` to bring it back. `st fleet tend --retire` is the "
+                         "stronger card-level state that also makes `st fleet start` "
                          "skip it.")
 
-    wn = sub.add_parser(
+    wn = leaf(
         "window", help="transactional fleet-maintenance drain / clear / restore ledger")
     wn_sub = wn.add_subparsers(dest="window_action", required=True)
     wn_plan = wn_sub.add_parser("plan", help="snapshot the fleet and acquire one window ID")
@@ -990,12 +1103,12 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("-n", "--dry-run", action="store_true",
                        help="verify and describe the transition; change nothing")
 
-    co = sub.add_parser("cost", help="per-bead costs from Camayoc and explicit focus bindings")
+    co = leaf("cost", help="per-bead costs from Camayoc and explicit focus bindings")
     co.add_argument("bead", nargs="?")
     co.add_argument("--json", action="store_true")
     co.add_argument("--sync", action="store_true", help="publish metrics and idempotent closed-bead receipts")
 
-    ss = sub.add_parser("stats", help="what the crew actually did: files, "
+    ss = leaf("stats", help="what the crew actually did: files, "
                                       "skills, tokens, activity (local store)")
     ss.add_argument("agent", nargs="?",
                     help="one agent's numbers; the whole crew if omitted")
@@ -1024,7 +1137,7 @@ def build_parser() -> argparse.ArgumentParser:
     ss.add_argument("--json", action="store_true",
                     help="with --graph: machine-readable output")
 
-    lg = sub.add_parser("log", help="what happened")
+    lg = leaf("log", help="what happened")
     lg.add_argument("agent", nargs="?")
 
     ib = sub.add_parser("inbox",
@@ -1057,13 +1170,13 @@ def build_parser() -> argparse.ArgumentParser:
     tk.add_argument("-a", "--assignee")
     tk.add_argument("-n", "--dry-run", action="store_true")
 
-    dm = sub.add_parser("dream", help="inspect or run one bounded spare-capacity reflection cycle")
+    dm = leaf("dream", help="inspect or run one bounded spare-capacity reflection cycle")
     dm.add_argument("--run", action="store_true",
                     help="run one cycle now (still requires idle work queue and measured headroom)")
     dm.add_argument("-n", "--dry-run", action="store_true",
                     help="show the cycle that would be created; write nothing")
 
-    cx = sub.add_parser("context", help="what code should I be looking at?")
+    cx = leaf("context", help="what code should I be looking at?")
     cx.add_argument("query", nargs="+")
     cx.add_argument("-b", "--budget", type=int, default=5)
     cx.add_argument("--repo", help="restrict to one indexed repo")
@@ -1071,7 +1184,7 @@ def build_parser() -> argparse.ArgumentParser:
     cx.add_argument("--none", action="store_true",
                     help="use the none-adapter (the leak test: harness works without bobbin)")
 
-    dr = sub.add_parser("doctor", help="what tools are installed, what's stale, what's missing")
+    dr = leaf("doctor", help="what tools are installed, what's stale, what's missing")
     dr.add_argument("tool", nargs="?", help="check one tool; all if omitted")
     dr.add_argument("--install", action="store_true",
                     help="install/upgrade the missing or stale tools (refuses if a toolchain is absent)")
@@ -1081,14 +1194,14 @@ def build_parser() -> argparse.ArgumentParser:
                     help="skip the release check (offline/fast) — detect local state only")
 
     # The `project` alias lived here and is GONE — see the `role` note above.
-    # `st roles sync` is the spelling.
+    # `st fleet roles sync` is the spelling.
 
-    td = sub.add_parser("tend", help="supervise the crew: respawn what DIED, "
+    td = leaf("tend", help="supervise the crew: respawn what DIED, "
                                      "never what was RETIRED")
     td.add_argument("--install", action="store_true",
                     help="install the systemd --user timer that runs a pass")
     td.add_argument("--uninstall", action="store_true",
-                    help="remove the timer (only if st tend wrote it)")
+                    help="remove the timer (only if st fleet tend wrote it)")
     td.add_argument("--status", action="store_true",
                     help="is it installed, and when did a pass last run?")
     td.add_argument("--retire", metavar="AGENT",
@@ -1137,7 +1250,7 @@ def build_parser() -> argparse.ArgumentParser:
                          "session as a side effect.")
     _add_despite_hold(at)
 
-    ib2 = sub.add_parser("input",
+    ib2 = leaf("input",
                          help="what is in an agent's input box: EMPTY | TYPED | "
                               "GHOST — and clear or dismiss it. NEVER submits.")
     ib2.add_argument("agent", help="whose input box")
@@ -1153,20 +1266,20 @@ def build_parser() -> argparse.ArgumentParser:
                             "CANCEL a tool call an agent is stopped on — Escape "
                             "is that key too, so there is no `st cancel`")
 
-    ak = sub.add_parser("ask",
+    ak = leaf("ask",
                         help="print the QUESTION an agent is blocked on: the "
                              "prompt, the command being approved, and the "
                              "numbered options verbatim. Read-only.")
     ak.add_argument("agent", help="who is blocked")
 
-    aw = sub.add_parser("answer",
+    aw = leaf("answer",
                         help="select option N on an agent's blocking picker, by "
                              "NUMBER. Refuses on a pane that is not on one.")
     aw.add_argument("agent", help="who to answer")
     aw.add_argument("n", type=int, metavar="N",
-                    help="the option number, as `st ask` printed it")
+                    help="the option number, as `st agent ask` printed it")
 
-    db = sub.add_parser("dashboard", help="a live, self-refreshing view of an "
+    db = leaf("dashboard", help="a live, self-refreshing view of an "
                                           "admin's tier (roster/state/work)")
     db.add_argument("admin", nargs="?",
                     help="whose tier; defaults to the administrator")
@@ -1175,7 +1288,7 @@ def build_parser() -> argparse.ArgumentParser:
     db.add_argument("--once", action="store_true",
                     help="render one snapshot and exit (no refresh loop)")
 
-    sb = sub.add_parser("subscribe",
+    sb = leaf("subscribe",
                         help="watch quipu entity events; route assigned workflows to the admin")
     sb.add_argument("--once", action="store_true",
                     help="poll one batch and exit (default: loop)")
@@ -1184,13 +1297,13 @@ def build_parser() -> argparse.ArgumentParser:
     sb.add_argument("--server", default=None,
                     help="quipu server (default $QUIPU_SERVER)")
 
-    hp = sub.add_parser("help",
+    hp = leaf("help",
                         help="rationale pages for the recurring instructions "
                              "(handoff/cycle, haul, inbox)")
     hp.add_argument("topic", nargs="?", default="",
                     help="handoff | cycle | haul | inbox; omit to list")
 
-    cy = sub.add_parser("cycle",
+    cy = leaf("cycle",
                         help="clear an agent's context WITHOUT destroying its "
                              "runtime: checkpoint -> stop -> relaunch -> "
                              "re-dispatch. `/clear` drops bypass; this does not")
@@ -1206,7 +1319,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_despite_hold(cy)
     # --checkpoint-file is Stiwi's "an st command that does the needful"
     # (aegis-x6yoq). Before it, a handoff was TWO hand-composed commands — a
-    # `bd comment ... --file` and then an `st cycle --self -r '...'` repeating the
+    # `bd comment ... --file` and then an `st agent cycle --self -r '...'` repeating the
     # gist — and that composition is exactly where agents fumbled: they wrote the
     # notes, then had to invent a one-line summary under context pressure, having
     # just been told their judgement is degrading. Now the file IS the checkpoint:
@@ -1227,7 +1340,7 @@ def build_parser() -> argparse.ArgumentParser:
     cy.add_argument("--self", dest="self_", action="store_true",
                     help="REQUEST your own cycle. An agent cannot cycle itself "
                          "in-process (the stop kills the session doing the "
-                         "stopping), so this records a request `st tend` honours")
+                         "stopping), so this records a request `st fleet tend` honours")
     cy.add_argument("--allow-loss", action="store_true",
                     help="cycle even though a tree holds uncommitted or unpushed "
                          "work. Named separately from any --force ON PURPOSE, so "
@@ -1245,7 +1358,7 @@ def build_parser() -> argparse.ArgumentParser:
                          "session starts, and starting from nothing is the "
                          "habit this requirement exists to break.")
 
-    wt = sub.add_parser("worktree",
+    wt = leaf("worktree",
                         help="provision (or gc) an agent's isolated worktree off "
                              "a SHARED project repo — so agents never share an "
                              "index/HEAD")
@@ -1258,7 +1371,7 @@ def build_parser() -> argparse.ArgumentParser:
                     help="remove the worktree IFF unchanged — never discards "
                          "uncommitted or unpushed work")
 
-    ph = sub.add_parser("push",
+    ph = leaf("push",
                         help="push your worktree branch to EVERY remote — the "
                              "repo has two live peers and pushing one forks it")
     ph.add_argument("repo",
@@ -1269,7 +1382,7 @@ def build_parser() -> argparse.ArgumentParser:
     ph.add_argument("--branch", default="main",
                     help="destination branch on each remote (default: main)")
 
-    hi = sub.add_parser("history",
+    hi = leaf("history",
                         help="list an agent's CAPTURED transcripts — the durable "
                              "archive of sessions incl. reasoning")
     hi.add_argument("agent", nargs="?",
@@ -1277,7 +1390,70 @@ def build_parser() -> argparse.ArgumentParser:
     hi.add_argument("--all", action="store_true",
                     help="list every session, not just the 20 most recent")
 
+    # `--help` lists the surface in SURFACE's order — verbs, then groups, and
+    # each group's leaves as the table spells them — not in the order this
+    # function happens to wire them.
+    _order_help(sub, list(SURFACE))
+    for group, subs in group_subs.items():
+        _order_help(subs, list(SURFACE[group] or ()))
     return ap
+
+
+def _old_spelling(parser: argparse.ArgumentParser, argv: list[str]) -> str | None:
+    """The OLD top-level spelling argv uses, if any — found BEFORE parsing.
+
+    Before, because `st cycle --help` exits inside argparse, and the notice has
+    to have been printed by then. Walks past the global options using the
+    parser's own knowledge of which of them take a value, so the list of those
+    options is not repeated here.
+    """
+    i = 0
+    while i < len(argv):
+        tok = argv[i]
+        if tok.startswith("-") and len(tok) > 1:
+            action = parser._option_string_actions.get(tok.split("=", 1)[0])
+            if action is not None and action.nargs is None and "=" not in tok:
+                i += 1                      # the option's value
+            i += 1
+            continue
+        return tok if tok in GROUP_OF else None
+    return None
+
+
+def _chosen_leaf(parser: argparse.ArgumentParser, ns, argv: list[str]):
+    """The deepest subparser `ns` chose, and the argv slice that belongs to it.
+
+    `st fleet roles set lex worker` is three parsers deep; parse_intermixed_args
+    cannot run on any parser that still holds a subparsers action (it raises
+    TypeError — measured on 3.14 as `st roles set lex worker --reports-to
+    hammond` crashing instead of reporting a usage error), so walk down to the
+    leaf. None when the walk stops short (`st fleet roles --check extra`): the
+    caller lets argparse report that one normally.
+    """
+    rest = argv
+    while True:
+        subs = next((ac for ac in parser._actions
+                     if isinstance(ac, argparse._SubParsersAction)), None)
+        if subs is None:
+            return parser, rest
+        name = getattr(ns, subs.dest, None)
+        if name not in subs.choices or name not in rest:
+            return None, rest
+        rest = rest[rest.index(name) + 1:]
+        parser = subs.choices[name]
+
+
+def _canonical(ns):
+    """Make `ns.cmd` THE LEAF, however it was spelled, so main() dispatches on
+    one name. `ns.group` says which group it lives in (None for a verb)."""
+    if ns.cmd in GROUP_OF:                  # the old spelling, aliased
+        ns.group = GROUP_OF[ns.cmd]
+    elif SURFACE.get(ns.cmd):               # a group: the leaf is what runs
+        ns.group = ns.cmd
+        ns.cmd = getattr(ns, f"{ns.cmd}_cmd")
+    else:
+        ns.group = None
+    return ns
 
 
 def _parse_args(argv: list[str] | None):
@@ -1286,28 +1462,32 @@ def _parse_args(argv: list[str] | None):
     positional (`unrecognized arguments: hi`): a `nargs="*"` positional, once
     matched, does not reopen after an optional. argparse's parse_intermixed_args
     handles exactly this, but it does NOT support subparsers — so detect the
-    stranded case (parse_known_args leaves extras) and re-run the CHOSEN subparser
-    with intermixed parsing. The fast path (no extras) is unchanged.
+    stranded case (parse_known_args leaves extras) and re-run the CHOSEN leaf
+    parser with intermixed parsing. The fast path (no extras) is unchanged.
+
+    An OLD top-level spelling (`st cycle` for `st agent cycle`) parses the same
+    arguments into the same handler and prints ONE line to stderr saying so —
+    nothing else changes, and $ST_QUIET_ALIASES silences the line.
     """
     argv = list(sys.argv[1:] if argv is None else argv)
     parser = build_parser()
+    old = _old_spelling(parser, argv)
+    if old and not os.environ.get(QUIET_ALIASES_ENV):
+        print(f"st {old} is now st {GROUP_OF[old]} {old}; the old spelling goes "
+              f"away in two releases.", file=sys.stderr)
     ns, extra = parser.parse_known_args(argv)
     if not extra:
-        return ns
-    subs = next((ac for ac in parser._actions
-                 if isinstance(ac, argparse._SubParsersAction)), None)
-    cmd = getattr(ns, "cmd", None)
-    if subs is None or cmd not in subs.choices:
+        return _canonical(ns)
+    leaf, sub_argv = _chosen_leaf(parser, ns, argv)
+    if leaf is None or any(tok not in sub_argv for tok in extra):
         return parser.parse_args(argv)          # not our case — let argparse report
-    sub_argv = argv[argv.index(cmd) + 1:]
-    # Re-parse the subcommand's args into a FRESH namespace (a populated one makes
-    # parse_intermixed_args warn), then copy the subcommand values onto `ns`, which
-    # already carries the globals + cmd from the top parse_known_args.
-    fresh = subs.choices[cmd].parse_intermixed_args(sub_argv)
+    # Re-parse the leaf's args into a FRESH namespace (a populated one makes
+    # parse_intermixed_args warn), then copy the values onto `ns`, which already
+    # carries the globals + the command names from the top parse_known_args.
+    fresh = leaf.parse_intermixed_args(sub_argv)
     for key, value in vars(fresh).items():
         setattr(ns, key, value)
-    return ns
-
+    return _canonical(ns)
 
 
 def _cmd_history(a) -> int:
@@ -1404,7 +1584,7 @@ def _despite_hold(a) -> bool:
 def _refuse_gaming(a, status) -> int:
     """Refuse a launch, and say in the same breath how to proceed anyway.
 
-    The remedy is indented under the refusal, the way `st harness` already prints
+    The remedy is indented under the refusal, the way `st agent harness` already prints
     one, so the two read as a single answer instead of a rule and a shrug.
     """
     print(f"  refused: {status.refusal}", file=sys.stderr)
@@ -1491,7 +1671,7 @@ def main(argv: list[str] | None = None) -> int:
         from . import stats as stats_mod
         if a.files:
             if not a.agent:
-                print("st stats --files needs an agent", file=sys.stderr)
+                print("st agent stats --files needs an agent", file=sys.stderr)
                 return 2
             return stats_mod.stats_files(a.root, a.agent, since_h=a.since)
         return stats_mod.stats_report(a.root, a.agent, since_h=a.since)
@@ -1599,7 +1779,7 @@ def _warn_if_no_store(a) -> bool:
     workspaces are SIBLINGS of the checkout, not children of it
     (~/gt/<rig>/crew/<agent> vs ~/gt/shantytown/.shanty). Walking up from a sibling
     tree never reaches the store, at any depth. The pointer exists for exactly this
-    shape and `st init` writes it — a deployment that predates init has none, which
+    shape and `st fleet init` writes it — a deployment that predates init has none, which
     is the state this fires in.
 
     A WARNING, NOT A REFUSAL, and before the command rather than after: commands
@@ -1692,19 +1872,19 @@ def _record_launch_unretirement(a, card) -> bool:
 
 
 def tend_fate(launches, agent: str) -> str:
-    """WHAT `st tend` WILL ACTUALLY DO to an agent whose launch stamp is gone.
+    """WHAT `st fleet tend` WILL ACTUALLY DO to an agent whose launch stamp is gone.
 
     ONE SPELLING, because there were two and they contradicted each other
-    (aegis-5gbshs). `st stop` said "will NOT bring it back"; `st crew`'s
-    operator-stopped row said "Still respawned by `st tend`". Both cannot be
+    (aegis-5gbshs). `st agent stop` said "will NOT bring it back"; `st crew`'s
+    operator-stopped row said "Still respawned by `st fleet tend`". Both cannot be
     true, and the evidence settled it: kelly sat operator-stopped for 46+ hours
     with zero respawns, so the flat promise was the wrong one.
 
-    That promise had ALREADY been removed once. aegis-k9068 found it in `st stop`
+    That promise had ALREADY been removed once. aegis-k9068 found it in `st agent stop`
     — tend REFUSES an unstamped agent while any other agent holds a stamp, so a
     stop taken on the strength of "tend will bring it back" silently became
     permanent, measured at ~2h of lost tier-1 alert cover. The fix corrected the
-    sentence in `st stop` and left the identical sentence in `st crew` standing.
+    sentence in `st agent stop` and left the identical sentence in `st crew` standing.
     A second spelling of a fact is a second chance to be wrong about it, so both
     call sites now read this.
 
@@ -1719,14 +1899,14 @@ def tend_fate(launches, agent: str) -> str:
         # Cannot read the stamps. Say so rather than promising either fate: an
         # operator who is told "it stays down" and finds it back, or told "it
         # comes back" and finds it gone, is worse off than one told to check.
-        return (f"`st tend`'s behaviour here is UNKNOWN (launch stamps "
-                f"unreadable). Use `st new {agent}` to be sure it is up.")
+        return (f"`st fleet tend`'s behaviour here is UNKNOWN (launch stamps "
+                f"unreadable). Use `st agent new {agent}` to be sure it is up.")
     if others:
-        return (f"`st tend` will NOT bring it back — its launch stamp is gone, "
+        return (f"`st fleet tend` will NOT bring it back — its launch stamp is gone, "
                 f"and tend does not respawn an unstamped agent. "
-                f"Use `st new {agent}`.")
-    return (f"`st tend` will respawn it (no launch stamps remain, so tend's "
-            f"ownership gate does not apply); `st tend --retire {agent}` is how "
+                f"Use `st agent new {agent}`.")
+    return (f"`st fleet tend` will respawn it (no launch stamps remain, so tend's "
+            f"ownership gate does not apply); `st fleet tend --retire {agent}` is how "
             f"you say do not bring it back.")
 
 
@@ -1837,7 +2017,7 @@ def _observe_live(runtime, panes, session, card=None) -> bool:
         # THE CHROME CONSENT GATE (aegis-neffw), and it is the trust gate's twin.
         # Live-fire 2026-08-05: `claude --chrome` shows the folder-trust dialog,
         # then a SECOND screen consenting to the browser integration, and that one
-        # blocks the ready UI too — is_live False, so `st new` returns
+        # blocks the ready UI too — is_live False, so `st agent new` returns
         # could-not-tell for an agent that is one keystroke from fine. That is the
         # aegis-84z1 0-path failure, reachable again the moment a card opts in.
         #
@@ -1877,9 +2057,9 @@ def _cmd_new(a) -> int:
     """new <agent> — bring up a HOOKED agent session (#5).
 
     The single-agent PRIMITIVE, and it REFUSES a live session (the clobber guard
-    below) — `st new` on a running agent is a mistake, not an idempotent no-op.
+    below) — `st agent new` on a running agent is a mistake, not an idempotent no-op.
     The boot command that wants "make it so, whatever is currently up" is
-    `st start`; the difference is written up in bootstrap.py.
+    `st fleet start`; the difference is written up in bootstrap.py.
     """
     if (rc := _window_launch_gate(a)) is not None:
         return rc
@@ -1914,7 +2094,7 @@ def _harness_lane_held(a, cfg, target: str) -> bool:
 
 
 def _cmd_harness(a) -> int:
-    """`st harness <agent> [claude|codex]` — convert one agent, in one command.
+    """`st agent harness <agent> [claude|codex]` — convert one agent, in one command.
 
     Replaces the five hand edits of `.shanty/crew/<agent>.json` that produced
     this bead (one of them reverted, one briefly wrong). The conversion IS the
@@ -2003,7 +2183,7 @@ def _cmd_harness(a) -> int:
         print(f"  note: the governor counts {a.agent} against {plan.to_harness} "
               f"from now, but it is still spending {plan.from_harness} budget "
               "until it relaunches")
-        print(f"  relaunch when ready:  st harness {a.agent} {plan.to_harness} --now")
+        print(f"  relaunch when ready:  st agent harness {a.agent} {plan.to_harness} --now")
         return OK
 
     # VERIFY BY THE PANE, NOT THE CARD (sattler). The card is what we just wrote,
@@ -2044,7 +2224,7 @@ def unobserved_launch_report(agent: str, harness: str, session: str,
     card's runtime dir, kills nothing, and is the same check `st crew` renders a
     launch blocker from.
 
-    Defect 3 — the recovery is stop-then-new, and nothing said so. `st new`
+    Defect 3 — the recovery is stop-then-new, and nothing said so. `st agent new`
     refuses over the shell prompt its own failed launch left behind ("session
     already exists — stop it first"), so a reader who takes the obvious retry
     loses a round trip with the agent already down. One clause fixes it.
@@ -2071,8 +2251,8 @@ def unobserved_launch_report(agent: str, harness: str, session: str,
             blocker = ""
     return (f"could not tell: launched {agent} but the runtime was not observed "
             f"live in {session} within the timeout. It may still be coming up; "
-            f"check `st log {agent}`.{blocker} If it is not coming up, the retry "
-            f"is `st stop {agent}` THEN `st new {agent}` — `st new` alone refuses "
+            f"check `st agent log {agent}`.{blocker} If it is not coming up, the retry "
+            f"is `st agent stop {agent}` THEN `st agent new {agent}` — `st agent new` alone refuses "
             f"over the session this launch left behind.")
 
 
@@ -2144,7 +2324,7 @@ def _launch(a, card, panes, runtime, *, dry_run: bool = False,
     # and never blocks the launch (stale-but-working beats no agent).
     if card.workspace:
         if err := _refresh_clone(card.workspace):
-            # SECOND SITE OF aegis-ghedod, found by running `st new` during the
+            # SECOND SITE OF aegis-ghedod, found by running `st agent new` during the
             # forge outage right after fixing the first one. "ff-only pull
             # refused" for a `Connection refused` blames the TREE for a dead
             # REMOTE here exactly as it did on the dispatch path — and a guard
@@ -2223,7 +2403,7 @@ def _launch(a, card, panes, runtime, *, dry_run: bool = False,
     final = panes.capture(session)
     if getattr(runtime, "waiting_for_human", None) and runtime.waiting_for_human(final):
         print(f"  could not tell: {card.name} ({session}) is WAITING ON A PROMPT "
-              f"(first-run consent), not up yet. Answer it: `st log {card.name}` to "
+              f"(first-run consent), not up yet. Answer it: `st agent log {card.name}` to "
               f"see it, then `st attach {card.name}`.", file=sys.stderr)
         return CANNOT_TELL
     # NAME THE CAUSE IF WE CAN SEE IT, AND ALWAYS NAME THE RECOVERY
@@ -2240,7 +2420,7 @@ def _launch(a, card, panes, runtime, *, dry_run: bool = False,
     # directly — it is a read of /proc and the card's runtime dir, it kills
     # nothing, and it is the same check `st crew` renders a launch blocker from.
     #
-    # Defect 3: `st new` refuses over the shell prompt its own failed launch left
+    # Defect 3: `st agent new` refuses over the shell prompt its own failed launch left
     # behind ("session already exists — stop it first"), so the recovery is
     # stop-then-new rather than new. That is discoverable in one attempt and it
     # costs a cycle at the worst possible moment, with the agent already down.
@@ -2383,12 +2563,12 @@ def _verify_live_hooks(a, card, runtime, panes, session: str) -> int:
 
     THE GAP THIS CLOSES. runtime.py already states the boundary honestly:
     compose() guarantees --settings was REQUESTED; it does not guarantee hooks
-    FIRED, and _observe_live only proves the PROCESS is up. So `st new` could
+    FIRED, and _observe_live only proves the PROCESS is up. So `st agent new` could
     print "started" and exit 0 for an agent that came up carrying no stop hooks
     at all. That is not a hypothetical shape of bug — measured 2026-07-20
     (aegis-0v97), all 8 gastown-launched crew were running RIGHT THEN with no
     stop hooks; they could not even SEND, and nothing detected it for the entire
-    time it was true. `st roles --check` finds it, but only if someone runs it.
+    time it was true. `st fleet roles --check` finds it, but only if someone runs it.
     Here it is caught at the moment of launch, by the process's own cmdline.
 
     Three outcomes, and the middle one is the whole point:
@@ -2401,7 +2581,7 @@ def _verify_live_hooks(a, card, runtime, panes, session: str) -> int:
     operator is told to remove it. Two reasons: the pane is the evidence (killing
     it destroys the cmdline that proves what went wrong, which is exactly what
     made aegis-0v97 hard to see), and a launcher that reaps on a verdict is one
-    bad verdict away from killing healthy agents. `st stop` already exists and is
+    bad verdict away from killing healthy agents. `st agent stop` already exists and is
     one command. If arnold rules teardown belongs here, it is a small change —
     but it should be a ruling, not a side effect of adding a check.
     """
@@ -2425,7 +2605,7 @@ def _verify_live_hooks(a, card, runtime, panes, session: str) -> int:
     if wiring is None:
         print(f"  could not tell: {card.name} ({session}) is live, but its stop "
               f"hooks could NOT be read from the running process, so it is "
-              f"UNVERIFIED — not confirmed hooked. Check `st roles --check`.",
+              f"UNVERIFIED — not confirmed hooked. Check `st fleet roles --check`.",
               file=sys.stderr)
         return CANNOT_TELL
     missing = need - wiring.directions
@@ -2449,7 +2629,7 @@ def _verify_live_hooks(a, card, runtime, panes, session: str) -> int:
               f"its position requires. The live process carries {carries}"
               f"{whence}, but this agent needs {sorted(need)} — missing "
               f"{sorted(missing)}. It is running and it is broken: remove it "
-              f"with `st stop {card.name}`, fix the settings it launches with, "
+              f"with `st agent stop {card.name}`, fix the settings it launches with, "
               f"and start it again.", file=sys.stderr)
         return REFUSED
     verified = sorted(need) if need else "none required by the graph"
@@ -2458,7 +2638,7 @@ def _verify_live_hooks(a, card, runtime, panes, session: str) -> int:
     return OK
 
 
-# The mode label `st start <agent>...` reports: agents named on the command line
+# The mode label `st fleet start <agent>...` reports: agents named on the command line
 # came from no mode, and printing one would credit a config that was never read.
 EXPLICIT = "explicit"
 
@@ -2514,7 +2694,7 @@ def _cmd_init(a, *, ask=_prompt, isatty=None) -> int:
             what.append(config.CONFIG_NAME)
         print(f"  refused: {root} is already a deployment ({', '.join(what)}). "
               f"`st crew` to see it. To add an agent to an existing store use "
-              f"`st roles set <name> <role>`; pass --force if you really mean to "
+              f"`st fleet roles set <name> <role>`; pass --force if you really mean to "
               f"scaffold over this one (no existing card is overwritten).",
               file=_sys.stderr)
         return REFUSED
@@ -2535,12 +2715,12 @@ def _cmd_init(a, *, ask=_prompt, isatty=None) -> int:
                 workspaces=defaults.workspaces, mode=defaults.mode,
                 hibernate=defaults.hibernate)
         elif not isatty():
-            print(f"  refused: stdin is not a terminal, so `st init` cannot ask "
+            print(f"  refused: stdin is not a terminal, so `st fleet init` cannot ask "
                   f"its questions. Pass -y/--yes to take the flags and defaults "
-                  f"(`st init -y --admin <name> --crew a,b`).", file=_sys.stderr)
+                  f"(`st fleet init -y --admin <name> --crew a,b`).", file=_sys.stderr)
             return REFUSED
         else:
-            print("\n  st init — a few questions. Enter accepts the [default].\n")
+            print("\n  st fleet init — a few questions. Enter accepts the [default].\n")
             answers = scaffold.ask_all(ask, defaults=defaults)
     except scaffold.ScaffoldError as e:
         print(f"  refused: {e}", file=_sys.stderr)
@@ -2608,7 +2788,7 @@ def _init_apply(a, root: Path, plan, answers) -> int:
         print(f"  config   {cfg_path}")
 
     # PROVE IT PARSES. The file was just generated, and a config this command
-    # writes but `st start` would refuse is the worst possible handoff.
+    # writes but `st fleet start` would refuse is the worst possible handoff.
     try:
         config.load(root)
     except config.ConfigError as e:
@@ -2617,7 +2797,7 @@ def _init_apply(a, root: Path, plan, answers) -> int:
 
     print()
     print(f"  ready. {len(plan.cards)} card(s), mode {answers.mode!r}.")
-    print(f"    st start          # bring up mode {answers.mode!r}")
+    print(f"    st fleet start          # bring up mode {answers.mode!r}")
     print(f"    st attach         # the admin's pane (starts it if it is down)")
     print(f"    st crew           # who exists, who is up")
     print()
@@ -2641,12 +2821,12 @@ def _boot_launcher(a, panes, runtime):
             return boot_mod.REFUSED, "launch REFUSED — the reason is printed above"
         return (boot_mod.UNVERIFIED,
                 f"session {_session_for(card)!r} exists but the runtime was NOT "
-                f"observed live — see above; `st log {card.name}`")
+                f"observed live — see above; `st agent log {card.name}`")
     return launch
 
 
 def _start_roster(a, cfg, agents) -> tuple[list[str], str, list[str], str | None]:
-    """(names, mode label, skipped-retired, refusal) — WHO `st start` will bring up.
+    """(names, mode label, skipped-retired, refusal) — WHO `st fleet start` will bring up.
 
     Pure resolution, separated from the launching so a test can pin the selection
     rules (retired exclusion, tier order, unknown names) without a runtime. The
@@ -2654,7 +2834,7 @@ def _start_roster(a, cfg, agents) -> tuple[list[str], str, list[str], str | None
     """
     if a.agent:
         # EXPLICIT NAMES WIN, AND THE MODE IS NOT CONSULTED. Naming both is
-        # REFUSED rather than silently resolved: `st start --mode heavy sattler`
+        # REFUSED rather than silently resolved: `st fleet start --mode heavy sattler`
         # has two readings ("heavy, plus sattler" / "sattler, from the heavy set")
         # and picking one quietly means the operator who meant the other brings up
         # a fleet they did not ask for. Ambiguity about how many agents to bill is
@@ -2663,8 +2843,8 @@ def _start_roster(a, cfg, agents) -> tuple[list[str], str, list[str], str | None
             return [], "", [], (
                 f"--mode {a.mode!r} and explicit agents ({', '.join(a.agent)}) are "
                 f"two different asks — a mode IS a crew list. Pick one: "
-                f"`st start --mode {a.mode}` for the mode's crew, or "
-                f"`st start {' '.join(a.agent)}` for exactly these.")
+                f"`st fleet start --mode {a.mode}` for the mode's crew, or "
+                f"`st fleet start {' '.join(a.agent)}` for exactly these.")
         selectors, label = list(a.agent), EXPLICIT
     else:
         try:
@@ -2682,7 +2862,7 @@ def _start_roster(a, cfg, agents) -> tuple[list[str], str, list[str], str | None
     if not roster.names:
         # SELECTED NOBODY. The common shape is a `lite` boot on a store with no
         # administrator card — and the useful message names the store, not the
-        # abstraction, because the fix is `st roles set <agent> administrator`.
+        # abstraction, because the fix is `st fleet roles set <agent> administrator`.
         detail = (f" (the roster has {len(agents)} card(s), and none of them "
                   f"matched)" if agents else " (the roster is EMPTY — no cards)")
         retired_note = (f" {len(roster.skipped_retired)} matching card(s) are "
@@ -2692,14 +2872,14 @@ def _start_roster(a, cfg, agents) -> tuple[list[str], str, list[str], str | None
         return [], label, roster.skipped_retired, (
             f"mode {label!r} selects {selectors} and that matched NO agent to "
             f"start{detail}.{retired_note} An administrator is what `lite` boots: "
-            f"`st roles set <agent> administrator` writes one.")
+            f"`st fleet roles set <agent> administrator` writes one.")
     return roster.names, label, roster.skipped_retired, None
 
 
 def _cmd_start(a) -> int:
     """start [agent...] [--mode M] — bring the town up. The boot command.
 
-    Why this is a command and not `st new` in a loop, or a flag on `st tend`, is
+    Why this is a command and not `st agent new` in a loop, or a flag on `st fleet tend`, is
     argued in bootstrap.py. Here, the three things the exit code has to mean:
 
       0  every selected agent is UP (launched now, or already running)
@@ -2759,7 +2939,7 @@ def _cmd_start(a) -> int:
 
 def _report_hibernate(cfg) -> None:
     """Say the hibernate policy in force, on the command that just applied the
-    rest of the config. An operator reading `st start` output is holding the
+    rest of the config. An operator reading `st fleet start` output is holding the
     config in their head at that exact moment, and a policy that only ever
     manifests as "the admin went quiet at 3am" is one nobody connects to a file."""
     h = cfg.hibernate
@@ -2781,7 +2961,7 @@ def _capture_history_before_kill(a, agent_name: str, why: str) -> None:
     """Archive an agent's transcripts BEFORE its session is killed.
 
     THE GAP THIS CLOSES (aegis-ay3gv2). The archiver is a Stop hook, so it fires
-    on a NATURAL turn end. `st stop`, the cycle that `st tend` performs THROUGH
+    on a NATURAL turn end. `st agent stop`, the cycle that `st fleet tend` performs THROUGH
     it, and the auth-dead relaunch all kill the runtime instead, and no hook
     fires for any of them.
 
@@ -2867,7 +3047,7 @@ def _cmd_stop(a) -> int:
     # OWNERSHIP GUARD. The session is live — but st only reaps what
     # st launched. The registry pane names can COLLIDE with sessions somebody
     # else already started under the same name, so on a shared socket
-    # `st stop ellie` would kill a session st never launched.
+    # `st agent stop ellie` would kill a session st never launched.
     # A name match is not permission to kill: refuse unless st owns the session.
     if not panes.owns(session):
         print(f"  refused: {a.agent} ({session}) was not launched by st — refusing "
@@ -2878,9 +3058,9 @@ def _cmd_stop(a) -> int:
     # SECOND FACTOR: the LAUNCH STAMP. SHANTY_OWNED alone lied once, live
     # (wn7g pilot's negative control): tend's pre-gate respawns created
     # another orchestrator's crew sessions, so those panes carry the marker
-    # while the OTHER fleet operates them — `st stop ellie` dry-ran straight
+    # while the OTHER fleet operates them — `st agent stop ellie` dry-ran straight
     # to "would kill" against the live foreign session. An st-MANAGED agent
-    # has a launch stamp (st new writes it; st stop forgets it); a session st
+    # has a launch stamp (st agent new writes it; st agent stop forgets it); a session st
     # merely created once does not. No stamp while other stamps exist =
     # created-but-not-managed = refuse. Empty store = cannot tell = the env
     # marker alone decides, as before (fresh deployments must still reap).
@@ -2932,7 +3112,7 @@ def _cmd_stop(a) -> int:
                      reason=getattr(a, "reason", "") or "")
     # WHAT TEND WILL ACTUALLY DO, asked rather than assumed (aegis-k9068).
     #
-    # This line used to promise "`st tend` will still respawn it" unconditionally.
+    # This line used to promise "`st fleet tend` will still respawn it" unconditionally.
     # It is the same function that just called `_launches.forget()` above — and
     # tend REFUSES an agent with no stamp while any other agent has one. So the
     # promise was false for every deliberately stopped agent on a live fleet, and
@@ -3040,7 +3220,7 @@ def _cmd_graph_adoption(a) -> int:
 
 
 def _cmd_doctor(a) -> int:
-    """st doctor [tool] [--install] [--dry-run] [--no-latest].
+    """st ops doctor [tool] [--install] [--dry-run] [--no-latest].
 
     Detect is the default and touches nothing. --install mutates; --dry-run makes
     even --install touch nothing (it prints the plan). Exit: 0 all present &
@@ -3063,7 +3243,7 @@ def _cmd_doctor(a) -> int:
     # reported installed-vs-available for four tools and never once about `st`.
     # The tool that audits deployment drift was the only one exempt, and it is the
     # one whose staleness silently corrupts every other row it prints. Only
-    # rendered for a full run: `st doctor bobbin` asked about bobbin.
+    # rendered for a full run: `st ops doctor bobbin` asked about bobbin.
     # remote= rides --no-latest: both mean "no network lookups on this run". The
     # behind-upstream fetch is the same class of question as "0.6.0 available".
     self_h = (selfcheck.check_self(remote=not a.no_latest)
@@ -3072,7 +3252,7 @@ def _cmd_doctor(a) -> int:
     sock_v, sock_why = _socket_check(a)
 
     # Is the metrics capture wired to the branch that writes TOKENS (aegis-u5u98)?
-    # Asked here because `st stats` told a reader to ask `st doctor` and doctor had
+    # Asked here because `st agent stats` told a reader to ask `st ops doctor` and doctor had
     # nothing to say — a tell that points at a command which does not answer is a
     # dead end in the exact place it was meant to help. Never fatal to doctor: a
     # registry we cannot read is a `?` row, not a crash in the command an operator
@@ -3112,7 +3292,7 @@ def _cmd_doctor(a) -> int:
         code = _fold_socket(_doctor_exit(doc, healths, self_h), sock_v, doc)
         # The untracked-hook liveness leg (aegis-06ue4): out-of-band answer to
         # "has the fail-open governance nudge actually run?" Only on a full run —
-        # `st doctor bobbin` asked about bobbin, not the fleet's hooks.
+        # `st ops doctor bobbin` asked about bobbin, not the fleet's hooks.
         if len(specs) == len(doc.SPECS):
             from . import codex_daemon
             try:
@@ -3227,7 +3407,7 @@ def _render_socket(verdict, why) -> str:
 
 
 def _untracked_health(a):
-    """Rows + rendered block for `st doctor`'s untracked-hook-liveness leg
+    """Rows + rendered block for `st ops doctor`'s untracked-hook-liveness leg
     (aegis-06ue4). Every input is read here and injected into the pure checker.
 
     All three readers fail toward cannot-tell, never toward a false pass or a
@@ -3357,7 +3537,7 @@ def _cmd_role(a) -> int:
         return OK
     # GENERATIVE (#6): emit each written role's settings in the SAME operation as
     # the card, so "declaring a role emits its stop hooks" is literal — the card
-    # and its hooks cannot drift. This is the CONTENT st new's launch reads.
+    # and its hooks cannot drift. This is the CONTENT st agent new's launch reads.
     #
     # PER (HARNESS, ROLE), not per role: which artifact a card reads is decided
     # by the program it runs, so a store with a codex lead and a claude lead
@@ -3464,7 +3644,7 @@ def _report_who_the_rewrite_did_not_reach(a, roles: set[str]) -> None:
         print(f"  ⚠ NOT DEPLOYED to {len(stale)} live agent(s): {', '.join(stale)}")
         print(f"    They are still running the settings they launched with. The "
               f"file you just wrote reaches")
-        print(f"    them only on relaunch: `st stop <agent> && st new <agent>`.")
+        print(f"    them only on relaunch: `st agent stop <agent> && st agent new <agent>`.")
     if unknown:
         print(f"  ? {len(unknown)} live agent(s) have no launch stamp, so whether "
               f"this reached them is UNKNOWN:")
@@ -3687,7 +3867,7 @@ def _cmd_inbox(a) -> int:
     #
     # THE FORMAT MOVED OUT (aegis-5vxmz). It was an inline f-string here while
     # inbox was the only attributed path; it is now attribution.attribute,
-    # because dispatch and every st tend push sign their sends too and a security
+    # because dispatch and every st fleet tend push sign their sends too and a security
     # marker that is written twice is a security marker that can drift. The
     # behaviour is unchanged — the two differential tests below still hold.
     # KEEP WHAT THE CALLER ACTUALLY TYPED. The cap is checked against the
@@ -3736,7 +3916,7 @@ def _cmd_inbox(a) -> int:
         # ack recipe ran in bash. Nothing destructive ran by luck of the wording,
         # not by design. Refuse, and say the message was NOT delivered.
         print(f"  refused: {e}", file=sys.stderr)
-        print(f"  remedy: st new {agent.name}, or use `st inbox -d` so the "
+        print(f"  remedy: st agent new {agent.name}, or use `st inbox -d` so the "
               f"message survives until it is back.", file=sys.stderr)
         return REFUSED
     # READ IT BACK. Sending the keystrokes is not delivering the message, and
@@ -4377,7 +4557,7 @@ def _cmd_go(a) -> int:
             print(f"  refused: worktree — {e}", file=sys.stderr)
             return REFUSED
         print(f"  worktree: {wt_path}")
-        wtag = f"[st worktree: work in {wt_path}"
+        wtag = f"[st repo worktree: work in {wt_path}"
         if wt_warn := _refresh_worktree(wt_path):
             print(f"  ⚠ {wt_warn}", file=sys.stderr)
             wtag += f" — {wt_warn}"
@@ -4444,7 +4624,7 @@ def _cmd_go(a) -> int:
         # dispatchable. Refusing is the whole point: typing a dispatch into bash
         # would EXECUTE it, and the sender would be told the work was assigned.
         print(f"  refused: {e}", file=sys.stderr)
-        print(f"  remedy: st new {a.agent}   (then re-run this dispatch)",
+        print(f"  remedy: st agent new {a.agent}   (then re-run this dispatch)",
               file=sys.stderr)
         return REFUSED
     except TriageRefused as e:
@@ -4456,7 +4636,7 @@ def _cmd_go(a) -> int:
         # We do NOT relaunch automatically: killing an agent as a side effect of a
         # dispatch is exactly the kind of thing that must stay an explicit act.
         if e.decision.action is Action.RESTART:
-            print(f"  remedy: st stop {a.agent} && st new {a.agent}   "
+            print(f"  remedy: st agent stop {a.agent} && st agent new {a.agent}   "
                   f"(launcher-relaunch, never handoff — a handoff drops --settings "
                   f"and produces a hookless agent)", file=sys.stderr)
         return REFUSED
@@ -4615,7 +4795,7 @@ def _cmd_crew(a) -> int:
     prompt both print `up`. The verdict is triage's, unchanged and already
     load-bearing (dispatch.py refuses sends into busy panes); `st crew` simply
     never asked it. Measured cost of not asking: a 5-worker dispatch round fed on
-    a handoff's word, with no way to verify it short of `st log` per agent and
+    a handoff's word, with no way to verify it short of `st agent log` per agent and
     eyeballing the scrape (sattler, 2026-07-19).
 
     It also answers the roster's OTHER blind spot without inventing anything: the
@@ -4660,11 +4840,11 @@ def _cmd_crew(a) -> int:
         return CANNOT_TELL
     runtime = _runtime(a, panes)
     # --count answers BEFORE the empty-roster line: an empty roster is `0/0`, not
-    # a sentence telling a status bar to run `st new`.
+    # a sentence telling a status bar to run `st agent new`.
     if getattr(a, "count", False):
         return _crew_count(agents, panes, runtime, untracked_root=a.root)
     if not agents:
-        print("  no agents. `st new <agent>`.")
+        print("  no agents. `st agent new <agent>`.")
         return OK
     launches = _launches(a)
     stops = _stops(a)
@@ -4832,7 +5012,7 @@ def _cmd_crew(a) -> int:
     if deliberate:
         who = ", ".join(
             f"{n}{f' — {r.reason}' if r.reason else ''}" for n, r in deliberate)
-        print(f"  {len(deliberate)} stopped ON PURPOSE (`st stop`, not faults): "
+        print(f"  {len(deliberate)} stopped ON PURPOSE (`st agent stop`, not faults): "
               f"{who}")
         # This row used to promise a respawn flatly. That is false on any fleet
         # with other agents up, and aegis-5gbshs measured it: 46h down, zero
@@ -4840,21 +5020,21 @@ def _cmd_crew(a) -> int:
         # quoted wording is deliberately NOT repeated, because a test bans the
         # old string and a comment quoting it would defeat that ban.
         names = [n for n, _ in deliberate]
-        print(f"    `st new <agent>` brings one back. "
+        print(f"    `st agent new <agent>` brings one back. "
               f"{tend_fate(launches, names[0] if len(names) == 1 else '<agent>')}")
     if codex_blocked:
         print(f"  ⚠ {len(codex_blocked)} codex-daemon-wedged launch blocker(s):")
         for name, why in codex_blocked:
             print(f"    · {name}: {why}")
-        print("    `st new <agent>` repairs only that card's daemon and stale lock.")
+        print("    `st agent new <agent>` repairs only that card's daemon and stale lock.")
     if blocked_cycles:
         print(f"  ⚠ {len(blocked_cycles)} REQUESTED cycle(s) REFUSED and still "
               f"pending — NOT in flight:")
         for name, path in blocked_cycles:
-            where = path or f"(run `st cycle {name}` to see it)"
+            where = path or f"(run `st agent cycle {name}` to see it)"
             print(f"    · {name:<11} blocked on {where}")
         print("    Each of these agents keeps working on a context already judged "
-              "full. Commit + `st push` that tree, and the next `st tend` serves "
+              "full. Commit + `st repo push` that tree, and the next `st fleet tend` serves "
               "the cycle.")
     if cycling_agents:
         print(f"  {len(cycling_agents)} planned context cycle(s): "
@@ -4874,7 +5054,7 @@ def _cmd_crew(a) -> int:
         print(f"  ⚠ {len(work_unknown)} UNKNOWN work state: "
               f"{', '.join(work_unknown)}")
         print("    Not counted as free or busy — pane content did not prove either. "
-              "Inspect with `st log <agent>` before dispatching.")
+              "Inspect with `st agent log <agent>` before dispatching.")
     # WHO CAN TAKE THIS is only half the dispatcher's question; the other half is
     # WHAT IS NOT QUEUED ANYWHERE. See _unassigned_open (aegis-jqcs3).
     n_un, n_p1, why = _unassigned_open(a)
@@ -4915,7 +5095,7 @@ def _cmd_crew(a) -> int:
         print(f"    human mid-sentence. A send-keys here APPENDS — do not "
               f"dispatch, and do not press Enter at")
         print(f"    someone else's pane to 'un-stall' it. Look with "
-              f"`st log <agent>` and ask its owner.")
+              f"`st agent log <agent>` and ask its owner.")
         print(f"    To resubmit once confirmed: a bare Enter does NOT submit "
               f"(measured) — use C-u,")
         print(f"    re-send the text with `send-keys -l`, pause ~1s, then Enter.")
@@ -4932,11 +5112,11 @@ def _cmd_crew(a) -> int:
               f"will not time out. An ANSWERED")
         print(f"    picker still blocks until it is submitted; two agents sat on "
               f"those for over an hour.")
-        # NAME THE COMMAND (aegis-w30p2). `st log <agent>` dumped the pane and
+        # NAME THE COMMAND (aegis-w30p2). `st agent log <agent>` dumped the pane and
         # left the reader to eyeball a picker — which is how an option 2 that had
         # changed meaning between two prompts got answered twice in one evening.
-        print(f"    Read it:   st ask {waiting[0]}")
-        print(f"    Answer it: st answer {waiting[0]} <N>")
+        print(f"    Read it:   st agent ask {waiting[0]}")
+        print(f"    Answer it: st agent answer {waiting[0]} <N>")
         print(f"    ...or tell them to put the decision on the bead with a "
               f"recommendation and carry")
         print(f"    on — a question in a pane reaches nobody and dies with the "
@@ -4984,7 +5164,7 @@ def _cmd_crew(a) -> int:
         print(f"    browser OAuth flow — it cannot be driven for them. Recovery: "
               f"the OPERATOR re-logs in on their")
         print(f"    own session first (refreshing the shared credential), then "
-              f"`st tend --reauth` relaunches every")
+              f"`st fleet tend --reauth` relaunches every")
         print(f"    auth-dead agent in one command. Their frozen context is lost "
               f"either way — it was already")
         print(f"    unreachable the moment auth died.")
@@ -5002,7 +5182,7 @@ def _cmd_crew(a) -> int:
               f"needs a keystroke per command cannot")
         print(f"    make progress by construction, and each approval only "
               f"reveals the next one. Fix is `dangerous`")
-        print(f"    on the CARD plus a RELAUNCH (`st stop <agent> && st new "
+        print(f"    on the CARD plus a RELAUNCH (`st agent stop <agent> && st agent new "
               f"<agent>`) — the mode is read at launch, so")
         print(f"    editing the card alone changes nothing. Verify by this "
               f"column flipping, never by the card.")
@@ -5054,15 +5234,15 @@ def _cmd_crew(a) -> int:
               f"on disk: {', '.join(stale)}")
         print(f"    Their hooks are whatever the file said AT LAUNCH. Rewriting a "
               f"settings file is not deploying it — only a relaunch")
-        print(f"    (`st stop <agent> && st new <agent>`) re-reads it.")
+        print(f"    (`st agent stop <agent> && st agent new <agent>`) re-reads it.")
     if unknown:
         print(f"  ? {len(unknown)} agent(s) have no launch stamp, so this cannot "
               f"be answered for them: {', '.join(unknown)}")
         print(f"    Launched before stamping existed, or by something other than "
-              f"`st new`. UNKNOWN, not fine.")
+              f"`st agent new`. UNKNOWN, not fine.")
     # The CARD half of the same defect, and the one that is dormant rather than
     # burning: these agents are down, so nothing is stalling right now — but the
-    # card is what `st tend` re-arms, and re-arming one of these manufactures the
+    # card is what `st fleet tend` re-arms, and re-arming one of these manufactures the
     # incident again. It sat unseen behind `retired=true` for exactly this reason:
     # a retired card is not launched, so its defect never shows up as a symptom.
     # BEFORE bad_cards on purpose: bad_cards is DORMANT (those agents are down,
@@ -5081,7 +5261,7 @@ def _cmd_crew(a) -> int:
               f"routed to a lead in this state rise")
         print(f"    to the administrator as `lead-unreachable` while the lead "
               f"is visibly up.")
-        print(f"    Fix: `st stop <agent> && st new <agent>`. NOT offered "
+        print(f"    Fix: `st agent stop <agent> && st agent new <agent>`. NOT offered "
               f"automatically — a relaunch destroys")
         print(f"    in-flight context, so it stays a human's call.")
     if bad_cards:
@@ -5089,9 +5269,9 @@ def _cmd_crew(a) -> int:
               f"CANNOT WORK: {', '.join(n for n, _ in bad_cards)}")
         for name, gaps in bad_cards:
             print(f"      {name}: {', '.join(g.short for g in gaps)}")
-        print(f"    Harmless while they stay down — the card is what `st tend` "
+        print(f"    Harmless while they stay down — the card is what `st fleet tend` "
               f"re-arms, so this is a trap laid for")
-        print(f"    whoever un-retires them next. `st tend --unretire` says the "
+        print(f"    whoever un-retires them next. `st fleet tend --unretire` says the "
               f"full reason, and REFUSES on a workspace")
         print(f"    fault (manual mode it only warns about — that one can be "
               f"deliberate).")
@@ -5105,7 +5285,7 @@ def _check_alert_keepers(a, rules: list[Path]) -> int:
 
     A keeper is a roster *ownership* declaration, not a promise that its pane is
     running at this instant: intentional stops are expected to self-heal through
-    ``st tend``.  The durable bad states are instead (1) no label, (2) a label
+    ``st fleet tend``.  The durable bad states are instead (1) no label, (2) a label
     that names no card, and (3) a card which cannot make unattended progress when
     re-armed.  Reading ``panes`` here would turn normal right-sizing into a
     permanent false red and invite a silence.
@@ -5471,7 +5651,7 @@ def _alive_elsewhere_note(agents, panes) -> str:
         return ("    ⚠ ALIVE ELSEWHERE, not down: " + "; ".join(sorted(stray)) +
                 " — the pane st manages is gone but a session carrying the agent's "
                 "name is running. It takes no dispatches from st and `st go` cannot "
-                "reach it. Recover with `st new <agent>` after stopping the other "
+                "reach it. Recover with `st agent new <agent>` after stopping the other "
                 "session; do NOT read this as a crashed agent.")
     except Exception:      # noqa: BLE001 — the roster never fails on this
         return ""
@@ -5601,7 +5781,7 @@ def _crew_governor(a) -> int:
 
     A PURE READ (`persist=False`). A status bar polls every few seconds; if this
     extended a hysteresis hold, merely LOOKING at the bar would ratchet fleet
-    policy. `st tend` remains the one writer of the engaged tier.
+    policy. `st fleet tend` remains the one writer of the engaged tier.
     """
     try:
         reg = _registry(a)
@@ -5748,7 +5928,7 @@ def _live_by_governor(cards, panes, cfg, governors, root):
     while reading the same fleet in the same minute:
 
         st crew --governor   base live 0/6      <- bucketed by harness name
-        st tend              base live 5/6      <- every card treated as base
+        st fleet tend              base live 5/6      <- every card treated as base
 
     `harness.name_for` never returns "base" — it returns "claude" for a card that
     never said — so `live_by_harness.get("base")` was structurally always 0, and
@@ -5776,10 +5956,10 @@ def _live_by_governor(cards, panes, cfg, governors, root):
         #
         # `_governor_for` resolves through `harness.name_for`, which reads the
         # CARD — correct for ADMISSION, because the gate decides what a launch
-        # WILL be. It is wrong for spend: between `st harness <agent> <target>`
+        # WILL be. It is wrong for spend: between `st agent harness <agent> <target>`
         # and that agent's relaunch, the card says one program and the process is
         # still the other, so the budget being consumed belongs to the lane the
-        # count just left. `st harness` made that window routine rather than the
+        # count just left. `st agent harness` made that window routine rather than the
         # by-hand rarity it used to be.
         #
         # A cmdline we cannot read yields None and we KEEP the card's answer:
@@ -5817,7 +5997,7 @@ def _agent_counts(a, agents, panes, runtime):
                into the state label would double-count it against `up`, and would
                make an agent that is down indistinguishable from one nobody looked
                at — the distinction `_crew_states` exists to preserve.
-      stopped  the deliberate-stop record. An `st stop`ped agent is genuinely
+      stopped  the deliberate-stop record. An `st agent stop`ped agent is genuinely
                `down`; that it was somebody's DECISION is a second fact about the
                same agent, not a third state (aegis-k9068 — tend used to explain
                every deliberate stop as a fault).
@@ -6003,7 +6183,7 @@ def _cmd_band(a) -> int:
 
     aegis-ftmfn. The band decides whether an agent is still running after a usage
     throttle, and until now no verb wrote one. `roles set` writes the TREE
-    POSITION, so `st roles set billy normal` is refused as a depth violation
+    POSITION, so `st fleet roles set billy normal` is refused as a depth violation
     (correctly — `normal` is not a place in the tree), and the only remaining way
     was to hand-edit the card's `roles` array. Twenty cards were banded that way
     and three were missed. Nothing detected it, because a missing band and a band
@@ -6361,7 +6541,7 @@ def _cmd_project(a) -> int:
         # projects FROM the cards. So a clean match proves the sync worked — it
         # cannot detect a roster that was wrong when it was written, because the
         # thing it is checked against was written from it. Measured on this fleet:
-        # `st roles sync --dry-run` reported 20/20 clean and a SPARQL count agreed
+        # `st fleet roles sync --dry-run` reported 20/20 clean and a SPARQL count agreed
         # at 20, while the operator's actual decision existed in no machine-readable
         # form at all. Two instruments agreeing is not two instruments being right.
         #
@@ -6374,7 +6554,7 @@ def _cmd_project(a) -> int:
                   "projected FROM these cards, so this compares the copy to the "
                   "copy. It proves the sync worked; it CANNOT tell you the roster "
                   "is the one that was decided. Configure an independent referent "
-                  "— `st roles sync --from file:<path>` — and this becomes a real "
+                  "— `st fleet roles sync --from file:<path>` — and this becomes a real "
                   "check.", file=sys.stderr)
         print()
         return OK
@@ -6419,7 +6599,7 @@ def _cmd_project(a) -> int:
     # the root of the tree into a worker has not projected anything, it has
     # decapitated the host. The MacBook dry-run would have done exactly this
     # to hammond, silently, on the strength of an undeclared role. Changing who
-    # the administrator is happens through `st roles set`, on purpose, once.
+    # the administrator is happens through `st fleet roles set`, on purpose, once.
     decap = [(n, b, af) for n, b, af, _l, _new in changes
              if b and b[0] == "administrator" and af[0] != "administrator"]
     if decap:
@@ -6429,7 +6609,7 @@ def _cmd_project(a) -> int:
                   file=sys.stderr)
         print("  A sync never changes the administrator. Declare the role in the "
               "graph (hasRole administrator) or change it deliberately with "
-              "`st roles set`. No flag overrides this.\n", file=sys.stderr)
+              "`st fleet roles set`. No flag overrides this.\n", file=sys.stderr)
         # A dry-run keeps its contract (exit 0, nothing written): the finding
         # above IS the value of the dry-run. The real run refuses below.
 
@@ -6499,7 +6679,7 @@ def _resolve_repo(repo: str) -> Path:
 
     That is not a rare coincidence, it is the normal case: a Python repo holds a
     package directory named after the repo, so `./shantytown` exists inside every
-    shantytown checkout AND every shantytown worktree. `st push shantytown <me>`
+    shantytown checkout AND every shantytown worktree. `st repo push shantytown <me>`
     — the documented form — therefore failed SPECIFICALLY in the tree you are
     standing in when you push, which is the only place anyone runs it. Same for
     quipu, hank, bobbin. Measured 2026-08-04: refused with "no worktree at
@@ -6527,7 +6707,7 @@ def _resolve_repo(repo: str) -> Path:
 
 
 def _resolve_push_worktree(repo: str, agent: str) -> Path:
-    """Resolve an EXISTING agent worktree for ``st push``.
+    """Resolve an EXISTING agent worktree for ``st repo push``.
 
     Bare repo names may live in either of the two established source roots on
     this host: ``$GT_ROOT`` (normally ``~/gt``) or ``$WORKSPACE_ROOT``
@@ -6551,7 +6731,7 @@ def _resolve_push_worktree(repo: str, agent: str) -> Path:
     # A bare name can be a compatibility alias for a differently named source
     # checkout (currently hank -> hank-src).  Resolve that alias BEFORE looking
     # for an existing worktree: otherwise a stale hank-wt left by the archived
-    # repository captures `st push hank`, even while `st worktree hank` correctly
+    # repository captures `st repo push hank`, even while `st repo worktree hank` correctly
     # provisions from the active hank-src checkout.
     gt_worktree = worktree_for(resolved, agent)
     candidates = [gt_worktree, workspace_root / f"{repo}-wt" / agent]
@@ -6573,7 +6753,7 @@ def _push_invocation_branch(dest: Path) -> tuple[Path, str] | None:
     A linked worktree has its own git-dir but shares one git *common* directory.
     Comparing the common directory is therefore the discriminating check: a
     caller elsewhere in the filesystem must not affect the established
-    ``st push <repo> <agent>`` behavior, while a caller inside another worktree
+    ``st repo push <repo> <agent>`` behavior, while a caller inside another worktree
     of this exact repository is expressing a branch choice we must not ignore.
     """
     import subprocess
@@ -6621,7 +6801,7 @@ def _durable_checkpoint_gate(a, agent_name: str):
     fleet; only the reads live here.
 
     "Since the last relaunch" is the LAUNCH STAMP'S mtime. launched.FilesLaunches
-    writes it atomically at the moment of launch and `st stop` forgets it, so at
+    writes it atomically at the moment of launch and `st agent stop` forgets it, so at
     gate time it dates the session that is running right now — which is exactly
     the window a handoff has to be newer than. It carries no timestamp FIELD, and
     adding one would be a schema change to a store `st crew` reads on every
@@ -6667,7 +6847,7 @@ def _cmd_cycle(a) -> int:
     saturation.
 
     The sequence that works — found by hand five separate times before it was a
-    verb — is stop-with-a-reason then relaunch, because `st new` RESTORES what
+    verb — is stop-with-a-reason then relaunch, because `st agent new` RESTORES what
     `/clear` destroys: bypass, the MCP kit, skills, journaling, and a verification
     that the stop hooks are live on the new process.
 
@@ -6681,7 +6861,7 @@ def _cmd_cycle(a) -> int:
 
     agent_name = a.agent or os.environ.get("SHANTY_AGENT", "")
     if not agent_name:
-        print("  refused: no agent. `st cycle <agent>`, or `--self` with "
+        print("  refused: no agent. `st agent cycle <agent>`, or `--self` with "
               "$SHANTY_AGENT set.", file=sys.stderr)
         return REFUSED
 
@@ -6715,7 +6895,7 @@ def _cmd_cycle(a) -> int:
         if not a.reason.strip():
             print("  refused: --self needs your checkpoint. You are the only one "
                   "who can write it, and it is the only thing the cycle destroys. "
-                  "`st cycle --self --checkpoint-file <notes>` (or -r '<what you "
+                  "`st agent cycle --self --checkpoint-file <notes>` (or -r '<what you "
                   "are mid-task on, decisions already made, the exact next step>')",
                   file=sys.stderr)
             return REFUSED
@@ -6800,7 +6980,7 @@ def _cmd_cycle(a) -> int:
                   f"— named in your resume dispatch.")
         elif gctx.exemption:
             print(f"  no graph context: {gctx.exemption} — recorded.")
-        print(f"  `st tend` performs it. You stay up until it does, so keep "
+        print(f"  `st fleet tend` performs it. You stay up until it does, so keep "
               f"working; nothing is lost if it never fires.")
         print(f"  {handoff_text.refusal_note()}")
         return OK
@@ -6896,7 +7076,7 @@ def _cmd_cycle(a) -> int:
     if rc != OK:
         print(f"  could not tell: {agent_name} was stopped but the relaunch did "
               f"not verify (exit {rc}). Its checkpoint is on the stop record. "
-              f"`st new {agent_name}` to retry — do NOT assume it is up.",
+              f"`st agent new {agent_name}` to retry — do NOT assume it is up.",
               file=sys.stderr)
         return CANNOT_TELL
 
@@ -6959,7 +7139,7 @@ def _cmd_worktree(a) -> int:
     """
     agent = a.agent or os.environ.get("SHANTY_AGENT")
     if not agent:
-        print("  refused: no agent. `st worktree <repo> <agent>` or set "
+        print("  refused: no agent. `st repo worktree <repo> <agent>` or set "
               "$SHANTY_AGENT.", file=sys.stderr)
         return REFUSED
     repo = _resolve_repo(a.repo)
@@ -7042,7 +7222,7 @@ def _cmd_push(a) -> int:
     """
     agent = a.agent or os.environ.get("SHANTY_AGENT")
     if not agent:
-        print("  refused: no agent. `st push <repo> <agent>` or set "
+        print("  refused: no agent. `st repo push <repo> <agent>` or set "
               "$SHANTY_AGENT.", file=sys.stderr)
         return REFUSED
     try:
@@ -7051,7 +7231,7 @@ def _cmd_push(a) -> int:
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED
     if not Path(dest).is_dir():
-        print(f"  refused: no worktree at {dest} — `st worktree {a.repo} {agent}` "
+        print(f"  refused: no worktree at {dest} — `st repo worktree {a.repo} {agent}` "
               f"first.", file=sys.stderr)
         return REFUSED
 
@@ -7062,7 +7242,7 @@ def _cmd_push(a) -> int:
         print(
             f"  refused before push: checked-out branch '{caller_branch}' at "
             f"{caller_path} differs from canonical '{branch}' at {dest}. "
-            "No remote was contacted. Run st push from the canonical worktree, "
+            "No remote was contacted. Run st repo push from the canonical worktree, "
             "or use an explicit git push after reviewing the exact ref.",
             file=sys.stderr,
         )
@@ -7720,7 +7900,7 @@ def _window_launch_gate(a) -> int | None:
     if lease is None:
         return None
     print(f"  refused: maintenance window {lease['id']!r} is {lease['state']} — "
-          "relaunch held until `st window release` or `abort`", file=sys.stderr)
+          "relaunch held until `st fleet window release` or `abort`", file=sys.stderr)
     return REFUSED
 
 
@@ -7796,9 +7976,9 @@ def _cmd_window(a) -> int:
                     inbox.deliver(
                         row["agent"],
                         f"MAINTENANCE WINDOW {a.id}: checkpoint, clear typed input, "
-                        f"report, then `st stop {row['agent']} --reason 'window {a.id}'`. "
+                        f"report, then `st agent stop {row['agent']} --reason 'window {a.id}'`. "
                         "Relaunch is leased until release/abort.",
-                        frm=_me(a) or "st window")
+                        frm=_me(a) or "st fleet window")
             print(f"  draining {a.id}: relaunch lease active; "
                   f"{sum(bool(r.get('live')) for r in manifest['roster'])} live agent(s) notified")
             return OK
@@ -7990,7 +8170,7 @@ def _cmd_dashboard(a) -> int:
             return OK
 
     # The self-refreshing panel. Clear + redraw each interval; Ctrl-C exits clean.
-    print("  st dashboard — refreshing every "
+    print("  st fleet dashboard — refreshing every "
           f"{a.interval}s. Ctrl-C to stop.", file=sys.stderr)
     try:
         while True:
@@ -8106,7 +8286,7 @@ def _print_question(agent: str, q) -> None:
 
     Verbatim because paraphrasing an approval prompt is how an operator approves
     something other than what they read. The options carry their own numbers from
-    the screen rather than being re-numbered here, so `st answer <agent> N` and
+    the screen rather than being re-numbered here, so `st agent answer <agent> N` and
     what the agent will act on are the same N by construction.
     """
     print(f"  {agent} is blocked on a question:\n")
@@ -8120,7 +8300,7 @@ def _print_question(agent: str, q) -> None:
             print(f"         {o.detail}")
     if q.footer:
         print(f"\n    ({q.footer})")
-    print(f"\n  Answer it: st answer {agent} <N>")
+    print(f"\n  Answer it: st agent answer {agent} <N>")
 
 
 def _cmd_ask(a) -> int:
@@ -8144,7 +8324,7 @@ def _cmd_ask(a) -> int:
     panes, card, screen, awaiting = got
     if not awaiting:
         print(f"  {card.name}: no blocking picker is up — nothing is being "
-              f"asked. (`st input {card.name} --show` for what is in its box.)")
+              f"asked. (`st agent input {card.name} --show` for what is in its box.)")
         return OK
 
     from .runtime import reads_a_question
@@ -8205,9 +8385,9 @@ def _cmd_attach(a, *, execer=_exec_attach, which=None) -> int:
     true sentence that answers a question nobody asked: the operator typing
     `st attach weaver` has already decided they want to be in weaver's pane, and
     making them run a second command to get there is the whole cold-start friction.
-    The launch goes through the same `_launch` seam as `st new`, so an agent
+    The launch goes through the same `_launch` seam as `st agent new`, so an agent
     attached-into-existence is provisioned, workspace-checked and hook-verified
-    exactly like one `st new` made.
+    exactly like one `st agent new` made.
 
     `--no-start` is for the caller that must promise it creates nothing — a script
     attaching to whatever is already running. That need is real, so it stays
@@ -8255,7 +8435,7 @@ def _cmd_attach(a, *, execer=_exec_attach, which=None) -> int:
     if not card.pane:
         # NO PANE ON THE CARD IS STILL A REFUSAL, even though a down agent is not.
         # `_launch` would invent an `st-<name>` session, but a session that is not
-        # on the card is invisible to `st crew`, `st stop` and `st tend` — so
+        # on the card is invisible to `st crew`, `st agent stop` and `st fleet tend` — so
         # attaching into one would create an agent only this command can find.
         # The fix is the card, and it is one command.
         print(f"  refused: {name} has NO pane on its card, so there is no session "
@@ -8362,7 +8542,7 @@ def _dream_sweep(a, cfg, agents, panes, *, force=False, dry_run=False):
             and panes.exists(card.pane)):
         panes.send(card.pane, attribute(
             f"Work is on your hook: {item.id} — {cycle.title} — scheduled DREAM "
-            f"cycle; read the bead and execute one bounded pass.", "st dream"))
+            f"cycle; read the bead and execute one bounded pass.", "st work dream"))
     return cycle, item.id, "created"
 
 
@@ -8544,9 +8724,9 @@ def _cmd_tend(a) -> int:
 
     # --loop <secs>: run passes on an interval, so blocked-worker delivery is
     # PROMPT ON ITS OWN (aegis-w0kk) rather than "on the coordinator's next stop".
-    # This is the heartbeat the bead's option 2 names; without a running st tend
+    # This is the heartbeat the bead's option 2 names; without a running st fleet tend
     # timer (its systemd install refuses while gastown-crew-watchdog holds the
-    # crew), a foreground/backgrounded `st tend --loop 30` is the runnable one.
+    # crew), a foreground/backgrounded `st fleet tend --loop 30` is the runnable one.
     loop = getattr(a, "loop", None)
     if not loop:
         return _tend_once(a)
@@ -8576,12 +8756,12 @@ def _cmd_tend(a) -> int:
             _tend_once(a, quiet=True)
         except Exception:  # noqa: BLE001 — survive anything a pass can raise
             import traceback
-            print(f"  ⚠ st tend: this pass CRASHED — supervision continues; "
+            print(f"  ⚠ st fleet tend: this pass CRASHED — supervision continues; "
                   f"next pass in {loop}s. Traceback:", file=sys.stderr)
             traceback.print_exc()
         now = _code_fingerprint()
         if fp is not None and now is not None and now != fp:
-            print("  st tend: the installed code CHANGED under this loop — "
+            print("  st fleet tend: the installed code CHANGED under this loop — "
                   "re-exec to run what is on disk.", file=sys.stderr)
             os.execv(sys.executable, [sys.executable] + sys.argv)
         time.sleep(loop)
@@ -8741,7 +8921,7 @@ def _tend_once(a, quiet: bool = False) -> int:
     #
     # Candidates are the agents on the donor lane whose ROLE is not pinned to it:
     # a lead pinned to claude cannot be converted, so offering one as a candidate
-    # would be advice that `st harness` then refuses.
+    # would be advice that `st agent harness` then refuses.
     from . import harness_switch as _hswitch
     _pinned = cfg.harness_required_by_role
     _by_lane: dict = {}
@@ -8762,7 +8942,7 @@ def _tend_once(a, quiet: bool = False) -> int:
             candidates=tuple(sorted(_by_lane.get(_n, []))),
             # The compatibility lane is named `base` and runs `claude`; the
             # recommendation must name the program, since that is what
-            # `st harness` takes.
+            # `st agent harness` takes.
             harness=(harness_mod.DEFAULT if _n == "base" else _n))
         for _n in sorted(governors)
         # A BLIND LANE IS EXCLUDED, not defaulted. Recommending a fleet move on a
@@ -8782,7 +8962,7 @@ def _tend_once(a, quiet: bool = False) -> int:
     # a no-op with ST_GOVERNOR_PUSHGATEWAY unset.
     #
     # A DRY RUN PUBLISHES NOTHING. It evaluates and prints, like everything else
-    # on a dry run — and its counters must not move, or `st tend --dry-run` would
+    # on a dry run — and its counters must not move, or `st fleet tend --dry-run` would
     # silently inflate st_governor_decisions_total for a decision nobody applied.
     if not a.dry_run and gov_metric_lanes:
         gov_metrics_mod.publish(
@@ -8842,7 +9022,7 @@ def _tend_once(a, quiet: bool = False) -> int:
     def _respawn(card, session):
         runtime.start(card, session)
         # It is UP again, so the deliberate-stop record is history (#29). tend
-        # respawning an `st stop`ped agent is correct and unchanged — a stop is not
+        # respawning an `st agent stop`ped agent is correct and unchanged — a stop is not
         # a retirement — but the record must not outlive the stop it describes, or
         # this agent's NEXT crash reads as somebody's decision.
         _stops(a).forget(card.name)
@@ -8959,7 +9139,7 @@ def _tend_once(a, quiet: bool = False) -> int:
             print(f"  ⚠ prompted {len(cycled)} saturated agent(s) to cycle: "
                   f"{', '.join(cycled)}", file=sys.stderr)
         # HONOUR SELF-REQUESTED CYCLES (aegis-3laza). An agent cannot cycle itself
-        # in-process — the stop kills the session running the stop — so `st cycle
+        # in-process — the stop kills the session running the stop — so `st agent cycle
         # --self` can only record a request, and this is what honours it. It is the
         # half that removes three of the five measured failures: the agent that
         # KNOWS it is degrading no longer has to wait for a coordinator to notice.
@@ -9006,7 +9186,7 @@ def _tend_once(a, quiet: bool = False) -> int:
             if rc_c != OK:
                 print(f"  ⚠ tend: {who} REQUESTED a cycle and it did not complete "
                       f"(exit {rc_c}) — the request stays pending. Usually a dirty "
-                      f"or unpushed tree; run `st cycle {who} -r '...'` to see it.",
+                      f"or unpushed tree; run `st agent cycle {who} -r '...'` to see it.",
                       file=sys.stderr)
         # TELL THE AGENTS THEMSELVES (aegis-7xptd5). The loop above records each
         # refusal on the request (via _cmd_cycle) and reports it to stderr, where
@@ -9200,7 +9380,7 @@ def _drain_sweep(a, verdict, agents, panes, *, governor_name="base", episode=Non
         gov_mod.DrainLedger(Path(a.root)).clear()
         return []
     inbox = _inbox(a, default="beads")
-    me = _me(a) or "st tend"
+    me = _me(a) or "st fleet tend"
     # Each provider has its own drain episode and ledger.  Reusing the legacy
     # ledger would let a relaxing sibling clear another provider's outstanding
     # drain, precisely when its workers still need to report their pushed WIP.
@@ -9252,7 +9432,7 @@ def _governor_episode(a) -> float:
 
 def _retire_card(a, name: str) -> None:
     """Mark an agent RETIRED on its card — the same durable mechanism
-    `st tend --retire` uses, so a crash-loop retirement is visible to, and
+    `st fleet tend --retire` uses, so a crash-loop retirement is visible to, and
     reversible by, exactly the commands an operator already knows.
 
     It names ITSELF as the actor, not $SHANTY_AGENT. This runs inside a tend
@@ -9265,7 +9445,7 @@ def _retire_card(a, name: str) -> None:
     try:
         reg = _registry(a)
         card = reg.get(name)
-        reg.set(replace(card, retired=True, retired_by="st tend (crash-loop)",
+        reg.set(replace(card, retired=True, retired_by="st fleet tend (crash-loop)",
                         retired_at=_now_iso()))
     except Exception as e:                        # noqa: BLE001 — never fatal
         print(f"  ⚠ could not retire {name}: {e}", file=sys.stderr)
@@ -9276,7 +9456,7 @@ def _tend_reauth(a) -> int:
 
     THE INCIDENT THIS REPLACES: an operator re-login rotated the shared
     credential and every live agent's session went login-expired at once — nine
-    agents, each needing a by-hand `st stop` + `st new`, while every roster
+    agents, each needing a by-hand `st agent stop` + `st agent new`, while every roster
     surface said `idle`. This is that recovery as ONE command, run at the moment
     only the operator can know: AFTER they have re-logged in. /login inside a
     pane is an interactive browser OAuth flow — it cannot be driven for the
@@ -9295,7 +9475,7 @@ def _tend_reauth(a) -> int:
     normal pass, so retirement, workspace-ensure, clone-refresh and the
     appeared-while-we-looked race guard all hold. What this adds around them:
     the kill (tend never kills), the ownership guard on it (a name match is not
-    permission to kill — same rule as `st stop`), and a liveness verify after.
+    permission to kill — same rule as `st agent stop`), and a liveness verify after.
 
     HONEST BOUNDARY: the verify proves the process CAME UP, not that it is
     authed — the banner only appears on the first failed API call, so a launch
@@ -9328,7 +9508,7 @@ def _tend_reauth(a) -> int:
             print(f"  refused: {card.name} ({card.pane}) was not launched by st — "
                   f"refusing to kill a session st does not own. A name match is "
                   f"not permission to kill. Its own launcher recovers it, or: "
-                  f"kill it by hand, then `st new {card.name}` brings it back "
+                  f"kill it by hand, then `st agent new {card.name}` brings it back "
                   f"st-owned.", file=sys.stderr)
             refused += 1
             continue
@@ -9358,11 +9538,11 @@ def _tend_reauth(a) -> int:
     relaunch = [c for c in relaunch if not panes.exists(c.pane)]
 
     # THE SAME respawn path as a normal tend pass — one launcher, not a second.
-    # The spawn also stamps what it launched with (same record `st new` writes),
+    # The spawn also stamps what it launched with (same record `st agent new` writes),
     # so the relaunched agent's settings verdict is measured, not `unknown`.
     def _spawn(card, session):
         runtime.start(card, session)
-        # Best-effort, same contract as `st new`: an unstamped agent reports
+        # Best-effort, same contract as `st agent new`: an unstamped agent reports
         # `unknown`, which is the state it is in — never fail the launch.
         _launched_now(a, card.name, runtime.settings_path(card))
     tender = tend_mod.Tender(
@@ -9388,7 +9568,7 @@ def _tend_reauth(a) -> int:
     if unverified:
         print(f"  could not tell: {len(unverified)} relaunched agent(s) not "
               f"observed live within the timeout: {', '.join(unverified)} — "
-              f"check `st log <agent>`.", file=sys.stderr)
+              f"check `st agent log <agent>`.", file=sys.stderr)
     else:
         print(f"  {len(relaunch)} agent(s) relaunched and observed live.")
     print("  live is not authed: the login banner only shows on the first API "
@@ -9563,7 +9743,7 @@ def _tend_retire(a) -> int:
     reg.set(replace(card, retired=want, retired_by=_actor(),
                     retired_at=_now_iso()))
     if want:
-        print(f"  {name} is RETIRED. `st tend` will not respawn it, and will "
+        print(f"  {name} is RETIRED. `st fleet tend` will not respawn it, and will "
               f"ESCALATE if it finds it alive.")
         print(f"  recorded on the card: RETIRED by {_actor()} "
               f"at {_now_iso()}")
@@ -9595,7 +9775,7 @@ def _tend_status(a) -> int:
     # is_masked IS NOT OPTIONAL HERE (aegis-unbuw). It defaults to "nothing is
     # masked", and this call site omitted it while `--install` passed it — so
     # the masked-tombstone fix landed on the path that REFUSES and missed the
-    # path an operator actually reads. `st tend --status` went on calling a
+    # path an operator actually reads. `st fleet tend --status` went on calling a
     # masked, RemainAfterExit=yes oneshot an active competitor, which is the
     # same false positive, on the more-read surface, telling a human to go
     # fight a unit that can never run again.

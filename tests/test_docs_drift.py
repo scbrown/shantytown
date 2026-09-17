@@ -32,37 +32,74 @@ CLI_MD = ROOT / "docs" / "cli.md"
 DOCS = sorted((ROOT / "docs").glob("*.md"))
 
 
-def _subcommands() -> set[str]:
+def _surface() -> dict[str, frozenset[str] | None]:
+    """{verb: None, group: frozenset(leaves)}, read off the wired parser. Six
+    verbs and five groups since the regrouping (2026-09-17); the hidden aliases
+    for the old spellings are not part of the surface and do not iterate."""
     parser = cli.build_parser()
-    for action in parser._actions:
-        if isinstance(action, argparse._SubParsersAction):
-            return set(action.choices)
-    return set()
+    top = next(a for a in parser._actions if isinstance(a, argparse._SubParsersAction))
+    out: dict[str, frozenset[str] | None] = {}
+    for name in top.choices:
+        sub = next((a for a in top.choices[name]._actions
+                    if isinstance(a, argparse._SubParsersAction)), None)
+        is_group = cli.SURFACE.get(name) is not None
+        out[name] = frozenset(sub.choices) if (sub is not None and is_group) else None
+    return out
 
 
-def _commands_in_block(text: str, fence_contains: str) -> set[str]:
-    """Pull `st <cmd>` names out of the fenced block that contains a marker."""
+def _subcommands() -> set[str]:
+    """Every name that may follow `st` directly: the verbs and the groups."""
+    return set(_surface())
+
+
+def _leaf_count() -> int:
+    """THE COUNT: thirty-three LEAVES — the six verbs plus the twenty-seven
+    grouped commands, i.e. everything that runs a handler. A group is a
+    namespace, runs nothing, and earns no slot. README's badge, its versus-table
+    row, its prose sentence and docs/cli.md's count paragraph all state this
+    number, and each is checked against the parser below."""
+    return sum(1 if leaves is None else len(leaves) for leaves in _surface().values())
+
+
+def _surface_in_block(text: str, fence_contains: str) -> dict[str, frozenset[str] | None]:
+    """Pull the surface out of the fenced block that contains a marker.
+
+    `st <name>` at the start of a line is a verb or a group; a line indented by
+    EXACTLY two spaces and then a word is a leaf of the most recent group.
+    Continuation lines of a description are indented far deeper, so they never
+    read as a leaf. A leaf under a verb is a drift and fails here."""
     for block in re.findall(r"```[a-z]*\n(.*?)```", text, re.S):
-        if fence_contains in block:
-            return {m.group(1) for m in re.finditer(r"^st ([a-z]+)", block, re.M)}
+        if fence_contains not in block:
+            continue
+        out: dict[str, set[str] | None] = {}
+        current: str | None = None
+        for line in block.splitlines():
+            if m := re.match(r"^st ([a-z]+)", line):
+                current = m.group(1)
+                out.setdefault(current, set() if cli.SURFACE.get(current) else None)
+            elif m := re.match(r"^  ([a-z]+)", line):
+                assert current is not None and out[current] is not None, (
+                    f"leaf line {line!r} under a verb (or no group) in the surface block")
+                out[current].add(m.group(1))       # type: ignore[union-attr]
+        return {k: (frozenset(v) if v is not None else None) for k, v in out.items()}
     raise AssertionError(f"no fenced block containing {fence_contains!r}")
 
 
 # --- the surface listing in each document must BE the surface ----------------
 
 def test_readme_whole_surface_block_lists_exactly_the_wired_commands():
-    listed = _commands_in_block(README.read_text(), "← the anchor")
-    assert listed == _subcommands(), (
-        f"README's 'whole surface' block drifted: it lists {sorted(listed)}, the "
-        f"parser wires {sorted(_subcommands())}."
+    listed = _surface_in_block(README.read_text(), "← the anchor")
+    assert listed == _surface(), (
+        f"README's 'whole surface' block drifted: it lists {listed}, the "
+        f"parser wires {_surface()}."
     )
 
 
 def test_cli_md_whole_surface_block_lists_exactly_the_wired_commands():
-    listed = _commands_in_block(CLI_MD.read_text(), "st anchor")
-    assert listed == _subcommands(), (
-        f"docs/cli.md's surface block drifted: it lists {sorted(listed)}, the "
-        f"parser wires {sorted(_subcommands())}."
+    listed = _surface_in_block(CLI_MD.read_text(), "st anchor")
+    assert listed == _surface(), (
+        f"docs/cli.md's surface block drifted: it lists {listed}, the "
+        f"parser wires {_surface()}."
     )
 
 
@@ -85,9 +122,15 @@ def test_no_doc_advertises_a_command_the_cli_does_not_have():
         for line in doc.read_text().splitlines():
             if _DISAVOWS.search(line):
                 continue
-            for m in re.finditer(r"`st ([a-z]+)", line):
-                if m.group(1) not in wired:
-                    offenders.append(f"{doc.relative_to(ROOT)}: `st {m.group(1)}`")
+            for m in re.finditer(r"`st ([a-z]+)(?: ([a-z]+))?", line):
+                first, second = m.group(1), m.group(2)
+                if first not in wired:
+                    # Since the regrouping this is also where `st agent cycle` (now
+                    # `st agent cycle`) fails: the old spelling is an alias
+                    # the CLI accepts for two releases, not a command it has.
+                    offenders.append(f"{doc.relative_to(ROOT)}: `st {first}`")
+                elif cli.SURFACE.get(first) and second and second not in cli.SURFACE[first]:
+                    offenders.append(f"{doc.relative_to(ROOT)}: `st {first} {second}`")
     assert not offenders, (
         "docs advertise commands the CLI does not wire: " + ", ".join(sorted(set(offenders)))
         + ". Either build it or stop promising it."
@@ -108,7 +151,7 @@ def test_no_doc_tells_the_reader_to_run_shanty():
     offenders = []
     for doc in [README, *DOCS]:
         for m in re.finditer(r"shanty ([a-z]+)", doc.read_text()):
-            if m.group(1) in _subcommands():
+            if m.group(1) in _subcommands() | set(cli.GROUP_OF):
                 offenders.append(f"{doc.relative_to(ROOT)}: shanty {m.group(1)}")
     assert not offenders, (
         "docs invoke `shanty <cmd>`; the installed binary is `st`: " + ", ".join(offenders)
@@ -120,15 +163,15 @@ def test_no_doc_tells_the_reader_to_run_shanty():
 def test_readme_command_badge_matches_the_wired_count():
     m = re.search(r"badge/commands-(\d+)-", README.read_text())
     assert m, "the README command-count badge is gone"
-    assert int(m.group(1)) == len(_subcommands()), (
-        f"README badge claims {m.group(1)} commands; the parser wires {len(_subcommands())}."
+    assert int(m.group(1)) == _leaf_count(), (
+        f"README badge claims {m.group(1)} commands; the parser wires {_leaf_count()}."
     )
 
 
 def test_readme_versus_table_matches_the_wired_count():
     m = re.search(r"\| Commands \| ~110 \| \*\*(\d+)\*\* \|", README.read_text())
     assert m, "the Versus Gas Town command row is gone"
-    assert int(m.group(1)) == len(_subcommands())
+    assert int(m.group(1)) == _leaf_count()
 
 
 def test_readme_test_badge_matches_the_real_collected_count():
@@ -183,7 +226,7 @@ def test_cli_md_stated_count_matches_the_wired_count():
              23: "Twenty-three", 24: "Twenty-four", 25: "Twenty-five",
              26: "Twenty-six", 27: "Twenty-seven", 28: "Twenty-eight",
              29: "Twenty-nine", 30: "Thirty", 31: "Thirty-one", 32: "Thirty-two", 33: "Thirty-three"}
-    n = len(_subcommands())
+    n = _leaf_count()
     assert n in words, "add the number word and update docs/cli.md"
     text = CLI_MD.read_text()
     assert re.search(rf"^{words[n]}\.", text, re.M), (
@@ -404,6 +447,6 @@ def test_readme_prose_count_matches_the_parser():
              34: "thirty-four", 35: "thirty-five", 36: "thirty-six"}
     m = re.search(r"^([A-Z][a-z-]+), and the count is load-bearing", README.read_text(), re.M)
     assert m, "the README's 'and the count is load-bearing' sentence is gone"
-    n = len(_subcommands())
+    n = _leaf_count()
     assert m.group(1).lower() == words[n], (
         f"README prose says {m.group(1)!r} commands; the parser wires {n}.")

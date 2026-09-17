@@ -5,9 +5,9 @@ credential and all 9 live crew went `● Login expired · Please run /login` at
 once — ready UI up, input box empty, so every roster surface said `idle`. They
 were counted feedable (Rule Zero held the coordinator hostage to dead panes),
 tend's cycle driver prompted one over and over into the banner, and recovery was
-nine by-hand `st stop` + `st new`. Every test here pins one leg of the fix:
+nine by-hand `st agent stop` + `st agent new`. Every test here pins one leg of the fix:
 the state is NAMED, excluded from feedable, reported by tend, and recovered by
-ONE command (`st tend --reauth`).
+ONE command (`st fleet tend --reauth`).
 """
 from __future__ import annotations
 
@@ -196,7 +196,7 @@ def test_crew_shows_auth_dead_as_a_distinct_state_not_idle(tmp_path, monkeypatch
     assert triage.AUTH_DEAD in rows["ellie"]
     assert "1 free: ian" in out                    # ellie is NOT on the free list
     assert "AUTH-DEAD" in out                      # and the summary names her
-    assert "st tend --reauth" in out               # with the remedy
+    assert "st fleet tend --reauth" in out               # with the remedy
 
 
 # --- part 5: tend reports it as a FAULT, and does not auto-relaunch ----------
@@ -237,12 +237,12 @@ def test_tend_reports_auth_dead_as_a_fault_and_touches_nothing(tmp_path):
     (f,) = rep.findings
     assert f.verdict == tend_mod.AUTH_DEAD
     assert not f.acted                       # reported, never auto-relaunched
-    assert "st tend --reauth" in f.why       # the remedy is named
+    assert "st fleet tend --reauth" in f.why       # the remedy is named
     assert not rep.healthy()                 # exit code 2: alertable
     assert runtime.started == []
 
 
-# --- part 6: the one command — st tend --reauth ------------------------------
+# --- part 6: the one command — st fleet tend --reauth ------------------------------
 
 class _ReauthPanes(_Panes):
     """After a relaunch the pane must show a FRESH screen, not the dead one —
@@ -323,7 +323,7 @@ def test_reauth_dry_run_touches_nothing(tmp_path, monkeypatch, capsys):
 
 
 def test_reauth_refuses_a_session_st_does_not_own(tmp_path, monkeypatch, capsys):
-    """The st stop rule, fleet edition: a name match is not permission to kill."""
+    """The st agent stop rule, fleet edition: a name match is not permission to kill."""
     root, panes = _reauth_fixture(tmp_path, monkeypatch,
                                   screens={"ellie": AUTH_DEAD_PANE}, owned=set())
     a = _ReauthArgs(root)
