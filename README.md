@@ -38,7 +38,7 @@ st inbox ada "go read st-1"           # → straight into ada's pane
 st crew                              # → who's up, who's on what
 ```
 
-Three steps: **create → send → fetch.** No daemon. No broker. No queue — just a
+Three steps: **create → send → fetch.** No resident daemon. No broker. No queue — just a
 thin harness plus an orchestration layer that prioritizes work and reacts to
 governed events (see [Workflows & events](#-workflows--events)).
 
@@ -165,8 +165,10 @@ earned its size honestly: a mayor, a deacon, convoys, formulas, quotas, scheduli
 orchestration tier for running a real fleet. If you want a town, use the town. Shantytown does not
 try to replace any of that and never will.
 
-Shantytown's whole claim is *smallness*: stdlib-only Python, no daemon, no server, no background
-process, and a tracker you can swap in two functions.
+Shantytown's whole claim is *smallness*: stdlib-only Python, no resident daemon, no server, and a
+tracker you can swap in two functions. The one scheduled thing is `st tend --install`, which asks
+your systemd user timer to run a one-shot `st tend` pass every five minutes; nothing of
+shantytown's stays running between passes.
 
 |  | **raw tmux + shell scripts** | **[Gas Town](https://github.com/gastownhall/gastown)** | **shantytown** |
 |--|:---:|:---:|:---:|
@@ -177,7 +179,7 @@ process, and a tracker you can swap in two functions.
 | Scheduling, quotas, fleet-scale ops | ❌ | ✅ | ❌ |
 | Refuses to type into a busy pane | ❌ | ❌ | ✅ |
 | Pluggable work tracker (files, beads, yours) | ❌ | ❌ *beads* | ✅ |
-| Runs with no daemon or background service | ✅ | ❌ | ✅ |
+| Runs with no resident daemon (`st tend` is a one-shot on a systemd timer) | ✅ | ❌ | ✅ |
 | No database or data plane to stand up | ✅ | ❌ *Dolt* | ✅ |
 | Third-party runtime dependencies | none | Dolt | **none** |
 
@@ -211,8 +213,9 @@ plus every script on one fleet. Full write-up in [`docs/vision.md`](docs/vision.
 
 ## ✨ Features
 
-- 🛖 **A town with no town hall.** No daemon, no broker, no message bus, no scheduler. `st` is a
-  process that runs, does one thing, and exits.
+- 🛖 **A town with no town hall.** No resident daemon, no broker, no message bus, no scheduler.
+  `st` is a process that runs, does one thing, and exits — including `st tend`, which a systemd user
+  timer starts every five minutes and which exits when its pass is over.
 - 📮 **`st inbox` *is* `tmux send-keys`.** Nothing sits between you and the agent — which is exactly
   why an undeliverable message can't be quietly queued and reported as sent.
 - 📋 **`st task` gives you an id.** Create work, get `st-1` back. That id is the whole reason step
@@ -289,7 +292,7 @@ never the reverse — so an agent's address can't quietly drift from reality.
 ```
 st task <title>                   create work, get an id back
 st inbox <agent> <message>         a message into a pane. send-keys, nothing more.
-st go <item> [agent]              dispatch. the one that matters.
+st go <item> <agent>              dispatch. the one that matters. the agent is named, never guessed.
 st repool <item>                  hand an item back: status -> open AND assignee cleared, verified
 st defer <item> <kind> --reason-file <path|->
                                   park it with one blocker-kind label + durable reason, verified
@@ -328,8 +331,8 @@ st stats [agent]                  files/skills plus provider tokens and cache di
 st cost [bead] [--sync]           parser-owned cost reads and closed-bead/metric publication
 ```
 
-Twenty, and the count is load-bearing: a test pins this block to the parser, so the next command
-either updates the list or fails CI.
+Thirty-three, and the count is load-bearing: a test pins this block AND this sentence to the parser,
+so the next command either updates both or fails CI.
 
 ## 🔀 Workflows & events
 

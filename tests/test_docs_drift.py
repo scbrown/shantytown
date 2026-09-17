@@ -390,3 +390,20 @@ def test_the_config_example_shows_the_harness_table():
     example = (ROOT / "docs" / "shantytown.toml.example").read_text()
     assert "[harness]" in example and "[harness.by_role]" in example, \
         "shantytown.toml.example does not document the [harness] table"
+
+
+def test_readme_prose_count_matches_the_parser():
+    """The sentence under the whole-surface block said "Twenty, and the count is
+    load-bearing" while the parser wired thirty-three. The block was pinned; the
+    sentence a reader quotes was not — the same drift test_command_count.py found
+    in cli.py's docstring, one file over. Now the README word moves with the parser."""
+    words = {20: "twenty", 21: "twenty-one", 22: "twenty-two", 23: "twenty-three",
+             24: "twenty-four", 25: "twenty-five", 26: "twenty-six",
+             27: "twenty-seven", 28: "twenty-eight", 29: "twenty-nine",
+             30: "thirty", 31: "thirty-one", 32: "thirty-two", 33: "thirty-three",
+             34: "thirty-four", 35: "thirty-five", 36: "thirty-six"}
+    m = re.search(r"^([A-Z][a-z-]+), and the count is load-bearing", README.read_text(), re.M)
+    assert m, "the README's 'and the count is load-bearing' sentence is gone"
+    n = len(_subcommands())
+    assert m.group(1).lower() == words[n], (
+        f"README prose says {m.group(1)!r} commands; the parser wires {n}.")

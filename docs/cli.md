@@ -12,7 +12,7 @@
 ```
 st anchor [--short|--events|--harness]
                               who am I, what's on my plate         <- the anchor
-st go <item> [agent]          dispatch. this is the one that matters.
+st go <item> <agent>          dispatch. this is the one that matters. the agent is required.
 st repool <item>              hand an item back to the pool: status -> open AND
                               assignee cleared, one verified write. Clearing the
                               assignee alone leaves it in_progress — off `bd ready`,

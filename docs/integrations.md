@@ -71,7 +71,10 @@ here costs zero lines**, because the coupling point is a database that already h
 
 ### What this forbids
 
-- **No `st dashboard`.** Gas Town has one; it is not running; nobody filed a bead.
+- **No dashboard that the harness feeds.** `st dashboard` exists, and it is allowed precisely
+  because it obeys the obligation above: a self-refreshing READ of an admin's tier from the store,
+  with nothing written for its benefit. Gas Town's dashboard is the other kind; it is not running;
+  nobody filed a bead.
 - **No `shanty-api`.** Gas Town built one; it is undeployed; its only consumer routed around it.
 - **No dashboard-shaped writes on the dispatch path.** `gt sling` auto-creates a convoy per dispatch
   *for dashboard visibility* — a write on the hot path, for a reader that doesn't need it.

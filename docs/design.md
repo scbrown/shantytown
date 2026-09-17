@@ -119,11 +119,9 @@ a confident heuristic you cannot inspect** — the whole point is that the opera
 ```python
 # beads
 def create(t, b): return sh(f"bd create {q(t)} -d {q(b)}").id
-def hint(i):      return f"go read bead {i} — run: bd show {i}"
 
 # files — the zero-dependency floor. proves the abstraction.
 def create(t, b): p = Path("work")/f"{uuid4()}.md"; p.write_text(f"# {t}\n\n{b}"); return str(p)
-def hint(i):      return f"go read {i}"
 ```
 
 The **files** adapter is not a toy. It's the proof the abstraction holds — if shantytown works with a
