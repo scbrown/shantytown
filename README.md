@@ -152,10 +152,3 @@ MIT — see [LICENSE](LICENSE).
 Every number here was measured on one host, not estimated.<br>
 <i>A crew of agents, and someone running the town.</i>
 </sub></div>
-
----
-
-<div align="center"><sub>
-Every number here was measured on one host, not estimated.<br>
-<i>A crew of agents, and someone running the town.</i>
-</sub></div>
