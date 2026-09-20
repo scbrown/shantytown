@@ -567,6 +567,25 @@ class Policy:
     # level is the whole domain (a card runs exactly one program), and nesting
     # would invite a resolution order nobody can hold in their head.
     by_harness: dict = field(default_factory=dict)
+    # ── THE BALANCE VIEW (aegis-03cstj) ──────────────────────────────────────
+    # Both default to OFF, so a deployment that has never heard of this feature
+    # behaves byte-for-byte as it did -- the same rule [by_harness] follows.
+    #
+    # `balance_band`: how many times the other lane's pace counts as "ahead".
+    # 0 means "use the module default" rather than "a band of zero", because a
+    # band of zero would make every fleet permanently unbalanced.
+    balance_band: float = 0.0
+    # `reading_needs_live_session`: this lane's usage number is derived FROM
+    # sessions of its own harness, so with none live the reader re-reads an old
+    # snapshot and stamps it `now` -- fresh age, stale number. Declaring this
+    # lets the balance view mark it STALE and ask for a refresh instead of
+    # recommending against a lane on a reading nothing has updated. It is opt-in
+    # per lane and never inferred from the lane name or the `source` string: the
+    # fleet view rewrites `source` in transport, so inference would work on one
+    # host and quietly stop working across the fleet.
+    #
+    # It can only ever produce REFRESH, never a hold: this flag cannot restrict.
+    reading_needs_live_session: bool = False
 
     @property
     def active(self) -> bool:
@@ -3036,7 +3055,8 @@ def _limit_id(tbl) -> "str | None":
 _GOV_KEYS = {"source", "window", "on_signal_lost", "relax_margin",
              "max_age_seconds", "url", "path", "username", "password_file",
              "stub_pct", "tier", "exempt", "burndown", "pace", "max_agents",
-             "metric", "by_harness", "limit_id", "delegation_reserve_pct"}
+             "metric", "by_harness", "limit_id", "delegation_reserve_pct",
+             "balance_band", "reading_needs_live_session"}
 _TIER_KEYS = {"at", "min_priority", "traits", "action", "window", "max_agents"}
 _BURN_KEYS = {"window", "within", "reserve"}
 _PACE_KEYS = {"window", "ratio", "length"}
@@ -3217,6 +3237,9 @@ def parse(tbl: dict) -> Policy:
                   tiers=tiers, exempt=tuple(exempt), burndowns=burndowns,
                   paces=paces, max_agents=_cap(tbl, "[governor]"),
                   delegation_reserve_pct=delegation_reserve,
+                  balance_band=float(tbl.get("balance_band", 0.0) or 0.0),
+                  reading_needs_live_session=bool(
+                      tbl.get("reading_needs_live_session", False)),
                   metric=_metric(tbl, "metric", USAGE_METRIC),
                   account_metric=_metric(tbl, "account_metric",
                                          ACCOUNT_USAGE_METRIC),

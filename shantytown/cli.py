@@ -570,7 +570,8 @@ def _crew_account_governor(a):
                                   why=v.why, policy_host=fleet.policy_hosts[name],
                                   provenance=governors[name].reader.provenance,
                                   readings=fg.observations(governors[name]))
-                                  for name, v in verdicts.items()})))
+                                  for name, v in verdicts.items()},
+                              balance=_balance_wire(fleet))))
     else:
         if not governors:
             print('off' if not fleet.errors else 'lost ' + fleet.fallback())
@@ -593,12 +594,57 @@ def _crew_account_governor(a):
                   + ('' if v.signal_lost else ' '.join(parts))
                   + f' live {counts.get(name, 0)}/{v.max_agents or "uncapped"}'
                   + f' policy={fleet.policy_hosts[name]} freshest[{sources}] ' + v.effect())
+        # WHICH lane to feed next (aegis-03cstj). Printed after the per-lane lines
+        # because it is derived from them, and printed even when it cannot say --
+        # a balance view that appears only when it has an opinion is one an operator
+        # cannot tell from a missing feature.
+        if len(fleet.governors) > 1:
+            print(fleet.balance().line())
         for row in fleet.agents:
             if row['live']:
                 print(f'  {row["host"]} {row["name"]} {row["harness"]} live')
         if fleet.errors:
             print('  ' + fleet.fallback())
     return CANNOT_TELL if fleet.errors else OK
+
+
+def _fleet_balance(a):
+    """The balance verdict for tend, or None when it cannot be established.
+
+    FAIL-OPEN BY CONSTRUCTION. Every caller treats None as "no preference", so a
+    governor that cannot be built, a single-lane fleet and a transport failure all
+    degrade to today's behaviour rather than to a wrong preference. This is the one
+    place in the balance feature that runs on the tend timer, and tend must not
+    acquire a new way to fail.
+
+    `_governors` caches the FleetGovernor on the namespace, so when tend has already
+    built one this adds no remote collection at all.
+    """
+    try:
+        _cfg, _governors_map = _governors(a)
+        fleet = getattr(a, '_account_governor', None)
+        if fleet is None or len(fleet.governors) <= 1:
+            return None
+        return fleet.balance()
+    except Exception:                      # noqa: BLE001 — never break the sweep
+        return None
+
+
+def _balance_wire(fleet):
+    """The balance verdict as JSON, or None when there is only one lane.
+
+    `actionable` is published alongside `prefer` deliberately. A consumer that reads
+    only `prefer` would treat REFRESH and UNRATED -- which carry no lane -- correctly
+    today, but would silently start routing on any future verdict that names a lane
+    for reporting. The boolean is the contract; the lane is the detail.
+    """
+    if len(fleet.governors) <= 1:
+        return None
+    v = fleet.balance()
+    return dict(verdict=v.verdict, prefer=v.prefer, actionable=v.actionable,
+                ratio=(None if v.ratio is None or v.ratio != v.ratio
+                       or v.ratio in (float('inf'), float('-inf')) else v.ratio),
+                why=v.why, line=v.line())
 
 
 def _governor(a):
@@ -9534,7 +9580,8 @@ def _tend_once(a, quiet: bool = False) -> int:
         # fixed for blocked workers. Deduped per idle episode, fail-open, and it
         # reuses the SAME free/dispatchable computation as hfta's hard gate.
         idle = _sweep("idle-fleet", lambda: notify_mod.IdleFleetAlerter(
-            Path(a.root), _registry(a), panes, runtime, log=_log).sweep(agents))
+            Path(a.root), _registry(a), panes, runtime, log=_log,
+            balance=lambda: _fleet_balance(a)).sweep(agents))
         if idle:
             print(f"  ⚠ alerted the coordinator — {len(idle)} newly-idle feedable "
                   f"worker(s) with work ready: {', '.join(idle)}", file=sys.stderr)
