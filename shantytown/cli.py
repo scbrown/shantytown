@@ -1158,6 +1158,9 @@ def build_parser() -> argparse.ArgumentParser:
                               "deployment declares more than one")
     rl_band.add_argument("-n", "--dry-run", action="store_true")
     rl_sync = rl_sub.add_parser("sync", help="materialize the crew cards FROM a source")
+    rl_sync.add_argument("--require-host-sync", type=int, default=1, metavar="VERSION",
+                         help="require host-sync protocol VERSION before any projection; "
+                              "legacy binaries reject this flag without syncing")
     rl_sync.add_argument("-n", "--dry-run", action="store_true", help="show the diff, write nothing")
     rl_sync.add_argument("--force", action="store_true", help="sync even if it restructures LIVE agents")
     # aegis-ftmfn: a SECOND consent, deliberately not folded into --force. See
@@ -1215,6 +1218,12 @@ def build_parser() -> argparse.ArgumentParser:
     it.add_argument("--workspaces", default=None, metavar="DIR",
                     help="parent directory for agent workspaces — each agent gets "
                          "DIR/<name>. Omitted: agents launch in the current dir")
+    it.add_argument("--host", default=None, help="this host's exact fleet identity")
+    it.add_argument("--peer", action="append", default=[], metavar="NAME=SSH,ROOT",
+                    help="remote host, SSH target and remote store root; repeat per peer")
+    it.add_argument("--quipu-server", default=None, help="existing fleet's Quipu URL")
+    it.add_argument("--ontology-namespace", default=None, help="existing fleet's exact ontology IRI")
+    it.add_argument("--canonical-source", default=None, help="local canonical shantytown checkout")
     it.add_argument("--mode", default=None, choices=["lite", "heavy"],
                     help="the startup mode to write into the config (default lite)")
     it.add_argument("--hibernate", action="store_true",
@@ -2897,6 +2906,50 @@ def _cmd_init(a, *, ask=_prompt, isatty=None) -> int:
               file=_sys.stderr)
         return REFUSED
 
+    from .deployment import deployment_default, local_host
+    host = getattr(a, "host", None) or local_host(root)
+    server = getattr(a, "quipu_server", None) or deployment_default(root, "QUIPU_SERVER")
+    onto = getattr(a, "ontology_namespace", None) or deployment_default(root, "SHANTY_ONTO_NS")
+    canonical = getattr(a, "canonical_source", None) or deployment_default(root, "SHANTY_CANONICAL_SOURCE")
+    if cfg_exists:
+        try:
+            kept = config.load(root)
+        except config.ConfigError as e:
+            print(f"  refused: {e}", file=_sys.stderr)
+            return REFUSED
+        if host != kept.host_name:
+            print("  refused: --force preserves existing config; set [host] name "
+                  "there before initializing cards with a different host.", file=_sys.stderr)
+            return REFUSED
+    peers = []
+    try:
+        for peer in getattr(a, "peer", []):
+            name, destination = peer.split("=", 1)
+            ssh, remote_root = destination.split(",", 1)
+            peers.append((name, ssh, remote_root))
+    except ValueError:
+        print("  refused: --peer needs NAME=SSH,ROOT", file=_sys.stderr)
+        return REFUSED
+    if server:
+        if not onto:
+            print("  refused: an existing fleet needs --ontology-namespace (or "
+                  "SHANTY_ONTO_NS); guessing can hide every existing member.", file=_sys.stderr)
+            return REFUSED
+        try:
+            members = QuipuRegistry(server=server, onto=onto, root=root).all().exact()
+        except Exception as e:
+            print(f"  could not inspect the existing fleet: {e}. Nothing written.", file=_sys.stderr)
+            return CANNOT_TELL
+        if members and not host:
+            print(f"  refused: the configured fleet has {len(members)} member(s); "
+                  "pass --host NAME to scaffold [host] name before joining it.", file=_sys.stderr)
+            return REFUSED
+        if members:
+            print(f"  existing fleet: {len(members)} member(s); initializing host {host!r}")
+    plumbing = tuple((k, v) for k, v in (
+        ("QUIPU_SERVER", server), ("SHANTY_ONTO_NS", onto),
+        ("SHANTY_CANONICAL_SOURCE", canonical)) if v)
+
     # FLAGS PRE-ANSWER QUESTIONS; --yes skips the asking entirely. A non-tty with
     # no --yes REFUSES rather than calling input() — a wizard that blocks forever
     # inside a script or a hook is worse than one that says it cannot ask.
@@ -2905,13 +2958,14 @@ def _cmd_init(a, *, ask=_prompt, isatty=None) -> int:
         workers=tuple(w.strip() for w in (a.crew or "").split(",") if w.strip()),
         workspaces=a.workspaces,
         mode=a.mode or config.DEFAULT_MODE,
-        hibernate=bool(a.hibernate))
+        hibernate=bool(a.hibernate), host=host, peers=tuple(peers), env=plumbing)
     try:
         if a.yes:
             answers = scaffold.make_answers(
                 admin=defaults.admin, workers=defaults.workers,
                 workspaces=defaults.workspaces, mode=defaults.mode,
-                hibernate=defaults.hibernate)
+                hibernate=defaults.hibernate, host=defaults.host,
+                peers=defaults.peers, env=defaults.env)
         elif not isatty():
             print(f"  refused: stdin is not a terminal, so `st fleet init` cannot ask "
                   f"its questions. Pass -y/--yes to take the flags and defaults "
@@ -2960,7 +3014,7 @@ def _init_apply(a, root: Path, plan, answers) -> int:
             print(f"  kept     {name:<12} (card already exists — not touched)")
             continue
         ws = f"{answers.workspaces.rstrip('/')}/{name}" if answers.workspaces else None
-        reg.set(Agent(name=name, role="worker", workspace=ws))
+        reg.set(Agent(name=name, role="worker", workspace=ws, host=answers.host))
         print(f"  card     {name:<12} {root / 'crew' / f'{name}.json'}")
 
     # ROLES + ROUTING through the generative op, so the cards and the stop hooks
@@ -3444,7 +3498,8 @@ def _cmd_doctor(a) -> int:
     # rendered for a full run: `st ops doctor bobbin` asked about bobbin.
     # remote= rides --no-latest: both mean "no network lookups on this run". The
     # behind-upstream fetch is the same class of question as "0.6.0 available".
-    self_h = (selfcheck.check_self(remote=not a.no_latest)
+    canonical = deployment_default(a.root, "SHANTY_CANONICAL_SOURCE")
+    self_h = (selfcheck.check_self(remote=not a.no_latest, canonical=canonical)
               if len(specs) == len(doc.SPECS) else None)
 
     sock_v, sock_why = _socket_check(a)
@@ -3550,7 +3605,7 @@ def _cmd_doctor(a) -> int:
     observed = doc.detect_all(specs, check_latest=not a.no_latest)
     print(doc.report(observed))
     # Re-run the self-check too: --install can have just replaced `st` itself.
-    self_after = selfcheck.check_self() if len(specs) == len(doc.SPECS) else None
+    self_after = selfcheck.check_self(canonical=canonical) if len(specs) == len(doc.SPECS) else None
     if self_after is not None:
         print(selfcheck.render(self_after))
     return _doctor_exit(doc, observed, self_after)
@@ -6753,6 +6808,20 @@ def _cmd_project(a) -> int:
     right, and a projection that cannot be previewed is a footgun regardless of
     which side of the divergence is correct.
     """
+    # Never use load_or_default on this mutating path: an unreadable floor is
+    # not permission to project. The explicit flag also protects older parsers,
+    # which reject it before reaching their unscoped projection code.
+    from .sync_version import require_host_sync
+    try:
+        cfg = config.load(a.root)
+        require_host_sync(max(cfg.host_min_sync_version,
+                              getattr(a, "require_host_sync", 1)))
+        if getattr(a, "require_host_sync", 1) < 1:
+            raise ValueError("--require-host-sync must be a positive integer")
+    except (config.ConfigError, ValueError) as e:
+        print(f"  refused: {e}", file=sys.stderr)
+        return REFUSED
+
     # aegis-t4eve: the source is chosen here, not hardcoded, and it is PRINTED.
     # Ontology-first with file-fallback by default; an explicit --from is never
     # silently substituted (asking for quipu and getting a stale file without

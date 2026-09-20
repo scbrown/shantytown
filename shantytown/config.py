@@ -188,6 +188,7 @@ class Config:
     # cards `roles sync` is allowed to write. None = single-host deployment,
     # which is every deployment written before this existed.
     host_name: str | None = None
+    host_min_sync_version: int = 1
     # [host.peers.<name>] ssh = "user@addr", root = "/path/to/.shanty" — how the
     # ephemeral inbox reaches an agent whose card says it lives elsewhere.
     host_peers: dict[str, "HostPeer"] = field(default_factory=dict)
@@ -319,7 +320,7 @@ _MODEL_KEYS = {"default", "by_role"}
 _STARTUP_KEYS = {"mode"}
 _HIB_KEYS = {"enabled", "max_quiet_minutes"}
 _TMUX_KEYS = {"socket"}
-_HOST_KEYS = {"name", "peers"}
+_HOST_KEYS = {"name", "peers", "min_sync_version"}
 _HOST_PEER_KEYS = {"ssh", "root"}
 _DREAM_KEYS = {"enabled", "interval_minutes", "min_headroom_pct", "domains"}
 
@@ -385,6 +386,7 @@ def _resolve(data: dict, path: Path) -> Config:
                   env=_env(path, _table(path, data, "env")),
                   tmux_socket=_tmux_socket(path, _table(path, data, "tmux")),
                   host_name=_host_name(path, _table(path, data, "host")),
+                  host_min_sync_version=_host_sync_version(path, _table(path, data, "host")),
                   host_peers=_host_peers(path, _table(path, data, "host")),
                   roles=declared_roles,
                   precedence=_precedence(path, _table(path, data, "precedence")),
@@ -691,6 +693,13 @@ def _env(path: Path, tbl: dict) -> dict[str, str]:
                 f"{type(v).__name__}. Every value here is also settable as an "
                 f"environment variable, so it has to be one string.")
     return out
+
+
+def _host_sync_version(path: Path, tbl: dict) -> int:
+    value = tbl.get("min_sync_version", 1)
+    if type(value) is not int or value < 1:
+        raise ConfigError(f"{path}: [host] min_sync_version must be a positive integer")
+    return value
 
 
 def _host_name(path: Path, tbl: dict) -> str | None:

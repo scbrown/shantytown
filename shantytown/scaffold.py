@@ -26,6 +26,7 @@ failure the generative design exists to prevent.
 from __future__ import annotations
 
 import re
+import json
 from dataclasses import dataclass, field
 
 from . import config
@@ -61,6 +62,9 @@ class Answers:
     mode: str = config.DEFAULT_MODE
     hibernate: bool = False
     max_quiet_minutes: int = 60
+    host: str | None = None
+    peers: tuple[tuple[str, str, str], ...] = ()
+    env: tuple[tuple[str, str], ...] = ()
 
     def names(self) -> tuple[str, ...]:
         return (self.admin, *self.workers)
@@ -106,9 +110,19 @@ def validate_name(name: str, what: str = "agent name") -> str:
 
 
 def make_answers(*, admin, workers=(), workspaces=None, mode=config.DEFAULT_MODE,
-                 hibernate=False, max_quiet_minutes=60) -> Answers:
+                 hibernate=False, max_quiet_minutes=60, host=None, peers=(), env=()) -> Answers:
     """Validate raw values into Answers. The ONE gate — the interactive path and
     the flags path both come through here, so a rule cannot apply to only one."""
+    if host is not None:
+        host = validate_name(host, "host name")
+    for name, ssh, root in peers:
+        validate_name(name, "peer host name")
+        if not ssh.strip() or not root.strip() or name == host:
+            raise ScaffoldError("peers need a different host name, SSH target and store root")
+    if peers and not host:
+        raise ScaffoldError("--peer requires --host")
+    if len({p[0] for p in peers}) != len(peers):
+        raise ScaffoldError("a peer host is named twice")
     admin = validate_name(admin, "administrator name")
     seen, clean = {admin}, []
     for w in workers:
@@ -129,7 +143,8 @@ def make_answers(*, admin, workers=(), workspaces=None, mode=config.DEFAULT_MODE
                             f"{', '.join(sorted(config.BUILTIN_MODES))}")
     return Answers(admin=admin, workers=tuple(clean),
                    workspaces=(workspaces or None), mode=mode,
-                   hibernate=hibernate, max_quiet_minutes=max_quiet_minutes)
+                   hibernate=hibernate, max_quiet_minutes=max_quiet_minutes,
+                   host=host, peers=tuple(peers), env=tuple(env))
 
 
 # --- the question script ----------------------------------------------------
@@ -190,7 +205,8 @@ def ask_all(ask, *, defaults: Answers | None = None, note=print) -> Answers:
                       lambda v: _an_int(v, 0, 10_080, "minutes"))
 
     return make_answers(admin=admin, workers=workers, workspaces=workspaces,
-                        mode=mode, hibernate=hib, max_quiet_minutes=mins)
+                        mode=mode, hibernate=hib, max_quiet_minutes=mins,
+                        host=d.host, peers=d.peers, env=d.env)
 
 
 def _one_of(value: str, allowed: list[str], what: str) -> str:
@@ -265,4 +281,20 @@ def config_text(answers: Answers) -> str:
         f"max_quiet_minutes = {answers.max_quiet_minutes}",
         "",
     ]
+    if answers.host:
+        lines += ["[host]", f"name = {json.dumps(answers.host)}",
+                  "# Host-sync protocol, not the package version.",
+                  "min_sync_version = 1", ""]
+        for name, ssh, root in answers.peers:
+            lines += [f"[host.peers.{json.dumps(name)}]",
+                      f"ssh = {json.dumps(ssh)}", f"root = {json.dumps(root)}", ""]
+        if not answers.peers:
+            lines += ["# Add each remote host using its graph name:",
+                      '# [host.peers.primary]', '# ssh = "operator@primary.example"',
+                      '# root = "/opt/fleet/.shanty"', ""]
+    else:
+        lines += ["# Before joining an existing fleet, rerun init with --host NAME",
+                  "# or declare [host] name and min_sync_version = 1 here.", ""]
+    if answers.env:
+        lines += ["[env]"] + [f"{k} = {json.dumps(v)}" for k, v in answers.env] + [""]
     return "\n".join(lines)

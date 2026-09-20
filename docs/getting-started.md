@@ -44,3 +44,5 @@ prompt. `-n` shows every path and writes nothing.
 `st fleet init` refuses a store that already has cards or a config — a second init is far more likely to be
 a mistyped `--root` than an intent. To add one agent to a store that exists, `st fleet roles set <name>
 <role>` writes the card and its hooks in the same operation.
+
+Joining an existing fleet from another machine? Use the [second-host setup guide](second-host.md) before syncing roles.

@@ -634,6 +634,11 @@ transitions use ordinary `roles set`. `--lead` names the new worker's supervisor
 
 ## `st fleet init` — the scaffold wizard
 
+Joining an existing fleet? Follow [the second-host guide](second-host.md), including
+`--host`, repeatable `--peer NAME=SSH,ROOT`, `--quipu-server`,
+`--ontology-namespace`, and `--canonical-source`. Host-scoped sync invocations
+should retain `--require-host-sync 1` so legacy binaries reject before projecting.
+
 A fresh clone could not reach a runnable state without hand-authoring JSON. Four artifacts had four
 different origins — the store directory was a `mkdir`, the crew cards came from a hierarchy file fed to
 `roles sync`, the settings files were a side effect of `roles set`, the config was hand-written — and
