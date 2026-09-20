@@ -1481,3 +1481,28 @@ the supplied session population, not proof of the fleet's tail distribution.
 Completed-review ticks refresh native Camayoc status metrics without source or
 graph access, so an intentional pause does not masquerade as a dead producer.
 Review must precede any new population or cap change.
+
+### Fleet view across hosts
+
+With `[host.peers.<name>]` entries configured, `st crew` reads each peer over SSH
+and displays its agents in the same table with a `HOST` column. Each host uses
+its own pane-content readiness checks. Local diagnostics follow the table.
+`st crew --local` retains the local-only view and makes no peer requests.
+
+`st crew --json` returns a versioned object with `version`, `scope`, `host`,
+`complete`, `agents`, and `errors`. Each agent includes its host, name, role,
+state, work verdict, posture, live flag, executing harness (card fallback), pane,
+settings verdict, and tree verdict. The peer protocol requests
+`st --root <peer.root> crew --json --local` to prevent recursive polling.
+SSH connects within five seconds and each request has a twenty-second total
+limit; peers are polled concurrently (up to sixteen at a time).
+
+A failed, incompatible, or wrongly identified peer is an explicit
+`<host> UNREACHABLE (<reason>)` row. Partial JSON has `complete: false` and names
+the failed host in `errors`; both forms exit 2. `--count` combines the hosts'
+busy/idle readings; an unreachable peer instead prints `unknown` and exits 2.
+`--governor` includes remote live agents in the displayed provider occupancy,
+using the local usage policy; an unreachable peer prints `lost` and exits 2.
+This display does not change admission policy. Use `--local` for the previous
+local count/governor behavior. `--json` cannot combine with `--count` or
+`--governor`.
