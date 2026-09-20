@@ -610,13 +610,36 @@ A **down** pane is not a fault: `route_stop` already rises to the administrator 
 unreachable, loudly and with a reason. The `live:` leg catches what that path cannot see — pane
 **up**, wiring **wrong**, so nothing rises and nothing drains.
 
+## Creating a graph worker on this host
+
+On an existing graph-backed deployment, register a worker before projecting its card:
+
+```bash
+st --registry quipu fleet roles set new_worker worker --create --lead supervisor --dry-run
+st --registry quipu fleet roles set new_worker worker --create --lead supervisor
+st fleet roles sync --dry-run
+st fleet roles sync
+```
+
+Creation requires declared `QUIPU_SERVER`, `SHANTY_ONTO_NS`, and `[host] name`. The
+supervisor must already be a lead or administrator. The new graph identity carries
+this host's placement; the next sync projects it here and skips other hosts. An
+existing local card retains its launch settings; otherwise deployment defaults apply.
+The hierarchy and harness checks run before writing, and creation verifies the graph
+read-back. If verification fails, inspect the graph before retrying.
+
+`--create` refuses an existing graph identity. It registers workers; subsequent role
+transitions use ordinary `roles set`. `--lead` names the new worker's supervisor;
+`--reports` continues to name a lead or administrator's subordinates.
+
 ## `st fleet init` — the scaffold wizard
 
 A fresh clone could not reach a runnable state without hand-authoring JSON. Four artifacts had four
 different origins — the store directory was a `mkdir`, the crew cards came from a hierarchy file fed to
 `roles sync`, the settings files were a side effect of `roles set`, the config was hand-written — and
 nothing assigned the `pane` field that every launch, attach, stop and supervise path resolves an agent
-through. `st fleet roles set` cannot help: it *refuses* an agent that has no card yet.
+through. Ordinary `st fleet roles set` refuses an unknown agent; graph worker
+registration with `--create` requires an already-configured deployment and supervisor.
 
 ```text
 $ st fleet init
@@ -983,6 +1006,13 @@ is not "missing", it's "installed and nobody knows what's there"), and detect **
 `--break-system-packages` — this host is PEP-668, which is why `st` itself ships via pipx.
 
 ## `st inbox` — a message, and somewhere for it to land
+
+In a deployment with a declared host and graph authority, an absent local recipient
+card falls through to the graph for an **off-host** member. No shadow local card is
+needed. Ephemeral delivery uses the declared host peer; durable delivery uses the
+selected inbox backend and never types into a coincidentally named local pane.
+An unreachable graph is reported as an unknown lookup, not a missing agent. Sender
+pane ownership remains a local check even with `--registry quipu`.
 
 ```
 st inbox ian "go read st-1"          send: straight into ian's pane (send-keys)
