@@ -923,6 +923,10 @@ def build_parser() -> argparse.ArgumentParser:
     df.add_argument("-n", "--dry-run", action="store_true")
 
     cr = sub.add_parser("crew", help="who exists, what state, what role")
+    cr.add_argument("--local", action="store_true",
+                    help="read only this host; do not contact configured peers")
+    cr.add_argument("--json", action="store_true",
+                    help="versioned crew snapshot (use --local for a peer read)")
     cr.add_argument("--wide", "--no-truncate", action="store_true",
                     help="print the full assigned title (default marks clipped titles with …)")
     cr.add_argument("--count", action="store_true",
@@ -4886,6 +4890,22 @@ def _cmd_crew(a) -> int:
     answered: a stamp records WHICH BYTES an agent launched with, and one we did
     not observe would be a fabricated measurement, which is worse than a blank.
     """
+    from . import fleet as fleet_mod
+    from .deployment import local_host
+    cfg, cfg_error = config.load_or_default(Path(a.root))
+    if cfg_error:
+        print(f"  could not tell: {cfg_error}", file=sys.stderr)
+        return CANNOT_TELL
+    local = local_host(a.root)
+    peer_results = (fleet_mod.collect(cfg.host_peers)
+                    if not getattr(a, "local", False) else [])
+    a.crew_peers = peer_results
+    peer_errors = fleet_mod.errors(peer_results)
+    if getattr(a, "json", False) and (getattr(a, "count", False)
+                                     or getattr(a, "governor", False)):
+        print("  refused: --json cannot be combined with --count/--governor",
+              file=sys.stderr)
+        return REFUSED
     # --governor answers FIRST, before the registry and the panes are touched.
     # Capacity is a property of the BUDGET, not the roster: a registry that cannot
     # be read must not blank the number that decides whether to dispatch at all.
@@ -4896,6 +4916,9 @@ def _cmd_crew(a) -> int:
         gaming = quiet_time_mod.read(Path(a.root))
         if gaming.state != "off":
             print(gaming.render())
+        if peer_errors:
+            print("lost " + "; ".join(peer_errors))
+            return CANNOT_TELL
         return _crew_governor(a)
     if rules := getattr(a, "check_alert_keepers", None):
         return _check_alert_keepers(a, rules)
@@ -4919,12 +4942,44 @@ def _cmd_crew(a) -> int:
     except Exception as e:
         print(f"  could not tell: {e}", file=sys.stderr)
         return CANNOT_TELL
+    if local:
+        agents = [ag for ag in agents if ag.host in (None, local)]
     runtime = _runtime(a, panes)
+    if getattr(a, "json", False):
+        launches = _launches(a)
+        local_rows = []
+        for ag, state, work, posture in _crew_states(
+                agents, panes, runtime, cycling=cycling, untracked_root=a.root,
+                cycle_blocked=cycle_blocked, budget_root=a.root):
+            live = bool(ag.pane and panes.exists(ag.pane))
+            actual = None
+            reader = getattr(panes, "cmdline", None)
+            if live and callable(reader):
+                try:
+                    actual = harness_mod.running_name(reader(ag.pane))
+                except Exception:
+                    pass
+            local_rows.append(dict(
+                name=ag.name, host=local or "local", role=",".join(ag.effective_roles()),
+                state=state, work=work, posture=posture, pane=ag.pane or "—",
+                live=live, harness=actual or harness_mod.name_for(ag, root=a.root),
+                settings=_settings_verdict(launches, ag.name, state == "up"),
+                tree=_tree_staleness_cell(a, ag, sweep=False)[0]))
+        print(json.dumps(dict(version=fleet_mod.VERSION,
+                              scope="local" if getattr(a, "local", False) else "fleet",
+                              host=local or "local", complete=not peer_errors,
+                              agents=local_rows + fleet_mod.rows(peer_results),
+                              errors=peer_errors)))
+        return CANNOT_TELL if peer_errors else OK
     # --count answers BEFORE the empty-roster line: an empty roster is `0/0`, not
     # a sentence telling a status bar to run `st agent new`.
     if getattr(a, "count", False):
-        return _crew_count(agents, panes, runtime, untracked_root=a.root)
-    if not agents:
+        if peer_errors:
+            print("unknown " + "; ".join(peer_errors))
+            return CANNOT_TELL
+        return _crew_count(agents, panes, runtime, untracked_root=a.root,
+                           peer_rows=fleet_mod.rows(peer_results))
+    if not agents and not peer_results:
         print("  no agents. `st agent new <agent>`.")
         return OK
     launches = _launches(a)
@@ -4960,6 +5015,9 @@ def _cmd_crew(a) -> int:
     except Exception:
         plate = None
     print()
+    if peer_results:
+        print(f"  {'HOST':<22} {'AGENT':<11} {'ROLE':<14} {'STATE':<13} "
+              f"{'SETTINGS':<8} {'TREE':<9} {'WORK':<16} {'POSTURE':<7} PANE")
     for ag, state, work, posture in _crew_states(
             agents, panes, runtime, cycling=cycling, untracked_root=a.root,
             cycle_blocked=cycle_blocked, budget_root=a.root):
@@ -5046,7 +5104,8 @@ def _cmd_crew(a) -> int:
         # reintroduce that tie-break in the renderer. An undeclared member falls
         # back to its tree position, so an un-migrated fleet looks exactly as before.
         role_cell = ",".join(ag.effective_roles())
-        print(f"  {ag.name:<11} {role_cell:<14} {state:<13} {verdict:<8} "
+        host_cell = f"{local or 'local':<22} " if peer_results else ""
+        print(f"  {host_cell}{ag.name:<11} {role_cell:<14} {state:<13} {verdict:<8} "
               f"{tree_cell:<9} {work:<16} {posture:<7} {ag.pane or '—'}")
         if state == "up":
             try:
@@ -5063,6 +5122,14 @@ def _cmd_crew(a) -> int:
                 print(f"    {context_label}")
                 if context_label.startswith("context UNKNOWN"):
                     context_unknown.append(ag.name)
+    for row in fleet_mod.rows(peer_results):
+        print(f"  {row['host']:<22} {row['name']:<11} {row['role']:<14} "
+              f"{row['state']:<13} {row['settings']:<8} {row['tree']:<9} "
+              f"{row['work']:<16} {row['posture']:<7} {row['pane']}")
+    for error in peer_errors:
+        print("  " + error)
+    if peer_results:
+        print("\n  Local diagnostics:")
     if context_unknown:
         print(f"  ⚠ {len(context_unknown)} live agent(s) with UNMEASURED context: "
               + ", ".join(context_unknown))
@@ -5358,7 +5425,7 @@ def _cmd_crew(a) -> int:
               f"deliberate).")
     if stale or unknown or bad_cards or role_drift:
         print()
-    return OK
+    return CANNOT_TELL if peer_errors else OK
 
 
 def _check_alert_keepers(a, rules: list[Path]) -> int:
@@ -5941,14 +6008,24 @@ def _crew_governor(a) -> int:
         _cfg, governors = _governors(a)
         try:
             cards = _registry(a).all().exact()
+            from .deployment import local_host
+            host = local_host(a.root)
+            cards = [card for card in cards
+                     if not host or getattr(card, "host", None) in (None, host)]
         except Exception:
             cards = []
         panes = _panes(a) if cards else None
         live_by_harness = _live_by_governor(cards, panes, cfg, governors, a.root)
+        from . import fleet as fleet_mod
+        for lane, count in fleet_mod.live_counts(
+                getattr(a, "crew_peers", []), governors).items():
+            live_by_harness[lane] = live_by_harness.get(lane, 0) + count
         for name, multi in sorted(governors.items()):
             print(f"{name} {_render(multi, running=live_by_harness.get(name, 0), name=name)}")
-        for harness in sorted({harness_mod.name_for(card, root=a.root) for card in cards}
-                              - {"base"} - set(cfg.governor.by_harness)):
+        fleet_harnesses = ({harness_mod.name_for(card, root=a.root) for card in cards}
+                           | {row["harness"] for row in fleet_mod.rows(
+                               getattr(a, "crew_peers", []))})
+        for harness in sorted(fleet_harnesses - {"base"} - set(cfg.governor.by_harness)):
             if gov_mod.unconfigured(cfg.governor, harness):
                 print(f"{harness} lost unconfigured — no usage governor")
         return OK
@@ -5994,10 +6071,16 @@ def _crew_governor(a) -> int:
     # aegis-yc864 shape: a display disagreeing with enforcement.
     try:
         cards = _registry(a).all().exact()
+        from .deployment import local_host
+        host = local_host(a.root)
+        cards = [card for card in cards
+                 if not host or getattr(card, "host", None) in (None, host)]
         panes = _panes(a)
         running = sum(bool(card.pane and panes.exists(card.pane)) for card in cards)
     except Exception:
         running = 0
+    from . import fleet as fleet_mod
+    running += sum(row["live"] for row in fleet_mod.rows(getattr(a, "crew_peers", [])))
     print(_render(gov, running=running))
     return OK
 
@@ -6160,7 +6243,7 @@ def _utilization(harness, *, readings, policy, verdict, live, now, advisory,
     return seen
 
 
-def _crew_count(agents, panes, runtime, untracked_root=None) -> int:
+def _crew_count(agents, panes, runtime, untracked_root=None, peer_rows=()) -> int:
     """`st crew --count` — print `busy/total`, nothing else.
 
     TOTAL IS NOT THE ROSTER SIZE. It is the number of agents we can actually
@@ -6178,6 +6261,8 @@ def _crew_count(agents, panes, runtime, untracked_root=None) -> int:
             busy += 1
         elif work == triage_mod.IDLE:
             idle += 1
+    busy += sum(row["work"] == triage_mod.BUSY for row in peer_rows)
+    idle += sum(row["work"] == triage_mod.IDLE for row in peer_rows)
     print(f"{busy}/{busy + idle}")
     return OK
 
