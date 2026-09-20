@@ -1529,7 +1529,8 @@ new launches and dispatch are held. Each peer call has a 20-second deadline and
 peers are queried concurrently. A peer census older than 60 seconds or more than
 30 seconds in the future is rejected; keep host clocks synchronized.
 
-All hosts must declare the same set of uniquely named peers. Launch admission is
+All hosts must declare the same set of uniquely named peers; differing membership
+is reported and holds admission before either host can use another authority. Launch admission is
 serialized on the lexically first host using an SSH-held file lock under that
 host's governor state directory. The census is read after acquiring the lock,
 then the lock remains held through launch. `tend` recounts local agents between
@@ -1538,6 +1539,5 @@ admission instead of electing another authority. The remote lock needs `python3`
 and POSIX file locking on the SSH host. No additional daemon or package is needed.
 
 This coordinates the configured `st` launch paths in a connected fleet. It is not
-a distributed consensus or fencing service: out-of-band launches, asymmetric
-peer configuration, or loss of the SSH lock connection during a launch can defeat
+a distributed consensus or fencing service: out-of-band launches or loss of the SSH lock connection during a launch can defeat
 serialization. Do not claim a hard quota boundary under those conditions.

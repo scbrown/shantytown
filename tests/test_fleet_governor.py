@@ -76,7 +76,7 @@ def sample(host='desktop', cap=2, pct=10, at=None, agents=None):
     at = time.time() if at is None else at
     policy = gov.Policy(tiers=(gov.Tier(at=50, min_priority=1),), max_agents=cap)
     reader = FreshestReader({host: {'five_hour': Reading(pct=pct, at=at)}})
-    return fg.snapshot(host, {'base': gov.Governor(policy, reader)}, agents or [], now=at)
+    return fg.snapshot(host, {'base': gov.Governor(policy, reader)}, agents or [], now=at, hosts=['desktop', 'laptop'])
 
 
 def test_roundtrip_portable_policy_omits_reader_coordinates_and_credentials():
@@ -283,3 +283,11 @@ def test_unreachable_authority_never_falls_back_to_local_lock(tmp_path, monkeypa
         with fg.admission_lock(tmp_path, 'laptop', {'desktop': peer}):
             pytest.fail('launch authorized without authority')
     assert not (tmp_path / 'governor' / 'admission.lock').exists()
+
+
+def test_asymmetric_membership_cannot_choose_two_lock_authorities(tmp_path):
+    local = sample()
+    peer = sample('laptop')
+    peer['hosts'] = ['another', 'desktop', 'laptop']
+    f = fg.FleetGovernor(local, [(peer, '')], tmp_path)
+    assert 'host membership disagrees' in f.admits_launch('claude')

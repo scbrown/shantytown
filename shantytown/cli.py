@@ -514,8 +514,9 @@ def _governors(a):
     from .deployment import local_host
     fleet = getattr(a, '_account_governor', None)
     if fleet is None:
-        snapshot = fg.snapshot(local_host(a.root) or 'local', local,
-                               _governor_agents(a))
+        host = local_host(a.root) or 'local'
+        snapshot = fg.snapshot(host, local, _governor_agents(a),
+                               hosts=[host, *cfg.host_peers])
         fleet = fg.FleetGovernor(snapshot, fg.collect(cfg.host_peers), a.root)
         a._account_governor = fleet
         if fleet.errors:
@@ -547,8 +548,9 @@ def _crew_account_governor(a):
     from .deployment import local_host
     if getattr(a, 'local', False):
         _cfg, governors = _local_governors(a)
-        print(json.dumps(fg.snapshot(local_host(a.root) or 'local', governors,
-                                     _governor_agents(a))))
+        host = local_host(a.root) or 'local'
+        print(json.dumps(fg.snapshot(host, governors, _governor_agents(a),
+                                     hosts=[host, *_cfg.host_peers])))
         return OK
     cfg, governors = _governors(a)
     fleet = getattr(a, '_account_governor', None)

@@ -137,13 +137,16 @@ def observations(governor):
             for w, r in readings.items()}
 
 
-def snapshot(host, governors, agents, *, now=None):
-    return dict(version=VERSION, scope='local', host=host, complete=True,
+def snapshot(host, governors, agents, *, now=None, hosts=None):
+    value = dict(version=VERSION, scope='local', host=host, complete=True,
                 observed_at=time.time() if now is None else now, agents=agents,
                 governors={name: dict(policy=policy_wire(g.policy),
                                       readings=observations(g),
                                       state=asdict(g.state.get() if g.state else gov.Engaged()))
                            for name, g in governors.items()})
+    if hosts is not None:
+        value['hosts'] = sorted(hosts)
+    return value
 
 
 def _number(value, *, optional=False):
@@ -259,6 +262,11 @@ class FleetGovernor:
         self.local = local['host']
         self.snapshots = [local] + [s for s, error in peers if s is not None and not error]
         self.errors = [error for _, error in peers if error]
+        if 'hosts' in local:
+            for item in self.snapshots:
+                if item.get('hosts') != local['hosts']:
+                    self.errors.append(f'{item["host"]} host membership disagrees; '
+                                       'cannot establish one admission authority')
         self.governors = {}
         self.policy_hosts = {}
         lanes = sorted({name for s in self.snapshots for name in s['governors']})
