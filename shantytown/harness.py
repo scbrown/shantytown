@@ -1395,6 +1395,21 @@ def picker_markers() -> tuple[str, ...]:
         m for h in all_harnesses() for m in getattr(h, "picker_markers", ())))
 
 
+def task_list_evidence(screen: str) -> str:
+    """Observed Codex new-task composer, never a running task's input.
+
+    The footer strings were captured in aegis-4f0zje. Ignore attributes and
+    trailing padding, and only inspect current chrome, not old conversation.
+    No task count is inferred: the composer does not prove how many run.
+    """
+    from .triage import strip_attrs
+    tail = "\n".join(strip_attrs(screen or "").rstrip().splitlines()[-10:])
+    if "Describe a new task" in tail or (
+            "New task" in tail and "esc tasks" in tail):
+        return tail
+    return ""
+
+
 def ready_patterns() -> tuple[str, ...]:
     """Measured ready-UI patterns across registered harnesses.
 

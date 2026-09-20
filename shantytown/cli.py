@@ -4164,6 +4164,9 @@ def _cmd_inbox(a) -> int:
         # ack recipe ran in bash. Nothing destructive ran by luck of the wording,
         # not by design. Refuse, and say the message was NOT delivered.
         print(f"  refused: {e}", file=sys.stderr)
+        from .tmux import PaneTaskList
+        if isinstance(e, PaneTaskList):
+            return REFUSED
         print(f"  remedy: st agent new {agent.name}, or use `st inbox -d` so the "
               f"message survives until it is back.", file=sys.stderr)
         return REFUSED
@@ -8601,6 +8604,8 @@ def _cmd_input(a) -> int:
 
     if not rep.changed:
         return CANNOT_TELL
+    if rep.verdict == input_box.TASK_LIST and (a.clear or a.dismiss):
+        return REFUSED
     if rep.verdict == input_box.UNKNOWN:
         return CANNOT_TELL
     # GHOST is also an empty input buffer: it is only the runtime's dimmed

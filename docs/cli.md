@@ -1007,6 +1007,13 @@ is not "missing", it's "installed and nobody knows what's there"), and detect **
 
 ## `st inbox` — a message, and somewhere for it to land
 
+A Codex pane on the task list/new-task composer refuses live delivery: submitting
+there creates a parallel task instead of messaging the running one. Open the
+intended task first, or use `st inbox -d`; the durable message remains unread in
+the inbox when the live nudge is refused. `st agent input` reports `TASK-LIST`
+and refuses clear/dismiss on that screen. It does not pass launch/cycle readiness.
+The running-task count is unknown from this footer alone.
+
 In a deployment with a declared host and graph authority, an absent local recipient
 card falls through to the graph for an **off-host** member. No shadow local card is
 needed. Ephemeral delivery uses the declared host peer; durable delivery uses the
