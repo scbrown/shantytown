@@ -144,6 +144,7 @@ import time
 # over. Found by a test written for the provenance work (internal-ref).
 from dataclasses import replace
 from pathlib import Path
+from .answer import CouldNotLook, PartialAnswer
 
 from . import beads as beads_mod
 from . import cycle as cycle_mod
@@ -185,7 +186,7 @@ from .files import (FilesRegistry, FilesTracker, plate as files_plate,
                     items as files_items)
 from .launched import FilesLaunches, CURRENT, STALE, UNKNOWN
 from .stopped import FilesStops
-from .quipu import QuipuRegistry
+from .quipu import QuipuRegistry, QuipuQueryRejected, QuipuWriteRejected
 from . import graph_adoption
 from . import window as window_mod
 from . import selfcheck
@@ -438,7 +439,12 @@ def _verified_sender(a, panes) -> tuple[str | None, bool]:
     if not os.environ.get("TMUX_PANE"):
         return sender, True
     from .stop_event import _stop_identity
-    verified = _stop_identity(_registry(a), panes, sender)
+    # Pane ownership is local execution state. A graph recipient registry has
+    # no tmux mapping and must not make a valid local sender unverifiable.
+    local_registry = (FilesRegistry(a.root / "crew")
+                      if getattr(a, "registry", "files") == "quipu"
+                      else _registry(a))
+    verified = _stop_identity(local_registry, panes, sender)
     return verified, verified is not None
 
 
@@ -961,6 +967,9 @@ def build_parser() -> argparse.ArgumentParser:
                         help="worker | lead | administrator, or any role this "
                              "deployment declares under [roles.<name>]")
     rl_set.add_argument("--reports", default="", help="comma-separated reports for a lead/administrator")
+    rl_set.add_argument("--create", action="store_true",
+                        help="create a new graph worker on this declared host; requires --registry quipu")
+    rl_set.add_argument("--lead", help="supervisor of the new agent (with --create)")
     rl_set.add_argument("-n", "--dry-run", action="store_true")
     # aegis-ftmfn: THE BAND HAD NO VERB. `roles set` writes the TREE POSITION, so
     # `st fleet roles set billy normal` is refused as a depth violation and the only way
@@ -3520,9 +3529,51 @@ def _cmd_role(a) -> int:
     from . import tier
     reports = [r.strip() for r in a.reports.split(",") if r.strip()]
     try:
-        plan = tier.role_set(_registry(a), a.agent, a.role,
+        registry = _registry(a)
+        initial = None
+        if getattr(a, "lead", None) and not getattr(a, "create", False):
+            raise ValueError("--lead requires --create; --reports names subordinates")
+        if getattr(a, "create", False):
+            from .deployment import local_host
+            from .protocols import Agent
+            import re
+            if getattr(a, "registry", "files") != "quipu":
+                raise ValueError("--create requires --registry quipu")
+            if a.role != "worker" or reports:
+                raise ValueError("--create adds a worker with --lead; use role transitions after creation")
+            if not (deployment_default(a.root, "QUIPU_SERVER")
+                    and deployment_default(a.root, "SHANTY_ONTO_NS")):
+                raise ValueError("--create requires declared QUIPU_SERVER and SHANTY_ONTO_NS")
+            host = local_host(a.root)
+            if not host:
+                raise ValueError("--create requires a declared [host] name")
+            for value in (a.agent, a.role, host, a.lead):
+                if value is not None and not re.fullmatch(
+                        r"[A-Za-z_](?:[A-Za-z0-9_.-]*[A-Za-z0-9_-])?", value):
+                    raise ValueError("agent, role, host and lead must be simple identifiers")
+            if not a.lead:
+                raise ValueError("--create requires --lead")
+            lead = registry.get(a.lead)
+            if lead.role not in ("lead", "administrator"):
+                raise ValueError("--lead must name a lead or administrator")
+            try:
+                local_card = FilesRegistry(a.root / "crew").get(a.agent)
+            except LookupError:
+                local_card = Agent(name=a.agent, role=a.role)
+            # Registration adopts an existing local launch configuration when
+            # present; the graph owns placement, not the machine's executable.
+            initial = replace(local_card, role=a.role, reports_to=a.lead, host=host)
+        plan = tier.role_set(registry, a.agent, a.role,
                              reports=reports, dry_run=a.dry_run,
-                             catalog=_catalog(a), root=a.root)
+                             catalog=_catalog(a), root=a.root, initial=initial)
+        if initial is not None and not a.dry_run:
+            try:
+                observed = registry.get(a.agent)
+            except LookupError as e:
+                raise CouldNotLook("new graph identity is absent on read-back") from e
+            if (observed.role, observed.reports_to, observed.host) != (
+                    initial.role, initial.reports_to, initial.host):
+                raise CouldNotLook("new graph identity did not read back as requested")
     except (LookupError, ValueError, CapabilityError) as e:
         # CapabilityError (aegis-w5l9): the new role needs a stop capability the
         # card's harness lacks. role_set raised it BEFORE writing, so this refusal
@@ -3530,6 +3581,10 @@ def _cmd_role(a) -> int:
         # hierarchy refusals above.
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED
+    except (CouldNotLook, PartialAnswer, QuipuQueryRejected, QuipuWriteRejected) as e:
+        print(f"  could not tell: graph role operation could not be verified ({e}); "
+              "inspect the graph before retrying", file=sys.stderr)
+        return CANNOT_TELL
     print(("  would write:" if a.dry_run else "  wrote:"))
     print(plan.render())
     if a.dry_run:
@@ -3882,10 +3937,14 @@ def _cmd_inbox(a) -> int:
         return REFUSED
     msg = attribute(msg, sender)
     try:
-        agent = _registry(a).get(a.agent)
+        agent = _message_recipient(a)
     except LookupError as e:
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED
+    except (CouldNotLook, PartialAnswer, QuipuQueryRejected, OSError) as e:
+        print(f"  could not tell: recipient lookup failed ({type(e).__name__}); "
+              "nothing was sent", file=sys.stderr)
+        return CANNOT_TELL
     if getattr(a, "durable", False):
         return _inbox_durable(a, agent, msg, panes, typed=typed)
 
@@ -3936,6 +3995,25 @@ def _cmd_inbox(a) -> int:
         return CANNOT_TELL
     print(f"  -> {agent.name}    sent to pane {agent.pane}")
     return OK
+
+
+def _message_recipient(a):
+    """An off-host graph member need not have a local projected card."""
+    registry = _registry(a)
+    try:
+        return registry.get(a.agent)
+    except LookupError:
+        from .deployment import local_host, deployment_default
+        local = local_host(a.root)
+        # Offline/file-only deployments keep their existing no-network lookup.
+        if (getattr(a, "registry", "files") != "files" or not local
+                or not deployment_default(a.root, "QUIPU_SERVER")):
+            raise
+        member = QuipuRegistry(root=a.root).get(a.agent)
+        if member.host and member.host != local:
+            return member
+        # A missing LOCAL projection is not a licence to guess a local pane.
+        raise LookupError(f"{a.agent} has no off-host placement; sync local cards first")
 
 
 def _relay_if_offhost(a, agent, typed: str, sender: str | None) -> int | None:
@@ -4032,7 +4110,10 @@ def _inbox_durable(a, agent, msg: str, panes, typed: str | None = None) -> int:
     # `--backend files` stays explicit and useful — when the store is unreachable,
     # local-and-known beats the CANNOT_TELL that persist-first would return.
     backend = _backend(a, default="beads")
-    live = agent.pane is not None and panes.exists(agent.pane)
+    from .deployment import local_host
+    local = local_host(a.root)
+    offhost = agent.host is not None and agent.host != local
+    live = not offhost and agent.pane is not None and panes.exists(agent.pane)
     if a.dry_run:
         print(f"  would: deliver a durable message to {agent.name}'s inbox via {backend}")
         print(f"  would: {'+ live send-keys -> ' + agent.pane if live else 'no live send (recipient down); survives in the inbox'}")

@@ -31,7 +31,7 @@ THE FOUR OPEN QUESTIONS (roles.md) — RULED, as the design author:
                                        hole and the tier is decorative.
 """
 from __future__ import annotations
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 
 from .protocols import Agent, Registry
@@ -127,7 +127,8 @@ def _reports_of(registry: Registry, lead: str) -> list[Agent]:
 
 
 def plan_role_set(registry: Registry, agent_name: str, role: str,
-                  reports: list[str] | None = None, catalog=None) -> RolePlan:
+                  reports: list[str] | None = None, catalog=None,
+                  initial: Agent | None = None) -> RolePlan:
     """Resolve what role set would do. No writes. Refuses at plan time.
 
     Refusing here (not at write time) means --dry-run shows the refusal too, and
@@ -162,7 +163,17 @@ def plan_role_set(registry: Registry, agent_name: str, role: str,
             f"{', '.join(catalog.known())}. Declare it as [roles.{role}] in "
             f"shantytown.toml (or in the graph) — the role list is the "
             f"deployment's, not st's.")
-    agent = registry.get(agent_name)          # LookupError if unknown
+    try:
+        agent = registry.get(agent_name)
+    except LookupError:
+        if initial is None:
+            raise
+        if initial.name != agent_name:
+            raise ValueError("initial identity does not match the requested agent")
+        agent = initial
+    else:
+        if initial is not None:
+            raise ValueError(f"{agent_name} already exists; omit --create to edit it")
     reports = reports or []
 
     plan = RolePlan()
@@ -179,9 +190,8 @@ def plan_role_set(registry: Registry, agent_name: str, role: str,
                 f"{role!r} is unattached (it is not in the reporting tree), so it "
                 f"cannot take reports {reports}. Point them at a lead or the "
                 f"administrator.")
-        plan.writes.append(Agent(name=agent_name, role=role, reports_to=None,
-                                 pane=pane_for(agent_name, agent.pane),
-                                 harness=agent.harness))
+        plan.writes.append(replace(agent, role=role, reports_to=None,
+                                   pane=pane_for(agent_name, agent.pane)))
         return plan
 
     if role == "worker":
@@ -193,22 +203,19 @@ def plan_role_set(registry: Registry, agent_name: str, role: str,
                 f"{agent_name} -> worker would strand its reports {stranded}. "
                 f"Re-point them first (they need a lead or the administrator)."
             )
-        plan.writes.append(Agent(name=agent_name, role="worker",
-                                 reports_to=agent.reports_to,
-                                 pane=pane_for(agent_name, agent.pane),
-                                 harness=agent.harness))
+        plan.writes.append(replace(agent, role="worker",
+                                   pane=pane_for(agent_name, agent.pane)))
         return plan
 
     if role == "administrator":
         # Q4: an administrator reports to nobody (it is the root).
-        plan.writes.append(Agent(name=agent_name, role="administrator",
-                                 reports_to=None, pane=pane_for(agent_name, agent.pane),
-                                 harness=agent.harness))
+        plan.writes.append(replace(agent, role="administrator",
+                                   reports_to=None, pane=pane_for(agent_name, agent.pane)))
         # reports handed to an administrator are direct (Q4: worker with no lead)
         for r in reports:
             ra = registry.get(r)
-            plan.writes.append(Agent(name=r, role=ra.role, reports_to=agent_name,
-                                     pane=pane_for(r, ra.pane), harness=ra.harness))
+            plan.writes.append(replace(ra, reports_to=agent_name,
+                                       pane=pane_for(r, ra.pane)))
         return plan
 
     # role == "lead"
@@ -242,21 +249,19 @@ def plan_role_set(registry: Registry, agent_name: str, role: str,
         admin = find_administrator(registry)
         if admin and admin != agent_name:
             lead_reports_to = admin
-    plan.writes.append(Agent(name=agent_name, role="lead",
-                             reports_to=lead_reports_to,
-                             pane=pane_for(agent_name, agent.pane),
-                             harness=agent.harness))
+    plan.writes.append(replace(agent, role="lead", reports_to=lead_reports_to,
+                               pane=pane_for(agent_name, agent.pane)))
     for r in reports:
         ra = registry.get(r)
-        plan.writes.append(Agent(name=r, role=ra.role, reports_to=agent_name,
-                                 pane=pane_for(r, ra.pane), harness=ra.harness))
+        plan.writes.append(replace(ra, reports_to=agent_name,
+                                   pane=pane_for(r, ra.pane)))
         plan.routes.append((r, agent_name))   # emit the stop-hook routing
     return plan
 
 
 def role_set(registry: MutableRegistry, agent_name: str, role: str,
              reports: list[str] | None = None, dry_run: bool = False,
-             catalog=None, root=None) -> RolePlan:
+             catalog=None, root=None, initial: Agent | None = None) -> RolePlan:
     """`root` is threaded for ONE reason: the deployment can name a card's
     program without the card saying so (`[harness]` / `[harness.by_role]`), and
     that answer lives under the root. The gate below must ask the program the
@@ -265,7 +270,10 @@ def role_set(registry: MutableRegistry, agent_name: str, role: str,
     refuses at `st agent new`, which is aegis-85ox with a config file in the middle.
     None keeps the card-only answer, which is what every caller without a root
     already got."""
-    plan = plan_role_set(registry, agent_name, role, reports, catalog=catalog)
+    # A new identity participates in the same hierarchy/capability plan before
+    # any write. Pre-writing a seed card would leave an orphan on a refused plan.
+    plan = plan_role_set(registry, agent_name, role, reports, catalog=catalog,
+                         initial=initial)
     # Capability gate (aegis-w5l9). A lead/administrator RECEIVES stop events, so
     # its harness must declare blocking stop hooks; refuse BEFORE any write, so
     # the registry never holds a tier card the fleet can never start (and its
