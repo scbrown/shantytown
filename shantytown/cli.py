@@ -458,7 +458,7 @@ def _wire(a) -> Dispatcher:
                       audit=FeedAudit(Path(a.root)))
 
 
-def _governors(a):
+def _local_governors(a):
     """Build one reader/governor per declared policy, keyed by harness.
 
     ``base`` deliberately retains the legacy state file and is the only entry
@@ -485,6 +485,118 @@ def _governors(a):
                                        None if name == "base" else name),
             name=name)
     return cfg, out
+
+
+def _governor_agents(a):
+    """Small local census, charged to the running process before the card."""
+    from .deployment import local_host
+    host = local_host(a.root) or 'local'
+    panes = _panes(a)
+    rows = []
+    for card in _registry(a).all().exact():
+        if getattr(card, 'host', None) not in (None, host):
+            continue
+        live = bool(card.pane and panes.exists(card.pane))
+        actual = None
+        reader = getattr(panes, 'cmdline', None)
+        if live and callable(reader):
+            actual = harness_mod.running_name(reader(card.pane))
+        rows.append(dict(name=card.name, host=host, live=live,
+                         harness=actual or harness_mod.name_for(card, root=a.root)))
+    return rows
+
+
+def _governors(a):
+    cfg, local = _local_governors(a)
+    if not cfg.host_peers or getattr(a, 'local', False):
+        return cfg, local
+    from . import fleet_governor as fg
+    from .deployment import local_host
+    fleet = getattr(a, '_account_governor', None)
+    if fleet is None:
+        snapshot = fg.snapshot(local_host(a.root) or 'local', local,
+                               _governor_agents(a))
+        fleet = fg.FleetGovernor(snapshot, fg.collect(cfg.host_peers), a.root)
+        a._account_governor = fleet
+        if fleet.errors:
+            print('  ⚠ ' + fleet.fallback(), file=sys.stderr)
+    policies = {name: g.policy for name, g in fleet.governors.items()}
+    base = policies.pop('base', gov_mod.Policy())
+    return replace(cfg, governor=replace(base, by_harness=policies)), fleet.governors
+
+
+def _account_launch_refusal(a, card):
+    try:
+        cfg, governors = _governors(a)
+        fleet = getattr(a, '_account_governor', None)
+        if fleet is None:
+            return ''
+        rows = _governor_agents(a)
+        refusal = fleet.admits_launch(harness_mod.name_for(card, root=a.root), rows)
+        if refusal:
+            return refusal
+        _h, governor, unconfigured = _governor_for(cfg, governors, card, a.root)
+        verdict = unconfigured or (governor.evaluate(persist=False) if governor else None)
+        return verdict.excludes(card, _catalog(a)) if verdict else ''
+    except Exception as exc:
+        return f'account governor cannot establish admission ({type(exc).__name__})'
+
+
+def _crew_account_governor(a):
+    from . import fleet_governor as fg
+    from .deployment import local_host
+    if getattr(a, 'local', False):
+        _cfg, governors = _local_governors(a)
+        print(json.dumps(fg.snapshot(local_host(a.root) or 'local', governors,
+                                     _governor_agents(a))))
+        return OK
+    cfg, governors = _governors(a)
+    fleet = getattr(a, '_account_governor', None)
+    if fleet is None:
+        print(json.dumps(fg.snapshot(local_host(a.root) or 'local', governors,
+                                     _governor_agents(a))))
+        return OK
+    counts = fleet.counts()
+    verdicts = {name: g.evaluate(persist=False) for name, g in governors.items()}
+    if getattr(a, 'json', False):
+        print(json.dumps(dict(version=fg.VERSION, scope='fleet',
+                              host=fleet.local, complete=not fleet.errors,
+                              errors=fleet.errors, agents=fleet.agents,
+                              governors={name: dict(
+                                  live=counts.get(name, 0), max_agents=v.max_agents,
+                                  signal_lost=v.signal_lost, frozen=v.frozen,
+                                  why=v.why, policy_host=fleet.policy_hosts[name],
+                                  provenance=governors[name].reader.provenance,
+                                  readings=fg.observations(governors[name]))
+                                  for name, v in verdicts.items()})))
+    else:
+        if not governors:
+            print('off' if not fleet.errors else 'lost ' + fleet.fallback())
+        for name, v in verdicts.items():
+            g = governors[name]
+            parts = []
+            for window in (gov_mod.FIVE_HOUR, gov_mod.SEVEN_DAY):
+                r = g.reader.read_all().get(window)
+                if r is None or r.lost(time.time(), g.policy.max_age_seconds):
+                    parts.append('?/?/?')
+                    continue
+                pct = int(round(r.pct))
+                thresholds = sorted(t.at for t in g.policy.tiers_for(window) if t.at > pct)
+                next_at = thresholds[0] if thresholds else '-'
+                left = r.resets_in(time.time())
+                reset = '-' if left is None else str(max(0, int(left)))
+                parts.append(f'{pct}/{next_at}/{reset}')
+            sources = ','.join(f'{w}@{h}' for w, h in g.reader.provenance.items())
+            print(f'{name} {"lost" if v.signal_lost else "ok"} '
+                  + ('' if v.signal_lost else ' '.join(parts))
+                  + f' live {counts.get(name, 0)}/{v.max_agents or "uncapped"}'
+                  + f' policy={fleet.policy_hosts[name]} freshest[{sources}] ' + v.effect())
+        for row in fleet.agents:
+            if row['live']:
+                print(f'  {row["host"]} {row["name"]} {row["harness"]} live')
+        if fleet.errors:
+            print('  ' + fleet.fallback())
+    return CANNOT_TELL if fleet.errors else OK
 
 
 def _governor(a):
@@ -555,6 +667,9 @@ def _dispatch_gate(a):
     if gaming.held:
         return lambda item, agent=None: gaming.refusal
     cfg, governors = _governors(a)
+    fleet = getattr(a, '_account_governor', None)
+    if fleet is not None and fleet.errors:
+        return lambda item, agent=None: fleet.fallback()
     stood_down = bool(getattr(getattr(cfg, "fleet", None), "stood_down", False))
     if not governors and not stood_down:
         return None
@@ -2271,6 +2386,25 @@ def unobserved_launch_report(agent: str, harness: str, session: str,
 
 def _launch(a, card, panes, runtime, *, dry_run: bool = False,
             window_restore: bool = False) -> int:
+    from . import fleet_governor as fg
+    cfg, err = config.load_or_default(Path(a.root))
+    if err:
+        print('  refused: ' + str(err), file=sys.stderr)
+        return REFUSED
+    try:
+        with fg.admission_lock(a.root, cfg.host_name, cfg.host_peers):
+            # A census made before waiting for the lock cannot admit anything.
+            if hasattr(a, '_account_governor'):
+                del a._account_governor
+            return _launch_admitted(a, card, panes, runtime, dry_run=dry_run,
+                                    window_restore=window_restore)
+    except fg.AdmissionUnavailable as exc:
+        print('  refused: ' + str(exc), file=sys.stderr)
+        return REFUSED
+
+
+def _launch_admitted(a, card, panes, runtime, *, dry_run: bool = False,
+                     window_restore: bool = False) -> int:
     """LAUNCH ONE AGENT. The whole seam: refuse-first, then workspace, then kit,
     then session, then verify. Returns 0 (up + hooks verified) / 1 (refused) /
     2 (launched but not verified).
@@ -2297,6 +2431,9 @@ def _launch(a, card, panes, runtime, *, dry_run: bool = False,
               "dispatch, respawns and every other launch.", file=sys.stderr)
     if not window_restore and (rc := _window_launch_gate(a)) is not None:
         return rc
+    if refusal := _account_launch_refusal(a, card):
+        print('  refused: ' + refusal, file=sys.stderr)
+        return REFUSED
     # A dead app-server can outlive its pane behind Codex's per-card daemon and
     # make every subsequent launch time out. Repair only the daemon whose
     # /proc environment names this card; argv is never an ownership signal.
@@ -4897,6 +5034,9 @@ def _cmd_crew(a) -> int:
         print(f"  could not tell: {cfg_error}", file=sys.stderr)
         return CANNOT_TELL
     local = local_host(a.root)
+    if getattr(a, 'governor', False) and (getattr(a, 'json', False)
+                                        or cfg.host_peers and not getattr(a, 'local', False)):
+        return _crew_account_governor(a)
     peer_results = (fleet_mod.collect(cfg.host_peers)
                     if not getattr(a, "local", False) else [])
     a.crew_peers = peer_results
@@ -8988,6 +9128,8 @@ def _tend_once(a, quiet: bool = False) -> int:
     gov_metric_lanes = []
     util_clock = time.time()
     live_by_gov = _live_by_governor(agents, panes, cfg, governors, a.root)
+    if fleet := getattr(a, '_account_governor', None):
+        live_by_gov = fleet.counts(_governor_agents(a))
     from . import codex_daemon
     blocked_by_gov = {name: 0 for name in governors}
     for card in agents:
@@ -9221,6 +9363,7 @@ def _tend_once(a, quiet: bool = False) -> int:
         target_src=_target_source(getattr(a, "target", None),
                                   None if verdict is None else verdict.max_agents),
         governed=(lambda card: gaming.refusal if gaming.held else
+                  _account_launch_refusal(a, card) or
                   (_card_verdict(card).excludes(card, _catalog(a))
                    if governors and _card_verdict(card) is not None else "")),
         # The same record `st crew` reads to print "stopped ON PURPOSE", so the
@@ -9231,7 +9374,20 @@ def _tend_once(a, quiet: bool = False) -> int:
     )
     if not a.dry_run:
         _gaming_advisory(a, gaming, reg=reg, panes=panes)
-    rep = tender.pass_over(agents, dry_run=a.dry_run)
+    from . import fleet_governor as fg
+    try:
+        with fg.admission_lock(a.root, cfg.host_name, cfg.host_peers):
+            if cfg.host_peers:
+                if hasattr(a, '_account_governor'):
+                    del a._account_governor
+                cfg, governors = _governors(a)
+                verdicts = {name: g.evaluate(persist=not a.dry_run)
+                            for name, g in governors.items()}
+                card_verdicts.clear()
+            rep = tender.pass_over(agents, dry_run=a.dry_run)
+    except fg.AdmissionUnavailable as exc:
+        print('  held: ' + str(exc), file=sys.stderr)
+        return CANNOT_TELL
     # DELIVER blocked workers to their coordinator (aegis-w0kk). Not on a dry run
     # — a dry run pushes nothing, same as it launches nothing. Deduped, so a
     # heartbeat does not re-spam a still-blocked worker every interval.

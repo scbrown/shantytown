@@ -1506,3 +1506,38 @@ using the local usage policy; an unreachable peer prints `lost` and exits 2.
 This display does not change admission policy. Use `--local` for the previous
 local count/governor behavior. `--json` cannot combine with `--count` or
 `--governor`.
+
+### Account governors across hosts
+
+With `[host.peers.*]` configured, `crew --governor`, `go`, `new`, and `tend`
+use account observations from every host. `crew --governor --json --local`
+exports only this host's portable policy, producer timestamps, hysteresis and
+live agents; it never follows peers or exports reader credentials. The default
+JSON reply has `scope: "fleet"`, merged counts, policy hosts and per-window
+observation provenance. Human output names each live agent's host.
+
+The freshest producer timestamp wins **per window**, with a deterministic host
+name tie-break. A newer failed probe is still a failed probe; receipt over SSH
+does not refresh stale usage. Hosts without a local policy inherit the peer
+policy. Multiple declarations for the same provider must agree; disagreement
+holds new launches and dispatch until the policies are reconciled. The strictest
+remembered window hold survives until the ordinary relaxation rules release it.
+
+A missing or incompatible peer is reported as an available/local usage fallback
+with **unknown remote spend**, not an empty host. Existing agents keep running;
+new launches and dispatch are held. Each peer call has a 20-second deadline and
+peers are queried concurrently. A peer census older than 60 seconds or more than
+30 seconds in the future is rejected; keep host clocks synchronized.
+
+All hosts must declare the same set of uniquely named peers. Launch admission is
+serialized on the lexically first host using an SSH-held file lock under that
+host's governor state directory. The census is read after acquiring the lock,
+then the lock remains held through launch. `tend` recounts local agents between
+respawns, so one pass cannot reuse a slot. A busy or unavailable authority holds
+admission instead of electing another authority. The remote lock needs `python3`
+and POSIX file locking on the SSH host. No additional daemon or package is needed.
+
+This coordinates the configured `st` launch paths in a connected fleet. It is not
+a distributed consensus or fencing service: out-of-band launches, asymmetric
+peer configuration, or loss of the SSH lock connection during a launch can defeat
+serialization. Do not claim a hard quota boundary under those conditions.
