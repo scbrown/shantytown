@@ -96,11 +96,14 @@ def test_count_includes_remote_content(tmp_path, monkeypatch, capsys):
 
 @pytest.mark.parametrize('mode', ['table', 'json', 'count', 'governor'])
 def test_unreachable_remains_visible_and_nonzero(tmp_path, monkeypatch, capsys, mode):
+    from shantytown import fleet_governor
     args = setup(tmp_path, monkeypatch)
     if mode != 'table':
         setattr(args, mode, True)
     monkeypatch.setattr(fleet, 'collect', lambda peers:
                         [dict(host='laptop', agents=[], error='deadline')])
+    monkeypatch.setattr(fleet_governor, 'collect', lambda peers:
+                        [(None, 'laptop UNREACHABLE (deadline)')])
     assert cli._cmd_crew(args) == cli.CANNOT_TELL
     out = capsys.readouterr().out
     assert 'laptop UNREACHABLE' in out
@@ -132,15 +135,14 @@ def test_remote_ungoverned_provider_is_not_charged_to_base():
 
 
 def test_governor_display_counts_local_and_remote(tmp_path, monkeypatch, capsys):
-    from test_crew_governor import _Gov, _reading, _verdict, gov_mod
+    from shantytown import fleet_governor
+    from test_fleet_governor import sample, agent
     args = setup(tmp_path, monkeypatch)
     args.governor = True
-    gov = _Gov({gov_mod.FIVE_HOUR: _reading(45), gov_mod.SEVEN_DAY: _reading(24)},
-               _verdict())
-    monkeypatch.setattr(cli, '_governor', lambda a: gov)
-    monkeypatch.setattr(cli.creel_advisory_mod, 'controller_line', lambda *a, **k: '')
+    monkeypatch.setattr(fleet_governor, 'collect', lambda peers: [(
+        sample('laptop', agents=[agent('laptop', 'remote')]), '')])
     assert cli._cmd_crew(args) == 0
-    assert 'UTIL[live 2/' in capsys.readouterr().out
+    assert 'live 2/2' in capsys.readouterr().out
 
 
 def test_failed_peer_does_not_hide_another_peer(monkeypatch):
