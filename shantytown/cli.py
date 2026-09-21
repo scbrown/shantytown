@@ -1080,8 +1080,10 @@ def build_parser() -> argparse.ArgumentParser:
     reason.add_argument("--reason", help="short reason; prefer --reason-file for prose")
     reason.add_argument("--reason-file", type=Path,
                         help="read the reason from a file, or - for stdin")
-    df.add_argument("--until", default="", metavar="DATE",
-                    help="re-evaluation date (ISO, e.g. 2026-09-20) written to "
+    df.add_argument("--until", default="", metavar="DATE_OR_UTC_TIME",
+                    help="re-evaluation day (2026-09-20) or exact UTC time "
+                         "(2026-09-20T23:05:00Z); shortened or timezone-less "
+                         "timestamps are refused, including in -n dry runs. Written to "
                          "the structured defer_until field. Otherwise a testable "
                          "resume_when marker or existing defer_until is required.")
     df.add_argument("-n", "--dry-run", action="store_true")

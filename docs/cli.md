@@ -191,7 +191,8 @@ rotation, and capacity refusal without running supervision.
 The twenty-seventh is **defer**: the tracker already knew how to hide work, but bare
 deferral did not require the deferrer to state whether the blocker was a bead, human,
 access capability, external event, or no blocker at all. `st work defer` records that kind
-and requires a testable resume condition: `--until <ISO date>`, an existing
+and requires a testable resume condition: `--until YYYY-MM-DD` (day) or
+`--until YYYY-MM-DDTHH:MM:SSZ` (exact UTC time), an existing
 `defer_until`, or a `resume_when: closed:<id>` / `date:<ISO date>` marker. It
 writes and verifies the reason and condition before changing status, then verifies
 status, blocker kind, reason and condition together. An interrupted write returns
