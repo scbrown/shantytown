@@ -187,6 +187,7 @@ from .files import (FilesRegistry, FilesTracker, plate as files_plate,
                     items as files_items)
 from .launched import FilesLaunches, CURRENT, STALE, UNKNOWN
 from .stopped import FilesStops
+from . import agent_hold
 from .quipu import QuipuRegistry, QuipuQueryRejected, QuipuWriteRejected
 from . import graph_adoption
 from . import window as window_mod
@@ -572,7 +573,8 @@ def _crew_account_governor(a):
                                   why=v.why, policy_host=fleet.policy_hosts[name],
                                   provenance=governors[name].reader.provenance,
                                   readings=fg.observations(governors[name]))
-                                  for name, v in verdicts.items()})))
+                                  for name, v in verdicts.items()},
+                              balance=_balance_wire(fleet))))
     else:
         if not governors:
             print('off' if not fleet.errors else 'lost ' + fleet.fallback())
@@ -595,12 +597,57 @@ def _crew_account_governor(a):
                   + ('' if v.signal_lost else ' '.join(parts))
                   + f' live {counts.get(name, 0)}/{v.max_agents or "uncapped"}'
                   + f' policy={fleet.policy_hosts[name]} freshest[{sources}] ' + v.effect())
+        # WHICH lane to feed next (aegis-03cstj). Printed after the per-lane lines
+        # because it is derived from them, and printed even when it cannot say --
+        # a balance view that appears only when it has an opinion is one an operator
+        # cannot tell from a missing feature.
+        if len(fleet.governors) > 1:
+            print(fleet.balance().line())
         for row in fleet.agents:
             if row['live']:
                 print(f'  {row["host"]} {row["name"]} {row["harness"]} live')
         if fleet.errors:
             print('  ' + fleet.fallback())
     return CANNOT_TELL if fleet.errors else OK
+
+
+def _fleet_balance(a):
+    """The balance verdict for tend, or None when it cannot be established.
+
+    FAIL-OPEN BY CONSTRUCTION. Every caller treats None as "no preference", so a
+    governor that cannot be built, a single-lane fleet and a transport failure all
+    degrade to today's behaviour rather than to a wrong preference. This is the one
+    place in the balance feature that runs on the tend timer, and tend must not
+    acquire a new way to fail.
+
+    `_governors` caches the FleetGovernor on the namespace, so when tend has already
+    built one this adds no remote collection at all.
+    """
+    try:
+        _cfg, _governors_map = _governors(a)
+        fleet = getattr(a, '_account_governor', None)
+        if fleet is None or len(fleet.governors) <= 1:
+            return None
+        return fleet.balance()
+    except Exception:                      # noqa: BLE001 — never break the sweep
+        return None
+
+
+def _balance_wire(fleet):
+    """The balance verdict as JSON, or None when there is only one lane.
+
+    `actionable` is published alongside `prefer` deliberately. A consumer that reads
+    only `prefer` would treat REFRESH and UNRATED -- which carry no lane -- correctly
+    today, but would silently start routing on any future verdict that names a lane
+    for reporting. The boolean is the contract; the lane is the detail.
+    """
+    if len(fleet.governors) <= 1:
+        return None
+    v = fleet.balance()
+    return dict(verdict=v.verdict, prefer=v.prefer, actionable=v.actionable,
+                ratio=(None if v.ratio is None or v.ratio != v.ratio
+                       or v.ratio in (float('inf'), float('-inf')) else v.ratio),
+                why=v.why, line=v.line())
 
 
 def _governor(a):
@@ -1035,8 +1082,10 @@ def build_parser() -> argparse.ArgumentParser:
     reason.add_argument("--reason", help="short reason; prefer --reason-file for prose")
     reason.add_argument("--reason-file", type=Path,
                         help="read the reason from a file, or - for stdin")
-    df.add_argument("--until", default="", metavar="DATE",
-                    help="re-evaluation date (ISO, e.g. 2026-09-20) written to "
+    df.add_argument("--until", default="", metavar="DATE_OR_UTC_TIME",
+                    help="re-evaluation day (2026-09-20) or exact UTC time "
+                         "(2026-09-20T23:05:00Z); shortened or timezone-less "
+                         "timestamps are refused, including in -n dry runs. Written to "
                          "the structured defer_until field. Otherwise a testable "
                          "resume_when marker or existing defer_until is required.")
     df.add_argument("-n", "--dry-run", action="store_true")
@@ -1114,6 +1163,9 @@ def build_parser() -> argparse.ArgumentParser:
                               "deployment declares more than one")
     rl_band.add_argument("-n", "--dry-run", action="store_true")
     rl_sync = rl_sub.add_parser("sync", help="materialize the crew cards FROM a source")
+    rl_sync.add_argument("--require-host-sync", type=int, default=1, metavar="VERSION",
+                         help="require host-sync protocol VERSION before any projection; "
+                              "legacy binaries reject this flag without syncing")
     rl_sync.add_argument("-n", "--dry-run", action="store_true", help="show the diff, write nothing")
     rl_sync.add_argument("--force", action="store_true", help="sync even if it restructures LIVE agents")
     # aegis-ftmfn: a SECOND consent, deliberately not folded into --force. See
@@ -1171,6 +1223,12 @@ def build_parser() -> argparse.ArgumentParser:
     it.add_argument("--workspaces", default=None, metavar="DIR",
                     help="parent directory for agent workspaces — each agent gets "
                          "DIR/<name>. Omitted: agents launch in the current dir")
+    it.add_argument("--host", default=None, help="this host's exact fleet identity")
+    it.add_argument("--peer", action="append", default=[], metavar="NAME=SSH,ROOT",
+                    help="remote host, SSH target and remote store root; repeat per peer")
+    it.add_argument("--quipu-server", default=None, help="existing fleet's Quipu URL")
+    it.add_argument("--ontology-namespace", default=None, help="existing fleet's exact ontology IRI")
+    it.add_argument("--canonical-source", default=None, help="local canonical shantytown checkout")
     it.add_argument("--mode", default=None, choices=["lite", "heavy"],
                     help="the startup mode to write into the config (default lite)")
     it.add_argument("--hibernate", action="store_true",
@@ -1206,6 +1264,8 @@ def build_parser() -> argparse.ArgumentParser:
     st = leaf("stop", help="stop it")
     st.add_argument("agent")
     st.add_argument("-n", "--dry-run", action="store_true")
+    st.add_argument("--after-turn", action="store_true",
+                    help="hold all automatic feeds now; stop at the next Stop hook")
     st.add_argument("--reason", default="", metavar="TEXT",
                     help="why, recorded with the stop (GitHub #29). A deliberate "
                          "stop is INTENT, not a fault: `st crew` and the "
@@ -1745,7 +1805,17 @@ def main(argv: list[str] | None = None) -> int:
     # to explain an empty or surprising store can say which leg answered.
     a.root, a.root_how = resolve_root(a.root, discover=(a.cmd != "init"))
     _warn_if_no_store(a)
+    from .deployment import command_environment
+    from .quipu import NamespaceUnconfigured
+    with command_environment(a.root):
+        try:
+            return _run_command(a)
+        except NamespaceUnconfigured as e:
+            print(f"  {e}", file=sys.stderr)
+            return REFUSED
 
+
+def _run_command(a) -> int:
     # Gate replacement operations before they stop a live session. The shared
     # launch seam remains guarded too for internal callers and restore paths.
     if a.cmd in {"new", "start", "cycle"} and not _despite_hold(a):
@@ -1978,6 +2048,7 @@ def _launched_now(a, card_name: str, settings_path=None) -> None:
     if settings_path:
         _launches(a).record(card_name, settings_path)
     _stops(a).forget(card_name)
+    agent_hold.clear(a.root, card_name)
 
 
 def _record_launch_unretirement(a, card) -> bool:
@@ -2882,6 +2953,50 @@ def _cmd_init(a, *, ask=_prompt, isatty=None) -> int:
               file=_sys.stderr)
         return REFUSED
 
+    from .deployment import deployment_default, local_host
+    host = getattr(a, "host", None) or local_host(root)
+    server = getattr(a, "quipu_server", None) or deployment_default(root, "QUIPU_SERVER")
+    onto = getattr(a, "ontology_namespace", None) or deployment_default(root, "SHANTY_ONTO_NS")
+    canonical = getattr(a, "canonical_source", None) or deployment_default(root, "SHANTY_CANONICAL_SOURCE")
+    if cfg_exists:
+        try:
+            kept = config.load(root)
+        except config.ConfigError as e:
+            print(f"  refused: {e}", file=_sys.stderr)
+            return REFUSED
+        if host != kept.host_name:
+            print("  refused: --force preserves existing config; set [host] name "
+                  "there before initializing cards with a different host.", file=_sys.stderr)
+            return REFUSED
+    peers = []
+    try:
+        for peer in getattr(a, "peer", []):
+            name, destination = peer.split("=", 1)
+            ssh, remote_root = destination.split(",", 1)
+            peers.append((name, ssh, remote_root))
+    except ValueError:
+        print("  refused: --peer needs NAME=SSH,ROOT", file=_sys.stderr)
+        return REFUSED
+    if server:
+        if not onto:
+            print("  refused: an existing fleet needs --ontology-namespace (or "
+                  "SHANTY_ONTO_NS); guessing can hide every existing member.", file=_sys.stderr)
+            return REFUSED
+        try:
+            members = QuipuRegistry(server=server, onto=onto, root=root).all().exact()
+        except Exception as e:
+            print(f"  could not inspect the existing fleet: {e}. Nothing written.", file=_sys.stderr)
+            return CANNOT_TELL
+        if members and not host:
+            print(f"  refused: the configured fleet has {len(members)} member(s); "
+                  "pass --host NAME to scaffold [host] name before joining it.", file=_sys.stderr)
+            return REFUSED
+        if members:
+            print(f"  existing fleet: {len(members)} member(s); initializing host {host!r}")
+    plumbing = tuple((k, v) for k, v in (
+        ("QUIPU_SERVER", server), ("SHANTY_ONTO_NS", onto),
+        ("SHANTY_CANONICAL_SOURCE", canonical)) if v)
+
     # FLAGS PRE-ANSWER QUESTIONS; --yes skips the asking entirely. A non-tty with
     # no --yes REFUSES rather than calling input() — a wizard that blocks forever
     # inside a script or a hook is worse than one that says it cannot ask.
@@ -2890,13 +3005,14 @@ def _cmd_init(a, *, ask=_prompt, isatty=None) -> int:
         workers=tuple(w.strip() for w in (a.crew or "").split(",") if w.strip()),
         workspaces=a.workspaces,
         mode=a.mode or config.DEFAULT_MODE,
-        hibernate=bool(a.hibernate))
+        hibernate=bool(a.hibernate), host=host, peers=tuple(peers), env=plumbing)
     try:
         if a.yes:
             answers = scaffold.make_answers(
                 admin=defaults.admin, workers=defaults.workers,
                 workspaces=defaults.workspaces, mode=defaults.mode,
-                hibernate=defaults.hibernate)
+                hibernate=defaults.hibernate, host=defaults.host,
+                peers=defaults.peers, env=defaults.env)
         elif not isatty():
             print(f"  refused: stdin is not a terminal, so `st fleet init` cannot ask "
                   f"its questions. Pass -y/--yes to take the flags and defaults "
@@ -2945,7 +3061,7 @@ def _init_apply(a, root: Path, plan, answers) -> int:
             print(f"  kept     {name:<12} (card already exists — not touched)")
             continue
         ws = f"{answers.workspaces.rstrip('/')}/{name}" if answers.workspaces else None
-        reg.set(Agent(name=name, role="worker", workspace=ws))
+        reg.set(Agent(name=name, role="worker", workspace=ws, host=answers.host))
         print(f"  card     {name:<12} {root / 'crew' / f'{name}.json'}")
 
     # ROLES + ROUTING through the generative op, so the cards and the stop hooks
@@ -3272,6 +3388,17 @@ def _cmd_stop(a) -> int:
     if refusal := _foreign_session_refusal(a, a.agent, session, panes):
         print(f"  refused: {refusal}", file=sys.stderr)
         return REFUSED
+    if getattr(a, "after_turn", False):
+        if a.dry_run:
+            print(f"  would: hold {a.agent} and stop after its current turn")
+            return OK
+        try:
+            agent_hold.hold(a.root, a.agent, _actor(), getattr(a, "reason", ""))
+        except OSError as exc:
+            print(f"  could not tell: {exc}", file=sys.stderr)
+            return CANNOT_TELL
+        print(f"  {a.agent}: {agent_hold.reason(a.root, a.agent)}; stop at next turn boundary")
+        return OK
     if a.dry_run:
         print(f"  would: kill-session {session}")
         return OK
@@ -3442,7 +3569,8 @@ def _cmd_doctor(a) -> int:
     # rendered for a full run: `st ops doctor bobbin` asked about bobbin.
     # remote= rides --no-latest: both mean "no network lookups on this run". The
     # behind-upstream fetch is the same class of question as "0.6.0 available".
-    self_h = (selfcheck.check_self(remote=not a.no_latest)
+    canonical = deployment_default(a.root, "SHANTY_CANONICAL_SOURCE")
+    self_h = (selfcheck.check_self(remote=not a.no_latest, canonical=canonical)
               if len(specs) == len(doc.SPECS) else None)
 
     sock_v, sock_why = _socket_check(a)
@@ -3548,7 +3676,7 @@ def _cmd_doctor(a) -> int:
     observed = doc.detect_all(specs, check_latest=not a.no_latest)
     print(doc.report(observed))
     # Re-run the self-check too: --install can have just replaced `st` itself.
-    self_after = selfcheck.check_self() if len(specs) == len(doc.SPECS) else None
+    self_after = selfcheck.check_self(canonical=canonical) if len(specs) == len(doc.SPECS) else None
     if self_after is not None:
         print(selfcheck.render(self_after))
     return _doctor_exit(doc, observed, self_after)
@@ -4162,6 +4290,9 @@ def _cmd_inbox(a) -> int:
         # ack recipe ran in bash. Nothing destructive ran by luck of the wording,
         # not by design. Refuse, and say the message was NOT delivered.
         print(f"  refused: {e}", file=sys.stderr)
+        from .tmux import PaneTaskList
+        if isinstance(e, PaneTaskList):
+            return REFUSED
         print(f"  remedy: st agent new {agent.name}, or use `st inbox -d` so the "
               f"message survives until it is back.", file=sys.stderr)
         return REFUSED
@@ -4744,6 +4875,9 @@ def _graph_context(a):
 
 
 def _cmd_go(a) -> int:
+    if held := agent_hold.reason(a.root, a.agent):
+        print(f"  refused: {a.agent} {held}", file=sys.stderr)
+        return REFUSED
     d = _wire(a)
     try:
         note = _read_note(a)
@@ -5951,6 +6085,8 @@ def _crew_states(agents, panes, runtime, cycling=(), untracked_root=None,
             # not what anything is running, and this column only ever reports what
             # was observed. What the card lacks is launch_gaps()' question.
             posture = "—"
+        if held := agent_hold.reason(untracked_root, ag.name):
+            work = held
         yield ag, state, work, posture
 
 
@@ -6754,6 +6890,20 @@ def _cmd_project(a) -> int:
     right, and a projection that cannot be previewed is a footgun regardless of
     which side of the divergence is correct.
     """
+    # Never use load_or_default on this mutating path: an unreadable floor is
+    # not permission to project. The explicit flag also protects older parsers,
+    # which reject it before reaching their unscoped projection code.
+    from .sync_version import require_host_sync
+    try:
+        cfg = config.load(a.root)
+        require_host_sync(max(cfg.host_min_sync_version,
+                              getattr(a, "require_host_sync", 1)))
+        if getattr(a, "require_host_sync", 1) < 1:
+            raise ValueError("--require-host-sync must be a positive integer")
+    except (config.ConfigError, ValueError) as e:
+        print(f"  refused: {e}", file=sys.stderr)
+        return REFUSED
+
     # aegis-t4eve: the source is chosen here, not hardcoded, and it is PRINTED.
     # Ontology-first with file-fallback by default; an explicit --from is never
     # silently substituted (asking for quipu and getting a stale file without
@@ -7105,6 +7255,25 @@ def _resolve_push_worktree(repo: str, agent: str) -> Path:
     return gt_worktree
 
 
+def _worktree_branch(dest: Path) -> str | None:
+    """The branch `dest` has checked out, or None if it cannot be determined.
+
+    None means CANNOT TELL and the caller proceeds: a detached HEAD or an
+    unreadable worktree is not evidence that the wrong branch is about to be
+    pushed, and refusing on it would break the canonical path for a condition we
+    have not observed. The refusal fires only on a POSITIVE disagreement.
+    """
+    import subprocess
+
+    try:
+        r = subprocess.run(["git", "-C", str(dest), "symbolic-ref", "--short", "HEAD"],
+                           capture_output=True, text=True, timeout=5)
+    except Exception:                      # noqa: BLE001
+        return None
+    name = r.stdout.strip()
+    return name if r.returncode == 0 and name else None
+
+
 def _push_invocation_branch(dest: Path) -> tuple[Path, str] | None:
     """Return the caller's worktree + branch when it belongs to ``dest``'s repo.
 
@@ -7356,14 +7525,31 @@ def _cmd_cycle(a) -> int:
     # prunes, which closes the opposite and worse error — a deleted upstream ref
     # laundering an orphaned commit into "safe".
     trees = _agent_trees(a, card, sweep=True)
-    verdict = cycle_mod.assess(
-        agent_name, trees, a.reason,
-        # untracked_all: the default porcelain collapses `?? .playwright-mcp/` to
-        # the directory, and the report has to be able to NAME a `.mcp.json.bak`
-        # inside one. This path already fetches over the network; one extra walk
-        # is not what makes it slow.
-        staleness=lambda t: tree_staleness(t, fetch=True, untracked_all=True),
-        allow_loss=a.allow_loss)
+    # Refuse a timed-out preflight BEFORE writing cycle state or stopping a pane.
+    # A pending request must remain exactly as the caller left it so a later
+    # attempt can retry; timeout is not evidence of unsaved work.
+    import subprocess
+    try:
+        cfg = config.load(a.root)
+        verdict = cycle_mod.assess(
+            agent_name, trees, a.reason,
+            # untracked_all: the default porcelain collapses `?? .playwright-mcp/` to
+            # the directory, and the report has to be able to NAME a `.mcp.json.bak`
+            # inside one. This path already fetches over the network; one extra walk
+            # is not what makes it slow.
+            staleness=lambda t: tree_staleness(
+                t, fetch=True, untracked_all=True, tracked_only=True,
+                fetch_timeout=cfg.keep_current_fetch_timeout_seconds),
+            allow_loss=a.allow_loss)
+    except subprocess.TimeoutExpired as e:
+        command = e.cmd if isinstance(e.cmd, (list, tuple)) else []
+        operation = "fetch" if "fetch" in command else "Git preflight"
+        print(f"  refused: tree is stale: {operation} timed out after {e.timeout:g}s; "
+              "cycle state unchanged", file=sys.stderr)
+        return REFUSED
+    except (config.ConfigError, OSError) as e:
+        print(f"  refused: cycle preflight: {str(e).splitlines()[0]}", file=sys.stderr)
+        return REFUSED
     if not verdict.ok:
         print(f"  refused: {verdict.render()}", file=sys.stderr)
         # aegis-7xptd5: STAMP THE REFUSAL ON THE PENDING REQUEST. The refusal is
@@ -7841,6 +8027,32 @@ def _cmd_push(a) -> int:
             "or use an explicit git push after reviewing the exact ref.",
             file=sys.stderr,
         )
+        return REFUSED
+    # ── PUSH WHAT THE WORKTREE IS ACTUALLY ON (aegis-8ijj33) ─────────────────
+    #
+    # `branch` above is CONSTRUCTED as wt/<agent>; nothing had checked that the
+    # worktree is on it. _push_invocation_branch covers the case where the CALLER
+    # stands in another worktree of this repo, and deliberately ignores a caller
+    # elsewhere in the filesystem — which is the common case for a lead pushing on
+    # someone's behalf, and therefore the uncovered one.
+    #
+    # MEASURED 2026-09-20 (wu): `st repo push shantytown wu` run from a crew clone
+    # pushed `wt/wu` -> main while the worktree was on `wu/nyce0l-declared-roles`
+    # and `wt/wu` was STALE. It published neither the work in the tree nor anything
+    # the caller had looked at, and it was stopped only by a non-fast-forward
+    # rejection — luck, not a guard. Had wt/wu been an ancestor of main it would
+    # have landed silently, and on a CD-wired repo that is a deploy (aegis-jtcau).
+    #
+    # This does not change WHERE a push goes; it refuses to push a branch the
+    # worktree is not on. The canonical case (worktree on wt/<agent>) is untouched.
+    checked_out = _worktree_branch(Path(dest))
+    if checked_out is not None and checked_out != branch:
+        print(f"  refused before push: {dest} is on '{checked_out}', but this would "
+              f"push '{branch}' — a branch the worktree is not on, so it is not the "
+              f"work you are looking at. No remote was contacted.\n"
+              f"  Either check out '{branch}' there, or push '{checked_out}' "
+              f"deliberately with an explicit git push after reviewing the ref.",
+              file=sys.stderr)
         return REFUSED
     outcomes = push_every_remote(dest, branch, a.branch)
     if not outcomes:
@@ -8842,6 +9054,8 @@ def _cmd_input(a) -> int:
 
     if not rep.changed:
         return CANNOT_TELL
+    if rep.verdict == input_box.TASK_LIST and (a.clear or a.dismiss):
+        return REFUSED
     if rep.verdict == input_box.UNKNOWN:
         return CANNOT_TELL
     # GHOST is also an empty input buffer: it is only the runtime's dimmed
@@ -9565,9 +9779,8 @@ def _tend_once(a, quiet: bool = False) -> int:
         gov_metrics_mod.publish(
             Path(a.root), gov_metric_lanes,
             agents=_agent_counts(a, agents, panes, runtime),
-            # The deployment's [env] table, NOT os.environ — st does not export
-            # it into its own process, so reading only the ambient environment
-            # would leave a correctly configured deployment silently unexported.
+            # Use the rooted resolver for internal callers too; CLI dispatch
+            # also carries this table in the command environment.
             # Same reason the creel probe above is read off cfg.env.
             env=cfg.env,
             log=lambda msg: print(f"  ⚠ {msg}", file=sys.stderr))
@@ -9657,10 +9870,11 @@ def _tend_once(a, quiet: bool = False) -> int:
         # is not sent hunting for a `--target` flag they never passed.
         target_src=_target_source(getattr(a, "target", None),
                                   None if verdict is None else verdict.max_agents),
-        governed=(lambda card: gaming.refusal if gaming.held else
+        governed=(lambda card: agent_hold.reason(a.root, card.name) or
+                  (gaming.refusal if gaming.held else
                   _account_launch_refusal(a, card) or
                   (_card_verdict(card).excludes(card, _catalog(a))
-                   if governors and _card_verdict(card) is not None else "")),
+                   if governors and _card_verdict(card) is not None else ""))),
         # The same record `st crew` reads to print "stopped ON PURPOSE", so the
         # two commands cannot disagree about whose decision put an agent down
         # (aegis-k9068). Without it tend explained every deliberate stop with the
@@ -9827,7 +10041,8 @@ def _tend_once(a, quiet: bool = False) -> int:
         # fixed for blocked workers. Deduped per idle episode, fail-open, and it
         # reuses the SAME free/dispatchable computation as hfta's hard gate.
         idle = _sweep("idle-fleet", lambda: notify_mod.IdleFleetAlerter(
-            Path(a.root), _registry(a), panes, runtime, log=_log).sweep(agents))
+            Path(a.root), _registry(a), panes, runtime, log=_log,
+            balance=lambda: _fleet_balance(a)).sweep(agents))
         if idle:
             print(f"  ⚠ alerted the coordinator — {len(idle)} newly-idle feedable "
                   f"worker(s) with work ready: {', '.join(idle)}", file=sys.stderr)

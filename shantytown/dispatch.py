@@ -365,6 +365,23 @@ def _is_bare_date(value) -> bool:
     """
     return bool(re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(value).strip()))
 
+
+def _valid_br_defer_until(value: str) -> bool:
+    """The absolute --defer forms accepted by br update and promised by st.
+
+    br accepts a bare day or RFC3339 with seconds and a timezone. Keep st's
+    time-of-day contract to one unambiguous UTC spelling; Python's ISO parser
+    alone also accepts shortened and timezone-less forms that br refuses.
+    This check runs before the dry-run return as well as before a real write.
+    """
+    from .deferrals import parse_stamp
+
+    return bool(
+        (_is_bare_date(value) or re.fullmatch(
+            r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", value
+        )) and parse_stamp(value) is not None
+    )
+
 class DeferUnconfirmed(Exception):
     """A defer write or read failed; persisted state must be inspected."""
 
@@ -870,8 +887,10 @@ class Dispatcher:
         marker = parse_condition((item.notes or "") + "\n\n" + reason)
         if date:
             expected = parse_stamp(date)
-            if expected is None:
-                raise DeferRefused("--until/defer_until must be an ISO date or timestamp")
+            if expected is None or (until and not _valid_br_defer_until(until)):
+                raise DeferRefused(
+                    "--until must be YYYY-MM-DD or YYYY-MM-DDTHH:MM:SSZ "
+                    "(UTC; br rejects shortened or timezone-less timestamps)")
             condition = date
         elif marker and marker.testable() and (
                 marker.kind != "date" or parse_stamp(marker.arg) is not None):

@@ -457,3 +457,44 @@ def test_porcelain_classifier_reads_ref_status_lines_only():
         "REFUSED: scrub the identifier, or fetch first from the forge") is False
     assert _push_rejected_non_ff("! [rejected] fetch first") is False, (
         "a bare bang line without the tab-separated ref-status shape is prose")
+
+
+# --- requirement: push the branch the WORKTREE IS ON, never a constructed name ---
+#
+# aegis-8ijj33. `branch` is built as wt/<agent> and nothing checked the worktree was
+# on it. _push_invocation_branch covers a caller standing in ANOTHER worktree of the
+# repo and deliberately ignores a caller elsewhere — which is the common case for a
+# lead pushing on someone's behalf, and so the uncovered one.
+#
+# MEASURED 2026-09-20: `st repo push shantytown wu` from a crew clone pushed `wt/wu`
+# -> main while the worktree was on `wu/nyce0l-declared-roles` and wt/wu was STALE.
+# It published neither the tree's work nor anything the caller had seen, and only a
+# non-fast-forward rejection stopped it. Had wt/wu been an ancestor of main it would
+# have landed silently, and on a CD-wired repo that is a deploy.
+
+def test_a_worktree_on_ANOTHER_branch_is_REFUSED_and_no_remote_moves(two_remotes, capsys):
+    repo, wt, origin, forge = two_remotes
+    _commit(wt, "work")
+    before_origin, before_forge = _sha(origin, "main"), _sha(forge, "main")
+    # The agent moved the worktree to a topic branch; wt/ellie is now stale.
+    _git(wt, "checkout", "-q", "-b", "ellie/topic")
+    _commit(wt, "work on the topic branch")
+
+    rc = main(["push", str(repo), "ellie"])
+
+    assert rc == REFUSED, "pushed a branch the worktree is not on"
+    out = capsys.readouterr()
+    msg = out.out + out.err
+    assert "ellie/topic" in msg, f"refusal does not name what is checked out: {msg!r}"
+    assert "wt/ellie" in msg, f"refusal does not name what it would have pushed: {msg!r}"
+    assert _sha(origin, "main") == before_origin, "origin moved despite the refusal"
+    assert _sha(forge, "main") == before_forge, "forge moved despite the refusal"
+
+
+def test_the_canonical_case_is_UNTOUCHED_by_that_guard(two_remotes):
+    """The control. Without it the guard could pass by refusing everything."""
+    repo, wt, origin, forge = two_remotes
+    _commit(wt, "work")
+    assert main(["push", str(repo), "ellie"]) == OK
+    assert _sha(origin, "main") == _sha(wt, "HEAD")
+    assert _sha(forge, "main") == _sha(wt, "HEAD")

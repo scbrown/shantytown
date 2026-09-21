@@ -212,6 +212,19 @@ class PaneNotAgent(RuntimeError):
     """
 
 
+class PaneTaskList(PaneNotAgent):
+    """No existing task is selected, so message input would create a task."""
+
+
+def _refuse_task_list(pane: str, screen: str) -> None:
+    from .harness import task_list_evidence
+    if task_list_evidence(screen):
+        raise PaneTaskList(
+            f"pane {pane} is on the task list; running task count unknown. "
+            "NOT DELIVERED: typing here starts a new parallel task. "
+            "Open the intended task, or use st inbox -d.")
+
+
 # Foreground commands that mean "this pane is a shell, not a runtime".
 #
 # A POSITIVE LIST, never "anything that is not a known runtime": st does not own
@@ -440,6 +453,7 @@ class Tmux:
                     f"pane {pane} is running {fg!r}, not an agent runtime — its "
                     f"agent has exited. NOT DELIVERED: typing here would execute "
                     f"the message as a shell command.")
+            _refuse_task_list(pane, self.capture(pane))
         # -l sends the text literally; the separate Enter is the submit.
         # This is the entire dispatch mechanism. gt nudge's own help says so:
         # "Send directly via tmux send-keys."
@@ -930,6 +944,8 @@ class NullPanes:
             raise PaneNotAgent(
                 f"pane {pane} is running {self.foreground_cmd!r}, not an agent "
                 f"runtime — NOT DELIVERED.")
+        if not allow_shell:
+            _refuse_task_list(pane, self.screen)
         self.sent.append((pane, text))
         # A real pane shows what was just typed into it, so capture() must
         # reflect the send — otherwise this double models a pane that silently

@@ -25,7 +25,39 @@ deployment did not say", never as a value.
 from __future__ import annotations
 
 import os
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
+
+
+_cli_active = ContextVar("shantytown_cli_active", default=False)
+
+
+def cli_active() -> bool:
+    return _cli_active.get()
+
+
+@contextmanager
+def command_environment(root):
+    """Carry this command's [env] to all readers and child processes.
+
+    Restore the caller's environment even on refusal. This is a CLI boundary,
+    not a library-client constructor: two library clients keep their own roots.
+    """
+    from .config import load_or_default
+    cfg, _err = load_or_default(root)
+    previous = {key: os.environ.get(key) for key in cfg.env}
+    token = _cli_active.set(True)
+    try:
+        os.environ.update(cfg.env)
+        yield
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+        _cli_active.reset(token)
 
 
 # --- WHERE the store is -----------------------------------------------------

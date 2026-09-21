@@ -14,6 +14,7 @@ import subprocess
 import time
 
 from . import governor as gov
+from . import governor_balance as balance_mod
 from .governor import GovernorError, Reading
 
 VERSION = 1
@@ -313,6 +314,83 @@ class FleetGovernor:
             return ''
         return ('; '.join(self.errors) + '; local/available usage fallback; '
                 'remote spend UNKNOWN; new launches and dispatch held')
+
+    def lane_paces(self, now=None, local_agents=None):
+        """Each lane's seven_day pace, or the reason it has none (aegis-03cstj).
+
+        seven_day and not five_hour, and that is forced rather than chosen: the codex
+        limit publishes NO five-hour window at all -- `st crew --governor` prints
+        `?/?/?` for it and always will -- so seven_day is the only window the two lanes
+        have in common. A balance view on a window one lane cannot report would be
+        permanently unrated.
+
+        TWO KINDS OF STALE, and the second is the one the directive was issued over:
+
+          age        the probe itself is old. `Reading.lost` already decides this and
+                     it is reused rather than re-implemented.
+          no session THE PROBE TIMESTAMP CAN BE FRESH WHILE THE NUMBER BEHIND IT IS
+                     NOT. A session-derived reader takes its snapshot from rollout
+                     files written BY sessions of that harness, so with none live it
+                     re-reads the same old snapshot and stamps it now. On 2026-09-16
+                     codex read 59% used at 9% elapsed -- a 6.5x pace, the most
+                     alarming number on the host -- while zero codex agents had been
+                     live for hours and the limit had since been reset. Age alone
+                     could not see it, because the age was fine.
+
+        The second check is OPT-IN per lane (`reading_needs_live_session = true`),
+        never inferred from the lane name or the source string. The fleet view
+        transports readings between hosts and rewrites `source`, so keying on the
+        source would work locally and quietly stop working across the fleet -- which
+        is precisely where this matters.
+        """
+        now = time.time() if now is None else now
+        counts = self.counts(local_agents)
+        live_by_harness = {}
+        rows = [r for r in self.agents if local_agents is None or r['host'] != self.local]
+        if local_agents is not None:
+            rows += local_agents
+        for row in rows:
+            if row['live']:
+                h = row.get('harness')
+                live_by_harness[h] = live_by_harness.get(h, 0) + 1
+        out = []
+        for name, g in self.governors.items():
+            policy = g.policy
+            reading = g.reader.read_all().get(gov.SEVEN_DAY)
+            if reading is None:
+                out.append(balance_mod.LanePace(
+                    lane=name, unrated_why='no seven_day reading'))
+                continue
+            lost = reading.lost(now, policy.max_age_seconds)
+            pace_cfg = policy.pace_for(gov.SEVEN_DAY)
+            length = (pace_cfg.window_length() if pace_cfg
+                      else gov.WINDOW_LENGTH_S.get(gov.SEVEN_DAY))
+            ratio, why = gov.pace_ratio(reading.pct if reading.pct is not None else 0.0,
+                                        reading.reset_at, now, length)
+            stale = lost or ''
+            if not stale and getattr(policy, 'reading_needs_live_session', False):
+                # The harnesses that feed this lane. `lane()` is the same mapping the
+                # launch gate uses, so this cannot drift away from it.
+                feeders = [h for h in live_by_harness if self.lane(h) == name]
+                if not feeders:
+                    age = int(now - reading.at) if reading.at else None
+                    stale = ('no live session of this harness to refresh a '
+                             'session-derived reading'
+                             + (f' (stamped {age}s ago)' if age is not None else ''))
+            out.append(balance_mod.LanePace(lane=name, ratio=ratio,
+                                            unrated_why=why, stale_why=stale))
+        return out
+
+    def balance(self, now=None, local_agents=None, band=None):
+        """Which lane to feed next, or why we cannot say. NEVER holds anything."""
+        if band is None:
+            band = balance_mod.DEFAULT_BAND
+            for g in self.governors.values():
+                configured = getattr(g.policy, 'balance_band', None)
+                if configured:
+                    band = configured
+                    break
+        return balance_mod.balance(self.lane_paces(now, local_agents), band)
 
     def admits_launch(self, harness, local_agents=None):
         if self.errors:

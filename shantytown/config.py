@@ -51,6 +51,7 @@ loses work, so the default is the other one.
 """
 from __future__ import annotations
 
+import math
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -163,6 +164,8 @@ class Config:
     render that differently from a file that said the same thing by hand, because
     "you are on the defaults" and "your config chose this" need different fixes.
     """
+    # Cycle preflight fetch budget; local Git probes keep their shorter bound.
+    keep_current_fetch_timeout_seconds: float = 180
     mode: str = DEFAULT_MODE
     modes: dict[str, list[str]] = field(default_factory=lambda: dict(BUILTIN_MODES))
     hibernate: Hibernate = field(default_factory=Hibernate)
@@ -188,6 +191,7 @@ class Config:
     # cards `roles sync` is allowed to write. None = single-host deployment,
     # which is every deployment written before this existed.
     host_name: str | None = None
+    host_min_sync_version: int = 1
     # [host.peers.<name>] ssh = "user@addr", root = "/path/to/.shanty" — how the
     # ephemeral inbox reaches an agent whose card says it lives elsewhere.
     host_peers: dict[str, "HostPeer"] = field(default_factory=dict)
@@ -322,13 +326,13 @@ def load_or_default(root) -> tuple[Config, str | None]:
 _TOP_KEYS = {"startup", "modes", "hibernate", "fleet", "crew", "env", "tmux", "dream",
              "roles", "precedence", "governor", "session_budget", "hostmem", "quiet_time",
              "harness",
-             "model", "host"}
+             "model", "host", "keep_current"}
 _HARNESS_KEYS = {"default", "by_role", "required_by_role"}
 _MODEL_KEYS = {"default", "by_role", "fallback", "fallback_by_role"}
 _STARTUP_KEYS = {"mode"}
 _HIB_KEYS = {"enabled", "max_quiet_minutes"}
 _TMUX_KEYS = {"socket"}
-_HOST_KEYS = {"name", "peers"}
+_HOST_KEYS = {"name", "peers", "min_sync_version"}
 _HOST_PEER_KEYS = {"ssh", "root"}
 _DREAM_KEYS = {"enabled", "interval_minutes", "min_headroom_pct", "domains"}
 
@@ -382,7 +386,14 @@ def _resolve(data: dict, path: Path) -> Config:
     (model_default, model_by_role,
      model_fallback, model_fallback_by_role) = _model(
         path, _table(path, data, "model"), declared=set(declared_roles))
+    keep_current = _table(path, data, "keep_current")
+    _refuse_unknown(path, "keep_current", keep_current, {"fetch_timeout_seconds"})
+    fetch_timeout = keep_current.get("fetch_timeout_seconds", 180)
+    if (isinstance(fetch_timeout, bool) or not isinstance(fetch_timeout, (int, float))
+            or not math.isfinite(fetch_timeout) or fetch_timeout <= 0):
+        raise ConfigError(f"{path}: keep_current.fetch_timeout_seconds must be a finite positive number")
     return Config(mode=mode, modes=modes,
+                  keep_current_fetch_timeout_seconds=fetch_timeout,
                   harness_default=harness_default,
                   harness_by_role=harness_by_role,
                   harness_required_by_role=harness_required_by_role,
@@ -397,6 +408,7 @@ def _resolve(data: dict, path: Path) -> Config:
                   env=_env(path, _table(path, data, "env")),
                   tmux_socket=_tmux_socket(path, _table(path, data, "tmux")),
                   host_name=_host_name(path, _table(path, data, "host")),
+                  host_min_sync_version=_host_sync_version(path, _table(path, data, "host")),
                   host_peers=_host_peers(path, _table(path, data, "host")),
                   roles=declared_roles,
                   precedence=_precedence(path, _table(path, data, "precedence")),
@@ -727,6 +739,13 @@ def _env(path: Path, tbl: dict) -> dict[str, str]:
                 f"{type(v).__name__}. Every value here is also settable as an "
                 f"environment variable, so it has to be one string.")
     return out
+
+
+def _host_sync_version(path: Path, tbl: dict) -> int:
+    value = tbl.get("min_sync_version", 1)
+    if type(value) is not int or value < 1:
+        raise ConfigError(f"{path}: [host] min_sync_version must be a positive integer")
+    return value
 
 
 def _host_name(path: Path, tbl: dict) -> str | None:

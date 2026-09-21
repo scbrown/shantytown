@@ -53,6 +53,7 @@ ABSENT = "NO-BOX"
 # out of this module (triage is runtime-blind by construction): the caller
 # passes the runtime's own verdict in, exactly as work_state takes `awaiting`.
 PICKER = "PICKER"
+TASK_LIST = "TASK-LIST"
 
 _FROM_TRIAGE = {
     triage.INPUT_EMPTY: EMPTY,
@@ -78,6 +79,10 @@ class Report:
 
 
 def _classify(screen: str) -> tuple[str, str, str]:
+    from .harness import task_list_evidence
+    evidence = task_list_evidence(screen)
+    if evidence:
+        return TASK_LIST, evidence, ""
     state = triage.input_state(screen)
     raw = triage.input_evidence(screen)
     plain = triage.strip_attrs(raw).strip()
@@ -96,6 +101,11 @@ def show(panes, pane: str, awaiting: bool = False) -> Report:
     screen = panes.capture(pane, attrs=True)
     verdict, raw, text = _classify(screen)
     detail = ""
+    if verdict == TASK_LIST:
+        return Report(TASK_LIST, raw, text, detail=(
+            "REFUSED: pane is on the task list; running task count unknown. "
+            "Open the intended task, or use st inbox -d. Typing here starts "
+            "a new parallel task."))
     if awaiting:
         return Report(PICKER, raw, text, detail=(
             "a BLOCKING option-picker is up — this pane needs an ANSWER, not a "
@@ -160,6 +170,11 @@ def clear(panes, pane: str, awaiting: bool = False) -> Report:
     screen = panes.capture(pane, attrs=True)
     verdict, raw, text = _classify(screen)
 
+    if verdict == TASK_LIST:
+        return Report(TASK_LIST, raw, text, detail=(
+            "REFUSED: pane is on the task list; running task count unknown. "
+            "Open the intended task, or use st inbox -d. Typing here starts "
+            "a new parallel task."))
     if awaiting:
         return Report(PICKER, raw, text, detail=(
             "REFUSED: a BLOCKING option-picker is up. Clearing would send C-u "
@@ -214,7 +229,10 @@ def dismiss(panes, pane: str) -> Report:
     """
     screen = panes.capture(pane, attrs=True)
     before = _prompt_line(screen)
-    _, raw, text = _classify(screen)
+    verdict, raw, text = _classify(screen)
+    if verdict == TASK_LIST:
+        return Report(TASK_LIST, raw, text, detail=(
+            "REFUSED: pane is on the task list; open the intended task first."))
     panes.control(pane, "Escape")
     screen, changed = _settle(panes, pane, before)
     verdict, raw, text = _classify(screen)

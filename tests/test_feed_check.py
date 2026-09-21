@@ -851,3 +851,16 @@ def test_an_UNASSIGNED_message_is_NOT_dispatchable():
     ready = [{"id": "aegis-1", "title": "inbox: [from wu] some pointer"},
              {"id": "aegis-2", "title": "mail: a legacy-prefixed one"}]
     assert feed_check.dispatchable({"weaver"}, ready) == []
+
+
+def test_after_turn_hold_gates_live_idle_worker_until_explicit_relaunch(tmp_path):
+    from shantytown import agent_hold
+    settings = _send_settings(tmp_path)
+    reg = _Reg([Agent(name="weaver", role="worker", pane="shanty-weaver")])
+    panes = _Panes({"shanty-weaver": IDLE},
+                   {"shanty-weaver": f"claude --settings {settings}"})
+    assert feed_check.free_feedable_workers(reg, panes, _Runtime(), tmp_path) == ["weaver"]
+    agent_hold.hold(tmp_path, "weaver", "lead", "budget")
+    assert feed_check.free_feedable_workers(reg, panes, _Runtime(), tmp_path) == []
+    agent_hold.clear(tmp_path, "weaver")
+    assert feed_check.free_feedable_workers(reg, panes, _Runtime(), tmp_path) == ["weaver"]

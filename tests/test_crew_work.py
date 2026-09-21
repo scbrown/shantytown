@@ -484,3 +484,13 @@ def test_anchor_exposes_startup_context_gap_but_short_mode_stays_machine_readabl
     a.short = True
     assert cli._cmd_anchor(a) == cli.OK
     assert capsys.readouterr().out == ""
+
+
+def test_crew_displays_after_turn_hold_actor_and_time(tmp_path, monkeypatch, capsys):
+    from shantytown import agent_hold
+    root = _roster(tmp_path, {"ellie": "p-ellie"})
+    monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: _Panes({"p-ellie": IDLE_SCREEN}))
+    agent_hold.hold(root, "ellie", "lead", "capacity")
+    assert cli._cmd_crew(_Args(root)) == cli.OK
+    out = capsys.readouterr().out
+    assert "held (by lead, since " in out

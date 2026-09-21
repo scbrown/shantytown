@@ -42,6 +42,8 @@ import time
 from pathlib import Path
 from typing import NamedTuple
 
+from . import governor_balance as balance_mod
+from . import harness as harness_mod
 from . import triage as triage_mod
 from .attribution import ST_TEND, attribute
 from .tmux import PaneNotAgent
@@ -662,7 +664,13 @@ class IdleFleetAlerter:
     def __init__(self, root, reg, panes, runtime, *, push=push_to_admin,
                  bd_ready=None, bd_in_progress=None, context_k=None,
                  handoff_k=None, log=None, audit=None, input_preflight=None,
-                 turn_receipts=None):
+                 turn_receipts=None, balance=None):
+        # WHICH LANE to feed first (aegis-03cstj). A CALLABLE, so the cost is paid
+        # only when there is something to feed, and OPTIONAL so every existing
+        # caller — including every test that constructs this class — keeps today's
+        # behaviour exactly. None means "no preference", which is also what a
+        # failed lookup returns.
+        self._balance = balance
         self._root = root          # aegis-mxgzh: the sweeps need it to resolve the br backend
         self.path = Path(root) / "notify" / "idle_fleet.json"
         # Kept for the launch-stamp ownership gate (aegis-2j2r): tend must
@@ -697,6 +705,37 @@ class IdleFleetAlerter:
         else:
             self._turn_receipts = turn_receipts
         self._input_preflight = input_preflight or self._pane_input_preflight
+
+    def _balance_line(self) -> str:
+        """The balance one-liner for the coordinator alert, or '' if unavailable."""
+        if self._balance is None:
+            return ''
+        try:
+            v = self._balance()
+        except Exception:                 # noqa: BLE001
+            return ''
+        return v.line() if v is not None else ''
+
+    def _lane_of(self, worker: str) -> str:
+        """The governor LANE this agent spends against, or '' if it cannot be told.
+
+        `''` is deliberately a lane no verdict ever prefers, so an agent whose card
+        or harness cannot be resolved simply sorts after the preferred ones rather
+        than being dropped or guessed at. `prefer_first` never filters, so an
+        unresolvable agent is still fed — just not first.
+
+        The claude -> 'base' mapping is FleetGovernor.lane's, restated here because
+        this class deliberately does not hold a FleetGovernor (building one does
+        remote collection, and this runs on the tend timer). If a third lane ever
+        exists, `balance` already refuses to rate it, so this cannot silently start
+        preferring the wrong one.
+        """
+        try:
+            card = self._reg.get(worker)
+            harness = harness_mod.name_for(card, root=self._shanty_root)
+        except Exception:                 # noqa: BLE001
+            return ''
+        return 'base' if harness == 'claude' else (harness or '')
 
     def _pane_input_preflight(self, worker: str):
         """Return the evidence-bearing input verdict immediately before a feed."""
@@ -873,6 +912,29 @@ class IdleFleetAlerter:
         hauling_newly = [w for w in newly if w in queues]
         unhauled_free = [w for w in free if w not in queues]
         newly = [w for w in newly if w not in queues]
+
+        # PREFER THE LANE WITH BUDGET (aegis-03cstj). A REORDER, never a filter:
+        # every agent that would have been fed is still fed, and admission is still
+        # decided entirely by the per-lane governor. So the worst a wrong preference
+        # can do is change the ORDER tend works through an idle set, which is why
+        # this is safe to run on a 5-minute timer.
+        #
+        # BALANCED, REFRESH and UNRATED all leave the order untouched — in
+        # particular a STALE probe cannot reorder anything, which is the failure the
+        # directive was issued over.
+        verdict = None
+        if self._balance is not None and hauling_newly:
+            try:
+                verdict = self._balance()
+            except Exception:             # noqa: BLE001 — fail-open like `free`
+                verdict = None
+        if verdict is not None and verdict.actionable:
+            before = list(hauling_newly)
+            hauling_newly = balance_mod.prefer_first(
+                hauling_newly, self._lane_of, verdict)
+            if hauling_newly != before:
+                self._log(f"haul: {verdict.line()} — feeding "
+                          f"{hauling_newly[0]} first (was {before[0]})")
 
         # TEND IS THE SECOND ADVANCE TRIGGER (the already-idle gap): the stop
         # hook advances a worker AT a stop, but an ALREADY-IDLE worker never
@@ -1080,7 +1142,8 @@ class IdleFleetAlerter:
             return nudged
 
         admin = self._push(self._reg, self._panes,
-                           _idle_fleet_message(unhauled_free, newly, ready))
+                           _idle_fleet_message(unhauled_free, newly, ready,
+                                               self._balance_line()))
         if admin is None:
             self._log("idle-fleet: free workers + ready work, but no reachable "
                       "coordinator pane — NOT alerted, will retry")
@@ -1095,14 +1158,21 @@ class IdleFleetAlerter:
 
 
 
-def _idle_fleet_message(free: list[str], newly: list[str], ready) -> str:
+def _idle_fleet_message(free: list[str], newly: list[str], ready,
+                        balance_line: str = "") -> str:
     top = "; ".join(f"{bid} {title}"[:60] for bid, title in ready[:3])
     fresh = f" (newly idle: {', '.join(newly)})" if newly != free else ""
+    # The lane hint rides the alert that already interrupts the coordinator
+    # (aegis-03cstj, item 4). Carried even when it says REFRESH or UNRATED: this
+    # alert exists to prompt a dispatch, and "which lane" is exactly the decision
+    # being prompted -- so "we cannot tell you which lane" is information the
+    # coordinator needs at that moment, not noise to suppress.
+    lane = f" {balance_line}." if balance_line else ""
     return (
         f"⚠ st fleet tend — RULE ZERO: {len(free)} feedable worker(s) IDLE "
         f"({', '.join(free)}){fresh} with {len(ready)} dispatchable bead(s) ready. "
         f"DISPATCH — a free worker while work is ready is the coordinator's stall. "
-        f"`st go <bead> <worker>`. Top ready: {top}. "
+        f"`st go <bead> <worker>`. Top ready: {top}.{lane} "
         f"(auto-alert from st fleet tend; you were not asked to sweep.)")
 
 

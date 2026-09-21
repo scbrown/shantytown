@@ -42,6 +42,10 @@ dropped key is how an operator comes to believe a policy is in force when it is 
 **`<root>/shantytown.toml` `[env]` and the environment — where the plumbing lives.** Flat values,
 read in that order, every one of them also settable as an env var:
 
+Every CLI command loads `[env]` after resolving its root. These values also reach
+child processes and readers that use the process environment directly. The CLI
+restores the caller's environment on return when invoked as a Python function.
+
 | variable | what it points at | default |
 |---|---|---|
 | `SHANTY_ROOT` | **which store `st` reads and writes** — the single most consequential setting. Precedence: `--root` > `$SHANTY_ROOT` > a `.shanty` found walking UP from the cwd > this box's pointer (`~/.config/shantytown/root`, written by `st fleet init`) > `cwd/.shanty`. The CLI and the Stop hook resolve it identically. The walk-up cannot help from a directory that is a SIBLING of the store rather than under it — an agent workspace, typically — which is what the pointer is for; with neither, `st` says so before the command runs rather than reporting "no such agent: &lt;your own name&gt;". | discovered; else `./.shanty` |
@@ -84,7 +88,7 @@ What `st` puts INTO an agent's session at launch — read by the agent, not by `
 | `ST_ROLE_DOMAIN` | which domain a domain-scoped role owns — a per-member parameter, so `keeper` stays reusable and the member supplies what it keeps. Omitted when absent, never emitted empty. |
 | `ST_REPORTS_TO` | its lead, for an agent that wants it without re-reading its card. Omitted when absent. |
 | `QUIPU_SERVER` | quipu, for `--registry quipu`, `st fleet roles sync`, or `st ops subscribe` | `http://localhost:3030` |
-| `SHANTY_ONTO_NS` | the ontology IRI base your graph is keyed under | `http://shantytown.example/ontology/` |
+| `SHANTY_ONTO_NS` | the ontology IRI base your graph is keyed under | required for CLI graph access |
 | `SHANTY_TOOLING_MANIFEST` | Absolute Quipu entity IRI whose single `rdf:value` is the canonical MCP, skills, and tooling-instructions JSON. Provision and doctor read it fresh; unavailable or ambiguous data refuses rather than falling back. See [harness tooling](harnesses.md#canonical-tooling-from-quipu). | unset (legacy local kit) |
 | `SHANTY_ONTO_CREW_CLASS` | the class local-name your graph uses for a crew member, resolved under `SHANTY_ONTO_NS`. Point st at your own vocabulary instead of adopting ours. | `CrewMember` |
 | `SHANTY_ONTO_REPORTS_PRED` | the predicate local-name for the supervisor edge. | `reports_to` |
@@ -106,3 +110,6 @@ What `st` puts INTO an agent's session at launch — read by the agent, not by `
 ⚠️ **`SHANTY_ONTO_NS` is data identity, not cosmetics.** Every triple in a graph is keyed under it.
 Pick one per graph, set it before the first write, and never change it — repointing it does not
 error, it just stops new facts from joining the old ones.
+CLI graph clients refuse before sending a request when the namespace is missing
+or is the documentation example. Local commands still work without a namespace.
+Library clients outside a CLI invocation retain the warned example fallback.

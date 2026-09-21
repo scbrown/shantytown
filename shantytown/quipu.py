@@ -308,6 +308,10 @@ def resolve_server(server: str | None = None, root=None) -> str:
     return server or deployment_default(root, "QUIPU_SERVER") or DEFAULT_SERVER
 
 
+class NamespaceUnconfigured(ValueError):
+    """The CLI must never query or write under an example identity."""
+
+
 def resolve_onto(onto: str | None = None, root=None) -> str:
     """The ontology namespace, in the same order and out of the same file as the
     address — so "where deployment config lives" keeps having ONE answer.
@@ -341,8 +345,13 @@ def resolve_onto(onto: str | None = None, root=None) -> str:
     a real deployment uses the hash form, and "helpfully" repairing a namespace is
     itself a way to stop joining the facts you were pointed at.
     """
-    from .deployment import deployment_default   # local: keeps this client's imports flat
+    from .deployment import cli_active, deployment_default
     resolved = onto or deployment_default(root, "SHANTY_ONTO_NS")
+    if cli_active() and (not resolved or resolved == DEFAULT_ONTO):
+        raise NamespaceUnconfigured(
+            "refused: configure SHANTY_ONTO_NS under [env] in shantytown.toml "
+            "with the graph's real namespace; the documentation-only namespace "
+            "is not a deployment identity. No graph request was sent.")
     if resolved:
         return resolved
     warnings.warn(

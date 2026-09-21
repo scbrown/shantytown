@@ -1662,6 +1662,9 @@ class ClaudeRuntime:
         "can I dispatch to this agent" would answer no for a free agent that had
         just run a failing test. Runtime-specific by construction: a second
         runtime knows its own ready markers, and triage knows none of them."""
+        from .harness import task_list_evidence
+        if task_list_evidence(screen):
+            return False  # a live new-task composer is not ready for task input
         if any(mark in screen for mark in self.READY_MARKERS):
             return True
         # Codex's positive signal is a structured status line rather than a

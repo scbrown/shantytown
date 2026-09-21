@@ -221,7 +221,8 @@ rotation, and capacity refusal without running supervision.
 The twenty-seventh is **defer**: the tracker already knew how to hide work, but bare
 deferral did not require the deferrer to state whether the blocker was a bead, human,
 access capability, external event, or no blocker at all. `st work defer` records that kind
-and requires a testable resume condition: `--until <ISO date>`, an existing
+and requires a testable resume condition: `--until YYYY-MM-DD` (day) or
+`--until YYYY-MM-DDTHH:MM:SSZ` (exact UTC time), an existing
 `defer_until`, or a `resume_when: closed:<id>` / `date:<ISO date>` marker. It
 writes and verifies the reason and condition before changing status, then verifies
 status, blocker kind, reason and condition together. An interrupted write returns
@@ -664,6 +665,11 @@ transitions use ordinary `roles set`. `--lead` names the new worker's supervisor
 
 ## `st fleet init` — the scaffold wizard
 
+Joining an existing fleet? Follow [the second-host guide](second-host.md), including
+`--host`, repeatable `--peer NAME=SSH,ROOT`, `--quipu-server`,
+`--ontology-namespace`, and `--canonical-source`. Host-scoped sync invocations
+should retain `--require-host-sync 1` so legacy binaries reject before projecting.
+
 A fresh clone could not reach a runnable state without hand-authoring JSON. Four artifacts had four
 different origins — the store directory was a `mkdir`, the crew cards came from a hierarchy file fed to
 `roles sync`, the settings files were a side effect of `roles set`, the config was hand-written — and
@@ -1036,6 +1042,13 @@ is not "missing", it's "installed and nobody knows what's there"), and detect **
 `--break-system-packages` — this host is PEP-668, which is why `st` itself ships via pipx.
 
 ## `st inbox` — a message, and somewhere for it to land
+
+A Codex pane on the task list/new-task composer refuses live delivery: submitting
+there creates a parallel task instead of messaging the running one. Open the
+intended task first, or use `st inbox -d`; the durable message remains unread in
+the inbox when the live nudge is refused. `st agent input` reports `TASK-LIST`
+and refuses clear/dismiss on that screen. It does not pass launch/cycle readiness.
+The running-task count is unknown from this footer alone.
 
 In a deployment with a declared host and graph authority, an absent local recipient
 card falls through to the graph for an **off-host** member. No shadow local card is
@@ -1510,6 +1523,11 @@ receipt publishes `review_due` on the twentieth observation. The report describe
 the supplied session population, not proof of the fleet's tail distribution.
 Completed-review ticks refresh native Camayoc status metrics without source or
 graph access, so an intentional pause does not masquerade as a dead producer.
+Completed sync ticks also refresh `st_bead_cost_sync_last_run_timestamp_seconds`
+and `st_bead_cost_paused_for_review` (1 during review, 0 otherwise) through the
+configured cost metrics publisher, including cooldown ticks. Review and cooldown
+preserve cached cost gauges and their last-success timestamp; without a cached
+sample, only heartbeat gauges are emitted. A failed push returns UNKNOWN.
 Review must precede any new population or cap change.
 
 ### Fleet view across hosts
@@ -1571,3 +1589,44 @@ and POSIX file locking on the SSH host. No additional daemon or package is neede
 This coordinates the configured `st` launch paths in a connected fleet. It is not
 a distributed consensus or fencing service: out-of-band launches or loss of the SSH lock connection during a launch can defeat
 serialization. Do not claim a hard quota boundary under those conditions.
+
+### Cycle fetch budget
+
+`st agent cycle` fetches and prunes only the remote selected by the workspace's
+main/master upstream configuration (or its sole remote). Other remotes are not
+contacted. Its loss check counts commits not found on that refreshed remote;
+commits saved only on a different remote may therefore require review before cycling.
+This prevents cached refs from a skipped remote from hiding deleted branches.
+
+Set the per-tree fetch deadline in `<root>/shantytown.toml`:
+
+```toml
+[keep_current]
+fetch_timeout_seconds = 180
+```
+
+The default is 180 seconds; the value must be finite and positive. Local Git
+probes retain their 60-second bound. A timeout kills the Git process group and
+returns a one-line refusal without stopping the pane or changing the card or
+pending cycle request. Retry after connectivity recovers or adjust the budget.
+A fetch that exits with a transport error retains the existing unverified-currency
+notice and loss-risk policy. Other keep-current pull paths retain their own bounds.
+
+### Stop after the current turn
+
+`st agent stop <agent> --after-turn --reason 'budget hold'` persists a hold
+immediately without interrupting the live turn. Haul continuation, idle feeding,
+explicit dispatch and tend respawn refuse held agents. `st crew` reports who
+held the agent and when. The next Stop event is persisted before a detached
+invocation of the existing guarded stop removes the pane and launch stamp.
+Its output is retained under `agent-holds/<agent>.stop.log` in the deployment
+root; a failed stop leaves feeding held. A successful `st agent new <agent>`
+clears the hold. Dry-run and ownership guards still apply.
+
+Cost synchronization publishes a scheduler heartbeat before selecting an active
+source. An UNKNOWN source-selection tick updates the attempt timestamp and
+records `unknown_reason=source_selection`; it does not look like a stopped
+schedule. The configured Camayoc publisher must support `--scheduler-only`.
+Heartbeats preserve pending writes and cooldowns and never count as cost samples.
+A live pane alone is insufficient source evidence: session discovery also
+requires a stats event within the last hour and matching transcript metadata.

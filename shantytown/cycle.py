@@ -137,13 +137,16 @@ class TreeRisk:
     dirty: bool = False
     unpushed: int = 0
     note: str = ""
+    publication_remote: str = ""
 
     def render(self) -> str:
         bits = []
         if self.dirty:
             bits.append("uncommitted changes")
         if self.unpushed:
-            bits.append(f"{self.unpushed} commit(s) on no remote ref")
+            scope = (f"not verified on remote {self.publication_remote}"
+                     if self.publication_remote else "on no remote ref")
+            bits.append(f"{self.unpushed} commit(s) {scope}")
         detail = " and ".join(bits) or "unreadable"
         return f"{self.path}: {detail}{(' — ' + self.note) if self.note else ''}"
 
@@ -173,10 +176,13 @@ class TreeStranded:
     path: str
     unpushed: int = 0
     detail: str = ""
+    publication_remote: str = ""
 
     def render(self) -> list:
+        scope = (f"not verified on remote {self.publication_remote}"
+                 if self.publication_remote else "on no remote ref")
         return [
-            f"{self.path}: {self.unpushed} commit(s) on no remote ref, and the "
+            f"{self.path}: {self.unpushed} commit(s) {scope}, and the "
             f"push remote is UNREACHABLE — not blocking this cycle, because a "
             f"cycle relaunches this same clone and does not touch commits",
             f"    PUSH THESE when the remote returns: cd {self.path} && st repo push",
@@ -340,6 +346,7 @@ def assess(agent: str, trees, checkpoint: str, staleness,
             notices.append(TreeUntracked(
                 str(tree), files=list(getattr(s, "untracked", ()) or ()),
                 total=count))
+        publication_remote = getattr(s, "publication_remote", "")
         if s.dirty or s.unpushed:
             # UNPUSHED-ONLY, AND THE REMOTE MEASURED UNREACHABLE, IS NOT A
             # REFUSAL (aegis-tig80i). See TreeStranded for why this is the safer
@@ -352,9 +359,11 @@ def assess(agent: str, trees, checkpoint: str, staleness,
                     verdict = None
                 if verdict is False:
                     stranded.append(
-                        TreeStranded(str(tree), unpushed=s.unpushed))
+                        TreeStranded(str(tree), unpushed=s.unpushed,
+                                     publication_remote=publication_remote))
                     continue
-            risks.append(TreeRisk(str(tree), dirty=s.dirty, unpushed=s.unpushed))
+            risks.append(TreeRisk(str(tree), dirty=s.dirty, unpushed=s.unpushed,
+                                  publication_remote=publication_remote))
 
     if risks and not allow_loss:
         return Verdict(

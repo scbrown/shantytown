@@ -1056,7 +1056,10 @@ def main(argv: list[str] | None = None) -> int:
     if me is None:
         return 1
     if mode == "send":
-        return _send(reg, events, panes, me, root)
+        result = _send(reg, events, panes, me, root)
+        from . import agent_hold
+        agent_hold.finish_turn(root, me)
+        return result
     if mode == "haul":
         return _haul(reg, panes, me, root)
     # shows_ready_ui is the RUNTIME's marker check (triage stays runtime-blind).

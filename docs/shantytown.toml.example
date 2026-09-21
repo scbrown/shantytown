@@ -195,6 +195,8 @@ max_load_per_core = 4.0
 # half looks configured and cannot be reached, which is worse than no peer.
 # ---------------------------------------------------------------------------
 [host]
+# Host-sync protocol floor; also pass --require-host-sync 1 to reject legacy CLIs.
+min_sync_version = 1
 # name = "rig-a"
 
 # [host.peers.laptop]

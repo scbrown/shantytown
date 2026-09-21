@@ -84,3 +84,15 @@ def test_confirmed_defer_clips_focus_and_redeclaration_reopens(tmp_path):
     conn.commit(); conn.close()
     focus = cost.bindings(tmp_path, 'project', {})
     assert focus[-1]['bead'] == 'p-c' and focus[-1]['start'] == 41
+
+
+def test_active_projection_replaces_cached_pause_with_new_sample(tmp_path, monkeypatch):
+    path = tmp_path / 'cost.prom'
+    path.write_text('st_bead_cost_paused_for_review 1\n')
+    monkeypatch.setattr(cost.time, 'time', lambda: 123)
+    cost._publish_metrics({'metric_path': str(path)}, sample())
+    text = path.read_text()
+    assert 'st_bead_cost_paused_for_review 0\n' in text
+    assert 'st_bead_cost_last_success_timestamp_seconds 123\n' in text
+    assert 'st_bead_cost_sync_last_run_timestamp_seconds 123\n' in text
+    assert 'kind="cache_read_input"} 40\n' in text

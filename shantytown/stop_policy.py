@@ -485,6 +485,12 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as e:  # noqa: BLE001 — reported, never swallowed
         print(f"stop_policy: could not persist my own stop event ({e!r})",
               file=sys.stderr)
+    from . import agent_hold
+    if agent_hold.reason(root, me):
+        # Workers already reached this seam through stop_event send above.
+        if reg.get(me).role == "administrator":
+            agent_hold.finish_turn(root, me)
+        return 0
     return run(root, me)
 
 

@@ -8,6 +8,14 @@ from shantytown import cost, cost_sampling as sampling
 from shantytown.protocols import Agent
 
 
+@pytest.fixture(autouse=True)
+def fake_publisher(monkeypatch):
+    def run(command, **kwargs):
+        assert command[1] == 'publisher'
+        return SimpleNamespace(returncode=0, stderr='')
+    monkeypatch.setattr(cost.subprocess, 'run', run)
+
+
 def write(path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value) + '\n')
@@ -71,7 +79,8 @@ def args(root, sync=True):
 
 
 def setup(root):
-    write(root / 'cost.json', {'sample_active_sources': True, 'publish_script': 'publisher', 'sources': ['pilot']})
+    write(root / 'cost.json', {'sample_active_sources': True, 'publish_script': 'publisher', 'sources': ['pilot'],
+                               'metric_path': str(root / 'cost.prom')})
 
 
 def test_display_never_selects_or_advances_population(tmp_path, monkeypatch):
@@ -114,7 +123,7 @@ def test_twentieth_shape_pauses_before_source_read_and_reports_distribution(tmp_
         return SimpleNamespace(returncode=0)
     monkeypatch.setattr(cost.subprocess, 'run', status_only)
     assert cost.run(args(tmp_path)) == 0
-    assert len(calls) == 1 and '--review-only' in calls[0]
+    assert len(calls) == 2 and '--scheduler-only' in calls[0] and '--review-only' in calls[1]
     report = json.loads(capsys.readouterr().out)
     assert report['status'] == 'REVIEW_DUE'
     assert report['dimensions']['records'] == {'min': 1, 'median': 10.5, 'max': 20}
@@ -145,7 +154,76 @@ def test_review_cannot_hide_pending_write_or_failed_health_publication(tmp_path,
     calls = []
     def failed(command, **kwargs):
         calls.append(command)
-        return SimpleNamespace(returncode=2, stderr='status unavailable')
+        return SimpleNamespace(returncode=2 if '--review-only' in command else 0,
+                               stderr='status unavailable')
     monkeypatch.setattr(cost.subprocess, 'run', failed)
     assert cost.run(args(tmp_path)) == 2
-    assert len(calls) == (0 if pending else 1)
+    assert len(calls) == (2 if pending else 3)
+    if pending:
+        assert all('--review-only' not in call for call in calls)
+    else:
+        assert '--review-only' in calls[1]
+
+
+def test_unknown_source_still_records_tick_and_failure(tmp_path, monkeypatch):
+    setup(tmp_path)
+    phases = []
+    def status(command, **kwargs):
+        phases.append(command[command.index('--scheduler-only') + 1])
+        return SimpleNamespace(returncode=0)
+    monkeypatch.setattr(cost.subprocess, 'run', status)
+    def no_source(root):
+        assert phases == ['tick']
+        raise ValueError('no metadata-verified active transcript source')
+    monkeypatch.setattr(sampling, 'select', no_source)
+    assert cost.run(args(tmp_path)) == 2
+    assert phases == ['tick', 'source_selection']
+    assert not (tmp_path / 'cost-active-rotation.json').exists()
+
+
+@pytest.mark.parametrize('cached', [False, True])
+def test_paused_ticks_push_heartbeat_without_fresh_costs(tmp_path, monkeypatch, cached):
+    setup(tmp_path)
+    config = json.loads((tmp_path / 'cost.json').read_text())
+    config.update(metrics_script='metrics-publisher', rig='project')
+    write(tmp_path / 'cost.json', config)
+    path = Path(config['metric_path'])
+    old = 'st_bead_tokens_total{bead="p-a"} 42\nst_bead_cost_last_success_timestamp_seconds 10\n'
+    if cached:
+        path.write_text(old)
+    monkeypatch.setattr(sampling, 'review', lambda _: {'status': 'REVIEW_DUE'})
+    def forbidden(*_):
+        raise AssertionError('review must not retrieve sources or advance rotation')
+    monkeypatch.setattr(cost, 'retrieve', forbidden)
+    monkeypatch.setattr(sampling, 'select', forbidden)
+    monkeypatch.setattr(sampling, 'attempted', forbidden)
+    pushed = []
+    def publish(command, **kwargs):
+        if command[1] == 'metrics-publisher':
+            pushed.append(Path(command[2]).read_text())
+        return SimpleNamespace(returncode=0)
+    monkeypatch.setattr(cost.subprocess, 'run', publish)
+    for stamp in (100, 200):
+        monkeypatch.setattr(cost.time, 'time', lambda: stamp)
+        assert cost.run(args(tmp_path)) == 0
+        assert f'st_bead_cost_sync_last_run_timestamp_seconds {stamp}\n' in pushed[-1]
+        assert pushed[-1].count('st_bead_cost_paused_for_review 1\n') == 1
+        assert pushed[-1].startswith(old) if cached else 'last_success' not in pushed[-1]
+    assert len(pushed) == 2
+    # Exiting review into cooldown must clear pause without pretending to sample.
+    monkeypatch.setattr(sampling, 'review', lambda _: None)
+    write(sampling.state_path(tmp_path).with_suffix('.receipt.json'), {'next_request_after': 300})
+    assert cost.run(args(tmp_path)) == 0
+    assert 'st_bead_cost_paused_for_review 0\n' in pushed[-1]
+    assert 'st_bead_cost_paused_for_review 1\n' not in pushed[-1]
+
+
+def test_review_metric_push_failure_is_unknown(tmp_path, monkeypatch):
+    setup(tmp_path)
+    config = json.loads((tmp_path / 'cost.json').read_text())
+    config.update(metrics_script='metrics-publisher', rig='project')
+    write(tmp_path / 'cost.json', config)
+    monkeypatch.setattr(sampling, 'review', lambda _: {'status': 'REVIEW_DUE'})
+    monkeypatch.setattr(cost.subprocess, 'run', lambda command, **_: SimpleNamespace(
+        returncode=2 if command[1] == 'metrics-publisher' else 0))
+    assert cost.run(args(tmp_path)) == 2
