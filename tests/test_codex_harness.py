@@ -31,6 +31,8 @@ import subprocess
 import tomllib
 from pathlib import Path
 
+import pathlib
+
 import pytest
 
 from shantytown import cli, codex, harness as harness_mod, triage
@@ -302,7 +304,7 @@ def test_codex_remote_control_repairs_path_shim_before_and_after_updater(tmp_pat
 
 def test_codex_role_config_disables_tui_startup_updates():
     """z50a0z: every generated role config carries the interim update brake."""
-    settings = codex.settings_for_role("worker", root="/tmp/r")
+    settings = codex.settings_for_role("worker", root="/store/r")
     assert settings["check_for_update_on_startup"] is False
     assert "check_for_update_on_startup = false" in codex.render(settings)
 
@@ -313,8 +315,8 @@ def test_the_launch_carries_the_same_identity_env_as_claude():
     harness is how a codex agent's bd events all get written as $USER (GitHub
     #24) or its role set stops reaching it (#37)."""
     card = Agent(name="ada", role="lead", domain="ops", reports_to="arnold")
-    launch = CODEX.launch(card, "/s/codex/lead/config.toml", root="/tmp/r")
-    for expected in ("SHANTY_ROOT=/tmp/r", "SHANTY_AGENT=ada", "BOBBIN_ROLE=lead",
+    launch = CODEX.launch(card, "/s/codex/lead/config.toml", root="/store/r")
+    for expected in ("SHANTY_ROOT=/store/r", "SHANTY_AGENT=ada", "BOBBIN_ROLE=lead",
                      "BEADS_ACTOR=ada", "ST_ROLES=lead", "ST_ROLE_DOMAIN=ops",
                      "ST_REPORTS_TO=arnold"):
         assert expected in launch, f"{expected} missing from {launch}"
@@ -452,7 +454,7 @@ def test_the_emitted_config_is_TOML_that_parses_back_to_what_we_meant():
     not write it), so it is proved by ROUND TRIP rather than by eye. Its first
     bug was a double-declared table that looked fine in the output and made the
     file unloadable."""
-    settings = codex.settings_for_role("lead", root="/tmp/r")
+    settings = codex.settings_for_role("lead", root="/store/r")
     text = codex.render(settings)
     assert tomllib.loads(text) == settings
 
@@ -464,11 +466,11 @@ def test_the_stop_routing_is_the_same_routing_claude_gets(role, expected):
     """The routing table is SHANTYTOWN's (runtime.role_stop_hooks), shared by
     both harnesses. A second copy is how a lead comes to send on one program and
     drain on the other."""
-    text = codex.render(codex.settings_for_role(role, root="/tmp/r"))
+    text = codex.render(codex.settings_for_role(role, root="/store/r"))
     assert codex.stop_directions(text) == expected
     from shantytown.runtime import claude_settings_for_role
     claude = CLAUDE.read_stop_directions(
-        json.dumps(claude_settings_for_role(role, root="/tmp/r")))
+        json.dumps(claude_settings_for_role(role, root="/store/r")))
     assert codex.stop_directions(text) == claude
 
 
@@ -492,7 +494,7 @@ def test_the_STILL_unmeasured_matchers_are_NOT_emitted(monkeypatch):
     on the strength of the Bash one having worked.
     """
     monkeypatch.setenv("SHANTY_BASH_GUARD", "/guard.sh")
-    settings = codex.settings_for_role("worker", root="/tmp/r")
+    settings = codex.settings_for_role("worker", root="/store/r")
     rendered = codex.render(settings)
     for unmeasured in codex.MATCHERS_NOT_EMITTED:
         matcher = unmeasured.split(":", 1)[1]
@@ -515,7 +517,7 @@ def test_a_codex_role_DOES_carry_the_deployment_bash_guard(monkeypatch):
     config still reads as carrying a guard.
     """
     monkeypatch.setenv("SHANTY_BASH_GUARD", "/guard.sh")
-    settings = codex.settings_for_role("worker", root="/tmp/r")
+    settings = codex.settings_for_role("worker", root="/store/r")
     groups = settings["hooks"]["PreToolUse"]
     assert [g["matcher"] for g in groups] == [runtime_mod.BASH_MATCHER]
     # The guard runs FIRST and is unwrapped, exactly as configured. yupana's
@@ -539,10 +541,10 @@ def test_the_bash_guard_matcher_is_the_SAME_ONE_claude_emits(monkeypatch):
     than against a literal, so the two cannot drift apart without this failing.
     """
     monkeypatch.setenv("SHANTY_BASH_GUARD", "/guard.sh")
-    claude_groups = runtime_mod.pre_tool_use_hooks(root="/tmp/r")
+    claude_groups = runtime_mod.pre_tool_use_hooks(root="/store/r")
     claude_bash = [g for g in claude_groups
                    if g.get("matcher") == runtime_mod.BASH_MATCHER]
-    codex_bash = codex.settings_for_role("worker", root="/tmp/r")["hooks"]["PreToolUse"]
+    codex_bash = codex.settings_for_role("worker", root="/store/r")["hooks"]["PreToolUse"]
     assert claude_bash == codex_bash
 
 
@@ -562,7 +564,7 @@ def test_NO_deployment_guard_still_means_NO_GUARD_COMMAND(monkeypatch):
     exits 0; nothing here can refuse a codex agent's shell command.
     """
     monkeypatch.delenv("SHANTY_BASH_GUARD", raising=False)
-    settings = codex.settings_for_role("worker", root="/tmp/r")
+    settings = codex.settings_for_role("worker", root="/store/r")
     assert set(settings["hooks"]) == {"SessionStart", "Stop", "PreToolUse"}
     cmds = [h["command"] for g in settings["hooks"]["PreToolUse"] for h in g["hooks"]]
     assert cmds == ["yupana hook pre-bash || exit 0"], cmds
@@ -610,7 +612,7 @@ def test_the_whole_rulebook_reaches_the_agent_not_the_first_32KiB():
     red — the emitted value is what protects us, which is the point of emitting
     it instead of relying on a default.
     """
-    settings = codex.settings_for_role("worker", root="/tmp/r")
+    settings = codex.settings_for_role("worker", root="/store/r")
     assert settings["project_doc_max_bytes"] == codex.PROJECT_DOC_MAX_BYTES
     # Headroom, not a snug fit: the rulebook grows, and a snug limit drops the
     # NEWEST rule first — the one added because something just went wrong.
@@ -633,7 +635,7 @@ def test_the_CLAUDE_md_fallback_is_NOT_emitted_because_it_cannot_fire():
     intact, useless the moment `bd init` regenerates a real AGENTS.md over it.
     Pinned so nobody adds it later as belt-and-braces and reads the fleet as
     covered twice when it is covered once."""
-    settings = codex.settings_for_role("worker", root="/tmp/r")
+    settings = codex.settings_for_role("worker", root="/store/r")
     for key in codex.FALLBACK_NOT_EMITTED:
         assert key not in settings, (
             f"{key} is consulted only when AGENTS.md is absent — see "
@@ -647,7 +649,7 @@ def test_an_operators_snug_doc_limit_does_NOT_survive_a_re_emission():
     rulebook is not a preference we honour."""
     existing = "project_doc_max_bytes = 32768\n"
     data = tomllib.loads(codex.render(
-        codex.settings_for_role("worker", root="/tmp/r"), existing))
+        codex.settings_for_role("worker", root="/store/r"), existing))
     assert data["project_doc_max_bytes"] == codex.PROJECT_DOC_MAX_BYTES
 
 
@@ -660,6 +662,26 @@ def test_the_settings_env_vars_are_DERIVED_from_the_registry():
     assert harness_mod.settings_env_vars() == (codex.HOME_VAR,)
     assert CLAUDE.settings_env_var is None      # a flag, nothing to recover
     assert CODEX.settings_env_var == codex.HOME_VAR
+
+
+#: /proc IS THE INSTRUMENT, so these two cannot run where it does not exist.
+#:
+#: They are not "Linux tests" by preference — they measure a REAL process's
+#: environment to prove that `CODEX_HOME=<dir> codex …` is a shell assignment the
+#: child's argv never carries, and /proc/<pid>/environ is the only place that
+#: fact is legible. The production path they cover (Tmux's launch-line
+#: reconstruction, codex_daemon's ownership check) reads /proc too, so on a BSD
+#: userland there is nothing to measure and nothing being measured.
+#:
+#: SKIPPED WITH A REASON rather than left red. A suite that is green in CI and
+#: red on every developer's desk teaches people to ignore a local red, and the
+#: next real failure goes with it — the same argument tend.py's codex_block
+#: injection was written out of. A skip says "not applicable here"; a failure
+#: says "something is broken", and only one of those is true.
+_NEEDS_PROC = pytest.mark.skipif(
+    not pathlib.Path("/proc/self/environ").exists(),
+    reason="reads /proc/<pid>/environ, which this platform does not have; the "
+           "codex launch-line reconstruction it covers reads /proc too")
 
 
 def _spawn_with_env(**extra):
@@ -688,6 +710,7 @@ def _spawn_with_env(**extra):
     raise AssertionError("child never exec'd — fixture failed, not the code")
 
 
+@_NEEDS_PROC
 def test_a_codex_agents_ENVIRON_is_folded_back_into_the_launch_line(tmp_path):
     """THE FALSE POSITIVE, at its source. `CODEX_HOME=<dir> codex …` is a shell
     assignment: the shell eats it and the child's argv never contains it. So
@@ -710,6 +733,7 @@ def test_a_codex_agents_ENVIRON_is_folded_back_into_the_launch_line(tmp_path):
         proc.wait()
 
 
+@_NEEDS_PROC
 def test_only_the_settings_vars_are_recovered_never_the_whole_environ(tmp_path):
     """A codex home sits beside its auth.json, and this string is printed in
     operator-facing findings. Recovering the whole environment to fix a display
@@ -958,7 +982,7 @@ def test_the_operator_keeps_everything_st_did_not_emit():
     emphatically not ours to rewrite."""
     existing = ('model = "gpt-5-codex"\n\n[shell_environment_policy]\n'
                 'inherit = "all"\n\n[hooks.state]\nmine = "kept"\n')
-    text = codex.render(codex.settings_for_role("worker", root="/tmp/r"), existing)
+    text = codex.render(codex.settings_for_role("worker", root="/store/r"), existing)
     data = tomllib.loads(text)
     assert data["model"] == "gpt-5-codex"
     assert data["shell_environment_policy"] == {"inherit": "all"}
@@ -970,8 +994,8 @@ def test_a_stale_stop_direction_does_NOT_survive_a_re_emission():
     """The other half of the merge rule, and the reason it is not a plain deep
     merge: st OWNS the events it emits. A lead demoted to worker must not keep
     draining."""
-    was_lead = codex.render(codex.settings_for_role("lead", root="/tmp/r"))
-    now_worker = codex.render(codex.settings_for_role("worker", root="/tmp/r"), was_lead)
+    was_lead = codex.render(codex.settings_for_role("lead", root="/store/r"))
+    now_worker = codex.render(codex.settings_for_role("worker", root="/store/r"), was_lead)
     assert codex.stop_directions(now_worker) == {"send"}
 
 
@@ -989,8 +1013,8 @@ def test_neither_harness_claims_the_others_file():
     settings_path_in_cmdline) safe: each reader is format-anchored and answers
     None rather than guessing, so first-match is a decision, not a coin toss."""
     from shantytown.runtime import claude_settings_for_role
-    claude_text = json.dumps(claude_settings_for_role("lead", root="/tmp/r"))
-    codex_text = codex.render(codex.settings_for_role("lead", root="/tmp/r"))
+    claude_text = json.dumps(claude_settings_for_role("lead", root="/store/r"))
+    codex_text = codex.render(codex.settings_for_role("lead", root="/store/r"))
     assert CODEX.read_stop_directions(claude_text) is None
     assert CLAUDE.read_stop_directions(codex_text) is None
     assert CLAUDE.settings_in_cmdline("CODEX_HOME=/s/c/w codex") is None

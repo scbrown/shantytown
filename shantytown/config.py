@@ -251,6 +251,15 @@ class Config:
     # reads as applied).
     model_default: str | None = None
     model_by_role: dict[str, str] = field(default_factory=dict)
+    # WHERE AN AGENT GOES WHEN ITS MODEL IS OUT OF BUDGET (Stiwi 2026-09-21:
+    # "we hit fable limits. we need to support this in st"). A usage limit is
+    # not an outage and not an expired login: the account is fine, the agent is
+    # fine, and ONE model is unavailable for a while. Nothing in st could say
+    # that, so a limited agent read `idle`, sat on the free list, and every
+    # dispatch into it failed with a banner st could not see — the aegis-arma
+    # shape exactly, one axis over.
+    model_fallback: str | None = None
+    model_fallback_by_role: dict[str, str] = field(default_factory=dict)
     path: Path | None = None
 
     def catalog(self):
@@ -319,7 +328,7 @@ _TOP_KEYS = {"startup", "modes", "hibernate", "fleet", "crew", "env", "tmux", "d
              "harness",
              "model", "host", "keep_current"}
 _HARNESS_KEYS = {"default", "by_role", "required_by_role"}
-_MODEL_KEYS = {"default", "by_role"}
+_MODEL_KEYS = {"default", "by_role", "fallback", "fallback_by_role"}
 _STARTUP_KEYS = {"mode"}
 _HIB_KEYS = {"enabled", "max_quiet_minutes"}
 _TMUX_KEYS = {"socket"}
@@ -374,7 +383,8 @@ def _resolve(data: dict, path: Path) -> Config:
     declared_roles = _roles(path, _table(path, data, "roles"))
     harness_default, harness_by_role, harness_required_by_role = _harness(
         path, _table(path, data, "harness"), declared=set(declared_roles))
-    model_default, model_by_role = _model(
+    (model_default, model_by_role,
+     model_fallback, model_fallback_by_role) = _model(
         path, _table(path, data, "model"), declared=set(declared_roles))
     keep_current = _table(path, data, "keep_current")
     _refuse_unknown(path, "keep_current", keep_current, {"fetch_timeout_seconds"})
@@ -389,6 +399,8 @@ def _resolve(data: dict, path: Path) -> Config:
                   harness_required_by_role=harness_required_by_role,
                   model_default=model_default,
                   model_by_role=model_by_role,
+                  model_fallback=model_fallback,
+                  model_fallback_by_role=model_fallback_by_role,
                   hibernate=_hibernate(path, _table(path, data, "hibernate")),
                   fleet=_fleet(path, _table(path, data, "fleet")),
                   crew=_crew(path, _table(path, data, "crew"),
@@ -504,8 +516,7 @@ def _harness(path: Path, tbl: dict,
     return default, _role_map("by_role"), _role_map("required_by_role")
 
 
-def _model(path: Path, tbl: dict,
-           declared: set[str] | None = None) -> tuple[str | None, dict[str, str]]:
+def _model(path: Path, tbl: dict, declared: set[str] | None = None) -> tuple:
     """[model] — which MODEL, for cards that do not say.
 
         [model]
@@ -562,7 +573,32 @@ def _model(path: Path, tbl: dict,
                 f"[roles.{role}] to use it here — a rule for a role nobody has "
                 f"applies to nobody and reads as applied.")
         by_role[role] = _slug(f"model.by_role] {role}", value)
-    return default, by_role
+
+    # THE FALLBACK HALF. Same shape, same precedence, same validation asymmetry —
+    # the role name is checked against this deployment's roles, the model slug is
+    # not checked against anything, for the reason spelled out above.
+    #
+    # It is a SEPARATE key rather than a list under `default` because the two
+    # answer different questions and are read at different moments: `default` is
+    # what a card runs, `fallback` is where it goes when that model says no. A
+    # list would make "which one am I on right now" a matter of position, and the
+    # thing reading it is a supervisor acting unattended on a limited agent.
+    fallback = tbl.get("fallback")
+    fallback = _slug("model] fallback", fallback) if fallback is not None else None
+    raw_fb = tbl.get("fallback_by_role", {})
+    if not isinstance(raw_fb, dict):
+        raise ConfigError(f"{path}: [model.fallback_by_role] must be a table, "
+                          f"got {type(raw_fb).__name__}")
+    fallback_by_role: dict[str, str] = {}
+    for role, value in raw_fb.items():
+        if role not in allowed:
+            raise ConfigError(
+                f"{path}: [model.fallback_by_role] {role!r} is not a role this "
+                f"deployment has; roles: {', '.join(sorted(allowed))}. Declare "
+                f"it as [roles.{role}] to use it here — a rule for a role "
+                f"nobody has applies to nobody and reads as applied.")
+        fallback_by_role[role] = _slug(f"model.fallback_by_role] {role}", value)
+    return default, by_role, fallback, fallback_by_role
 
 
 def _session_budget(path: Path, tbl: dict) -> SessionLimits:

@@ -89,6 +89,18 @@ UNTENDABLE = "no-pane"        # no pane on the card: nothing to supervise
 UNEQUIPPED = "unequipped"     # alive, but its workspace lacks the tool kit
 BACKOFF = "backoff"           # died again too soon — waiting before the next try
 CRASH_LOOP = "CRASH-LOOP"     # died repeatedly; RETIRED rather than thrashed
+LIMITED = "limited"           # alive, and its MODEL is out of usage budget.
+                              # A THIRD kind of "alive but nothing runs", and the
+                              # only one of the three a supervisor can clear by
+                              # itself: an expired login waits for a person, a
+                              # crash waits for a fix, but a usage limit is one
+                              # model being unavailable while the account, the
+                              # agent and the work are all fine. If the card (or
+                              # the deployment) names a fallback model, this pass
+                              # relaunches onto it; if nothing names one, it is
+                              # REPORTED and waits out the reset, because moving
+                              # an agent onto a model nobody chose is not a
+                              # recovery a supervisor gets to invent.
 AUTH_DEAD = "auth-dead"       # alive, login expired: every API call fails
                               # (aegis-arma). NOT auto-relaunched on a default
                               # pass — see the rule in _live — `st fleet tend --reauth`
@@ -109,7 +121,14 @@ CODEX_DAEMON_WEDGED = "codex-daemon-wedged"  # named launch-depth blocker
                               # (governor.Drainer), never this module reaping it.
 
 
-_FAULTS = frozenset({RESURRECTED, DEAF, REFUSED, UNEQUIPPED, AUTH_DEAD, CRASH_LOOP})
+# LIMITED is a FAULT ONLY WHEN IT COULD NOT BE CLEARED. A pass that fails an
+# agent over to its declared fallback has fixed the thing and reports the switch;
+# a pass with no fallback to use is reporting a live agent that cannot run, which
+# is what a fault means here. So the verdict is split at the point of action —
+# see _live — rather than by making the whole condition non-faulty, which would
+# hide the un-fixable half in the same silence auth-dead was rescued from.
+_FAULTS = frozenset({RESURRECTED, DEAF, REFUSED, UNEQUIPPED, AUTH_DEAD, CRASH_LOOP,
+                     LIMITED})
 
 # RESPAWN BACKOFF (GitHub #12). A crash-looping agent — bad card, broken
 # workspace_source, poisoned settings — turns the supervisor into a respawn
@@ -316,7 +335,8 @@ class Tender:
                  ensure=ensure_workspace, log=None, gaps=None, crashes=None,
                  retire=None, now=None, target=None, target_src=None,
                  governed=None,
-                 catalog=None, stops=None, codex_block=None):
+                 catalog=None, stops=None, codex_block=None,
+                 fallback_model=None, current_model=None):
         self._panes = panes
         self._runtime = runtime
         self._launches = launches
@@ -331,6 +351,21 @@ class Tender:
         # green in CI and red on every desk teaches people to ignore a local red
         # (aegis-9zhk2q).
         self._codex_block_fn = codex_block
+        # fallback_model(card) -> slug | None, and current_model(card) -> slug |
+        # None. INJECTED, like every other thing in here that reaches outside the
+        # object, and for the reason the codex_block comment above records at
+        # length: a dependency this class resolves for itself is one a fully
+        # constructed test cannot control, and the last one that did read the
+        # live host from inside a staticmethod and turned six hermetic tests red
+        # on every developer box.
+        #
+        # Default None = NO FALLBACK EXISTS, which makes report-only the
+        # behaviour any caller gets without opting in. That is the right default
+        # for an unattended supervisor: failing an agent over to another model is
+        # a decision the deployment makes in advance, never one this module
+        # discovers it is able to make.
+        self._fallback_model_fn = fallback_model
+        self._current_model_fn = current_model
         # spawn(card, session) -> None. The launcher. Injected because a test
         # that cannot spawn cannot test the only branch that matters.
         self._spawn = spawn
@@ -545,6 +580,42 @@ class Tender:
                            f"(not a fault — raise the target to bring it up)")
         return self._respawn(card, dry_run)
 
+    def _failover(self, card: Agent) -> Finding:
+        """A live agent whose model is out of budget. Switch it, or say so.
+
+        REPORT-ONLY WITHOUT A DECLARED FALLBACK, and that is the important half.
+        A supervisor that picked its own replacement model would move an
+        unattended agent onto a slug the deployment never chose — at the one
+        moment nobody is watching, and with no way for the operator to have said
+        no in advance. Declaring the fallback IS the saying-yes, so its absence
+        is a decision and not a gap.
+
+        The switch itself is left to the caller's respawn seam rather than
+        performed here: this module decides, and the thing that actually relaunches
+        is the same one every other respawn goes through. A supervisor that grew
+        its own private launcher would stop paying the pre-flight that makes a
+        respawn safe.
+        """
+        current = ((self._current_model_fn(card) if self._current_model_fn
+                    else None) or "its current model")
+        fallback = (self._fallback_model_fn(card) if self._fallback_model_fn
+                    else None)
+        if not fallback:
+            return Finding(card.name, "up", LIMITED,
+                           f"alive and OUT OF USAGE BUDGET on {current}: the "
+                           f"pane renders idle and every call fails until the "
+                           f"window resets. No fallback model is declared, so "
+                           f"this pass leaves it alone — set one on the card "
+                           f"(fallback_model) or in the deployment's [model] "
+                           f"fallback, and a pass will fail it over instead of "
+                           f"waiting out the reset")
+        return Finding(card.name, "up", LIMITED,
+                       f"alive and OUT OF USAGE BUDGET on {current} — failing "
+                       f"over to {fallback}. The account and the work are fine; "
+                       f"one model is unavailable, so the same agent comes back "
+                       f"on the declared fallback rather than waiting out the "
+                       f"reset")
+
     def _live(self, card: Agent, agents: list[Agent]) -> Finding:
         """An agent that EXISTS. The question is never "is the pane there" — it
         is "can this agent still report", and those are different facts."""
@@ -567,6 +638,14 @@ class Tender:
                            "FIRST (refreshing the shared credential), then "
                            "`st fleet tend --reauth` relaunches every auth-dead agent "
                            "in one command")
+        # OUT OF USAGE BUDGET, immediately after auth-dead: same observable
+        # shape (UI up, box empty, every call failing), different fault, and a
+        # recovery that does NOT need a human. Checked before the wiring and kit
+        # questions below for the reason auth-dead is — those are moot for a
+        # session that cannot run anything.
+        from .runtime import limit_reached
+        if limit_reached(self._runtime, plain):
+            return self._failover(card)
         wiring = live_wiring(card.pane, self._panes.cmdline)
         if wiring is None:
             return Finding(card.name, "up", DEAF,

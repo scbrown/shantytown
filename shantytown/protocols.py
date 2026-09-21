@@ -171,6 +171,30 @@ class Agent:
                                   # "here". The value is the deployment's own host
                                   # name ([host] name in shantytown.toml), never a
                                   # hostname(1) guess — see deployment.local_host.
+    fallback_model: str | None = None
+                                  # Where this card goes when its MODEL is out of
+                                  # budget. SEPARATE from `model` because the two
+                                  # answer different questions at different
+                                  # moments: `model` is what this agent runs,
+                                  # `fallback_model` is what it runs when that one
+                                  # says no. Folding them into one list would make
+                                  # "which am I on right now" a matter of position,
+                                  # and the thing reading it is an unattended
+                                  # supervisor acting on a limited agent.
+                                  # None = DO NOT SWITCH; wait out the reset. That
+                                  # is the honest default rather than a gap: st
+                                  # does not know which slugs a harness can reach,
+                                  # and a guessed fallback would move an agent onto
+                                  # a model the deployment never chose, quietly and
+                                  # with nobody watching.
+                                  # LAST FIELD ON PURPOSE. Agent is constructed
+                                  # positionally across the tests and the codex
+                                  # launch path; inserting a field mid-dataclass
+                                  # silently shifts every one of those call sites
+                                  # onto the wrong argument. Measured here: doing
+                                  # exactly that broke the byte-identical launch
+                                  # compose for three cards at once. New fields go
+                                  # at the end.
 
     def effective_roles(self) -> tuple[str, ...]:
         """The role set to ACT on: the declared stack, or the tree position alone.

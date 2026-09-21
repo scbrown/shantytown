@@ -183,6 +183,20 @@ def auth_expired(rt, screen: str) -> bool:
     return bool(ask(screen)) if callable(ask) else False
 
 
+def limit_reached(rt, screen: str) -> bool:
+    """Does `rt` say its MODEL IS OUT OF USAGE BUDGET on this screen?
+
+    The third sibling of asks_a_question and auth_expired, with the identical
+    tolerance and the identical safety argument: a runtime that reads no panes
+    cannot answer, and False-because-could-not-ask is safe ONLY because of where
+    it lands — the flag can only ever convert some other verdict INTO `limited`,
+    so failing to ask leaves the verdict exactly as it was. It can never
+    manufacture a limit, and it can never hide a busy or wedged agent behind one.
+    """
+    ask = getattr(rt, "limit_reached", None)
+    return bool(ask(screen)) if callable(ask) else False
+
+
 @runtime_checkable
 class Runtime(Protocol):
     """An agent runtime does three things (adapters.md). start() is this ruling."""
@@ -528,6 +542,29 @@ def _query_first_cmd() -> dict:
     directive that uses the agent's own $QUIPU_SERVER), fail-open in the module."""
     return {"type": "command",
             "command": f"{_hook_interpreter()} -m shantytown.query_first"}
+
+
+def _resume_brief_cmd(root=None) -> dict:
+    """The SessionStart RESUME BRIEF (Stiwi 2026-09-21). See resume_brief.py.
+
+    FIRST in the SessionStart group, ahead of the query-first directive and the
+    work-item briefing, and the order is the message: a session that was just
+    cycled must learn THAT before it is told how to research. Read top-down, a
+    brief that arrived after two paragraphs of standing advice reads as one more
+    piece of standing advice.
+
+    ROOTED, unlike _query_first_cmd, because this one READS STATE — and an
+    unrooted hook resolves `cwd/.shanty`, which for an agent launched in its own
+    workspace is a store that does not exist. That is aegis-nipg exactly: the
+    agent stays up, still works, and one mechanism silently addresses nothing.
+    $SHANTY_ROOT is also carried into the agent env as the belt, so a hook that
+    outlives a settings rewrite still lands in the right store.
+
+    Prints NOTHING at an ordinary session start, which is almost all of them."""
+    cmd = f"{_hook_interpreter()} -m shantytown.resume_brief"
+    if root:
+        cmd += f" --root {Path(root).resolve()}"
+    return {"type": "command", "command": cmd}
 
 
 def _yupana_brief_cmd() -> dict:
@@ -922,7 +959,7 @@ def role_stop_hooks(role: str, root=None) -> list[dict]:
     return stop
 
 
-def session_start_hooks() -> list[dict]:
+def session_start_hooks(root=None) -> list[dict]:
     """QUERY-FIRST at session start (aegis-rcyd): inject the "ask the knowledge
     graph before you act" directive into live context, the same way the
     bobbin-first hint works. Every role gets it — query-first is not role-scoped.
@@ -934,8 +971,17 @@ def session_start_hooks() -> list[dict]:
     knows about the item on its hook.
 
     MATCHER-FREE, which is what makes it emittable for a harness whose tool
-    vocabulary we have not measured (codex.MATCHERS_NOT_EMITTED)."""
-    return [{"hooks": [_query_first_cmd(), _yupana_brief_cmd()]}]
+    vocabulary we have not measured (codex.MATCHERS_NOT_EMITTED).
+
+    Plus the RESUME BRIEF (_resume_brief_cmd), which is what makes a cycle
+    survivable in place: the clear command fires SessionStart on its way out, so
+    the same event that empties the context is the one that refills the part
+    worth keeping. `root` is optional so the codex builder and every existing
+    caller keep working unchanged; passing it is what lets the brief find a
+    store that is not under the agent's cwd.
+    """
+    return [{"hooks": [_resume_brief_cmd(root), _query_first_cmd(),
+                       _yupana_brief_cmd()]}]
 
 
 # THE MATCHER, once. Both harnesses emit it and both readers look for it, so a
@@ -1098,7 +1144,7 @@ def claude_settings_for_role(role: str, root=None) -> dict:
     return {
         "hooks": {
             # QUERY-FIRST at session start (aegis-rcyd). See session_start_hooks.
-            "SessionStart": session_start_hooks(),
+            "SessionStart": session_start_hooks(root),
             "Stop": [{"hooks": role_stop_hooks(role, root=root)}],
             # yupana policy guard on every edit-shaped tool call. See _YUPANA_GUARD.
             "PreToolUse": pre_tool_use_hooks(root),
@@ -1491,6 +1537,27 @@ class ClaudeRuntime:
     # this), and a substring match on chrome an agent can quote is the trap every
     # marker in this file documents.
     AUTH_MARKERS = ("● Login expired",)
+    # USAGE LIMIT REACHED — the model is out of budget for a while.
+    #
+    # MEASURED, 2026-09-21, read out of the shipped binary (claude 2.1.278,
+    # `strings` over the install's versions/ directory — the same technique, and
+    # the same confidence caveat, as the compaction arithmetic in precompact).
+    # The banners are "Usage limit reached" and, for the credit form, "usage
+    # credit limit reached".
+    #
+    # THIS IS A THIRD KIND OF FAULT and that is why it gets its own markers
+    # rather than joining AUTH_MARKERS. An expired login means nothing runs until
+    # a HUMAN logs in. A usage limit means the account is healthy, the agent is
+    # healthy, the work is still there, and exactly one MODEL is unavailable for
+    # a bounded while. Folding the two together would prescribe the wrong
+    # recovery for whichever one lost — and the recoveries are opposites: one
+    # waits for a person, the other is the only fault in this system a supervisor
+    # can clear on its own.
+    #
+    # Lowercased before matching (see limit_reached), because the same sentence
+    # ships in both cases and a case-sensitive tuple would cover one form of the
+    # banner and silently miss the other.
+    LIMIT_MARKERS = ("usage limit reached", "usage credit limit reached")
     # Matched in the tail only — see awaiting_answer(). 8 lines, same window every
     # text predicate in triage.py uses; the answered shape sits ~5 lines up.
     _QUESTION_TAIL_LINES = 8
@@ -1770,6 +1837,29 @@ class ClaudeRuntime:
         return any(ln.strip().startswith(m)
                    for ln in lines[-self._QUESTION_TAIL_LINES:]
                    for m in self.AUTH_MARKERS)
+
+    def limit_reached(self, screen: str) -> bool:
+        """Is this pane's MODEL out of usage budget? (Stiwi 2026-09-21)
+
+        TAIL-ONLY, exactly like auth_dead above and for the identical measured
+        reason: an agent DISCUSSING a usage limit — reading this source, grepping
+        a log, quoting the banner to a colleague — is not an agent that has hit
+        one, and a whole-screen substring match cannot tell those apart. The
+        banner is the runtime's own current state, so it is in the tail or it is
+        not the state.
+
+        SUBSTRING within the tail rather than startswith, which is where this
+        differs from auth_dead. The limit sentence is composed INTO a longer line
+        (the binary carries it with a trailing reset clause — "resets in …"), so
+        anchoring at column 0 would match the bare form and miss every real one.
+        The tail window is what keeps that safe.
+        """
+        lines = [ln.lower() for ln in screen.splitlines()]
+        while lines and not lines[-1].strip():
+            lines.pop()
+        return any(m in ln
+                   for ln in lines[-self._QUESTION_TAIL_LINES:]
+                   for m in self.LIMIT_MARKERS)
 
 
 class StoplessRuntime:

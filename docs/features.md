@@ -56,7 +56,9 @@
   it kills.
 - 🧠 **Context is measured, and handoff comes before compaction.** Occupancy is read from the harness
   with UNKNOWN as a real third state, hints are advisory, and the PreCompact hook checkpoints so the
-  agent returns with its hooks and its bypass intact (`st agent cycle --self`, never `/clear`).
+  agent returns with its hooks and its bypass intact (`st agent cycle --self`, never a bare
+  `/clear`). The cycle clears the live session in place where it safely can, so an
+  attached operator is never detached by one.
 - 🐌 **Stalls self-heal before they escalate.** An idle worker holding an item with no change for
   `SHANTY_STALL_MIN` minutes is nudged to close or release it; the coordinator hears about it only
   if that goes unanswered.

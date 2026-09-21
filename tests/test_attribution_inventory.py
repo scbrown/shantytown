@@ -87,6 +87,14 @@ INVENTORY: dict[tuple[str, str], tuple[str, str]] = {
         ATTRIBUTED_UPSTREAM,
         "p.text was signed in Dispatcher.plan(), so the prefix also reaches "
         "--dry-run and triage. test_attribution.py has the differential pair."),
+    ("cli.py", "_cycle_soft"): (
+        BARE,
+        "the harness's own CLEAR COMMAND (`/clear`), typed into a live pane by "
+        "`st agent cycle`. A slash command is parsed by the runtime, not read by "
+        "the model: `[from hammond] /clear` is not an attributed instruction, it "
+        "is a line of prose that clears nothing and lands in the transcript as a "
+        "message the agent must then answer. Same class as the launch line "
+        "below — signing it would break the only thing it does."),
     ("runtime.py", "start"): (
         BARE,
         "the LAUNCH COMMAND LINE. A prefix here is a shell syntax error and every "
@@ -170,11 +178,27 @@ def test_every_attributed_here_site_really_calls_attribute():
             f"is not an attribute(...) call. Either sign it or re-classify it.")
 
 
-def test_the_bare_sites_are_the_two_we_argued_for():
+def test_the_bare_sites_are_the_ones_we_argued_for():
     """A positive control on the EXCEPTION LIST — the part of this design that can
     rot quietly. The whole scheme is 'the transport stays dumb and the exceptions
     are explicit'; if the exception list grows, the scheme has stopped paying for
     itself and the transport-level prefix deserves re-arguing. Failing here is a
-    prompt to have that argument, not merely to bump a number."""
+    prompt to have that argument, not merely to bump a number.
+
+    THE ARGUMENT, HAD (2026-09-21, third member added). All three exceptions are
+    the same kind of thing, and it is a kind with a sharp edge: text the RUNTIME
+    PARSES, rather than text the MODEL READS. A launch line is parsed by a shell,
+    a trust answer by a chooser, a clear command by the TUI's slash-command
+    dispatcher. None of them is ever seen by a model as a message, so there is
+    nobody for a `[from X]` prefix to inform — and in all three cases the prefix
+    does not merely fail to help, it BREAKS the thing: a signed launch line is a
+    shell syntax error, a signed `/clear` is prose that clears nothing and lands
+    in the transcript as a message the agent must answer.
+
+    So the scheme still pays for itself and the transport-level prefix does not
+    need re-arguing: the exception list has one rule, not three special cases,
+    and a fourth member is admissible only if it is parsed rather than read. A
+    send that a MODEL will read is signed — no matter who composed it."""
     bare = {k for k, (kind, _) in INVENTORY.items() if kind == BARE}
-    assert bare == {("cli.py", "_observe_live"), ("runtime.py", "start")}, sorted(bare)
+    assert bare == {("cli.py", "_observe_live"), ("cli.py", "_cycle_soft"),
+                    ("runtime.py", "start")}, sorted(bare)
