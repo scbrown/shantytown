@@ -13,6 +13,19 @@ from shantytown.workspace import tree_staleness
 from test_staleness import _repo, _clone, _run, _commit
 
 
+class _NoPane:
+    """No pane for this fixture's session, so cycle can only take the relaunch path.
+
+    These tests are about the Git transport preflight, not about which mechanism
+    a cycle picks. Reporting the session as absent is what keeps them that way:
+    it is the one answer that leaves no in-place option to weigh, so the assertion
+    below still reads stop/launch/dispatch for the reason it always did.
+    """
+
+    def exists(self, session: str) -> bool:
+        return False
+
+
 def world(tmp_path, monkeypatch):
     upstream = _repo(tmp_path / "upstream")
     clone = _clone(upstream, tmp_path / "clone", remote="tracked")
@@ -31,7 +44,7 @@ def world(tmp_path, monkeypatch):
                         lambda *a: DurableGate("worker", ok=True))
     actions = []
     monkeypatch.setattr(cli, "_cmd_stop", lambda a: actions.append("stop") or cli.OK)
-    monkeypatch.setattr(cli, "_panes", lambda a: object())
+    monkeypatch.setattr(cli, "_panes", lambda a: _NoPane())
     monkeypatch.setattr(cli, "_runtime", lambda *a: object())
     monkeypatch.setattr(cli, "_launch", lambda *a: actions.append("launch") or cli.OK)
     monkeypatch.setattr(cli, "_redispatch_after_cycle", lambda *a: actions.append("dispatch"))
