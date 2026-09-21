@@ -1553,3 +1553,25 @@ and POSIX file locking on the SSH host. No additional daemon or package is neede
 This coordinates the configured `st` launch paths in a connected fleet. It is not
 a distributed consensus or fencing service: out-of-band launches or loss of the SSH lock connection during a launch can defeat
 serialization. Do not claim a hard quota boundary under those conditions.
+
+### Cycle fetch budget
+
+`st agent cycle` fetches and prunes only the remote selected by the workspace's
+main/master upstream configuration (or its sole remote). Other remotes are not
+contacted. Its loss check counts commits not found on that refreshed remote;
+commits saved only on a different remote may therefore require review before cycling.
+This prevents cached refs from a skipped remote from hiding deleted branches.
+
+Set the per-tree fetch deadline in `<root>/shantytown.toml`:
+
+```toml
+[keep_current]
+fetch_timeout_seconds = 180
+```
+
+The default is 180 seconds; the value must be finite and positive. Local Git
+probes retain their 60-second bound. A timeout kills the Git process group and
+returns a one-line refusal without stopping the pane or changing the card or
+pending cycle request. Retry after connectivity recovers or adjust the budget.
+A fetch that exits with a transport error retains the existing unverified-currency
+notice and loss-risk policy. Other keep-current pull paths retain their own bounds.
