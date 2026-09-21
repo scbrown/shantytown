@@ -7443,14 +7443,31 @@ def _cmd_cycle(a) -> int:
     # prunes, which closes the opposite and worse error — a deleted upstream ref
     # laundering an orphaned commit into "safe".
     trees = _agent_trees(a, card, sweep=True)
-    verdict = cycle_mod.assess(
-        agent_name, trees, a.reason,
-        # untracked_all: the default porcelain collapses `?? .playwright-mcp/` to
-        # the directory, and the report has to be able to NAME a `.mcp.json.bak`
-        # inside one. This path already fetches over the network; one extra walk
-        # is not what makes it slow.
-        staleness=lambda t: tree_staleness(t, fetch=True, untracked_all=True),
-        allow_loss=a.allow_loss)
+    # Refuse a timed-out preflight BEFORE writing cycle state or stopping a pane.
+    # A pending request must remain exactly as the caller left it so a later
+    # attempt can retry; timeout is not evidence of unsaved work.
+    import subprocess
+    try:
+        cfg = config.load(a.root)
+        verdict = cycle_mod.assess(
+            agent_name, trees, a.reason,
+            # untracked_all: the default porcelain collapses `?? .playwright-mcp/` to
+            # the directory, and the report has to be able to NAME a `.mcp.json.bak`
+            # inside one. This path already fetches over the network; one extra walk
+            # is not what makes it slow.
+            staleness=lambda t: tree_staleness(
+                t, fetch=True, untracked_all=True, tracked_only=True,
+                fetch_timeout=cfg.keep_current_fetch_timeout_seconds),
+            allow_loss=a.allow_loss)
+    except subprocess.TimeoutExpired as e:
+        command = e.cmd if isinstance(e.cmd, (list, tuple)) else []
+        operation = "fetch" if "fetch" in command else "Git preflight"
+        print(f"  refused: tree is stale: {operation} timed out after {e.timeout:g}s; "
+              "cycle state unchanged", file=sys.stderr)
+        return REFUSED
+    except (config.ConfigError, OSError) as e:
+        print(f"  refused: cycle preflight: {str(e).splitlines()[0]}", file=sys.stderr)
+        return REFUSED
     if not verdict.ok:
         print(f"  refused: {verdict.render()}", file=sys.stderr)
         # aegis-7xptd5: STAMP THE REFUSAL ON THE PENDING REQUEST. The refusal is

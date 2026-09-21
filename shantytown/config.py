@@ -51,6 +51,7 @@ loses work, so the default is the other one.
 """
 from __future__ import annotations
 
+import math
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -163,6 +164,8 @@ class Config:
     render that differently from a file that said the same thing by hand, because
     "you are on the defaults" and "your config chose this" need different fixes.
     """
+    # Cycle preflight fetch budget; local Git probes keep their shorter bound.
+    keep_current_fetch_timeout_seconds: float = 180
     mode: str = DEFAULT_MODE
     modes: dict[str, list[str]] = field(default_factory=lambda: dict(BUILTIN_MODES))
     hibernate: Hibernate = field(default_factory=Hibernate)
@@ -314,7 +317,7 @@ def load_or_default(root) -> tuple[Config, str | None]:
 _TOP_KEYS = {"startup", "modes", "hibernate", "fleet", "crew", "env", "tmux", "dream",
              "roles", "precedence", "governor", "session_budget", "hostmem", "quiet_time",
              "harness",
-             "model", "host"}
+             "model", "host", "keep_current"}
 _HARNESS_KEYS = {"default", "by_role", "required_by_role"}
 _MODEL_KEYS = {"default", "by_role"}
 _STARTUP_KEYS = {"mode"}
@@ -373,7 +376,14 @@ def _resolve(data: dict, path: Path) -> Config:
         path, _table(path, data, "harness"), declared=set(declared_roles))
     model_default, model_by_role = _model(
         path, _table(path, data, "model"), declared=set(declared_roles))
+    keep_current = _table(path, data, "keep_current")
+    _refuse_unknown(path, "keep_current", keep_current, {"fetch_timeout_seconds"})
+    fetch_timeout = keep_current.get("fetch_timeout_seconds", 180)
+    if (isinstance(fetch_timeout, bool) or not isinstance(fetch_timeout, (int, float))
+            or not math.isfinite(fetch_timeout) or fetch_timeout <= 0):
+        raise ConfigError(f"{path}: keep_current.fetch_timeout_seconds must be a finite positive number")
     return Config(mode=mode, modes=modes,
+                  keep_current_fetch_timeout_seconds=fetch_timeout,
                   harness_default=harness_default,
                   harness_by_role=harness_by_role,
                   harness_required_by_role=harness_required_by_role,
