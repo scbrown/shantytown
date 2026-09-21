@@ -234,6 +234,30 @@ def metrics(result):
     return '\n'.join(lines) + '\n'
 
 
+def _publish_metrics(config, result=None, *, paused=False):
+    destination = Path(config['metric_path'])
+    # A pause is a live scheduler, not a fresh cost observation. Keep the last
+    # sample (including its success timestamp) when refreshing the heartbeat.
+    text = metrics(result) if result is not None else (
+        destination.read_text() if destination.exists() else '')
+    names = ('st_bead_cost_sync_last_run_timestamp_seconds',
+             'st_bead_cost_paused_for_review')
+    lines = [line for line in text.splitlines()
+             if not any(line.startswith((name + ' ', '# TYPE ' + name + ' '))
+                        for name in names)]
+    for name, value in zip(names, (time.time(), int(paused))):
+        lines.extend((f'# TYPE {name} gauge', f'{name} {value}'))
+    with tempfile.NamedTemporaryFile(mode='w', dir=destination.parent, delete=False) as handle:
+        handle.write('\n'.join(lines) + '\n')
+        temporary = handle.name
+    os.replace(temporary, destination)
+    if config.get('metrics_script'):
+        pushed = subprocess.run([sys.executable, config['metrics_script'], str(destination),
+                                 '--rig', config['rig']], capture_output=True, text=True, timeout=30)
+        if pushed.returncode:
+            raise RuntimeError('cost metric publication failed')
+
+
 def _scheduler_status(config, state, phase):
     response = subprocess.run(
         [sys.executable, config['publish_script'], '--actor', 'st-cost',
@@ -281,12 +305,14 @@ def _run_locked(args, config):
                     '--review-only', '--publish-status'], capture_output=True, text=True, timeout=30)
                 if refreshed.returncode:
                     raise RuntimeError('review status publication failed: ' + refreshed.stderr[:300])
+                _publish_metrics(config, paused=True)
                 print(json.dumps(report, sort_keys=True))
                 return 0
             for state in (Path(args.root) / 'cost-graph-state.json', graph_state):
                 receipt_path = state.with_suffix('.receipt.json')
                 prior = json.loads(receipt_path.read_text()) if receipt_path.exists() else {}
                 if prior.get('next_request_after', 0) > time.time():
+                    _publish_metrics(config)
                     print(json.dumps({'status': 'BACKOFF', 'until': prior['next_request_after']}))
                     return 0
             if not config.get("publish_script"):
@@ -324,15 +350,7 @@ def _run_selected(args, config, graph_state):
         # Do not publish a clean-looking replacement on a failed source.
         if result['errors']:
             raise RuntimeError('Camayoc source coverage UNKNOWN: ' + '; '.join(result['errors']))
-        destination = Path(config['metric_path'])
-        with tempfile.NamedTemporaryFile(mode='w', dir=destination.parent, delete=False) as handle:
-            handle.write(metrics(result)); temporary = handle.name
-        os.replace(temporary, destination)
-        if config.get('metrics_script'):
-            pushed = subprocess.run([sys.executable, config['metrics_script'], str(destination),
-                                     '--rig', config['rig']], capture_output=True, text=True, timeout=30)
-            if pushed.returncode:
-                raise RuntimeError('cost metric publication failed')
+        _publish_metrics(config, result)
         if config.get('publish_script'):
             with tempfile.NamedTemporaryFile(mode='w', suffix='.json') as handle:
                 json.dump(method, handle); handle.flush()

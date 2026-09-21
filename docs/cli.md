@@ -1492,6 +1492,11 @@ receipt publishes `review_due` on the twentieth observation. The report describe
 the supplied session population, not proof of the fleet's tail distribution.
 Completed-review ticks refresh native Camayoc status metrics without source or
 graph access, so an intentional pause does not masquerade as a dead producer.
+Completed sync ticks also refresh `st_bead_cost_sync_last_run_timestamp_seconds`
+and `st_bead_cost_paused_for_review` (1 during review, 0 otherwise) through the
+configured cost metrics publisher, including cooldown ticks. Review and cooldown
+preserve cached cost gauges and their last-success timestamp; without a cached
+sample, only heartbeat gauges are emitted. A failed push returns UNKNOWN.
 Review must precede any new population or cap change.
 
 ### Fleet view across hosts
