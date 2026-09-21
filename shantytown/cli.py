@@ -1791,7 +1791,17 @@ def main(argv: list[str] | None = None) -> int:
     # to explain an empty or surprising store can say which leg answered.
     a.root, a.root_how = resolve_root(a.root, discover=(a.cmd != "init"))
     _warn_if_no_store(a)
+    from .deployment import command_environment
+    from .quipu import NamespaceUnconfigured
+    with command_environment(a.root):
+        try:
+            return _run_command(a)
+        except NamespaceUnconfigured as e:
+            print(f"  {e}", file=sys.stderr)
+            return REFUSED
 
+
+def _run_command(a) -> int:
     # Gate replacement operations before they stop a live session. The shared
     # launch seam remains guarded too for internal callers and restore paths.
     if a.cmd in {"new", "start", "cycle"} and not _despite_hold(a):
@@ -9480,9 +9490,8 @@ def _tend_once(a, quiet: bool = False) -> int:
         gov_metrics_mod.publish(
             Path(a.root), gov_metric_lanes,
             agents=_agent_counts(a, agents, panes, runtime),
-            # The deployment's [env] table, NOT os.environ — st does not export
-            # it into its own process, so reading only the ambient environment
-            # would leave a correctly configured deployment silently unexported.
+            # Use the rooted resolver for internal callers too; CLI dispatch
+            # also carries this table in the command environment.
             # Same reason the creel probe above is read off cfg.env.
             env=cfg.env,
             log=lambda msg: print(f"  ⚠ {msg}", file=sys.stderr))
