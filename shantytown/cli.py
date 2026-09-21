@@ -7173,6 +7173,25 @@ def _resolve_push_worktree(repo: str, agent: str) -> Path:
     return gt_worktree
 
 
+def _worktree_branch(dest: Path) -> str | None:
+    """The branch `dest` has checked out, or None if it cannot be determined.
+
+    None means CANNOT TELL and the caller proceeds: a detached HEAD or an
+    unreadable worktree is not evidence that the wrong branch is about to be
+    pushed, and refusing on it would break the canonical path for a condition we
+    have not observed. The refusal fires only on a POSITIVE disagreement.
+    """
+    import subprocess
+
+    try:
+        r = subprocess.run(["git", "-C", str(dest), "symbolic-ref", "--short", "HEAD"],
+                           capture_output=True, text=True, timeout=5)
+    except Exception:                      # noqa: BLE001
+        return None
+    name = r.stdout.strip()
+    return name if r.returncode == 0 and name else None
+
+
 def _push_invocation_branch(dest: Path) -> tuple[Path, str] | None:
     """Return the caller's worktree + branch when it belongs to ``dest``'s repo.
 
@@ -7672,6 +7691,32 @@ def _cmd_push(a) -> int:
             "or use an explicit git push after reviewing the exact ref.",
             file=sys.stderr,
         )
+        return REFUSED
+    # ── PUSH WHAT THE WORKTREE IS ACTUALLY ON (aegis-8ijj33) ─────────────────
+    #
+    # `branch` above is CONSTRUCTED as wt/<agent>; nothing had checked that the
+    # worktree is on it. _push_invocation_branch covers the case where the CALLER
+    # stands in another worktree of this repo, and deliberately ignores a caller
+    # elsewhere in the filesystem — which is the common case for a lead pushing on
+    # someone's behalf, and therefore the uncovered one.
+    #
+    # MEASURED 2026-09-20 (wu): `st repo push shantytown wu` run from a crew clone
+    # pushed `wt/wu` -> main while the worktree was on `wu/nyce0l-declared-roles`
+    # and `wt/wu` was STALE. It published neither the work in the tree nor anything
+    # the caller had looked at, and it was stopped only by a non-fast-forward
+    # rejection — luck, not a guard. Had wt/wu been an ancestor of main it would
+    # have landed silently, and on a CD-wired repo that is a deploy (aegis-jtcau).
+    #
+    # This does not change WHERE a push goes; it refuses to push a branch the
+    # worktree is not on. The canonical case (worktree on wt/<agent>) is untouched.
+    checked_out = _worktree_branch(Path(dest))
+    if checked_out is not None and checked_out != branch:
+        print(f"  refused before push: {dest} is on '{checked_out}', but this would "
+              f"push '{branch}' — a branch the worktree is not on, so it is not the "
+              f"work you are looking at. No remote was contacted.\n"
+              f"  Either check out '{branch}' there, or push '{checked_out}' "
+              f"deliberately with an explicit git push after reviewing the ref.",
+              file=sys.stderr)
         return REFUSED
     outcomes = push_every_remote(dest, branch, a.branch)
     if not outcomes:
