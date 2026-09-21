@@ -186,6 +186,7 @@ from .files import (FilesRegistry, FilesTracker, plate as files_plate,
                     items as files_items)
 from .launched import FilesLaunches, CURRENT, STALE, UNKNOWN
 from .stopped import FilesStops
+from . import agent_hold
 from .quipu import QuipuRegistry, QuipuQueryRejected, QuipuWriteRejected
 from . import graph_adoption
 from . import window as window_mod
@@ -1259,6 +1260,8 @@ def build_parser() -> argparse.ArgumentParser:
     st = leaf("stop", help="stop it")
     st.add_argument("agent")
     st.add_argument("-n", "--dry-run", action="store_true")
+    st.add_argument("--after-turn", action="store_true",
+                    help="hold all automatic feeds now; stop at the next Stop hook")
     st.add_argument("--reason", default="", metavar="TEXT",
                     help="why, recorded with the stop (GitHub #29). A deliberate "
                          "stop is INTENT, not a fault: `st crew` and the "
@@ -2021,6 +2024,7 @@ def _launched_now(a, card_name: str, settings_path=None) -> None:
     if settings_path:
         _launches(a).record(card_name, settings_path)
     _stops(a).forget(card_name)
+    agent_hold.clear(a.root, card_name)
 
 
 def _record_launch_unretirement(a, card) -> bool:
@@ -3328,6 +3332,17 @@ def _cmd_stop(a) -> int:
               f"manage the agent in it (another orchestrator does). Refusing.",
               file=sys.stderr)
         return REFUSED
+    if getattr(a, "after_turn", False):
+        if a.dry_run:
+            print(f"  would: hold {a.agent} and stop after its current turn")
+            return OK
+        try:
+            agent_hold.hold(a.root, a.agent, _actor(), getattr(a, "reason", ""))
+        except OSError as exc:
+            print(f"  could not tell: {exc}", file=sys.stderr)
+            return CANNOT_TELL
+        print(f"  {a.agent}: {agent_hold.reason(a.root, a.agent)}; stop at next turn boundary")
+        return OK
     if a.dry_run:
         print(f"  would: kill-session {session}")
         return OK
@@ -4804,6 +4819,9 @@ def _graph_context(a):
 
 
 def _cmd_go(a) -> int:
+    if held := agent_hold.reason(a.root, a.agent):
+        print(f"  refused: {a.agent} {held}", file=sys.stderr)
+        return REFUSED
     d = _wire(a)
     try:
         note = _read_note(a)
@@ -6005,6 +6023,8 @@ def _crew_states(agents, panes, runtime, cycling=(), untracked_root=None,
             # not what anything is running, and this column only ever reports what
             # was observed. What the card lacks is launch_gaps()' question.
             posture = "—"
+        if held := agent_hold.reason(untracked_root, ag.name):
+            work = held
         yield ag, state, work, posture
 
 
@@ -9546,10 +9566,11 @@ def _tend_once(a, quiet: bool = False) -> int:
         # is not sent hunting for a `--target` flag they never passed.
         target_src=_target_source(getattr(a, "target", None),
                                   None if verdict is None else verdict.max_agents),
-        governed=(lambda card: gaming.refusal if gaming.held else
+        governed=(lambda card: agent_hold.reason(a.root, card.name) or
+                  (gaming.refusal if gaming.held else
                   _account_launch_refusal(a, card) or
                   (_card_verdict(card).excludes(card, _catalog(a))
-                   if governors and _card_verdict(card) is not None else "")),
+                   if governors and _card_verdict(card) is not None else ""))),
         # The same record `st crew` reads to print "stopped ON PURPOSE", so the
         # two commands cannot disagree about whose decision put an agent down
         # (aegis-k9068). Without it tend explained every deliberate stop with the

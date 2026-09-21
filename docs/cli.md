@@ -1575,3 +1575,14 @@ returns a one-line refusal without stopping the pane or changing the card or
 pending cycle request. Retry after connectivity recovers or adjust the budget.
 A fetch that exits with a transport error retains the existing unverified-currency
 notice and loss-risk policy. Other keep-current pull paths retain their own bounds.
+
+### Stop after the current turn
+
+`st agent stop <agent> --after-turn --reason 'budget hold'` persists a hold
+immediately without interrupting the live turn. Haul continuation, idle feeding,
+explicit dispatch and tend respawn refuse held agents. `st crew` reports who
+held the agent and when. The next Stop event is persisted before a detached
+invocation of the existing guarded stop removes the pane and launch stamp.
+Its output is retained under `agent-holds/<agent>.stop.log` in the deployment
+root; a failed stop leaves feeding held. A successful `st agent new <agent>`
+clears the hold. Dry-run and ownership guards still apply.

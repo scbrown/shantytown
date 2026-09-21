@@ -114,6 +114,9 @@ def haul_hold_reason(root, agent: str) -> str:
     """A deliberate stop or gaming hold must precede claims and continuation."""
     if root is None:
         return ""
+    from . import agent_hold
+    if held := agent_hold.reason(root, agent):
+        return held
     from .stopped import FilesStops
     from . import quiet_time as gaming
     if FilesStops(Path(root) / "stopped").get(agent) is not None:
