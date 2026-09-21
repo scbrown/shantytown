@@ -234,48 +234,86 @@ def metrics(result):
     return '\n'.join(lines) + '\n'
 
 
+def _scheduler_status(config, state, phase):
+    response = subprocess.run(
+        [sys.executable, config['publish_script'], '--actor', 'st-cost',
+         '--state', str(state), '--scheduler-only', phase, '--publish-status'],
+        capture_output=True, text=True, timeout=30)
+    if response.returncode:
+        raise RuntimeError('scheduler status publication failed')
+
+
 def run(args):
     try:
         config = json.loads((Path(args.root) / 'cost.json').read_text())
-        rotation = None
-        lock_path = Path(args.root) / 'cost.lock'
-        with lock_path.open('a') as lock:
+        with (Path(args.root) / 'cost.lock').open('a') as lock:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            graph_state = Path(args.root) / 'cost-graph-state.json'
-            if args.sync and config.get('sample_active_sources') is True:
-                from . import cost_sampling
-                # Changing population must not bypass the previous producer's
-                # request cooldown or an unresolved write.
-                for state in (graph_state, cost_sampling.state_path(args.root)):
-                    if state.with_suffix('.pending.json').exists():
-                        raise RuntimeError('indeterminate cost snapshot requires reconciliation')
-                if report := cost_sampling.review(args.root):
-                    _atomic_json(Path(args.root) / 'cost-active-review.json', report)
-                    refreshed = subprocess.run([sys.executable, config['publish_script'],
-                        '--actor', 'st-cost', '--state', str(cost_sampling.state_path(args.root)),
-                        '--review-only', '--publish-status'], capture_output=True, text=True, timeout=30)
-                    if refreshed.returncode:
-                        raise RuntimeError('review status publication failed: ' + refreshed.stderr[:300])
-                    print(json.dumps(report, sort_keys=True))
+            return _run_locked(args, config)
+    except (OSError, ValueError, KeyError) as exc:
+        print(f'cost: UNKNOWN: {exc}', file=sys.stderr)
+        return 2
+
+
+def _run_locked(args, config):
+    # Status and failed receipts share the same lock as graph publication.
+    status_ready = False
+    phase = 'preflight'
+    rotation = None
+    try:
+        graph_state = Path(args.root) / 'cost-graph-state.json'
+        if config.get('sample_active_sources') is True:
+            from . import cost_sampling
+            graph_state = cost_sampling.state_path(args.root)
+        if args.sync and config.get('publish_script'):
+            status_ready = True
+            _scheduler_status(config, graph_state, 'tick')
+        if args.sync and config.get('sample_active_sources') is True:
+            from . import cost_sampling
+            # Changing population must not bypass the previous producer's
+            # request cooldown or an unresolved write.
+            for state in (Path(args.root) / 'cost-graph-state.json', graph_state):
+                if state.with_suffix('.pending.json').exists():
+                    raise RuntimeError('indeterminate cost snapshot requires reconciliation')
+            if report := cost_sampling.review(args.root):
+                _atomic_json(Path(args.root) / 'cost-active-review.json', report)
+                refreshed = subprocess.run([sys.executable, config['publish_script'],
+                    '--actor', 'st-cost', '--state', str(cost_sampling.state_path(args.root)),
+                    '--review-only', '--publish-status'], capture_output=True, text=True, timeout=30)
+                if refreshed.returncode:
+                    raise RuntimeError('review status publication failed: ' + refreshed.stderr[:300])
+                print(json.dumps(report, sort_keys=True))
+                return 0
+            for state in (Path(args.root) / 'cost-graph-state.json', graph_state):
+                receipt_path = state.with_suffix('.receipt.json')
+                prior = json.loads(receipt_path.read_text()) if receipt_path.exists() else {}
+                if prior.get('next_request_after', 0) > time.time():
+                    print(json.dumps({'status': 'BACKOFF', 'until': prior['next_request_after']}))
                     return 0
-                for state in (graph_state, cost_sampling.state_path(args.root)):
-                    receipt_path = state.with_suffix('.receipt.json')
-                    prior = json.loads(receipt_path.read_text()) if receipt_path.exists() else {}
-                    if prior.get('next_request_after', 0) > time.time():
-                        print(json.dumps({'status': 'BACKOFF', 'until': prior['next_request_after']}))
-                        return 0
-                if not config.get("publish_script"):
-                    raise ValueError("active sampling requires the Camayoc publisher")
-                rotation = cost_sampling.select(args.root)
-                attempted_at = time.time()
-                config = {**config, 'sources': [rotation]}
-                graph_state = cost_sampling.state_path(args.root)
-            try:
-                return _run_selected(args, config, graph_state)
-            finally:
-                if rotation is not None:
-                    cost_sampling.attempted(args.root, rotation, attempted_at)
+            if not config.get("publish_script"):
+                raise ValueError("active sampling requires the Camayoc publisher")
+            phase = 'source_selection'
+            rotation = cost_sampling.select(args.root)
+            attempted_at = time.time()
+            config = {**config, 'sources': [rotation]}
+            graph_state = cost_sampling.state_path(args.root)
+        try:
+            phase = 'projection'
+            return _run_selected(args, config, graph_state)
+        finally:
+            if rotation is not None:
+                cost_sampling.attempted(args.root, rotation, attempted_at)
     except (OSError, ValueError, RuntimeError, KeyError, sqlite3.Error, subprocess.SubprocessError) as exc:
+        if status_ready:
+            try:
+                # Keep Camayoc's richer failure receipt if publication itself
+                # already recorded this attempt. Earlier failures need one.
+                path = graph_state.with_suffix('.receipt.json')
+                latest = json.loads(path.read_text()) if path.exists() else {}
+                if (phase != 'projection' or latest.get('scheduler_only') or not latest
+                        or latest.get('status') == 'OK'):
+                    _scheduler_status(config, graph_state, phase)
+            except (OSError, ValueError, RuntimeError, subprocess.SubprocessError):
+                print('cost: scheduler status could not be published', file=sys.stderr)
         print(f'cost: UNKNOWN: {exc}', file=sys.stderr)
         return 2
 

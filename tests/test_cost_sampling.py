@@ -8,6 +8,14 @@ from shantytown import cost, cost_sampling as sampling
 from shantytown.protocols import Agent
 
 
+@pytest.fixture(autouse=True)
+def fake_publisher(monkeypatch):
+    def run(command, **kwargs):
+        assert command[1] == 'publisher'
+        return SimpleNamespace(returncode=0, stderr='')
+    monkeypatch.setattr(cost.subprocess, 'run', run)
+
+
 def write(path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value) + '\n')
@@ -114,7 +122,7 @@ def test_twentieth_shape_pauses_before_source_read_and_reports_distribution(tmp_
         return SimpleNamespace(returncode=0)
     monkeypatch.setattr(cost.subprocess, 'run', status_only)
     assert cost.run(args(tmp_path)) == 0
-    assert len(calls) == 1 and '--review-only' in calls[0]
+    assert len(calls) == 2 and '--scheduler-only' in calls[0] and '--review-only' in calls[1]
     report = json.loads(capsys.readouterr().out)
     assert report['status'] == 'REVIEW_DUE'
     assert report['dimensions']['records'] == {'min': 1, 'median': 10.5, 'max': 20}
@@ -145,7 +153,28 @@ def test_review_cannot_hide_pending_write_or_failed_health_publication(tmp_path,
     calls = []
     def failed(command, **kwargs):
         calls.append(command)
-        return SimpleNamespace(returncode=2, stderr='status unavailable')
+        return SimpleNamespace(returncode=2 if '--review-only' in command else 0,
+                               stderr='status unavailable')
     monkeypatch.setattr(cost.subprocess, 'run', failed)
     assert cost.run(args(tmp_path)) == 2
-    assert len(calls) == (0 if pending else 1)
+    assert len(calls) == (2 if pending else 3)
+    if pending:
+        assert all('--review-only' not in call for call in calls)
+    else:
+        assert '--review-only' in calls[1]
+
+
+def test_unknown_source_still_records_tick_and_failure(tmp_path, monkeypatch):
+    setup(tmp_path)
+    phases = []
+    def status(command, **kwargs):
+        phases.append(command[command.index('--scheduler-only') + 1])
+        return SimpleNamespace(returncode=0)
+    monkeypatch.setattr(cost.subprocess, 'run', status)
+    def no_source(root):
+        assert phases == ['tick']
+        raise ValueError('no metadata-verified active transcript source')
+    monkeypatch.setattr(sampling, 'select', no_source)
+    assert cost.run(args(tmp_path)) == 2
+    assert phases == ['tick', 'source_selection']
+    assert not (tmp_path / 'cost-active-rotation.json').exists()

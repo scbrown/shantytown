@@ -1586,3 +1586,11 @@ invocation of the existing guarded stop removes the pane and launch stamp.
 Its output is retained under `agent-holds/<agent>.stop.log` in the deployment
 root; a failed stop leaves feeding held. A successful `st agent new <agent>`
 clears the hold. Dry-run and ownership guards still apply.
+
+Cost synchronization publishes a scheduler heartbeat before selecting an active
+source. An UNKNOWN source-selection tick updates the attempt timestamp and
+records `unknown_reason=source_selection`; it does not look like a stopped
+schedule. The configured Camayoc publisher must support `--scheduler-only`.
+Heartbeats preserve pending writes and cooldowns and never count as cost samples.
+A live pane alone is insufficient source evidence: session discovery also
+requires a stats event within the last hour and matching transcript metadata.
