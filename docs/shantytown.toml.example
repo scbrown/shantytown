@@ -248,6 +248,56 @@ max_load_per_core = 4.0
 # lead = "claude"
 
 # ---------------------------------------------------------------------------
+# [model] — WHICH MODEL, for cards that do not say, and WHERE THEY GO WHEN IT IS
+# OUT OF BUDGET.
+#
+# Same shape, same precedence and the same table position as [harness] above,
+# because it is the same question one axis over: harness picks the PROGRAM, model
+# picks what that program runs. MOST SPECIFIC WINS — the card, then the role
+# rule, then the default, then nothing (the flag is omitted and the harness
+# applies its own default).
+#
+# ONE HALF IS VALIDATED AND THE ASYMMETRY IS DELIBERATE. The ROLE name is checked
+# against this deployment's roles, because a rule for a role nobody has applies
+# to nobody and reads as applied. The MODEL name is NOT checked against a list
+# and must not be: slugs are the PROVIDER's vocabulary, minted and retired on
+# their schedule, so a build-time allowlist would refuse a model released after
+# the installed version — wrong in the direction that BLOCKS WORK, for a knob
+# whose failure is otherwise loud (a bad slug is rejected by the harness itself,
+# at launch, naming the model).
+#
+# FALLBACK — where an agent goes when its model is OUT OF USAGE BUDGET.
+#
+# A usage limit is not an outage and not an expired login. The account is fine,
+# the agent is fine, the work is still there, and exactly one model is
+# unavailable for a bounded while. It is the only fault in this system a
+# supervisor can clear on its own, without a person and without waiting: run the
+# same agent on a different model.
+#
+# UNSET MEANS DO NOT SWITCH, and that is a decision rather than a gap. st does
+# not know which slugs a given harness can reach, so a guessed fallback would
+# move an unattended agent onto a model you never chose, at the one moment
+# nobody is watching. Declaring it here IS the saying-yes. With nothing
+# declared, `st fleet tend` reports the limited agent and waits out the reset —
+# which is what it did before this table existed.
+#
+# A fallback equal to the model the card is already on is ignored: relaunching
+# into the same limit reads as a fix, costs a session and comes straight back.
+# ---------------------------------------------------------------------------
+
+# [model]
+# default = "claude-fable-5-1"
+# fallback = "claude-opus-5"
+
+# [model.by_role]
+# administrator = "claude-fable-5-1"
+# worker = "claude-sonnet-5"
+
+# [model.fallback_by_role]
+# administrator = "claude-opus-5"
+# worker = "claude-haiku-4-5-20251001"
+
+# ---------------------------------------------------------------------------
 # [roles.<name>] — YOUR role vocabulary, as traits.
 #
 # st ships three roles because its built-in PROCESS is defined for three: depth-2,

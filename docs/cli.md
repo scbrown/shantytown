@@ -110,6 +110,36 @@ Existing Stop hooks read the latest turn's input occupancy, including Claude
 cache tokens, and give one advisory per threshold crossing or session change.
 They name `st agent cycle --self --checkpoint-file <notes-file>`; they never schedule
 that cycle or latch a work ceiling. Finish critical work before checkpointing.
+
+**How a cycle is performed, and what it costs you.** `st agent cycle` chooses the
+least destructive mechanism the agent's state allows, and only the last resort
+takes the tmux session down:
+
+| mechanism | what happens | who notices |
+|---|---|---|
+| in-place clear | the harness's own clear command is typed into the live pane. The process, the session, the MCP kit, the skills and the permission mode are never torn down. | nobody — an attached operator stays attached and keeps watching |
+| respawn | the process is replaced; the session, and every client attached to it, survive. | the pane restarts in front of you |
+| relaunch | the session is destroyed and a new one started. | **every attached client is detached** |
+
+The in-place clear is the default and needs four things: a harness that declares
+a clear command (Claude Code does; codex does not), an agent that is idle, an
+empty input box, and — for a card that runs on bypass — a harness that can prove
+from the pane that bypass survived. A clear is typed at the same prompt a human
+uses, so into a busy pane it queues behind the turn and into a pane with
+unsubmitted text it appends to it; neither is a clear, and both are worse than
+the slower path. Anything missing drops to respawn, which is still seamless for
+an attached operator. `--no-in-place` forces a respawn when you want the process
+restarted as well as emptied — a wedged runtime, a settings file it must re-read,
+a new model on its card.
+
+**What the emptied session is handed.** A cycle writes a resume brief before it
+touches anything, and a SessionStart hook injects it into the fresh context. It
+carries the checkpoint, the checkpoint bead, the graph nodes named on the request
+and the work item that was re-dispatched — as POINTERS, not contents, so the new
+session opens small and knows where to look rather than opening large. It is
+delivered exactly once: a brief that survived its own delivery would be re-read
+at every later session start, telling an agent to resume work it finished two
+sessions ago.
 `st anchor` shows context measurement at startup, and `st crew` shows occupancy
 from that session's most recent hook transcript plus a named summary of live
 agents with unmeasured context. An agent without a current Stop observation is

@@ -1204,6 +1204,34 @@ def tree_staleness(dest: Path | str, run: GitRunner = _git,
     honest about what it is: "as of the last fetch". The dispatch path, which
     runs once and can afford it, passes fetch=True.
     """
+    # NOT A GIT WORKING TREE IS NOT AN UNREADABLE GIT WORKING TREE, and the two
+    # were the same answer here until 2026-09-21. `upstream_ref` cannot tell them
+    # apart — `git remote` in a plain directory fails exactly as it does in a repo
+    # with no remote — so both came back as an `error`, and `cycle.assess` acts on
+    # `error` as "a tree we could not read, which might hold the only copy of
+    # something".
+    #
+    # For a directory that is not a repository that premise is simply false.
+    # There are no commits, so nothing can be dirty, nothing can be unpushed, and
+    # a cycle relaunches the same clone and leaves the files exactly where they
+    # are — the same reasoning that already makes untracked files a notice rather
+    # than a gate. The consequence of getting it wrong was not theoretical: this
+    # host's administrator workspace is a plain directory, so `st agent cycle
+    # hammond` refused on it PERMANENTLY, and the remedy the refusal named
+    # ("commit and `st repo push` first") is not available in a directory with no
+    # repository to commit to. A refusal whose only exit does not exist is a
+    # permanent one, which is the failure mode aegis-5ewwhl and aegis-tig80i were
+    # each filed to remove.
+    #
+    # NARROW ON PURPOSE. Only "there is no repository here" is downgraded. A real
+    # repository that merely has no upstream configured still reports an error and
+    # still gates, because that one HAS commits and this is not the change that
+    # should decide what happens to them.
+    rc_tree, _out = run(dest, "rev-parse", "--is-inside-work-tree")
+    if rc_tree != 0:
+        why = (f"{dest} is not a git working tree — nothing here can be "
+               f"committed, pushed or stranded")
+        return Staleness(ref=None, note=why, error=None)
     ref, note = upstream_ref(dest, run=run)
     if ref is None:
         return Staleness(ref=None, note=note, error=note)

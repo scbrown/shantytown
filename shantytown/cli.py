@@ -148,6 +148,7 @@ from .answer import CouldNotLook, PartialAnswer
 
 from . import beads as beads_mod
 from . import cycle as cycle_mod
+from . import resume_brief as resume_brief_mod
 from . import dream as dream_mod
 from . import bootstrap as boot_mod
 from . import creel_advisory as creel_advisory_mod
@@ -196,7 +197,8 @@ from .runtime import (asks_a_question, auth_expired, bash_guard_command,
                       ClaudeRuntime, CapabilityError, SettingsError,
                       emitted_bash_guard, emitted_pre_edit_guard,
                       emitted_stop_directions, pre_edit_guard_command,
-                      input_stranded, live_stop_directions, live_wiring,
+                      input_stranded, limit_reached,
+                      live_stop_directions, live_wiring,
                       settings_for_role)
 from .tmux import Tmux, declared_socket
 from .workspace import (WorkspaceError, agent_worktrees, cleanup_worktree,
@@ -1480,6 +1482,16 @@ def build_parser() -> argparse.ArgumentParser:
     # GUARD before printing "would", or the preview an operator reads to authorise
     # a cycle would be silent about the work it is about to strand.
     cy.add_argument("-n", "--dry-run", action="store_true")
+    cy.add_argument("--no-in-place", action="store_true",
+                    help="skip the in-place clear and REPLACE THE PROCESS. The "
+                         "default clears the live session by typing the "
+                         "harness's own clear command, which keeps the process, "
+                         "the MCP kit, the permissions and — the point — every "
+                         "attached client. Use this when you want the agent "
+                         "restarted as well as emptied: a wedged runtime, a "
+                         "settings file it must re-read, a new model on its "
+                         "card. It still does NOT destroy the session, so you "
+                         "stay attached either way.")
     cy.add_argument("--no-graph-context", default="", metavar="REASON",
                     help="request the cycle with NO graph context, and say why. "
                          "One of this or --quipu-node is required on a cycle "
@@ -2387,7 +2399,7 @@ def unobserved_launch_report(agent: str, harness: str, session: str,
 
 
 def _launch(a, card, panes, runtime, *, dry_run: bool = False,
-            window_restore: bool = False) -> int:
+            window_restore: bool = False, reuse_session: bool = False) -> int:
     from . import fleet_governor as fg
     cfg, err = config.load_or_default(Path(a.root))
     if err:
@@ -2399,14 +2411,16 @@ def _launch(a, card, panes, runtime, *, dry_run: bool = False,
             if hasattr(a, '_account_governor'):
                 del a._account_governor
             return _launch_admitted(a, card, panes, runtime, dry_run=dry_run,
-                                    window_restore=window_restore)
+                                    window_restore=window_restore,
+                                    reuse_session=reuse_session)
     except fg.AdmissionUnavailable as exc:
         print('  refused: ' + str(exc), file=sys.stderr)
         return REFUSED
 
 
 def _launch_admitted(a, card, panes, runtime, *, dry_run: bool = False,
-                     window_restore: bool = False) -> int:
+                     window_restore: bool = False,
+                     reuse_session: bool = False) -> int:
     """LAUNCH ONE AGENT. The whole seam: refuse-first, then workspace, then kit,
     then session, then verify. Returns 0 (up + hooks verified) / 1 (refused) /
     2 (launched but not verified).
@@ -2522,8 +2536,25 @@ def _launch_admitted(a, card, panes, runtime, *, dry_run: bool = False,
     # cwd=card.workspace so the SESSION starts in the agent's own directory, not
     # the launcher's (GitHub #18) — the launch string also cd's, but a pane whose
     # own cwd is the checkout misleads every later shell opened in it.
+    #
+    # reuse_session INVERTS ONLY THIS STEP, and only this one (Stiwi 2026-09-21:
+    # "it kicked me out of claude code and i had to reattach"). A cycle replaces
+    # the PROCESS in a session it has already proved it owns; destroying the
+    # session to do that detaches every client, which is how cycling an agent
+    # ejected the person watching it. respawn-window keeps the session, so the
+    # operator stays attached and sees the pane restart in front of them.
+    #
+    # It is a parameter on THIS function rather than a second launcher because
+    # everything above and below it is load-bearing and shared — the workspace
+    # guard, the ff-only refresh, the equipped-or-not-created refusal, the MCP
+    # containment prepare, the launch stamp and the hooks verification. A cycle
+    # that reached for a cheaper launcher would have to re-earn all six, and the
+    # docstring's "ONE launcher" promise would quietly stop being true.
     try:
-        panes.new_session(session, cwd=card.workspace)
+        if reuse_session:
+            panes.respawn(session, cwd=card.workspace)
+        else:
+            panes.new_session(session, cwd=card.workspace)
     except RuntimeError as e:
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED
@@ -3170,6 +3201,48 @@ def _capture_history_before_kill(a, agent_name: str, why: str) -> None:
         pass
 
 
+def _foreign_session_refusal(a, agent_name: str, session: str, panes) -> str:
+    """Why st may NOT take this live session over, or "" if it may.
+
+    ONE DEFINITION, shared by every verb that replaces the process in a session
+    somebody is already running — `st agent stop` and the cycle's respawn path.
+    Both ask the identical question, and a guard implemented twice is a guard
+    that will one day be fixed once: the whole hazard here is that a name match
+    reads as permission, so the cheaper of two copies is the one that gets used.
+
+    OWNERSHIP GUARD. The session is live — but st only reaps what st launched.
+    The registry pane names can COLLIDE with sessions somebody else already
+    started under the same name, so on a shared socket `st agent stop ellie`
+    would kill a session st never launched. A name match is not permission to
+    kill.
+
+    SECOND FACTOR: the LAUNCH STAMP. SHANTY_OWNED alone lied once, live (wn7g
+    pilot's negative control): tend's pre-gate respawns created another
+    orchestrator's crew sessions, so those panes carry the marker while the OTHER
+    fleet operates them — `st agent stop ellie` dry-ran straight to "would kill"
+    against the live foreign session. An st-MANAGED agent has a launch stamp (st
+    agent new writes it; st agent stop forgets it); a session st merely created
+    once does not. No stamp while other stamps exist = created-but-not-managed =
+    refuse. Empty store = cannot tell = the env marker alone decides, as before
+    (fresh deployments must still reap).
+    """
+    if not panes.owns(session):
+        return (f"{agent_name} ({session}) was not launched by st — refusing to "
+                f"stop a session st does not own. A name match is not permission "
+                f"to kill (the registry pane names collide with the live crew).")
+    try:
+        launches = _launches(a)
+        unstamped = (launches.get(agent_name) is None
+                     and any(launches.root.glob("*.json")))
+    except Exception:  # noqa: BLE001 — a broken store must not wedge the reap
+        unstamped = False
+    if unstamped:
+        return (f"{agent_name} ({session}) carries st's session marker but has "
+                f"NO launch stamp — st created this session once but does not "
+                f"manage the agent in it (another orchestrator does). Refusing.")
+    return ""
+
+
 def _cmd_stop(a) -> int:
     """stop <agent> — kill the agent's session (#5).
 
@@ -3196,37 +3269,8 @@ def _cmd_stop(a) -> int:
             codex_daemon.stop_owned(agent.name)
         print(f"  {a.agent} was not running.")
         return OK
-    # OWNERSHIP GUARD. The session is live — but st only reaps what
-    # st launched. The registry pane names can COLLIDE with sessions somebody
-    # else already started under the same name, so on a shared socket
-    # `st agent stop ellie` would kill a session st never launched.
-    # A name match is not permission to kill: refuse unless st owns the session.
-    if not panes.owns(session):
-        print(f"  refused: {a.agent} ({session}) was not launched by st — refusing "
-              f"to stop a session st does not own. A name match is not permission "
-              f"to kill (the registry pane names collide with the live crew).",
-              file=sys.stderr)
-        return REFUSED
-    # SECOND FACTOR: the LAUNCH STAMP. SHANTY_OWNED alone lied once, live
-    # (wn7g pilot's negative control): tend's pre-gate respawns created
-    # another orchestrator's crew sessions, so those panes carry the marker
-    # while the OTHER fleet operates them — `st agent stop ellie` dry-ran straight
-    # to "would kill" against the live foreign session. An st-MANAGED agent
-    # has a launch stamp (st agent new writes it; st agent stop forgets it); a session st
-    # merely created once does not. No stamp while other stamps exist =
-    # created-but-not-managed = refuse. Empty store = cannot tell = the env
-    # marker alone decides, as before (fresh deployments must still reap).
-    try:
-        launches = _launches(a)
-        unstamped = (launches.get(a.agent) is None
-                     and any(launches.root.glob("*.json")))
-    except Exception:  # noqa: BLE001 — a broken store must not wedge the reap
-        unstamped = False
-    if unstamped:
-        print(f"  refused: {a.agent} ({session}) carries st's session marker but "
-              f"has NO launch stamp — st created this session once but does not "
-              f"manage the agent in it (another orchestrator does). Refusing.",
-              file=sys.stderr)
+    if refusal := _foreign_session_refusal(a, a.agent, session, panes):
+        print(f"  refused: {refusal}", file=sys.stderr)
         return REFUSED
     if a.dry_run:
         print(f"  would: kill-session {session}")
@@ -5814,10 +5858,16 @@ def _crew_states(agents, panes, runtime, cycling=(), untracked_root=None,
             # auth-dead pane prints `idle` — all 9 crew did, through a whole
             # expiry — and lands on the free list.
             ui_up = runtime.shows_ready_ui(plain)
+            # limited: the model is out of usage budget (Stiwi 2026-09-21,
+            # "we hit fable limits"). Without it a limited pane prints `idle`
+            # and lands on the free list — the same failure auth_dead above
+            # exists to close, one axis over, and with the same consequence:
+            # every dispatch into it fails against a banner st could not see.
             work = triage_mod.work_state(
                 screen, ui_up,
                 awaiting=asks_a_question(runtime, plain),
-                auth_dead=auth_expired(runtime, plain))
+                auth_dead=auth_expired(runtime, plain),
+                limited=limit_reached(runtime, plain))
             cmdline = None
             read_cmdline = getattr(panes, "cmdline", None)
             if callable(read_cmdline):
@@ -7359,15 +7409,174 @@ def _cmd_cycle(a) -> int:
               f"{gate.bead} has no comment from {agent_name} since "
               f"{gate.since}. That reasoning is being spent.", file=sys.stderr)
 
+    # WHICH MECHANISM. Decided from observed pane facts, never assumed — see
+    # cycle.plan for what each precondition costs if it is wrong.
+    panes = _panes(a)
+    runtime = _runtime(a, panes)
+    session = card.pane or _session_for(card)
+    chosen = _cycle_plan(a, card, session, panes, runtime)
+
     if a.dry_run:
-        print(f"  would: stop {agent_name} (reason: {verdict.checkpoint})")
-        print(f"  would: relaunch {agent_name} — bypass, MCP kit, skills, hooks")
+        print(f"  would: {chosen.render()}")
+        print(f"  would: write {agent_name}'s resume brief, injected into the "
+              f"fresh context by its SessionStart hook")
+        if chosen.mode != cycle_mod.SOFT:
+            print(f"  would: relaunch {agent_name} — bypass, MCP kit, skills, hooks")
+        if chosen.mode == cycle_mod.RELAUNCH:
+            print(f"  would: DESTROY session {session} — any attached client detaches")
+        else:
+            print(f"  would: keep session {session} — nothing detaches")
         print(f"  would: re-dispatch its plate item back to it")
         return OK
 
-    # STOP, through the real command so its ownership guards apply unchanged: st
-    # only reaps what st launched, and an unstamped session belongs to another
-    # orchestrator. A cycle must not become a second way to kill a foreign pane.
+    # THE BRIEF, WRITTEN BEFORE ANYTHING IS TOUCHED (Stiwi 2026-09-21: "an
+    # injection of whats expected for hte next sessions with the docs and quipu
+    # node etc"). Everything in it is already known HERE and was, until now,
+    # delivered nowhere the new session would look — the checkpoint went onto the
+    # stop record, the bead comment onto a bead, the graph nodes into a request
+    # file. A brief written after the clear would be a brief written by a process
+    # that no longer remembers any of it.
+    brief_path = _write_resume_brief(a, card, agent_name, verdict.checkpoint)
+
+    rc, performed = _perform_cycle(a, card, agent_name, session, panes, runtime,
+                                   chosen, verdict)
+    if rc != OK:
+        # The cycle did not complete, so the brief describes a clear that never
+        # happened. Leaving it would tell the agent's NEXT ordinary session start
+        # that its context was cleared by a cycle — an authoritative statement,
+        # in its own harness's voice, that is simply false.
+        resume_brief_mod.Briefs(a.root).drop(agent_name)
+        return rc
+
+    cycle_mod.Requests(a.root).clear(agent_name)   # only now: the cycle happened
+    kept = ("session, process, MCP kit and permissions all intact"
+            if performed == cycle_mod.SOFT else
+            "session kept (nothing detached); process relaunched"
+            if performed == cycle_mod.RESPAWN else
+            "session REPLACED — any attached client was detached")
+    print(f"  {agent_name}: CYCLED via {performed} — context cleared, {kept}.")
+    if brief_path:
+        print(f"  resume brief written — its SessionStart hook injects the "
+              f"checkpoint, bead and graph nodes into the fresh context.")
+    _redispatch_after_cycle(a, agent_name, getattr(a, "checkpoint_bead", ""))
+    return OK
+
+
+def _cycle_plan(a, card, session: str, panes, runtime):
+    """Observe the pane, then ask cycle.plan. Observation here, policy there.
+
+    Every fact is read ONCE and passed in. A policy that reaches for its own
+    facts cannot be tested without a live fleet, and this is the decision that
+    chooses between "type one command" and "kill the process tree".
+    """
+    live = bool(session) and panes.exists(session)
+    idle = input_empty = False
+    if live:
+        try:
+            # attrs=True: work_state's input-box check needs the RENDERING
+            # attributes, because dim is the only thing separating Claude Code's
+            # ghost-text suggestion from real unsubmitted input — and those two
+            # mean opposite things for a command about to be typed here.
+            screen = panes.capture(session, attrs=True)
+        except Exception:  # noqa: BLE001 — an unreadable pane is not idle
+            screen = ""
+        plain = triage_mod.strip_attrs(screen)
+        state = triage_mod.work_state(
+            screen, runtime.shows_ready_ui(plain),
+            awaiting=asks_a_question(runtime, plain),
+            auth_dead=auth_expired(runtime, plain))
+        idle = state == triage_mod.IDLE
+        input_empty = triage_mod.input_state(screen) == triage_mod.INPUT_EMPTY
+    return cycle_mod.plan(
+        clear_command=harness_mod.clear_command_for(card, a.root),
+        session_live=live,
+        owned=live and not _foreign_session_refusal(a, card.name, session, panes),
+        idle=idle,
+        input_empty=input_empty,
+        dangerous=bool(getattr(card, "dangerous", False)),
+        bypass_verifiable=harness_mod.bypass_verifiable(card, a.root),
+        prefer_soft=not getattr(a, "no_in_place", False))
+
+
+def _write_resume_brief(a, card, agent_name: str, checkpoint: str) -> str:
+    """Compose and persist what the fresh context is handed. Best-effort.
+
+    NEVER FATAL. A cycle whose brief could not be written is a cycle that still
+    needs to happen — the agent is saturated either way, and refusing over the
+    handoff would leave it degrading with its context full. Loud on stderr so the
+    operator knows this one lands without a briefing.
+    """
+    item = ""
+    try:
+        held = _tracker_plate(_tracker(a), agent_name)
+        item = held.id if held is not None else ""
+    except Exception:  # noqa: BLE001 — the tracker is not on this critical path
+        item = ""
+    docs = []
+    if card.workspace:
+        docs.append(f"{card.workspace}/CLAUDE.md — your charter, re-read it")
+    docs.append("`st ops help handoff` — why cycles work the way they do")
+    try:
+        text = resume_brief_mod.compose(
+            agent_name, checkpoint=checkpoint,
+            checkpoint_bead=getattr(a, "checkpoint_bead", "") or "",
+            quipu_nodes=list(getattr(a, "quipu_node", None) or []),
+            item=item, docs=docs)
+        return str(resume_brief_mod.Briefs(a.root).put(
+            agent_name, text, checkpoint=checkpoint, item=item))
+    except Exception as e:  # noqa: BLE001
+        print(f"  ⚠ resume brief NOT written ({e}) — {agent_name} will come back "
+              f"without its handoff in context. Its checkpoint is still on the "
+              f"bead and the stop record.", file=sys.stderr)
+        return ""
+
+
+def _perform_cycle(a, card, agent_name: str, session: str, panes, runtime,
+                   chosen, verdict) -> tuple:
+    """Do it, escalating DOWN the mechanisms and never back up.
+
+    Returns (exit code, the mechanism that actually ran). The second half is not
+    bookkeeping: an operator who asked for a seamless cycle and silently got a
+    process restart would go on believing the soft path works, and the next
+    person to debug it would start from a false premise.
+    """
+    if chosen.mode == cycle_mod.SOFT:
+        print(f"  {agent_name}: {chosen.render()}")
+        if _cycle_soft(a, card, agent_name, session, panes, runtime):
+            return OK, cycle_mod.SOFT
+        # ESCALATE, ONCE. The clear was typed and did not verify, so the session
+        # is in a state nobody has confirmed — possibly cleared, possibly not,
+        # possibly out of bypass. Replacing the process resolves all three, and
+        # it is the mechanism the plan would have chosen had the soft path been
+        # ineligible in the first place.
+        print(f"  ⚠ the in-place clear did not verify — escalating to replacing "
+              f"the process. Nothing detaches; this is the slower path, not a "
+              f"broken one.", file=sys.stderr)
+        chosen = cycle_mod.Plan(cycle_mod.RESPAWN, "escalated from an unverified "
+                                                   "in-place clear")
+
+    if chosen.mode == cycle_mod.RESPAWN:
+        print(f"  {agent_name}: {chosen.render()}")
+        if refusal := _foreign_session_refusal(a, agent_name, session, panes):
+            print(f"  refused: {refusal}", file=sys.stderr)
+            return REFUSED, cycle_mod.RESPAWN
+        # BEFORE the kill, never after — after it the rollout is gone. Same rule,
+        # and the same call, `st agent stop` obeys.
+        _capture_history_before_kill(a, agent_name, "cycle")
+        rc = _launch(a, card, panes, runtime, reuse_session=True)
+        if rc == OK:
+            return OK, cycle_mod.RESPAWN
+        # The process is already gone by here, so there is no gentler mode left
+        # to try and the session may be holding a dead shell. Fall through to the
+        # floor, which starts by stopping whatever is there.
+        print(f"  ⚠ in-place relaunch did not verify (exit {rc}) — falling back "
+              f"to a full stop and start. THIS DETACHES ANY ATTACHED CLIENT.",
+              file=sys.stderr)
+
+    # THE FLOOR. Stop through the real command so its ownership guards apply
+    # unchanged: st only reaps what st launched, and an unstamped session belongs
+    # to another orchestrator. A cycle must not become a second way to kill a
+    # foreign pane.
     stop_args = argparse.Namespace(**vars(a))
     stop_args.agent = agent_name
     stop_args.reason = f"{cycle_mod.CYCLE_REASON}: {verdict.checkpoint}"
@@ -7375,23 +7584,101 @@ def _cmd_cycle(a) -> int:
         print(f"  refused: {agent_name} was not stopped — NOT relaunching. "
               f"A cycle that launches over a session it could not stop is how "
               f"you get two of the same agent.", file=sys.stderr)
-        return rc
-
-    # RELAUNCH through the one shared launcher, so the cycle cannot acquire a
-    # cheaper version of the pre-flight that `new`/`start`/`attach` all pay.
-    panes = _panes(a)
-    rc = _launch(a, card, panes, _runtime(a, panes))
+        return rc, cycle_mod.RELAUNCH
+    rc = _launch(a, card, panes, runtime)
     if rc != OK:
         print(f"  could not tell: {agent_name} was stopped but the relaunch did "
               f"not verify (exit {rc}). Its checkpoint is on the stop record. "
               f"`st agent new {agent_name}` to retry — do NOT assume it is up.",
               file=sys.stderr)
-        return CANNOT_TELL
+        return CANNOT_TELL, cycle_mod.RELAUNCH
+    return OK, cycle_mod.RELAUNCH
 
-    cycle_mod.Requests(a.root).clear(agent_name)   # only now: the cycle happened
-    print(f"  {agent_name}: CYCLED — context cleared, runtime intact.")
-    _redispatch_after_cycle(a, agent_name, getattr(a, "checkpoint_bead", ""))
-    return OK
+
+#: How long to wait for a pane to come back after a clear command, and how often
+#: to look. A clear is local work — no model call, no network — so it lands in
+#: well under a second on a healthy session; the ceiling is for a pane that is
+#: not going to come back at all, and reaching it means escalating rather than
+#: failing, so it is cheap to be patient.
+_CLEAR_SETTLE_S = 12.0
+_CLEAR_POLL_S = 0.4
+
+
+def _cycle_soft(a, card, agent_name: str, session: str, panes, runtime) -> bool:
+    """Type the harness's clear command and VERIFY it landed. No process touched.
+
+    WHAT VERIFICATION MEANS HERE, and why it is not "we sent the keystrokes".
+    `st inbox` already paid for that distinction (aegis-wcjuz): keystrokes
+    reaching a pane and a command being EXECUTED are two facts, and reporting the
+    first as the second is how a message sat unread while its sender was told it
+    was delivered. The clear is worse than a message — an unexecuted clear leaves
+    a saturated agent that has been marked cycled.
+
+    So: the ready UI must be back AND the runtime's own context footer must have
+    let go of the number it was showing. That footer is Claude Code's own
+    accounting ("/clear to save 737.6k tokens"), it only renders when there is
+    enough context to be worth clearing, and the spinner replaces it mid-turn —
+    so ready-UI-up plus footer-gone is the cleared state and cannot be confused
+    with a turn in flight.
+    """
+    command = harness_mod.clear_command_for(card, a.root)
+    if not command:
+        return False
+    before_screen = triage_mod.strip_attrs(panes.capture(session))
+    before = triage_mod.context_tokens_k(before_screen)
+    # The rollout is about to be discarded by the clear exactly as a kill would
+    # discard it, so it is captured on the same rule and at the same moment.
+    _capture_history_before_kill(a, agent_name, "cycle-clear")
+    try:
+        panes.send(session, command)
+    except Exception as e:  # noqa: BLE001 — a refused send escalates, never crashes
+        print(f"  ⚠ could not type {command!r} into {session} ({e}).",
+              file=sys.stderr)
+        return False
+    deadline = time.time() + _CLEAR_SETTLE_S
+    while time.time() < deadline:
+        time.sleep(_CLEAR_POLL_S)
+        plain = triage_mod.strip_attrs(panes.capture(session))
+        if not runtime.shows_ready_ui(plain):
+            continue          # still redrawing, or mid-turn — not an answer yet
+        after = triage_mod.context_tokens_k(plain)
+        # None = the footer is not showing. With the ready UI up that is not
+        # "unknown", it is "there is no longer enough context to be worth
+        # clearing" — which is the whole objective.
+        #
+        # THE WEAK BRANCH, GUARDED. When `before` was itself None — a session
+        # whose context was already too small for the runtime to offer a clear —
+        # "the footer is absent" is true before the command is sent as well as
+        # after, so on its own it would pass on the FIRST poll no matter what
+        # happened, including a clear that never landed. The screen is the tie
+        # breaker: a clear wipes the transcript, so the visible pane cannot come
+        # back byte-identical to the one we captured before typing. Requiring a
+        # change costs nothing when the clear worked and is the only thing
+        # standing between this and reporting success for a no-op.
+        landed = (after is None or (before is not None and after < before))
+        if landed and before is None and plain == before_screen:
+            continue
+        if landed:
+            # THE aegis-3laza QUESTION, asked rather than assumed. None means the
+            # harness cannot tell us; plan() already refused the soft path for any
+            # card that RUNS on bypass while that is so, which is why None is
+            # allowed to pass here without anybody having guessed.
+            intact = harness_mod.bypass_intact(card, plain, a.root)
+            if intact is False:
+                # Citation in the comment, never in the string: the repo is
+                # public and this line is printed.
+                print(f"  ⚠ {agent_name} cleared but is NO LONGER on bypass — "
+                      f"the measured clear-drops-bypass fault is still live on "
+                      f"this harness. Replacing the process instead.",
+                      file=sys.stderr)
+                return False
+            if before is not None:
+                print(f"  cleared in place: {before:.1f}k -> "
+                      f"{'idle' if after is None else f'{after:.1f}k'}.")
+            return True
+    print(f"  ⚠ {agent_name}'s pane did not settle into a cleared ready state "
+          f"within {_CLEAR_SETTLE_S:.0f}s.", file=sys.stderr)
+    return False
 
 
 def _redispatch_after_cycle(a, agent_name: str, checkpoint_bead: str = "") -> None:
@@ -9346,6 +9633,12 @@ def _tend_once(a, quiet: bool = False) -> int:
         refresh_trees=(None if a.dry_run
                        else lambda card: _refresh_agent_worktrees(a, card)),
         gaps=lambda card: prov_mod.missing_kit(card, Path(a.root)),
+        # USAGE-LIMIT FAILOVER. Both resolvers walk the same card -> role ->
+        # fleet ladder, bound HERE because this is the only layer that holds the
+        # root; tend takes them as injected functions so a hermetic test can
+        # drive both branches without a config file on disk.
+        fallback_model=lambda card: harness_mod.resolve_fallback_model(card, a.root),
+        current_model=lambda card: harness_mod.resolve_model(card, a.root),
         # Backoff + give-up (GitHub #12): a crash-looping agent must cost one
         # launch per interval, not one per pass, and must eventually be retired
         # rather than thrashed forever.
@@ -9874,6 +10167,12 @@ def _tend_reauth(a) -> int:
         spawn=_spawn,
         refresh=_refresh_clone,
         gaps=lambda card: prov_mod.missing_kit(card, Path(a.root)),
+        # USAGE-LIMIT FAILOVER. Both resolvers walk the same card -> role ->
+        # fleet ladder, bound HERE because this is the only layer that holds the
+        # root; tend takes them as injected functions so a hermetic test can
+        # drive both branches without a config file on disk.
+        fallback_model=lambda card: harness_mod.resolve_fallback_model(card, a.root),
+        current_model=lambda card: harness_mod.resolve_model(card, a.root),
         # Backoff + give-up (GitHub #12): a crash-looping agent must cost one
         # launch per interval, not one per pass, and must eventually be retired
         # rather than thrashed forever.

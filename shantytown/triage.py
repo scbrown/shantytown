@@ -390,10 +390,23 @@ AUTH_DEAD = "auth-dead"       # the runtime's LOGIN EXPIRED (aegis-arma). The UI
                               # is a relaunch (`st fleet tend --reauth`) after the
                               # operator re-logs in — /login in the pane is an
                               # interactive browser OAuth flow nothing can drive.
+LIMITED = "limited"           # the runtime's MODEL IS OUT OF USAGE BUDGET. The UI
+                              # is up, the box is empty, and every call fails
+                              # until the window resets. The same observable shape
+                              # as auth-dead and a DIFFERENT fault, which is why
+                              # it is a separate verdict: an expired login waits
+                              # for a human, a usage limit waits for a clock — and
+                              # unlike either, it can be cleared immediately by
+                              # running the same agent on a different model. A
+                              # roster that printed `idle` here would put a pane
+                              # that cannot make a single call back on the free
+                              # list, which is exactly what auth-dead cost the
+                              # fleet before it had a name.
 
 
 def work_state(screen: str, ui_up: bool, awaiting: bool = False,
-               limit_k: float = None, auth_dead: bool = False) -> str:
+               limit_k: float = None, auth_dead: bool = False,
+               limited: bool = False) -> str:
     """Is this agent WORKING right now? The verdict `st crew` never asked for.
 
     The predicates already existed — dispatch.py has refused sends into busy
@@ -435,6 +448,23 @@ def work_state(screen: str, ui_up: bool, awaiting: bool = False,
     # failed with the same banner it could not see.
     if auth_dead:
         return AUTH_DEAD
+    # OUT OF USAGE BUDGET, immediately after auth-dead and for the same reason it
+    # sits where it does: a pane that cannot make an API call must not report any
+    # of the things it would report if it could. Its empty box, its picker and
+    # its saturation footer are all facts about a session that is not going to
+    # run, and printing one of those instead sends a coordinator to drive a cycle
+    # or answer a question in a pane where nothing can happen.
+    #
+    # AFTER mid_flight, deliberately, and this is the one place the argument is
+    # weaker than auth-dead's. A limited session may legitimately sit on a
+    # spinner waiting for its window to reset, so `busy` can mask `limited` for
+    # as long as that spinner runs. That is the conservative direction and it was
+    # chosen on purpose: the cost is a late verdict, while the other ordering
+    # risks calling a genuinely computing agent limited on the strength of a
+    # banner still on screen from before. The moment the spinner stops, the
+    # banner in the tail answers.
+    if limited:
+        return LIMITED
     # AFTER mid_flight on purpose. A pane that is genuinely computing is BUSY even
     # if a picker's chrome is somewhere on it, and this ordering means the new
     # verdict can only ever convert a `?` — it cannot take an agent that used to

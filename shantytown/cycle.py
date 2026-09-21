@@ -610,3 +610,119 @@ def requires_checkpoint_bead(role: str, checkpoint_bead: str) -> bool:
     migrates to named checkpoints.
     """
     return role == "administrator" and not checkpoint_bead.strip()
+
+
+# ---------------------------------------------------------------------------
+# HOW a cycle is performed. Three mechanisms, one policy (Stiwi, 2026-09-21).
+# ---------------------------------------------------------------------------
+#
+# Until now there was exactly one: stop the session, start a new one. It is the
+# most destructive of the three and it was applied unconditionally, including to
+# the case that needs none of its force — an idle agent sitting at a ready
+# prompt, whose only problem is that its conversation is too long.
+#
+# It also had a cost nobody had named: `kill_session` DETACHES EVERY ATTACHED
+# CLIENT. A cycle therefore ejected the human watching it. Stiwi, verbatim:
+# "it kicked me out of claude code and i had to reattach". Two of the three
+# mechanisms below fix that outright, because neither destroys the session.
+#
+# ESCALATING, never descending. Each mode is strictly more destructive than the
+# one above it, and the performer only ever moves DOWN this list — a soft clear
+# that cannot be verified escalates to a respawn, a respawn that cannot be
+# performed escalates to a relaunch. Nothing ever tries a gentler mode after a
+# harsher one has already taken the agent down.
+
+#: Type the harness's own clear command into the LIVE pane. No process restart,
+#: no session change, nothing detaches, the MCP kit and permissions are never
+#: re-negotiated because they are never torn down. The fresh context is refilled
+#: by the SessionStart hook the clear itself fires (resume_brief).
+SOFT = "soft"
+#: Replace the PROCESS, keep the session. Attached clients survive. This is what
+#: the old mechanism should always have been.
+RESPAWN = "respawn"
+#: Stop the session and start a new one — the original mechanism, kept as the
+#: floor. It is the only one that works when there is no live session to act on.
+RELAUNCH = "relaunch"
+
+
+@dataclass
+class Plan:
+    """WHICH mechanism, and why that one. A decision, not an action.
+
+    `why` is written to be printed. An operator who asked for a seamless cycle
+    and got a relaunch is owed the sentence that explains which precondition was
+    missing, because every one of them is something they can change.
+    """
+    mode: str
+    why: str
+
+    def render(self) -> str:
+        return f"{self.mode}: {self.why}"
+
+
+def plan(*, clear_command: str | None, session_live: bool, owned: bool,
+         idle: bool, input_empty: bool, dangerous: bool,
+         bypass_verifiable: bool, prefer_soft: bool = True) -> Plan:
+    """Choose the least destructive mechanism this agent's state allows.
+
+    Every argument is a FACT THE CALLER OBSERVED, never something this function
+    goes and looks up. That is what keeps the policy testable without a live
+    fleet — the same split `assess` already rests on, and for the same reason:
+    the part whose failure destroys work must be checkable in isolation.
+
+    THE TWO CONDITIONS THAT BLOCK A SOFT CLEAR, and why each is real:
+
+    `idle and input_empty` — a clear command is TYPED INTO THE PANE, at the same
+    prompt a human uses. Sent to a busy agent it is queued behind the turn in
+    flight; sent to a pane with unsubmitted text in its box it APPENDS to that
+    text, and what gets submitted is neither the clear nor the operator's line.
+    This is the same hazard `st inbox` already documents for live sends, arriving
+    at a command that cannot be half-delivered.
+
+    `dangerous and not bypass_verifiable` — aegis-3laza measured `/clear`
+    dropping a session out of bypass into MANUAL, which left the agent up and
+    UNDISPATCHABLE: the remedy needed its own remedy. That measurement is a year
+    of harness releases old and may no longer hold, but "may no longer hold" is
+    not evidence, and the cost of being wrong is the exact failure the cycle verb
+    was built to stop being. So a card that RUNS ON BYPASS only gets the soft
+    path once its harness can PROVE bypass survived; every other card is
+    indifferent to the question, because a permission mode that resets to what
+    the settings file already says is not a change at all.
+
+    That condition is deliberately shaped to expire on its own. The day somebody
+    measures the marker and declares it on the harness, every dangerous card
+    starts taking the soft path with a real verification behind it — no policy
+    edit, no migration, and no chance of the rule outliving its reason silently.
+    """
+    if not session_live:
+        return Plan(RELAUNCH, "no live session — there is no process to clear "
+                              "or replace, so this is a start, not a cycle")
+    if not owned:
+        # Reached only if a caller skipped the ownership guard. Naming it here
+        # too costs one branch and removes a way for a future performer to do
+        # the wrong thing quietly.
+        return Plan(RELAUNCH, "st does not own this session — the stop path's "
+                              "ownership guard is the one that must answer this")
+    if not prefer_soft:
+        return Plan(RESPAWN, "--no-in-place: replacing the process, keeping the "
+                             "session (nothing detaches)")
+    if not clear_command:
+        return Plan(RESPAWN, "this harness declares no clear command, so its "
+                             "context can only be shed by restarting it")
+    if not idle:
+        return Plan(RESPAWN, "the agent is mid-turn — a clear typed into a busy "
+                             "pane queues behind the turn instead of clearing it")
+    if not input_empty:
+        return Plan(RESPAWN, "there is unsubmitted text in the input box — a "
+                             "clear typed there would APPEND to it")
+    if dangerous and not bypass_verifiable:
+        # The citation stays in the docstring above and in the comment on
+        # ClaudeHarness.bypass_markers. This repo is public and a string literal
+        # is a value the program can PRINT — an internal ticket id in shipped
+        # output is one a reader cannot resolve.
+        return Plan(RESPAWN, "this card runs on bypass and the harness cannot "
+                             "yet prove a clear preserves it (it was measured "
+                             "dropping to MANUAL); replacing the process "
+                             "restores bypass by construction")
+    return Plan(SOFT, "clearing in place — the process, the session, the MCP "
+                      "kit, the permissions and every attached client survive")

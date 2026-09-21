@@ -742,6 +742,62 @@ class Tmux:
         except ValueError:
             return None
 
+    def respawn(self, name: str, cwd: str | None = None) -> None:
+        """Replace the PROCESS in the session's pane, KEEPING the session.
+
+        This is the difference between cycling an agent and evicting its
+        operator, and it is the whole of Stiwi's 2026-09-21 complaint: "it
+        kicked me out of claude code and i had to reattach". `kill_session`
+        destroys the session, and destroying a session DETACHES every client
+        attached to it — so the human watching an agent get cycled was dropped
+        to a shell, had to find the new session, and had to attach again. The
+        agent was fine. The person was ejected.
+
+        `respawn-window -k` kills the window's process and starts a new one in
+        the SAME window of the SAME session. The session object, its name, its
+        `SHANTY_OWNED` environment, its creation time and — the point — its
+        attached clients all survive. An attached operator sees the pane restart
+        in front of them and stays exactly where they were.
+
+        KEEPS THE OWNERSHIP GUARD HONEST. It does not create a session, so it
+        cannot become a second way to start an agent st does not own: the caller
+        has already had to find a LIVE session, and `owns()` still gates whether
+        st may touch it. That is why this is a separate verb from new_session
+        rather than a flag on it.
+
+        NOT IDEMPOTENT ABOUT ABSENCE, on purpose: respawning a session that is
+        not there would have to create one, and a "restart" that silently
+        becomes a "start" is how an agent ends up running in a session whose
+        ownership nobody checked. The caller checks exists() and falls back to
+        the stop+new path, which pays the full pre-flight.
+
+        The respawned pane runs the SHELL, not the agent — same as a pane fresh
+        out of new_session. The launch is a runtime send() afterwards, so a
+        handoff cannot leak in through the pane layer (invariant #5) and the
+        cycle reuses the one shared launcher instead of acquiring a cheaper one.
+        """
+        if not self.exists(name):
+            raise RuntimeError(
+                f"session {name!r} is not there — respawn replaces a process, "
+                f"it does not create a session")
+        argv = ["respawn-window", "-k", "-t", name]
+        if cwd and Path(cwd).is_dir():
+            # Only when it EXISTS, for the reason new_session gives: tmux fails
+            # the whole command on a missing -c, and a refusal here would strand
+            # the agent down rather than merely in the wrong directory.
+            argv += ["-c", str(Path(cwd).expanduser().resolve())]
+        pane_pid = self._pane_pid(name)
+        from . import panemem
+        subprocess.run(self._cmd(*argv), check=True, env=panemem.launch_env())
+        # THE SAME BELT kill_session wears, for the same measured reason: a child
+        # that ignores SIGHUP can ORPHAN and keep running — burning tokens,
+        # invisible to every check st has — while a NEW agent runs in the pane it
+        # used to own. Two of the same agent is the outcome the cycle's own
+        # refusal path exists to prevent, and respawn-window alone does not
+        # guarantee the old tree is gone.
+        if pane_pid:
+            self._kill_tree(pane_pid)
+
     def kill_session(self, name: str) -> None:
         """Destroy the session AND the process tree in its pane. IDEMPOTENT.
 
@@ -825,6 +881,11 @@ class NullPanes:
         # keystroke reach a pane, and a test that folds them together cannot
         # assert what any one of them did.
         self.picked = []
+        # Sessions whose PROCESS was replaced in place. Apart from
+        # everything else because the assertion a cycle test needs is
+        # exactly "respawned AND still live" — a respawn folded into
+        # the kill record could not distinguish the fix from the bug.
+        self.respawned = []
         self.screen = screen
         # pane -> launch command line. Lets a test model the green-and-dead
         # shape: a pane that EXISTS while the process in it carries someone
@@ -964,6 +1025,17 @@ class NullPanes:
         exercised on the cannot-tell branch rather than only the happy one.
         """
         return None if self._live is None else sorted(self._live)
+
+    def respawn(self, name: str, cwd: str | None = None) -> None:
+        """Same contract as Tmux.respawn: replaces the process, KEEPS the
+        session. In memory that is simply "the session stays live", recorded so
+        a test can assert the session was not destroyed — which is the property
+        the real one exists to provide."""
+        if not self.exists(name):
+            raise RuntimeError(f"session {name!r} is not there — respawn "
+                               f"replaces a process, it does not create a "
+                               f"session")
+        self.respawned.append((name, cwd))
 
     def kill_session(self, name: str) -> None:
         """Idempotent: discard removes if present, no-op if absent."""

@@ -286,6 +286,15 @@ class Harness(Protocol):
         on the directory ignores them."""
         ...
 
+    #: What st types into a live pane to clear this program's context in place,
+    #: or None if this program has no measured way to do that. Declared on the
+    #: harness because it is a property of the PROGRAM, exactly like the ready
+    #: markers and the stop-hook capability beside it.
+    clear_command: "str | None"
+    #: Screen text that proves a bypassed session is STILL bypassed. Empty =
+    #: unmeasured, which cycle.plan reads as "do not risk it".
+    bypass_markers: tuple
+
     def hooks(self, card: Agent) -> "HookSpec":
         """The CAPABILITY declaration the gate keys on: can the program this
         harness launches deliver a blocking stop hook to the MODEL?
@@ -326,6 +335,37 @@ class ClaudeHarness:
     # ever seen sitting in its box, the marker goes here and the check below
     # starts covering it with no other change.
     stranded_markers = ()
+    # THE CLEAR COMMAND — what st types into a LIVE pane to empty its context
+    # without touching the process (aegis-3laza's successor, Stiwi 2026-09-21).
+    #
+    # The original module docstring says an agent cannot clear itself, and that
+    # is still true and still the point: `/clear` is user-invoked, so the agent
+    # with the best signal about its own degradation has no way to act on it. It
+    # does NOT follow that the command is unusable — st is not the agent. st is
+    # outside the session, typing at the same prompt the operator types at, which
+    # is exactly the actor `/clear` was always waiting for. What was missing was
+    # never the authority, it was somebody to press the key.
+    clear_command = "/clear"
+    # Can this harness PROVE, from a captured pane, that bypass survived a clear?
+    #
+    # MEASURED, 2026-09-21, off sattler's live pane on vati (claude 2.1.x,
+    # launched --dangerously-skip-permissions): the footer renders
+    #
+    #     ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents
+    #
+    # Only the words are matched, never the glyphs. The ⏵⏵ prefix is decoration
+    # and decoration is what gets restyled between releases; a marker that
+    # depends on it stops matching SILENTLY, which here would mean quietly
+    # routing every bypassed card away from the soft path and nobody noticing
+    # that a feature had switched itself off. That trap is documented on
+    # READY_MARKERS and has been sprung on this repo before.
+    #
+    # EMPTY WOULD MEAN UNMEASURED, not "cannot happen" — the same convention as
+    # stranded_markers above — and it is load-bearing either way: cycle.plan
+    # refuses the soft path for any card running on bypass unless this can
+    # answer, so an emptied tuple degrades safely to replacing the process
+    # rather than guessing that bypass survived.
+    bypass_markers = ("bypass permissions on",)
 
     @staticmethod
     def _remote_control(root=None) -> bool:
@@ -830,6 +870,15 @@ class CodexHarness:
     # which the trailing Enter does NOT commit. The count varies with the body,
     # so the marker is the stable prefix.
     stranded_markers = ("[Pasted Content",)
+    # NO MEASURED CLEAR COMMAND. codex has its own session verbs, but which of
+    # them empties a context in place — and whether it keeps the approvals mode
+    # the launcher set — has not been probed on this fleet, and the cost of
+    # guessing wrong is an agent left in a mode it cannot dispatch from. None
+    # means codex cards cycle by having their process replaced, which is what
+    # they did before this existed and is not a regression for them. A probe
+    # under scripts/, like probe-codex-pretooluse.sh, is what would change it.
+    clear_command = None
+    bypass_markers = ()
 
     @property
     def settings_env_var(self) -> str:
@@ -1542,3 +1591,94 @@ def _deployment_harness(role: str | None, root) -> str | None:
     if role and cfg.harness_by_role.get(role):
         return cfg.harness_by_role[role]
     return cfg.harness_default
+
+
+def clear_command_for(card: Agent, root=None) -> "str | None":
+    """The clear command of the program THIS CARD runs, or None.
+
+    Asked of `for_card`, never of whatever runtime the CLI happened to build —
+    that mismatch is aegis-85ox, where a gate interrogated a hardcoded
+    ClaudeRuntime while the launched program came from the card. A capability
+    read off an object the card cannot select is a capability nobody is gating.
+    """
+    return getattr(for_card(card, root), "clear_command", None)
+
+
+def bypass_verifiable(card: Agent, root=None) -> bool:
+    """Whether this card's program can PROVE bypass survived a clear.
+
+    False while unmeasured, and false is the answer that costs nothing: it only
+    routes a bypassed card to the mechanism it already used.
+    """
+    return bool(getattr(for_card(card, root), "bypass_markers", ()))
+
+
+def bypass_intact(card: Agent, screen: str, root=None) -> "bool | None":
+    """Did bypass survive? True / False / None = COULD NOT ASK.
+
+    Three-valued on purpose. Collapsing "I could not look" into "it is gone"
+    would make every unmeasured harness escalate a healthy soft clear into a
+    process restart; collapsing it into "it is fine" would reinstate exactly the
+    aegis-3laza failure. Neither is available, so the caller gets the honest
+    third answer and decides — and the caller that matters (cycle) never even
+    reaches here for an unmeasured harness, because plan() kept it off the soft
+    path in the first place.
+    """
+    markers = getattr(for_card(card, root), "bypass_markers", ())
+    if not markers:
+        return None
+    return any(m in (screen or "") for m in markers)
+
+
+def resolve_fallback_model(card, root=None) -> str | None:
+    """Where this card goes when its MODEL is out of budget, or None.
+
+    Stiwi, 2026-09-21: "we hit fable limits. we need to support this in st".
+
+    A USAGE LIMIT IS NOT AN OUTAGE, and the whole feature turns on that. An
+    expired login (aegis-arma) means nothing can run until a human logs in. A
+    dead remote means the network is gone. A usage limit means the account is
+    healthy, the agent is healthy, the work is still there, and exactly one model
+    is unavailable for a bounded while. It is the only fault in this system that
+    a supervisor can clear on its own without a person and without waiting — by
+    running the same agent on a different model.
+
+    SAME LADDER as resolve_model, deliberately: the card, then the deployment's
+    rule for its ROLE, then the deployment's fleet-wide fallback, then None. A
+    reader who has learned one has learned the other.
+
+    None means DO NOT SWITCH, and it is the correct default rather than a gap.
+    shantytown does not know which slugs a harness can reach, and a guessed
+    fallback would move a limited agent onto a model the deployment never chose —
+    quietly, unattended, and at the moment nobody is watching. A deployment that
+    wants the switch says so; one that does not gets the honest report and waits
+    out the reset, which is what it already did.
+
+    NEVER RETURNS THE MODEL THE CARD IS ALREADY ON. A fallback equal to the
+    current model is a relaunch onto the same limit — it reads as a fix, costs a
+    session, and comes straight back, which is the crash-loop shape tend already
+    refuses to feed.
+    """
+    current = resolve_model(card, root)
+    declared = getattr(card, "fallback_model", None) or _deployment_fallback(
+        getattr(card, "role", None), root)
+    if declared and declared == current:
+        return None
+    return declared
+
+
+def _deployment_fallback(role: str | None, root) -> str | None:
+    """The deployment's [model] fallback answer for a role, or None.
+
+    load_or_default, for the reason _deployment_model gives: this resolves on a
+    recovery path, and a config typo elsewhere must surface as the config error
+    at the top of a command rather than as a fleet that silently declines to
+    fail over.
+    """
+    if root is None:
+        return None
+    from .config import load_or_default
+    cfg, _err = load_or_default(root)
+    if role and cfg.model_fallback_by_role.get(role):
+        return cfg.model_fallback_by_role[role]
+    return cfg.model_fallback

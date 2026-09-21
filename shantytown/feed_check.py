@@ -153,7 +153,8 @@ def free_feedable_workers(reg, panes, runtime, root=None, roles=("worker",)) -> 
     """
     from . import session_budget as _sb
     from . import triage as triage_mod
-    from .runtime import asks_a_question, auth_expired, live_wiring
+    from .runtime import (asks_a_question, auth_expired, limit_reached,
+                          live_wiring)
     # tend owns the retirement predicate; imported HERE rather than at module
     # level to match this function's other deferred imports and to keep
     # feed_check free of a top-level dependency on the supervisor.
@@ -186,10 +187,15 @@ def free_feedable_workers(reg, panes, runtime, root=None, roles=("worker",)) -> 
         # stopping to go feed nine agents none of which could run a single call.
         # An auth-dead worker's verdict is AUTH_DEAD, not IDLE, so it falls out
         # of `free` here — dead panes must never hold the coordinator hostage.
+        # A LIMITED worker's verdict is LIMITED, not IDLE, so it falls out of
+        # `free` here for the same reason an auth-dead one does: a pane whose
+        # model is out of budget cannot run a single call, and feeding it spends
+        # a dispatch to produce a banner.
         state = triage_mod.work_state(
             screen, runtime.shows_ready_ui(plain),
             awaiting=asks_a_question(runtime, plain),
-            auth_dead=auth_expired(runtime, plain))
+            auth_dead=auth_expired(runtime, plain),
+            limited=limit_reached(runtime, plain))
         if state != triage_mod.IDLE:
             continue
         # AT ITS SESSION CEILING IS NOT FREE (aegis-qviejh). `st crew` already
@@ -266,7 +272,8 @@ def idle_resumable_codex(reg, panes, runtime, active_beads, root=None) -> list[s
     """
     from . import harness as harness_mod
     from . import triage as triage_mod
-    from .runtime import asks_a_question, auth_expired, live_wiring
+    from .runtime import (asks_a_question, auth_expired, limit_reached,
+                          live_wiring)
     from .tend import is_retired
 
     stamped = st_launched_agents(root) if root is not None else None
@@ -293,7 +300,8 @@ def idle_resumable_codex(reg, panes, runtime, active_beads, root=None) -> list[s
             state = triage_mod.work_state(
                 screen, runtime.shows_ready_ui(plain),
                 awaiting=asks_a_question(runtime, plain),
-                auth_dead=auth_expired(runtime, plain))
+                auth_dead=auth_expired(runtime, plain),
+                limited=limit_reached(runtime, plain))
             wiring = live_wiring(card.pane, panes.cmdline)
         except Exception:
             continue
