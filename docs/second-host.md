@@ -20,7 +20,7 @@ alone does not prove either capability. The explicit host-sync protocol is now
 version **1**. Keep this requirement on every sync invocation, including previews:
 
 ```sh
-st --root /opt/fleet/.shanty fleet roles sync --require-host-sync 1 --dry-run
+st --root "/opt/fleet/.shanty" fleet roles sync --require-host-sync 1 --dry-run
 ```
 
 A legacy CLI that does not recognize the flag rejects it before projection
@@ -41,13 +41,13 @@ the flag in automation; an old, unflagged sync remains unsafe.
 Substitute your actual graph namespace, host identities, paths and SSH target:
 
 ```sh
-st --root /opt/fleet/.shanty fleet init -y \
+st --root "/opt/fleet/.shanty" fleet init -y \
   --host secondary --admin secondary-admin --crew worker-b \
   --quipu-server https://graph.example \
   --ontology-namespace https://fleet.example/ontology/ \
-  --canonical-source /home/operator/src/shantytown \
+  --canonical-source "$HOME/src/shantytown" \
   --peer primary=operator@primary.example,/opt/fleet/.shanty \
-  --workspaces /home/operator/workspaces
+  --workspaces "$HOME/workspaces"
 ```
 
 Init queries the configured graph before writing anything. If members already
@@ -79,10 +79,10 @@ members refuses. A sync cannot demote an existing administrator; correct the
 source hierarchy instead of trying to override the refusal.
 
 ```sh
-st --root /opt/fleet/.shanty fleet roles sync --require-host-sync 1 --dry-run
-st --root /opt/fleet/.shanty fleet roles sync --require-host-sync 1
-st --root /opt/fleet/.shanty crew
-st --root /opt/fleet/.shanty ops doctor
+st --root "/opt/fleet/.shanty" fleet roles sync --require-host-sync 1 --dry-run
+st --root "/opt/fleet/.shanty" fleet roles sync --require-host-sync 1
+st --root "/opt/fleet/.shanty" crew
+st --root "/opt/fleet/.shanty" ops doctor
 ```
 
 Review the preview: it should list only this host's intended members and explicitly
