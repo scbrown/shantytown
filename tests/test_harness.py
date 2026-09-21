@@ -92,16 +92,16 @@ _BEFORE = {
         "cd /x && SHANTY_AGENT=arnold BOBBIN_ROLE=administrator "
         "BEADS_ACTOR=arnold ST_ROLES=administrator claude --no-chrome --remote-control arnold "
         "--settings /s/administrator.json",
-    ("/tmp/r", "ellie"):
-        "SHANTY_ROOT=/tmp/r SHANTY_AGENT=ellie BOBBIN_ROLE=worker "
+    ("/store/r", "ellie"):
+        "SHANTY_ROOT=/store/r SHANTY_AGENT=ellie BOBBIN_ROLE=worker "
         "BEADS_ACTOR=ellie ST_ROLES=worker claude --no-chrome --remote-control ellie "
         "--settings /s/worker.json",
-    ("/tmp/r", "malcolm"):
-        "cd /home/w && SHANTY_ROOT=/tmp/r SHANTY_AGENT=malcolm BOBBIN_ROLE=lead "
+    ("/store/r", "malcolm"):
+        "cd /home/w && SHANTY_ROOT=/store/r SHANTY_AGENT=malcolm BOBBIN_ROLE=lead "
         "BEADS_ACTOR=malcolm ST_ROLES=lead claude --no-chrome --remote-control malcolm "
         "--dangerously-skip-permissions --settings /s/lead.json",
-    ("/tmp/r", "arnold"):
-        "cd /x && SHANTY_ROOT=/tmp/r SHANTY_AGENT=arnold "
+    ("/store/r", "arnold"):
+        "cd /x && SHANTY_ROOT=/store/r SHANTY_AGENT=arnold "
         "BOBBIN_ROLE=administrator BEADS_ACTOR=arnold ST_ROLES=administrator claude --no-chrome "
         "--remote-control arnold --settings /s/administrator.json",
 }
@@ -111,7 +111,7 @@ def _runtime(root=None):
     return ClaudeRuntime(NullPanes(), lambda c: f"/s/{c.role}.json", root=root)
 
 
-@pytest.mark.parametrize("root", [None, "/tmp/r"])
+@pytest.mark.parametrize("root", [None, "/store/r"])
 @pytest.mark.parametrize("card", _CARDS, ids=[c.name for c in _CARDS])
 def test_compose_is_byte_identical_for_every_existing_card_shape(card, root):
     """THE REFACTOR TEST. Every existing card composes the same bytes it did
@@ -134,9 +134,9 @@ def test_the_settings_format_is_the_harness_s_and_is_unchanged():
     the emitted settings are what nine live agents' hooks are wired from."""
     from shantytown.runtime import claude_settings_for_role
     for role in ("worker", "lead", "administrator"):
-        via_harness = harness_mod.get("claude").settings(role, root="/tmp/r")
-        assert settings_for_role(role, root="/tmp/r") == via_harness
-        assert via_harness == claude_settings_for_role(role, root="/tmp/r")
+        via_harness = harness_mod.get("claude").settings(role, root="/store/r")
+        assert settings_for_role(role, root="/store/r") == via_harness
+        assert via_harness == claude_settings_for_role(role, root="/store/r")
         # and it is still Claude Code's schema, not a generic one
         assert "Stop" in via_harness["hooks"]
 
@@ -148,7 +148,7 @@ def test_every_role_gets_the_query_first_session_start_hook():
     move quipu-query adoption."""
     from shantytown.runtime import claude_settings_for_role
     for role in ("worker", "lead", "administrator"):
-        hooks = claude_settings_for_role(role, root="/tmp/r")["hooks"]
+        hooks = claude_settings_for_role(role, root="/store/r")["hooks"]
         assert "SessionStart" in hooks, f"{role} has no SessionStart hook"
         cmds = [h["command"] for grp in hooks["SessionStart"] for h in grp["hooks"]]
         assert any("shantytown.query_first" in c for c in cmds), \
