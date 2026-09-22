@@ -279,6 +279,53 @@ def test_background_shader_maintenance_releases_the_crew(tmp_path):
         assert gaming.probe(tmp_path, proc=proc, now=now).state == 'gaming'
 
 
+def test_intermittent_shader_batches_cannot_restart_the_ceiling(tmp_path):
+    """The 2026-09-22 incident: the hold stood 22 h after play ended.
+
+    Steam precompiles in BATCHES with gaps between them. Clearing the ceiling
+    clock the instant a batch ended let the next batch restart it, so the
+    20-minute ceiling never elapsed however long the phase ran. A gap must not
+    buy the phase a fresh ceiling.
+    """
+    enabled(tmp_path)
+    proc = tmp_path / 'proc'
+    now = 1000
+    # Six batches of four minutes, each separated by a single minute with no
+    # shaders: thirty minutes of phase, never more than a minute of absence.
+    # Steam starts a fresh worker per batch, so each gets its own pid.
+    for batch in range(6):
+        process(proc, batch + 1, '/steam/fossilize_replay')
+        for _ in range(4):
+            gaming.probe(tmp_path, proc=proc, now=now)
+            now += 60
+        (proc / str(batch + 1) / 'cmdline').unlink()
+        gaming.probe(tmp_path, proc=proc, now=now)
+        now += 60
+    process(proc, 99, '/steam/fossilize_replay')
+    # The phase has outlived the ceiling, so a returning batch must not re-hold.
+    assert gaming.probe(tmp_path, proc=proc, now=now).state != 'gaming'
+
+
+def test_a_new_precompile_after_a_real_gap_earns_its_own_ceiling(tmp_path):
+    """The counterpart: the fix must not make the ceiling permanent.
+
+    A precompile the next day is a new phase and gets the full pre-launch grace,
+    because it may genuinely precede a launch.
+    """
+    enabled(tmp_path)
+    proc = tmp_path / 'proc'
+    process(proc, 1, '/steam/fossilize_replay')
+    for now in range(1000, 2201, 60):
+        assert gaming.probe(tmp_path, proc=proc, now=now).state == 'gaming'
+    (proc / '1' / 'cmdline').unlink()
+    for now in range(2260, 2521, 60):
+        gaming.probe(tmp_path, proc=proc, now=now)
+    assert gaming.probe(tmp_path, proc=proc, now=2600).state == 'clear'
+    # Hours later Steam precompiles again; that phase is held on its own merits.
+    process(proc, 2, '/steam/fossilize_replay')
+    assert gaming.probe(tmp_path, proc=proc, now=20000).state == 'gaming'
+
+
 def test_shader_ceiling_is_dropped_once_a_game_is_seen(tmp_path):
     """A long precompile that DOES end in a launch keeps the uninterrupted hold."""
     enabled(tmp_path)

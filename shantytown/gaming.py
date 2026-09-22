@@ -208,10 +208,24 @@ def probe(root: Path, *, proc: Path = Path("/proc"), now: float | None = None, s
             # when a shader phase begins with no game and is dropped the moment one
             # appears, so a launch that follows a long precompile is still held.
             shader_since = previous.get("shader_since") if automatic else None
-            if appids or not shaders:
-                shader_since = None
-            elif shader_since is None:
-                shader_since = now
+            shader_absent_since = previous.get("shader_absent_since") if automatic else None
+            if appids:
+                shader_since = shader_absent_since = None
+            elif shaders:
+                shader_absent_since = None
+                if shader_since is None:
+                    shader_since = now
+            else:
+                # Steam precompiles in BATCHES with gaps between them. Clearing the
+                # ceiling clock the instant a batch ended let the NEXT batch restart
+                # it, so the 20-minute ceiling never elapsed and the hold stood for
+                # 22 h after play ended (aegis-6ikuk8). Only a SUSTAINED absence ends
+                # the phase; a gap shorter than the lift delay keeps the clock running,
+                # while a genuinely new precompile later still earns its own ceiling.
+                shader_absent_since = (now if shader_absent_since is None
+                                       else float(shader_absent_since))
+                if now - shader_absent_since > lift_delay:
+                    shader_since = None
             fresh_shaders = bool(shaders) and (
                 shader_since is None or now - float(shader_since) <= shader_grace)
             if appids or fresh_shaders:
@@ -227,7 +241,8 @@ def probe(root: Path, *, proc: Path = Path("/proc"), now: float | None = None, s
                 state = "clear"
             data = dict(state=state, appids=appids, since=since if state != "clear" else 0,
                         observed=now, absent_since=absent, shader_pids=shaders,
-                        launch_until=launch_until, shader_since=shader_since)
+                        launch_until=launch_until, shader_since=shader_since,
+                        shader_absent_since=shader_absent_since)
             try:
                 data.update(gaming_activity.observe(proc, set(roots) | set(shaders), previous, now))
             except (OSError, ValueError, TypeError):
