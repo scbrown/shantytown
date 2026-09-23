@@ -76,7 +76,7 @@ def sample(host='desktop', cap=2, pct=10, at=None, agents=None):
     at = time.time() if at is None else at
     policy = gov.Policy(tiers=(gov.Tier(at=50, min_priority=1),), max_agents=cap)
     reader = FreshestReader({host: {'five_hour': Reading(pct=pct, at=at)}})
-    return fg.snapshot(host, {'base': gov.Governor(policy, reader)}, agents or [], now=at, hosts=['desktop', 'laptop'])
+    return fg.snapshot(host, {'base': gov.Governor(policy, reader)}, agents or [], now=at, hosts=['desktop', 'laptop'], admission_owner='desktop')
 
 
 def test_roundtrip_portable_policy_omits_reader_coordinates_and_credentials():
@@ -94,7 +94,7 @@ def test_roundtrip_portable_policy_omits_reader_coordinates_and_credentials():
 
 
 def test_peer_policy_governs_host_with_no_local_policy_and_counts_both(tmp_path):
-    local = fg.snapshot('laptop', {}, [agent('laptop', 'local')])
+    local = fg.snapshot('laptop', {}, [agent('laptop', 'local')], admission_owner='desktop')
     peer = sample(agents=[agent('desktop', 'remote')])
     fleet = fg.FleetGovernor(local, [(peer, '')], tmp_path)
     assert fleet.policy_hosts == {'base': 'desktop'}
@@ -120,7 +120,7 @@ def test_both_hosts_derive_same_freshest_verdict_and_hysteresis(tmp_path):
 def test_failed_peer_holds_growth_but_retains_local_reading(tmp_path):
     fleet = fg.FleetGovernor(sample(), [(None, 'laptop governor unavailable')], tmp_path)
     assert fleet.governors['base'].evaluate(persist=False).pct == 10
-    assert 'remote spend UNKNOWN' in fleet.admits_launch('claude')
+    assert 'peer occupancy or agreement UNKNOWN' in fleet.admits_launch('claude')
     assert 'fallback' in fleet.fallback()
 
 
@@ -163,7 +163,7 @@ def test_peer_transport_is_bounded_local_and_does_not_leak_stderr(monkeypatch):
 def fleet_setup(tmp_path, monkeypatch, peer=None):
     root = _roster(tmp_path, {'local': 'local-pane'})
     (root / 'shantytown.toml').write_text(
-        '[host]\nname="laptop"\n[host.peers.desktop]\nssh="user@example.test"\nroot="/tmp/root"\n')
+        '[host]\nname="laptop"\nadmission_owner="desktop"\n[host.peers.desktop]\nssh="user@example.test"\nroot="/tmp/root"\n')
     monkeypatch.setattr(cli, 'Tmux', lambda *a, **k: _Panes({'local-pane': IDLE_SCREEN}))
     monkeypatch.setattr(fg, 'collect', lambda peers: [(peer or sample(
         agents=[agent('desktop', 'remote')]), '')])
@@ -217,7 +217,7 @@ def test_dispatch_holds_on_missing_peer_instead_of_no_local_governor(tmp_path, m
     args = fleet_setup(tmp_path, monkeypatch)
     monkeypatch.setattr(fg, 'collect', lambda _: [(None, 'desktop governor unavailable')])
     gate = cli._dispatch_gate(args)
-    assert 'remote spend UNKNOWN' in gate(None, 'local')
+    assert 'peer occupancy or agreement UNKNOWN' in gate(None, 'local')
 
 
 def test_local_admission_lock_excludes_another_process(tmp_path):
@@ -231,7 +231,7 @@ with (pathlib.Path(sys.argv[1]) / 'governor' / 'admission.lock').open('a') as f:
     except BlockingIOError:
         sys.exit(7)
 '''
-    with fg.admission_lock(tmp_path, 'desktop', {'laptop': peer}):
+    with fg.admission_lock(tmp_path, 'desktop', {'laptop': peer}, owner='desktop'):
         result = subprocess.run([sys.executable, '-c', script, str(tmp_path)])
         assert result.returncode == 7
     result = subprocess.run([sys.executable, '-c', script, str(tmp_path)])
@@ -242,7 +242,7 @@ def test_tend_entrypoint_holds_down_agent_at_remote_cap(tmp_path, monkeypatch, c
     from test_tend import _Args as TendArgs, _Panes as TendPanes, _roster as tend_roster
     root = tend_roster(tmp_path, {'local': {'role': 'worker', 'pane': 'local-pane'}})
     (root / 'shantytown.toml').write_text(
-        '[host]\nname="desktop"\n[host.peers.laptop]\nssh="user@example.test"\nroot="/tmp/root"\n')
+        '[host]\nname="desktop"\nadmission_owner="desktop"\n[host.peers.laptop]\nssh="user@example.test"\nroot="/tmp/root"\n')
     panes = TendPanes(live=set())
     monkeypatch.setattr(cli, 'Tmux', lambda *a, **k: panes)
     monkeypatch.setattr(fg, 'collect', lambda _: [(sample('laptop', cap=1,
@@ -255,7 +255,8 @@ def test_tend_entrypoint_holds_down_agent_at_remote_cap(tmp_path, monkeypatch, c
     assert not list((root / 'governor').glob('state*.json'))
 
 
-def test_remote_lock_uses_same_authority_file_and_releases_on_exception(tmp_path, monkeypatch):
+@pytest.mark.parametrize('owner', ['desktop', 'z-server'])
+def test_remote_lock_uses_same_authority_file_and_releases_on_exception(tmp_path, monkeypatch, owner):
     import subprocess
     import fcntl
     original = subprocess.Popen
@@ -263,9 +264,9 @@ def test_remote_lock_uses_same_authority_file_and_releases_on_exception(tmp_path
         assert argv[0] == 'ssh' and argv[-2] == 'user@example.test'
         return original(['/bin/sh', '-c', argv[-1]], **kw)
     monkeypatch.setattr(fg.subprocess, 'Popen', launch)
-    peer = HostPeer('desktop', 'user@example.test', str(tmp_path))
+    peer = HostPeer(owner, 'user@example.test', str(tmp_path))
     with pytest.raises(RuntimeError, match='caller failed'):
-        with fg.admission_lock('/unused', 'laptop', {'desktop': peer}):
+        with fg.admission_lock('/unused', 'laptop', {owner: peer}, owner=owner):
             with (tmp_path / 'governor' / 'admission.lock').open('a') as handle:
                 with pytest.raises(BlockingIOError):
                     fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -280,7 +281,7 @@ def test_unreachable_authority_never_falls_back_to_local_lock(tmp_path, monkeypa
     monkeypatch.setattr(fg.subprocess, 'Popen', unavailable)
     peer = HostPeer('desktop', 'user@example.test', '/remote')
     with pytest.raises(fg.AdmissionUnavailable):
-        with fg.admission_lock(tmp_path, 'laptop', {'desktop': peer}):
+        with fg.admission_lock(tmp_path, 'laptop', {'desktop': peer}, owner='desktop'):
             pytest.fail('launch authorized without authority')
     assert not (tmp_path / 'governor' / 'admission.lock').exists()
 
@@ -291,3 +292,213 @@ def test_asymmetric_membership_cannot_choose_two_lock_authorities(tmp_path):
     peer['hosts'] = ['another', 'desktop', 'laptop']
     f = fg.FleetGovernor(local, [(peer, '')], tmp_path)
     assert 'host membership disagrees' in f.admits_launch('claude')
+
+
+def test_explicit_local_owner_ignores_alphabetically_earlier_peer(tmp_path, monkeypatch):
+    monkeypatch.setattr(fg.subprocess, 'Popen', lambda *a, **k: pytest.fail('contacted sleeping peer'))
+    peer = HostPeer('a-laptop', 'unused', '/unused')
+    with fg.admission_lock(tmp_path, 'z-server', {'a-laptop': peer}, owner='z-server'):
+        assert (tmp_path / 'governor' / 'admission.lock').is_file()
+
+
+@pytest.mark.parametrize('owner', [None, 'not-declared'])
+def test_multi_host_owner_must_be_deliberate_and_known(tmp_path, monkeypatch, owner):
+    monkeypatch.setattr(fg.subprocess, 'Popen', lambda *a, **k: pytest.fail('contacted peer'))
+    peer = HostPeer('laptop', 'unused', '/unused')
+    with pytest.raises(fg.AdmissionUnavailable):
+        with fg.admission_lock(tmp_path, 'server', {'laptop': peer}, owner=owner):
+            pytest.fail('admitted without a declared authority')
+    assert not (tmp_path / 'governor').exists()
+
+
+@pytest.mark.parametrize('host', [None, 'standalone'])
+def test_single_host_needs_no_authority_configuration(tmp_path, monkeypatch, host):
+    monkeypatch.setattr(fg.subprocess, 'Popen', lambda *a, **k: pytest.fail('contacted peer'))
+    with fg.admission_lock(tmp_path, host, {}):
+        pass
+
+
+@pytest.mark.parametrize('peer_owner', [None, 'laptop'])
+def test_old_or_disagreeing_peer_authority_holds_launch_and_dispatch(tmp_path, peer_owner):
+    local, peer = sample(), sample('laptop')
+    if peer_owner is None:
+        del peer['admission_owner']  # an old binary, not an empty new config
+    else:
+        peer['admission_owner'] = peer_owner
+    fleet = fg.FleetGovernor(local, [(peer, '')], tmp_path)
+    assert 'admission authority' in fleet.admits_launch('claude')
+    assert 'admission authority' in fleet.fallback()
+
+
+def test_config_loads_explicit_authority(tmp_path):
+    from shantytown import config
+    (tmp_path / 'shantytown.toml').write_text(
+        '[host]\nname="z-server"\nadmission_owner="z-server"\n'
+        '[host.peers.a-laptop]\nssh="user@example.test"\nroot="/tmp/root"\n')
+    assert config.load(tmp_path).host_admission_owner == 'z-server'
+
+
+@pytest.mark.parametrize('owner', ['""', '42', 'false', '"unknown"'])
+def test_config_rejects_invalid_authority(tmp_path, owner):
+    from shantytown import config
+    (tmp_path / 'shantytown.toml').write_text(
+        f'[host]\nname="server"\nadmission_owner={owner}\n')
+    with pytest.raises(config.ConfigError, match='admission_owner'):
+        config.load(tmp_path)
+
+
+def offline_fleet(tmp_path, monkeypatch, local=None, declared=None, now=None):
+    peers = {'laptop': HostPeer('laptop', 'user@example.test', '/remote')}
+    def disconnected(*args, **kwargs):
+        raise ConnectionRefusedError('peer asleep')
+    monkeypatch.setattr(fg.subprocess, 'run', disconnected)
+    return fg.FleetGovernor(local or sample(), fg.collect(peers), tmp_path,
+                            peer_config=peers, declared_agents=declared or [], now=now)
+
+
+def cache_peer(tmp_path, peer):
+    config = {'laptop': HostPeer('laptop', 'user@example.test', '/remote')}
+    return fg.FleetGovernor(sample(), [(peer, '')], tmp_path,
+                            peer_config=config, declared_agents=[])
+
+
+def test_owner_admits_with_cached_count_after_collect_connection_error(tmp_path, monkeypatch):
+    import time
+    now = time.time()
+    cache_peer(tmp_path, sample('laptop', at=now - 600,
+                               agents=[agent('laptop', 'remote')]))
+    fleet = offline_fleet(tmp_path, monkeypatch, now=now)
+    assert fleet.errors == []
+    assert fleet.counts() == {'base': 1}
+    assert fleet.admits_launch('claude') == ''
+    assert '3/2' in fleet.admits_launch('claude', [agent('desktop', 'local')])
+    assert fleet.warnings == ['laptop unreachable; cached count age 600s; 1 counted live']
+    # Cached readings cannot win freshest-observation selection or get restamped.
+    reader = fleet.governors['base'].reader
+    assert reader.provenance == {'five_hour': 'desktop'}
+    assert reader.read_all()['five_hour'].at > now - 600
+
+
+def test_owner_counts_never_seen_peer_cards_live(tmp_path, monkeypatch):
+    fleet = offline_fleet(tmp_path, monkeypatch, declared=[
+        agent('laptop', 'one', live=False), agent('laptop', 'two', live=False),
+        agent('other', 'unrelated')])
+    assert fleet.errors == []
+    assert fleet.counts() == {'base': 2}
+    assert '3/2' in fleet.admits_launch('claude')
+    assert 'never seen; count age unknown; 2 declared cards counted live' in fleet.warnings[0]
+
+
+@pytest.mark.parametrize('disagreement', ['policy', 'hosts', 'owner'])
+def test_disagreeing_peer_holds_even_when_later_unreachable(tmp_path, monkeypatch, disagreement):
+    peer = sample('laptop')
+    if disagreement == 'policy':
+        peer['governors']['base']['policy']['max_agents'] = 10
+    elif disagreement == 'hosts':
+        peer['hosts'] = ['laptop']
+    else:
+        peer['admission_owner'] = 'laptop'
+    live = cache_peer(tmp_path, peer)
+    assert live.errors and live.admits_launch('claude')
+    offline = offline_fleet(tmp_path, monkeypatch)
+    assert offline.errors and offline.admits_launch('claude')
+    assert 'disagree' in offline.fallback()
+
+
+@pytest.mark.parametrize('age', [fg.PEER_COUNT_MAX_AGE + 1, -31])
+def test_expired_or_future_cache_holds_instead_of_using_declared_cards(tmp_path, monkeypatch, age):
+    import time
+    now = time.time()
+    cache_peer(tmp_path, sample('laptop', at=now - age))
+    fleet = offline_fleet(tmp_path, monkeypatch, now=now)
+    assert 'cached count unusable' in fleet.admits_launch('claude')
+    assert 'never seen' not in str(fleet.warnings)
+
+
+@pytest.mark.parametrize('owner', [None, 'laptop'])
+def test_offline_fallback_is_only_for_explicit_local_owner(tmp_path, monkeypatch, owner):
+    local = sample()
+    local['admission_owner'] = owner
+    fleet = offline_fleet(tmp_path, monkeypatch, local=local)
+    assert 'unreachable' in fleet.admits_launch('claude')
+    assert not fleet.warnings
+
+
+@pytest.mark.parametrize('bad_local', ['absent', 'stale', 'failed'])
+def test_offline_fallback_requires_usable_local_usage(tmp_path, monkeypatch, bad_local):
+    local = sample()
+    if bad_local == 'absent':
+        local['governors'] = {}
+    else:
+        reading = local['governors']['base']['readings']['five_hour']
+        reading.update(at=0) if bad_local == 'stale' else reading.update(ok=False)
+    fleet = offline_fleet(tmp_path, monkeypatch, local=local)
+    assert 'requires' in fleet.admits_launch('claude')
+
+
+def test_invalid_reachable_snapshot_is_not_offline_permission(tmp_path, monkeypatch):
+    peers = {'laptop': HostPeer('laptop', 'user@example.test', '/remote')}
+    monkeypatch.setattr(fg.subprocess, 'run', lambda *a, **k:
+                        SimpleNamespace(returncode=0, stdout='not-json', stderr=''))
+    results = fg.collect(peers)
+    assert not isinstance(results[0][1], fg.PeerUnreachable)
+    fleet = fg.FleetGovernor(sample(), results, tmp_path,
+                             peer_config=peers, declared_agents=[])
+    assert fleet.admits_launch('claude')
+    offline = offline_fleet(tmp_path, monkeypatch)
+    assert 'last reachable census was invalid' in offline.admits_launch('claude')
+
+
+def test_corrupt_cache_does_not_mean_never_seen(tmp_path, monkeypatch):
+    cache_peer(tmp_path, sample('laptop'))
+    next((tmp_path / 'governor' / 'peers').glob('*.json')).write_text('broken')
+    fleet = offline_fleet(tmp_path, monkeypatch)
+    assert 'cached count unusable' in fleet.admits_launch('claude')
+
+
+def test_ssh_transport_exit_is_distinct_from_remote_command_failure(monkeypatch):
+    peer = HostPeer('laptop', 'user@example.test', '/remote')
+    for code in (255, 1):
+        monkeypatch.setattr(fg.subprocess, 'run', lambda *a, **k:
+                            SimpleNamespace(returncode=code, stdout='', stderr='secret'))
+        _, error = fg.read_peer(peer)
+        assert isinstance(error, fg.PeerUnreachable) == (code == 255)
+        assert 'secret' not in error
+
+
+def test_cli_owner_offline_cards_warnings_and_dispatch(tmp_path, monkeypatch, capsys):
+    from shantytown import config
+    root = _roster(tmp_path, {'local': 'local-pane'})
+    (root / 'shantytown.toml').write_text(
+        '[host]\nname="desktop"\nadmission_owner="desktop"\n'
+        '[host.peers.laptop]\nssh="user@example.test"\nroot="/remote"\n')
+    for name, retired in [('remote', False), ('retired', True)]:
+        (root / 'crew' / (name + '.json')).write_text(json.dumps(
+            dict(role='worker', host='laptop', harness='claude', retired=retired)))
+    cfg = config.load(root)
+    policy = gov.Policy(tiers=(gov.Tier(at=50, min_priority=1),), max_agents=3)
+    import time
+    local = gov.Governor(policy, FreshestReader({
+        'desktop': {'five_hour': Reading(pct=10, at=time.time())}}))
+    monkeypatch.setattr(cli, '_local_governors', lambda a: (cfg, {'base': local}))
+    monkeypatch.setattr(cli, 'Tmux', lambda *a, **k: _Panes({'local-pane': IDLE_SCREEN}))
+    def disconnected(*args, **kwargs):
+        raise ConnectionRefusedError('asleep')
+    monkeypatch.setattr(fg.subprocess, 'run', disconnected)
+    args = _Args(root)
+    args.governor = args.json = True
+    assert cli._cmd_crew(args) == cli.OK
+    output = json.loads(capsys.readouterr().out)
+    assert output['errors'] == []
+    assert output['governors']['base']['live'] == 2
+    assert '1 declared cards counted live' in output['warnings'][0]
+    assert [r['name'] for r in output['agents'] if r.get('estimated')] == ['remote']
+    card = next(c for c in cli._registry(args).all().exact() if c.name == 'local')
+    assert cli._account_launch_refusal(args, card) == ''
+    gate = cli._dispatch_gate(args)
+    assert gate is None or not gate(None, 'local')
+    args.json = False
+    assert cli._cmd_crew(args) == cli.OK
+    output = capsys.readouterr().out
+    assert 'laptop unreachable' in output
+    assert 'counted live (offline estimate)' in output

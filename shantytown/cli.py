@@ -519,9 +519,17 @@ def _governors(a):
     if fleet is None:
         host = local_host(a.root) or 'local'
         snapshot = fg.snapshot(host, local, _governor_agents(a),
-                               hosts=[host, *cfg.host_peers])
-        fleet = fg.FleetGovernor(snapshot, fg.collect(cfg.host_peers), a.root)
+                               hosts=[host, *cfg.host_peers],
+                               admission_owner=cfg.host_admission_owner)
+        declared = [dict(name=card.name, host=card.host, live=True,
+                         harness=harness_mod.name_for(card, root=a.root))
+                    for card in _registry(a).all().exact()
+                    if card.host in cfg.host_peers and not getattr(card, 'retired', False)]
+        fleet = fg.FleetGovernor(snapshot, fg.collect(cfg.host_peers), a.root,
+                                 peer_config=cfg.host_peers, declared_agents=declared)
         a._account_governor = fleet
+        for warning in fleet.warnings:
+            print('  ⚠ ' + warning, file=sys.stderr)
         if fleet.errors:
             print('  ⚠ ' + fleet.fallback(), file=sys.stderr)
     policies = {name: g.policy for name, g in fleet.governors.items()}
@@ -553,7 +561,8 @@ def _crew_account_governor(a):
         _cfg, governors = _local_governors(a)
         host = local_host(a.root) or 'local'
         print(json.dumps(fg.snapshot(host, governors, _governor_agents(a),
-                                     hosts=[host, *_cfg.host_peers])))
+                                     hosts=[host, *_cfg.host_peers],
+                                     admission_owner=_cfg.host_admission_owner)))
         return OK
     cfg, governors = _governors(a)
     fleet = getattr(a, '_account_governor', None)
@@ -566,7 +575,7 @@ def _crew_account_governor(a):
     if getattr(a, 'json', False):
         print(json.dumps(dict(version=fg.VERSION, scope='fleet',
                               host=fleet.local, complete=not fleet.errors,
-                              errors=fleet.errors, agents=fleet.agents,
+                              errors=fleet.errors, warnings=fleet.warnings, agents=fleet.agents,
                               governors={name: dict(
                                   live=counts.get(name, 0), max_agents=v.max_agents,
                                   signal_lost=v.signal_lost, frozen=v.frozen,
@@ -605,7 +614,10 @@ def _crew_account_governor(a):
             print(fleet.balance().line())
         for row in fleet.agents:
             if row['live']:
-                print(f'  {row["host"]} {row["name"]} {row["harness"]} live')
+                status = 'counted live (offline estimate)' if row.get('estimated') else 'live'
+                print(f'  {row["host"]} {row["name"]} {row["harness"]} {status}')
+        for warning in fleet.warnings:
+            print('  ' + warning)
         if fleet.errors:
             print('  ' + fleet.fallback())
     return CANNOT_TELL if fleet.errors else OK
@@ -2477,7 +2489,8 @@ def _launch(a, card, panes, runtime, *, dry_run: bool = False,
         print('  refused: ' + str(err), file=sys.stderr)
         return REFUSED
     try:
-        with fg.admission_lock(a.root, cfg.host_name, cfg.host_peers):
+        with fg.admission_lock(a.root, cfg.host_name, cfg.host_peers,
+                               owner=cfg.host_admission_owner):
             # A census made before waiting for the lock cannot admit anything.
             if hasattr(a, '_account_governor'):
                 del a._account_governor
@@ -9893,7 +9906,8 @@ def _tend_once(a, quiet: bool = False) -> int:
         _gaming_advisory(a, gaming, reg=reg, panes=panes)
     from . import fleet_governor as fg
     try:
-        with fg.admission_lock(a.root, cfg.host_name, cfg.host_peers):
+        with fg.admission_lock(a.root, cfg.host_name, cfg.host_peers,
+                               owner=cfg.host_admission_owner):
             if cfg.host_peers:
                 if hasattr(a, '_account_governor'):
                     del a._account_governor

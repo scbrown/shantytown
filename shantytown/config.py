@@ -191,6 +191,7 @@ class Config:
     # cards `roles sync` is allowed to write. None = single-host deployment,
     # which is every deployment written before this existed.
     host_name: str | None = None
+    host_admission_owner: str | None = None
     host_min_sync_version: int = 1
     # [host.peers.<name>] ssh = "user@addr", root = "/path/to/.shanty" — how the
     # ephemeral inbox reaches an agent whose card says it lives elsewhere.
@@ -332,7 +333,7 @@ _MODEL_KEYS = {"default", "by_role", "fallback", "fallback_by_role"}
 _STARTUP_KEYS = {"mode"}
 _HIB_KEYS = {"enabled", "max_quiet_minutes"}
 _TMUX_KEYS = {"socket"}
-_HOST_KEYS = {"name", "peers", "min_sync_version"}
+_HOST_KEYS = {"name", "peers", "min_sync_version", "admission_owner"}
 _HOST_PEER_KEYS = {"ssh", "root"}
 _DREAM_KEYS = {"enabled", "interval_minutes", "min_headroom_pct", "domains"}
 
@@ -408,6 +409,7 @@ def _resolve(data: dict, path: Path) -> Config:
                   env=_env(path, _table(path, data, "env")),
                   tmux_socket=_tmux_socket(path, _table(path, data, "tmux")),
                   host_name=_host_name(path, _table(path, data, "host")),
+                  host_admission_owner=_host_admission_owner(path, _table(path, data, "host")),
                   host_min_sync_version=_host_sync_version(path, _table(path, data, "host")),
                   host_peers=_host_peers(path, _table(path, data, "host")),
                   roles=declared_roles,
@@ -763,6 +765,18 @@ def _host_name(path: Path, tbl: dict) -> str | None:
         raise ConfigError(f"{path}: [host] name must be a string, got "
                           f"{type(v).__name__}")
     return v.strip() or None
+
+
+def _host_admission_owner(path: Path, tbl: dict) -> str | None:
+    value = tbl.get("admission_owner")
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise ConfigError(f"{path}: [host] admission_owner must be a non-empty string")
+    owner = value.strip()
+    if owner not in {_host_name(path, tbl), *_host_peers(path, tbl)}:
+        raise ConfigError(f"{path}: [host] admission_owner must name this host or a declared peer")
+    return owner
 
 
 def _host_peers(path: Path, tbl: dict) -> dict:

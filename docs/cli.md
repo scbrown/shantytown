@@ -1571,20 +1571,43 @@ policy. Multiple declarations for the same provider must agree; disagreement
 holds new launches and dispatch until the policies are reconciled. The strictest
 remembered window hold survives until the ordinary relaxation rules release it.
 
-A missing or incompatible peer is reported as an available/local usage fallback
-with **unknown remote spend**, not an empty host. Existing agents keep running;
-new launches and dispatch are held. Each peer call has a 20-second deadline and
-peers are queried concurrently. A peer census older than 60 seconds or more than
+Account usage is account-scoped; an unreachable peer makes its **occupancy**
+unknown. The configured local admission owner can use that peer's cached agent
+count for up to 24 hours. If no census has ever been seen, it counts every declared,
+non-retired card on that peer as live, using each card's harness. Diagnostics name
+the unreachable peer and count age (unknown for never-seen peers); JSON includes
+`warnings` and marks estimated agent rows. Estimates count toward admission caps,
+but do not prove a live session exists to refresh session-derived usage.
+
+This fallback requires usable local account readings. Cached usage readings and
+holds are never reused as fresh evidence. An expired, corrupt or incompatible
+census still holds launches and dispatch, as does a known policy, membership or
+owner disagreement, including disagreement remembered before an outage. Caches
+live under `governor/peers/` and are tied to the declared peer endpoint. The
+non-owner receives no offline fallback and still needs the owner's lock.
+Existing agents keep running. Each peer call has a 20-second deadline and peers
+are queried concurrently. A received census older than 60 seconds or more than
 30 seconds in the future is rejected; keep host clocks synchronized.
 
 All hosts must declare the same set of uniquely named peers; differing membership
-is reported and holds admission before either host can use another authority. Launch admission is
-serialized on the lexically first host using an SSH-held file lock under that
+is reported and holds admission before either host can use another authority. Every multi-host
+deployment must explicitly set `[host] admission_owner` to the same declared host.
+Choose an always-on host; names no longer elect the authority alphabetically.
+A single-host deployment needs no setting and never reaches for a peer.
+Launch admission is serialized on the chosen host using an SSH-held file lock under that
 host's governor state directory. The census is read after acquiring the lock,
 then the lock remains held through launch. `tend` recounts local agents between
 respawns, so one pass cannot reuse a slot. A busy or unavailable authority holds
 admission instead of electing another authority. The remote lock needs `python3`
 and POSIX file locking on the SSH host. No additional daemon or package is needed.
+
+The local governor JSON includes `admission_owner`. A missing or disagreeing peer
+value holds growth, including when a peer runs an older binary. To migrate, pause
+new admissions on every host and let in-flight launches finish, upgrade every host,
+configure the same owner everywhere, and check the local JSON on each before resuming.
+Do not switch only one host or use an unavailable authority as a reason to take a
+different local lock. The owner-only occupancy fallback above does not change
+which host owns the admission lock.
 
 This coordinates the configured `st` launch paths in a connected fleet. It is not
 a distributed consensus or fencing service: out-of-band launches or loss of the SSH lock connection during a launch can defeat
