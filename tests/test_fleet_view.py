@@ -57,7 +57,7 @@ def test_transport_failure_is_not_zero_agents(monkeypatch, failure):
 def setup(tmp_path, monkeypatch):
     root = _roster(tmp_path, {'local': 'local-pane'})
     (root / 'shantytown.toml').write_text(
-        '[host]\nname="desktop"\n[host.peers.laptop]\nssh="user@example.com"\nroot="/tmp/root"\n')
+        '[host]\nname="desktop"\nadmission_owner="desktop"\n[host.peers.laptop]\nssh="user@example.com"\nroot="/tmp/root"\n')
     monkeypatch.setattr(cli, 'Tmux', lambda *a, **k: _Panes({'local-pane': IDLE_SCREEN}))
     monkeypatch.setattr(fleet, 'collect', lambda peers:
                         [dict(host='laptop', agents=[row()], error=None)])

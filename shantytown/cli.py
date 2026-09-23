@@ -519,7 +519,8 @@ def _governors(a):
     if fleet is None:
         host = local_host(a.root) or 'local'
         snapshot = fg.snapshot(host, local, _governor_agents(a),
-                               hosts=[host, *cfg.host_peers])
+                               hosts=[host, *cfg.host_peers],
+                               admission_owner=cfg.host_admission_owner)
         fleet = fg.FleetGovernor(snapshot, fg.collect(cfg.host_peers), a.root)
         a._account_governor = fleet
         if fleet.errors:
@@ -553,7 +554,8 @@ def _crew_account_governor(a):
         _cfg, governors = _local_governors(a)
         host = local_host(a.root) or 'local'
         print(json.dumps(fg.snapshot(host, governors, _governor_agents(a),
-                                     hosts=[host, *_cfg.host_peers])))
+                                     hosts=[host, *_cfg.host_peers],
+                                     admission_owner=_cfg.host_admission_owner)))
         return OK
     cfg, governors = _governors(a)
     fleet = getattr(a, '_account_governor', None)
@@ -2477,7 +2479,8 @@ def _launch(a, card, panes, runtime, *, dry_run: bool = False,
         print('  refused: ' + str(err), file=sys.stderr)
         return REFUSED
     try:
-        with fg.admission_lock(a.root, cfg.host_name, cfg.host_peers):
+        with fg.admission_lock(a.root, cfg.host_name, cfg.host_peers,
+                               owner=cfg.host_admission_owner):
             # A census made before waiting for the lock cannot admit anything.
             if hasattr(a, '_account_governor'):
                 del a._account_governor
@@ -9893,7 +9896,8 @@ def _tend_once(a, quiet: bool = False) -> int:
         _gaming_advisory(a, gaming, reg=reg, panes=panes)
     from . import fleet_governor as fg
     try:
-        with fg.admission_lock(a.root, cfg.host_name, cfg.host_peers):
+        with fg.admission_lock(a.root, cfg.host_name, cfg.host_peers,
+                               owner=cfg.host_admission_owner):
             if cfg.host_peers:
                 if hasattr(a, '_account_governor'):
                     del a._account_governor

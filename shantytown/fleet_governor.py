@@ -25,20 +25,27 @@ class AdmissionUnavailable(GovernorError):
 
 
 @contextmanager
-def admission_lock(root, host, peers):
-    """Serialize census-to-launch on the lexically first configured host.
+def admission_lock(root, host, peers, *, owner=None):
+    """Serialize census-to-launch on the explicitly configured authority.
 
-    Every peer must list the same host set. There is no authority failover:
+    Every peer must list the same host set and authority. There is no failover:
     choosing a second lock when the first is unreachable would split the cap.
     SSH holds the remote flock through stdin until the local launch completes.
     This is coordination for a trusted, connected fleet, not a consensus service.
     """
     if not peers:
+        if owner is not None and owner != host:
+            raise AdmissionUnavailable('account admission authority is not a declared host')
         yield
         return
     if not host or host in peers:
         raise AdmissionUnavailable('account admission needs a unique local host name')
-    owner = min([host, *peers])
+    if not owner:
+        raise AdmissionUnavailable(
+            'multi-host account admission requires [host] admission_owner; '
+            'configure the same always-on host on every peer')
+    if owner not in {host, *peers}:
+        raise AdmissionUnavailable('account admission authority is not a declared host')
     if owner == host:
         import fcntl
         path = Path(root) / 'governor' / 'admission.lock'
@@ -138,7 +145,7 @@ def observations(governor):
             for w, r in readings.items()}
 
 
-def snapshot(host, governors, agents, *, now=None, hosts=None):
+def snapshot(host, governors, agents, *, now=None, hosts=None, admission_owner=None):
     value = dict(version=VERSION, scope='local', host=host, complete=True,
                 observed_at=time.time() if now is None else now, agents=agents,
                 governors={name: dict(policy=policy_wire(g.policy),
@@ -147,6 +154,7 @@ def snapshot(host, governors, agents, *, now=None, hosts=None):
                            for name, g in governors.items()})
     if hosts is not None:
         value['hosts'] = sorted(hosts)
+    value['admission_owner'] = admission_owner or (host if not hosts or len(hosts) == 1 else None)
     return value
 
 
@@ -263,6 +271,14 @@ class FleetGovernor:
         self.local = local['host']
         self.snapshots = [local] + [s for s, error in peers if s is not None and not error]
         self.errors = [error for _, error in peers if error]
+        if len(self.snapshots) > 1 or len(local.get('hosts', [])) > 1:
+            owner = local.get('admission_owner')
+            if not owner:
+                self.errors.append('missing [host] admission_owner; configure the same authority on every peer')
+            for item in self.snapshots:
+                if not item.get('admission_owner') or item['admission_owner'] != owner:
+                    self.errors.append(f'{item["host"]} admission authority missing or disagrees; '
+                                       'upgrade and configure every peer before growth')
         if 'hosts' in local:
             for item in self.snapshots:
                 if item.get('hosts') != local['hosts']:

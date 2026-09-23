@@ -76,7 +76,7 @@ def sample(host='desktop', cap=2, pct=10, at=None, agents=None):
     at = time.time() if at is None else at
     policy = gov.Policy(tiers=(gov.Tier(at=50, min_priority=1),), max_agents=cap)
     reader = FreshestReader({host: {'five_hour': Reading(pct=pct, at=at)}})
-    return fg.snapshot(host, {'base': gov.Governor(policy, reader)}, agents or [], now=at, hosts=['desktop', 'laptop'])
+    return fg.snapshot(host, {'base': gov.Governor(policy, reader)}, agents or [], now=at, hosts=['desktop', 'laptop'], admission_owner='desktop')
 
 
 def test_roundtrip_portable_policy_omits_reader_coordinates_and_credentials():
@@ -94,7 +94,7 @@ def test_roundtrip_portable_policy_omits_reader_coordinates_and_credentials():
 
 
 def test_peer_policy_governs_host_with_no_local_policy_and_counts_both(tmp_path):
-    local = fg.snapshot('laptop', {}, [agent('laptop', 'local')])
+    local = fg.snapshot('laptop', {}, [agent('laptop', 'local')], admission_owner='desktop')
     peer = sample(agents=[agent('desktop', 'remote')])
     fleet = fg.FleetGovernor(local, [(peer, '')], tmp_path)
     assert fleet.policy_hosts == {'base': 'desktop'}
@@ -163,7 +163,7 @@ def test_peer_transport_is_bounded_local_and_does_not_leak_stderr(monkeypatch):
 def fleet_setup(tmp_path, monkeypatch, peer=None):
     root = _roster(tmp_path, {'local': 'local-pane'})
     (root / 'shantytown.toml').write_text(
-        '[host]\nname="laptop"\n[host.peers.desktop]\nssh="user@example.test"\nroot="/tmp/root"\n')
+        '[host]\nname="laptop"\nadmission_owner="desktop"\n[host.peers.desktop]\nssh="user@example.test"\nroot="/tmp/root"\n')
     monkeypatch.setattr(cli, 'Tmux', lambda *a, **k: _Panes({'local-pane': IDLE_SCREEN}))
     monkeypatch.setattr(fg, 'collect', lambda peers: [(peer or sample(
         agents=[agent('desktop', 'remote')]), '')])
@@ -231,7 +231,7 @@ with (pathlib.Path(sys.argv[1]) / 'governor' / 'admission.lock').open('a') as f:
     except BlockingIOError:
         sys.exit(7)
 '''
-    with fg.admission_lock(tmp_path, 'desktop', {'laptop': peer}):
+    with fg.admission_lock(tmp_path, 'desktop', {'laptop': peer}, owner='desktop'):
         result = subprocess.run([sys.executable, '-c', script, str(tmp_path)])
         assert result.returncode == 7
     result = subprocess.run([sys.executable, '-c', script, str(tmp_path)])
@@ -242,7 +242,7 @@ def test_tend_entrypoint_holds_down_agent_at_remote_cap(tmp_path, monkeypatch, c
     from test_tend import _Args as TendArgs, _Panes as TendPanes, _roster as tend_roster
     root = tend_roster(tmp_path, {'local': {'role': 'worker', 'pane': 'local-pane'}})
     (root / 'shantytown.toml').write_text(
-        '[host]\nname="desktop"\n[host.peers.laptop]\nssh="user@example.test"\nroot="/tmp/root"\n')
+        '[host]\nname="desktop"\nadmission_owner="desktop"\n[host.peers.laptop]\nssh="user@example.test"\nroot="/tmp/root"\n')
     panes = TendPanes(live=set())
     monkeypatch.setattr(cli, 'Tmux', lambda *a, **k: panes)
     monkeypatch.setattr(fg, 'collect', lambda _: [(sample('laptop', cap=1,
@@ -255,7 +255,8 @@ def test_tend_entrypoint_holds_down_agent_at_remote_cap(tmp_path, monkeypatch, c
     assert not list((root / 'governor').glob('state*.json'))
 
 
-def test_remote_lock_uses_same_authority_file_and_releases_on_exception(tmp_path, monkeypatch):
+@pytest.mark.parametrize('owner', ['desktop', 'z-server'])
+def test_remote_lock_uses_same_authority_file_and_releases_on_exception(tmp_path, monkeypatch, owner):
     import subprocess
     import fcntl
     original = subprocess.Popen
@@ -263,9 +264,9 @@ def test_remote_lock_uses_same_authority_file_and_releases_on_exception(tmp_path
         assert argv[0] == 'ssh' and argv[-2] == 'user@example.test'
         return original(['/bin/sh', '-c', argv[-1]], **kw)
     monkeypatch.setattr(fg.subprocess, 'Popen', launch)
-    peer = HostPeer('desktop', 'user@example.test', str(tmp_path))
+    peer = HostPeer(owner, 'user@example.test', str(tmp_path))
     with pytest.raises(RuntimeError, match='caller failed'):
-        with fg.admission_lock('/unused', 'laptop', {'desktop': peer}):
+        with fg.admission_lock('/unused', 'laptop', {owner: peer}, owner=owner):
             with (tmp_path / 'governor' / 'admission.lock').open('a') as handle:
                 with pytest.raises(BlockingIOError):
                     fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -280,7 +281,7 @@ def test_unreachable_authority_never_falls_back_to_local_lock(tmp_path, monkeypa
     monkeypatch.setattr(fg.subprocess, 'Popen', unavailable)
     peer = HostPeer('desktop', 'user@example.test', '/remote')
     with pytest.raises(fg.AdmissionUnavailable):
-        with fg.admission_lock(tmp_path, 'laptop', {'desktop': peer}):
+        with fg.admission_lock(tmp_path, 'laptop', {'desktop': peer}, owner='desktop'):
             pytest.fail('launch authorized without authority')
     assert not (tmp_path / 'governor' / 'admission.lock').exists()
 
@@ -291,3 +292,56 @@ def test_asymmetric_membership_cannot_choose_two_lock_authorities(tmp_path):
     peer['hosts'] = ['another', 'desktop', 'laptop']
     f = fg.FleetGovernor(local, [(peer, '')], tmp_path)
     assert 'host membership disagrees' in f.admits_launch('claude')
+
+
+def test_explicit_local_owner_ignores_alphabetically_earlier_peer(tmp_path, monkeypatch):
+    monkeypatch.setattr(fg.subprocess, 'Popen', lambda *a, **k: pytest.fail('contacted sleeping peer'))
+    peer = HostPeer('a-laptop', 'unused', '/unused')
+    with fg.admission_lock(tmp_path, 'z-server', {'a-laptop': peer}, owner='z-server'):
+        assert (tmp_path / 'governor' / 'admission.lock').is_file()
+
+
+@pytest.mark.parametrize('owner', [None, 'not-declared'])
+def test_multi_host_owner_must_be_deliberate_and_known(tmp_path, monkeypatch, owner):
+    monkeypatch.setattr(fg.subprocess, 'Popen', lambda *a, **k: pytest.fail('contacted peer'))
+    peer = HostPeer('laptop', 'unused', '/unused')
+    with pytest.raises(fg.AdmissionUnavailable):
+        with fg.admission_lock(tmp_path, 'server', {'laptop': peer}, owner=owner):
+            pytest.fail('admitted without a declared authority')
+    assert not (tmp_path / 'governor').exists()
+
+
+@pytest.mark.parametrize('host', [None, 'standalone'])
+def test_single_host_needs_no_authority_configuration(tmp_path, monkeypatch, host):
+    monkeypatch.setattr(fg.subprocess, 'Popen', lambda *a, **k: pytest.fail('contacted peer'))
+    with fg.admission_lock(tmp_path, host, {}):
+        pass
+
+
+@pytest.mark.parametrize('peer_owner', [None, 'laptop'])
+def test_old_or_disagreeing_peer_authority_holds_launch_and_dispatch(tmp_path, peer_owner):
+    local, peer = sample(), sample('laptop')
+    if peer_owner is None:
+        del peer['admission_owner']  # an old binary, not an empty new config
+    else:
+        peer['admission_owner'] = peer_owner
+    fleet = fg.FleetGovernor(local, [(peer, '')], tmp_path)
+    assert 'admission authority' in fleet.admits_launch('claude')
+    assert 'admission authority' in fleet.fallback()
+
+
+def test_config_loads_explicit_authority(tmp_path):
+    from shantytown import config
+    (tmp_path / 'shantytown.toml').write_text(
+        '[host]\nname="z-server"\nadmission_owner="z-server"\n'
+        '[host.peers.a-laptop]\nssh="user@example.test"\nroot="/tmp/root"\n')
+    assert config.load(tmp_path).host_admission_owner == 'z-server'
+
+
+@pytest.mark.parametrize('owner', ['""', '42', 'false', '"unknown"'])
+def test_config_rejects_invalid_authority(tmp_path, owner):
+    from shantytown import config
+    (tmp_path / 'shantytown.toml').write_text(
+        f'[host]\nname="server"\nadmission_owner={owner}\n')
+    with pytest.raises(config.ConfigError, match='admission_owner'):
+        config.load(tmp_path)

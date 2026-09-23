@@ -25,6 +25,7 @@ socket = "default"             # the fleet's tmux server, DECLARED, never inferr
 
 [host]                         # only on a multi-host fleet
 name = "rig-a"                 # which rig this is, as the graph spells it
+admission_owner = "rig-a"      # same always-on lock host on EVERY peer
 
 [host.peers.laptop]            # how to reach the OTHER host's st
 ssh  = "me@laptop.example"     # `st inbox <agent>` relays here when the agent lives there

@@ -64,6 +64,13 @@ host's SSH target and store root. Verify SSH access with `BatchMode=yes` and
 ensure `st` is on the remote PATH. `--force` preserves existing config and cards;
 it is not a migration or a way to change an existing host's identity.
 
+Before launching on either host, set `[host] admission_owner` to the same always-on
+host name on both. Both hosts must run a build that exports `admission_owner` in
+`st crew --governor --json --local`. Missing or disagreeing authority declarations
+hold growth. For an existing fleet, pause admissions and drain in-flight launches
+before upgrading and changing the owner; see [account admission](cli.md) for the
+lock and peer-census boundaries.
+
 `SHANTY_CANONICAL_SOURCE` is an absolute **local checkout path**, not a Git URL or
 the first host's path. `st ops doctor` compares the installed package with that
 checkout. A source-less package needs a local approved checkout and an editable

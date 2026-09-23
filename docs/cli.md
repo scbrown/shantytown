@@ -1578,13 +1578,24 @@ peers are queried concurrently. A peer census older than 60 seconds or more than
 30 seconds in the future is rejected; keep host clocks synchronized.
 
 All hosts must declare the same set of uniquely named peers; differing membership
-is reported and holds admission before either host can use another authority. Launch admission is
-serialized on the lexically first host using an SSH-held file lock under that
+is reported and holds admission before either host can use another authority. Every multi-host
+deployment must explicitly set `[host] admission_owner` to the same declared host.
+Choose an always-on host; names no longer elect the authority alphabetically.
+A single-host deployment needs no setting and never reaches for a peer.
+Launch admission is serialized on the chosen host using an SSH-held file lock under that
 host's governor state directory. The census is read after acquiring the lock,
 then the lock remains held through launch. `tend` recounts local agents between
 respawns, so one pass cannot reuse a slot. A busy or unavailable authority holds
 admission instead of electing another authority. The remote lock needs `python3`
 and POSIX file locking on the SSH host. No additional daemon or package is needed.
+
+The local governor JSON includes `admission_owner`. A missing or disagreeing peer
+value holds growth, including when a peer runs an older binary. To migrate, pause
+new admissions on every host and let in-flight launches finish, upgrade every host,
+configure the same owner everywhere, and check the local JSON on each before resuming.
+Do not switch only one host or use an unavailable authority as a reason to take a
+different local lock. Selecting an available authority does not make an unavailable
+peer's census known: the unknown-remote-spend hold above still applies.
 
 This coordinates the configured `st` launch paths in a connected fleet. It is not
 a distributed consensus or fencing service: out-of-band launches or loss of the SSH lock connection during a launch can defeat
