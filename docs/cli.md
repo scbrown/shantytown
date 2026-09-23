@@ -30,6 +30,7 @@ st work                       the item and the board
                               (`bead|human|access|external|parked`) and a durable
                               reason naming its referent/re-test condition
   cost [bead] [--sync]        parser-owned cost reads and closed-bead/metric publication
+  triage [item ...]             preview Jev board suggestions; --publish comments only
   dream [--run]               inspect or run one bounded spare-capacity reflection cycle
 st agent                      one agent
   new <agent>                 create an agent from a card
@@ -192,7 +193,7 @@ Codex input already includes its cached subset. This makes
 `cache_read / usage_in` a provider-independent prompt-cache hit rate. The fields
 are omitted—not zeroed—when every matching transcript is unknown.
 
-Thirty-three. Six verbs at the top level and twenty-seven grouped commands under five groups
+Thirty-four. Six verbs at the top level and twenty-eight grouped commands under five groups
 (`work`, `agent`, `fleet`, `repo`, `ops`). A group is a namespace and runs nothing, so it earns no
 slot; the count is the leaves. The flat spellings from before the grouping (st cycle for
 st agent cycle, and so on) still parse into the same handler, print one line on stderr saying
@@ -1630,3 +1631,43 @@ schedule. The configured Camayoc publisher must support `--scheduler-only`.
 Heartbeats preserve pending writes and cooldowns and never count as cost samples.
 A live pane alone is insufficient source evidence: session discovery also
 requires a stats event within the last hour and matching transcript metadata.
+
+### Board triage (Jev)
+
+`st work triage [item ...] --jev-command 'python3 /path/to/camayoc/scripts/jev_mcp.py'`
+previews routing, duplicate and escalation severity suggestions. This earns a
+separate work command because it produces advice across the board, unlike
+`go` (dispatch) or `dream` (reflection). It uses the deployment's br board and
+Quipu crew roles/domains; missing domains are listed, never invented.
+
+The default selects at most five open unassigned non-inbox items. `--limit` bounds
+that set; each item makes one choice, one severity score and up to five pairwise
+noul calls against lexical duplicate candidates. Lexical similarity only selects
+candidates. It never becomes a Jev verdict. The none option remains enabled.
+`--dry-run` reads inputs without calling Jev. No API key enters st; the installed
+Camayoc server resolves its own credential and records per-agent usage.
+
+`--publish` appends comments tagged `jev`, `sourceKind=inferred`, `plane=quarantine`
+with request/model/confidence/usage and verifies the comment read-back. These are
+human-review suggestions; no assignment, priority, duplicate link, page or graph
+promotion occurs. A changed assignment or an invalid model/transport response
+refuses publication. A failure after earlier items were published is partial
+progress: inspect those comments before retrying an indeterminate write.
+
+`--benchmark labelled.jsonl` evaluates owner choice on at least 30 historical
+issue objects containing `id`, `title`, `description`, and `assignee`. Labels and
+priorities are excluded from model state. The JSON report includes agreement,
+abstention, confidence split and every request/result. Recorded assignee is the
+comparison label, not proof of a uniquely correct owner. Duplicate/severity arms
+remain uncalibrated until separately labelled; all output stays advisory.
+
+Initial routing measurement (2026-09-23): 30 distinct closed tasks spanning 13
+recorded assignees, sampled in rounds from each owner's latest completed tasks.
+An exact domain-predicate query supplied one domain for 14 graph crew choices;
+13 were missing. The general registry does not project domains, so triage reads
+that predicate separately and refuses partial reads. Jev matched 5/30
+labels (16.7%), abstained on 23/30 (76.7%), and made two other choices. This is a
+diagnostic baseline, not evidence of routing quality: populate governed ownership
+domains and rerun before trusting this arm. No confidence cutoff was inferred
+from this small set. Raw requests and results belong with the deployment's private
+benchmark artifacts, not in a public repository.

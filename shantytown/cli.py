@@ -1,8 +1,8 @@
-"""st — the CLI. Six verbs, five groups, twenty-seven grouped commands: thirty-three, and the count is load-bearing: each earns its slot.
+"""st — the CLI. Six verbs, five groups, twenty-eight grouped commands: thirty-four, and the count is load-bearing: each earns its slot.
 
     task · go · inbox [--count] · crew [--count|--governor]
     · anchor [--short|--events|--harness] · attach [-r|--no-start]
-    work  → repool · defer · cost [--sync] · dream [--run]
+    work  → repool · defer · cost [--sync] · dream [--run] · triage
     agent → new · stop · harness · cycle [--self|--allow-loss]
             · input [--show|--clear|--dismiss] · ask · answer · log · history <agent> · stats
     fleet → start [--mode] · tend [--install|--status|--reauth|--target]
@@ -861,7 +861,7 @@ def _default_root() -> Path:
 from .surface import SURFACE, GROUP_OF  # noqa: E402
 
 _GROUP_HELP = {
-    "work": "the item and the board: repool, defer, cost, dream",
+    "work": "the item and the board: repool, defer, cost, dream, triage",
     "agent": "one agent: new, stop, harness, cycle, input, ask, answer, log, history, stats",
     "fleet": "the fleet: start, tend, roles, init, hold, window, dashboard",
     "repo": "a shared project repo: worktree, push, context",
@@ -1367,6 +1367,14 @@ def build_parser() -> argparse.ArgumentParser:
                     help="run one cycle now (still requires idle work queue and measured headroom)")
     dm.add_argument("-n", "--dry-run", action="store_true",
                     help="show the cycle that would be created; write nothing")
+
+    bt = leaf("triage", help="Jev advisory routing, duplicate and severity suggestions")
+    bt.add_argument("items", nargs="*")
+    bt.add_argument("--limit", type=int, default=5)
+    bt.add_argument("--jev-command", help="quoted argv for the installed Camayoc Jev MCP server")
+    bt.add_argument("--publish", action="store_true", help="append advisory comments; never assign")
+    bt.add_argument("--benchmark", help="JSONL of at least 30 previously routed issues")
+    bt.add_argument("-n", "--dry-run", action="store_true", help="read inputs only, no Jev or writes")
 
     cx = leaf("context", help="what code should I be looking at?")
     cx.add_argument("query", nargs="+")
@@ -1899,6 +1907,17 @@ def _run_command(a) -> int:
         return _cmd_window(a)
     if a.cmd == "tend":
         return _cmd_tend(a)
+    if a.cmd == "triage":
+        from . import board_triage
+        try:
+            if a.limit < 1 or a.limit > 100 or (a.publish and (a.dry_run or a.benchmark)):
+                raise ValueError("limit must be 1..100; publish cannot combine with dry-run/benchmark")
+            result = board_triage.run(a, _tracker(a), QuipuRegistry(root=a.root))
+            print(json.dumps(result, ensure_ascii=False))
+            return OK
+        except Exception as exc:
+            print(f"board triage failed ({type(exc).__name__}): {exc}", file=sys.stderr)
+            return CANNOT_TELL
     if a.cmd == "dream":
         return _cmd_dream(a)
     if a.cmd == "attach":
