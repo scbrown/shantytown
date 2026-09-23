@@ -7,6 +7,7 @@ that never comes up MUST be 2, not 0.
 """
 from __future__ import annotations
 import json
+import shlex
 from pathlib import Path
 
 import pytest
@@ -273,6 +274,78 @@ def test_new_refuses_when_settings_cannot_be_materialized(tmp_path, monkeypatch,
     assert panes.sent == [], "refuse must launch nothing"
 
 
+def test_first_launch_names_a_working_settings_repair(tmp_path, monkeypatch, capsys):
+    """A fresh root needs an actionable refusal, including its shell-quoted root."""
+    root = tmp_path / "new host's store"
+    root.mkdir()
+    _world(root, settings=False)
+    panes = NullPanes(screen=READY, live=set())
+    monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: panes)
+    args = ["--root", str(root), "--backend", "files"]
+
+    assert cli.main([*args, "agent", "new", "ellie", "-n"]) == cli.REFUSED
+    err = capsys.readouterr().err
+    repair = next(part for part in err.split("`") if "fleet roles set" in part)
+    assert shlex.split(repair) == [
+        "st", "--root", str(root), "fleet", "roles", "set", "ellie", "worker",
+    ]
+    assert not (root / "settings").exists()
+    assert not panes.sent
+    assert not panes.exists("crew-ellie")
+
+    # Execute the exact advice, then retry through the public launch command.
+    assert cli.main(shlex.split(repair)[1:]) == cli.OK
+    assert (root / "settings" / "worker.settings.json").is_file()
+    assert cli.main([*args, "agent", "new", "ellie", "-n"]) == cli.OK
+    assert "--settings" in capsys.readouterr().out
+    assert not panes.sent
+
+
+@pytest.mark.parametrize("platform", ["linux", "darwin"])
+def test_memory_ceiling_notice_distinguishes_macos_from_a_failed_linux_bound(
+        monkeypatch, capsys, platform):
+    from shantytown import panemem
+    from shantytown.tmux import Tmux
+
+    panes = Tmux()
+    attempts = []
+    notes = []
+    monkeypatch.setattr(cli.sys, "platform", platform)
+    monkeypatch.setattr(panes, "pane_pid", lambda _: 123)
+    monkeypatch.setattr(panes, "_panemem_note", lambda *args: notes.append(args))
+
+    def cannot_bound(pid):
+        attempts.append(pid)
+        return panemem.Applied(False, scope=None, reason="test scope unavailable")
+
+    monkeypatch.setattr(panemem, "bound_pane", cannot_bound)
+    panes._bound_memory("crew-ellie")
+    err = capsys.readouterr().err
+    assert "memory ceiling NOT applied" in err
+    assert notes, "the limitation must still be recorded durably"
+    if platform == "darwin":
+        assert attempts == [], "macOS must not wait for an impossible systemd scope"
+        assert "expected on this platform" in err
+    else:
+        assert attempts == [123]
+        assert "test scope unavailable" in err
+        assert "expected on this platform" not in err
+
+
+def test_new_explains_a_store_without_mcp_provisioning(tmp_path, monkeypatch, capsys):
+    ws = tmp_path / "workspace"
+    ws.mkdir()
+    root = _world(tmp_path, workspace=str(ws))
+    panes = NullPanes(screen=READY, live=set())
+    monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: panes)
+    monkeypatch.setattr(cli, "_refresh_clone", lambda _: None)
+    assert cli._cmd_new(_Args(root=root)) == cli.OK
+    out = capsys.readouterr().out
+    assert "NO MCP kit" in out
+    assert "This store has not configured MCP provisioning" in out
+    assert "add a template there" in out
+
+
 def test_new_refuses_to_clobber_a_live_session(tmp_path, monkeypatch, capsys):
     """The clobber guard — never replace a running agent."""
     root = _world(tmp_path)
@@ -415,19 +488,22 @@ def test_new_is_OK_when_the_live_process_carries_what_the_graph_needs(tmp_path, 
     assert "VERIFIED" in capsys.readouterr().out
 
 
-def test_new_is_CANNOT_TELL_when_the_hooks_cannot_be_READ(tmp_path, monkeypatch, capsys):
+@pytest.mark.parametrize("platform", ["linux", "darwin"])
+def test_new_is_CANNOT_TELL_when_the_hooks_cannot_be_READ(tmp_path, monkeypatch, capsys, platform):
     """Unreadable is not hookless, and must never be reported as either a pass
     or a failure — the same contract live_stop_directions already holds."""
     root = _hooked_world(tmp_path)
     panes = NullPanes(screen=READY, live=set())
     monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: panes)
     monkeypatch.setattr(panes, "cmdline", lambda pane: None)   # cannot look
+    monkeypatch.setattr(cli.sys, "platform", platform)
 
     rc = cli._cmd_new(_Args(root=root))
 
     err = capsys.readouterr().err
     assert rc == cli.CANNOT_TELL
     assert "UNVERIFIED" in err
+    assert ("expected verification limitation" in err) == (platform == "darwin")
     assert "WITHOUT the stop hooks" not in err, "reported a cannot-tell as a definite failure"
 
 

@@ -2595,7 +2595,9 @@ def _launch_admitted(a, card, panes, runtime, *, dry_run: bool = False,
         # here is indistinguishable from the bug (an agent that launches with no
         # tools and looks fine), and a deleted template would restore it.
         print(f"  note: no provisioning template at {prov_mod.provision_dir(a.root)}"
-              f" — launching {card.name} with NO MCP kit.")
+              f" — launching {card.name} with NO MCP kit. "
+              "This store has not configured MCP provisioning; "
+              "add a template there if these tools are needed.")
     if card.workspace:
         # Skills, same claim shape as the servers: names read back out of the
         # links we just made, not "the directory is there". A crew that shipped
@@ -2857,9 +2859,15 @@ def _verify_live_hooks(a, card, runtime, panes, session: str) -> int:
     reader = getattr(panes, "cmdline", None)
     wiring = live_wiring(session, reader) if reader else None
     if wiring is None:
+        platform_note = (
+            " On macOS, the Linux /proc inspection is unavailable; "
+            "this is an expected verification limitation, not proof of missing hooks."
+            if sys.platform == "darwin" else ""
+        )
         print(f"  could not tell: {card.name} ({session}) is live, but its stop "
               f"hooks could NOT be read from the running process, so it is "
-              f"UNVERIFIED — not confirmed hooked. Check `st fleet roles --check`.",
+              f"UNVERIFIED — not confirmed hooked.{platform_note} "
+              "Check `st fleet roles --check`.",
               file=sys.stderr)
         return CANNOT_TELL
     missing = need - wiring.directions

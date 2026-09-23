@@ -7,6 +7,18 @@
 that role's stop hooks in the same write. See [`agent-card.md`](agent-card.md) for the card, the
 `role set` contract, and what happens to a lead's reports when it's demoted or goes down.
 
+On a fresh deployment, a card can exist before its role's settings have been emitted.
+`st agent new <agent>` refuses a settings-less launch and prints the exact repair:
+`st --root <store> fleet roles set <agent> <role>`. Run that command, even if the card
+already declares the role, then retry the launch. It emits the settings for the card's
+harness; existing operator settings are preserved by the normal role-setting merge.
+
+On macOS, launch reports that the systemd/cgroup memory ceiling is unavailable. Live
+hook inspection also relies on Linux `/proc`: an unreadable process remains **UNVERIFIED**
+(exit 2), even when that limitation is expected. Neither notice proves hooks are missing
+or a memory limit was applied. Separately, a store without a provisioning template launches
+with no MCP kit on any platform; configure the template if the agents need those tools.
+
 ## Three roles
 
 | role | takes work? | delegates? | receives stop hooks from |

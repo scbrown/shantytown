@@ -646,6 +646,13 @@ class Tmux:
         there and is not.
         """
         from . import panemem
+        if sys.platform == "darwin":
+            # MemoryMax requires Linux systemd/cgroups. A Mac cannot acquire
+            # the .scope this path waits for, regardless of tmux configuration.
+            note = "memory ceiling NOT applied — systemd/cgroup limits are unavailable on macOS"
+            self._panemem_note(name, "-", note)
+            print(f"  note: {name}: {note} (expected on this platform)", file=sys.stderr)
+            return
         pid = self.pane_pid(name)
         if pid is None:
             self._panemem_note(name, "-", "no pane pid — memory ceiling NOT applied")

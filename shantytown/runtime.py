@@ -38,6 +38,7 @@ import re
 import os
 import json
 import shutil
+import shlex
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -1598,9 +1599,17 @@ class ClaudeRuntime:
         require_capability(program, card, consequence="Nothing launched.")
         settings_path = self.settings_path(card)
         if not settings_path:
+            # A new store may have a card whose role has never been emitted.
+            # Name the generating command, rooted to THIS store, so repair does
+            # not depend on discovering that a no-op role set writes settings.
+            repair = ["st"]
+            if self._root is not None:
+                repair += ["--root", str(Path(self._root).resolve())]
+            repair += ["fleet", "roles", "set", card.name, card.role]
             raise SettingsError(
                 f"could not materialize settings for {card.name} "
-                f"(role {card.role!r}); refusing to launch a settings-less agent."
+                f"(role {card.role!r}); refusing to launch a settings-less agent. "
+                f"Emit the role settings with `{shlex.join(repair)}`, then retry."
             )
         launch = program.launch(card, settings_path, root=self._root)
         # The invariant, asserted where it is made. If this ever fails, the bug is
