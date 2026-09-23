@@ -521,8 +521,15 @@ def _governors(a):
         snapshot = fg.snapshot(host, local, _governor_agents(a),
                                hosts=[host, *cfg.host_peers],
                                admission_owner=cfg.host_admission_owner)
-        fleet = fg.FleetGovernor(snapshot, fg.collect(cfg.host_peers), a.root)
+        declared = [dict(name=card.name, host=card.host, live=True,
+                         harness=harness_mod.name_for(card, root=a.root))
+                    for card in _registry(a).all().exact()
+                    if card.host in cfg.host_peers and not getattr(card, 'retired', False)]
+        fleet = fg.FleetGovernor(snapshot, fg.collect(cfg.host_peers), a.root,
+                                 peer_config=cfg.host_peers, declared_agents=declared)
         a._account_governor = fleet
+        for warning in fleet.warnings:
+            print('  ⚠ ' + warning, file=sys.stderr)
         if fleet.errors:
             print('  ⚠ ' + fleet.fallback(), file=sys.stderr)
     policies = {name: g.policy for name, g in fleet.governors.items()}
@@ -568,7 +575,7 @@ def _crew_account_governor(a):
     if getattr(a, 'json', False):
         print(json.dumps(dict(version=fg.VERSION, scope='fleet',
                               host=fleet.local, complete=not fleet.errors,
-                              errors=fleet.errors, agents=fleet.agents,
+                              errors=fleet.errors, warnings=fleet.warnings, agents=fleet.agents,
                               governors={name: dict(
                                   live=counts.get(name, 0), max_agents=v.max_agents,
                                   signal_lost=v.signal_lost, frozen=v.frozen,
@@ -607,7 +614,10 @@ def _crew_account_governor(a):
             print(fleet.balance().line())
         for row in fleet.agents:
             if row['live']:
-                print(f'  {row["host"]} {row["name"]} {row["harness"]} live')
+                status = 'counted live (offline estimate)' if row.get('estimated') else 'live'
+                print(f'  {row["host"]} {row["name"]} {row["harness"]} {status}')
+        for warning in fleet.warnings:
+            print('  ' + warning)
         if fleet.errors:
             print('  ' + fleet.fallback())
     return CANNOT_TELL if fleet.errors else OK

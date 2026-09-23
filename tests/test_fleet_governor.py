@@ -120,7 +120,7 @@ def test_both_hosts_derive_same_freshest_verdict_and_hysteresis(tmp_path):
 def test_failed_peer_holds_growth_but_retains_local_reading(tmp_path):
     fleet = fg.FleetGovernor(sample(), [(None, 'laptop governor unavailable')], tmp_path)
     assert fleet.governors['base'].evaluate(persist=False).pct == 10
-    assert 'remote spend UNKNOWN' in fleet.admits_launch('claude')
+    assert 'peer occupancy or agreement UNKNOWN' in fleet.admits_launch('claude')
     assert 'fallback' in fleet.fallback()
 
 
@@ -217,7 +217,7 @@ def test_dispatch_holds_on_missing_peer_instead_of_no_local_governor(tmp_path, m
     args = fleet_setup(tmp_path, monkeypatch)
     monkeypatch.setattr(fg, 'collect', lambda _: [(None, 'desktop governor unavailable')])
     gate = cli._dispatch_gate(args)
-    assert 'remote spend UNKNOWN' in gate(None, 'local')
+    assert 'peer occupancy or agreement UNKNOWN' in gate(None, 'local')
 
 
 def test_local_admission_lock_excludes_another_process(tmp_path):
@@ -345,3 +345,160 @@ def test_config_rejects_invalid_authority(tmp_path, owner):
         f'[host]\nname="server"\nadmission_owner={owner}\n')
     with pytest.raises(config.ConfigError, match='admission_owner'):
         config.load(tmp_path)
+
+
+def offline_fleet(tmp_path, monkeypatch, local=None, declared=None, now=None):
+    peers = {'laptop': HostPeer('laptop', 'user@example.test', '/remote')}
+    def disconnected(*args, **kwargs):
+        raise ConnectionRefusedError('peer asleep')
+    monkeypatch.setattr(fg.subprocess, 'run', disconnected)
+    return fg.FleetGovernor(local or sample(), fg.collect(peers), tmp_path,
+                            peer_config=peers, declared_agents=declared or [], now=now)
+
+
+def cache_peer(tmp_path, peer):
+    config = {'laptop': HostPeer('laptop', 'user@example.test', '/remote')}
+    return fg.FleetGovernor(sample(), [(peer, '')], tmp_path,
+                            peer_config=config, declared_agents=[])
+
+
+def test_owner_admits_with_cached_count_after_collect_connection_error(tmp_path, monkeypatch):
+    import time
+    now = time.time()
+    cache_peer(tmp_path, sample('laptop', at=now - 600,
+                               agents=[agent('laptop', 'remote')]))
+    fleet = offline_fleet(tmp_path, monkeypatch, now=now)
+    assert fleet.errors == []
+    assert fleet.counts() == {'base': 1}
+    assert fleet.admits_launch('claude') == ''
+    assert '3/2' in fleet.admits_launch('claude', [agent('desktop', 'local')])
+    assert fleet.warnings == ['laptop unreachable; cached count age 600s; 1 counted live']
+    # Cached readings cannot win freshest-observation selection or get restamped.
+    reader = fleet.governors['base'].reader
+    assert reader.provenance == {'five_hour': 'desktop'}
+    assert reader.read_all()['five_hour'].at > now - 600
+
+
+def test_owner_counts_never_seen_peer_cards_live(tmp_path, monkeypatch):
+    fleet = offline_fleet(tmp_path, monkeypatch, declared=[
+        agent('laptop', 'one', live=False), agent('laptop', 'two', live=False),
+        agent('other', 'unrelated')])
+    assert fleet.errors == []
+    assert fleet.counts() == {'base': 2}
+    assert '3/2' in fleet.admits_launch('claude')
+    assert 'never seen; count age unknown; 2 declared cards counted live' in fleet.warnings[0]
+
+
+@pytest.mark.parametrize('disagreement', ['policy', 'hosts', 'owner'])
+def test_disagreeing_peer_holds_even_when_later_unreachable(tmp_path, monkeypatch, disagreement):
+    peer = sample('laptop')
+    if disagreement == 'policy':
+        peer['governors']['base']['policy']['max_agents'] = 10
+    elif disagreement == 'hosts':
+        peer['hosts'] = ['laptop']
+    else:
+        peer['admission_owner'] = 'laptop'
+    live = cache_peer(tmp_path, peer)
+    assert live.errors and live.admits_launch('claude')
+    offline = offline_fleet(tmp_path, monkeypatch)
+    assert offline.errors and offline.admits_launch('claude')
+    assert 'disagree' in offline.fallback()
+
+
+@pytest.mark.parametrize('age', [fg.PEER_COUNT_MAX_AGE + 1, -31])
+def test_expired_or_future_cache_holds_instead_of_using_declared_cards(tmp_path, monkeypatch, age):
+    import time
+    now = time.time()
+    cache_peer(tmp_path, sample('laptop', at=now - age))
+    fleet = offline_fleet(tmp_path, monkeypatch, now=now)
+    assert 'cached count unusable' in fleet.admits_launch('claude')
+    assert 'never seen' not in str(fleet.warnings)
+
+
+@pytest.mark.parametrize('owner', [None, 'laptop'])
+def test_offline_fallback_is_only_for_explicit_local_owner(tmp_path, monkeypatch, owner):
+    local = sample()
+    local['admission_owner'] = owner
+    fleet = offline_fleet(tmp_path, monkeypatch, local=local)
+    assert 'unreachable' in fleet.admits_launch('claude')
+    assert not fleet.warnings
+
+
+@pytest.mark.parametrize('bad_local', ['absent', 'stale', 'failed'])
+def test_offline_fallback_requires_usable_local_usage(tmp_path, monkeypatch, bad_local):
+    local = sample()
+    if bad_local == 'absent':
+        local['governors'] = {}
+    else:
+        reading = local['governors']['base']['readings']['five_hour']
+        reading.update(at=0) if bad_local == 'stale' else reading.update(ok=False)
+    fleet = offline_fleet(tmp_path, monkeypatch, local=local)
+    assert 'requires' in fleet.admits_launch('claude')
+
+
+def test_invalid_reachable_snapshot_is_not_offline_permission(tmp_path, monkeypatch):
+    peers = {'laptop': HostPeer('laptop', 'user@example.test', '/remote')}
+    monkeypatch.setattr(fg.subprocess, 'run', lambda *a, **k:
+                        SimpleNamespace(returncode=0, stdout='not-json', stderr=''))
+    results = fg.collect(peers)
+    assert not isinstance(results[0][1], fg.PeerUnreachable)
+    fleet = fg.FleetGovernor(sample(), results, tmp_path,
+                             peer_config=peers, declared_agents=[])
+    assert fleet.admits_launch('claude')
+    offline = offline_fleet(tmp_path, monkeypatch)
+    assert 'last reachable census was invalid' in offline.admits_launch('claude')
+
+
+def test_corrupt_cache_does_not_mean_never_seen(tmp_path, monkeypatch):
+    cache_peer(tmp_path, sample('laptop'))
+    next((tmp_path / 'governor' / 'peers').glob('*.json')).write_text('broken')
+    fleet = offline_fleet(tmp_path, monkeypatch)
+    assert 'cached count unusable' in fleet.admits_launch('claude')
+
+
+def test_ssh_transport_exit_is_distinct_from_remote_command_failure(monkeypatch):
+    peer = HostPeer('laptop', 'user@example.test', '/remote')
+    for code in (255, 1):
+        monkeypatch.setattr(fg.subprocess, 'run', lambda *a, **k:
+                            SimpleNamespace(returncode=code, stdout='', stderr='secret'))
+        _, error = fg.read_peer(peer)
+        assert isinstance(error, fg.PeerUnreachable) == (code == 255)
+        assert 'secret' not in error
+
+
+def test_cli_owner_offline_cards_warnings_and_dispatch(tmp_path, monkeypatch, capsys):
+    from shantytown import config
+    root = _roster(tmp_path, {'local': 'local-pane'})
+    (root / 'shantytown.toml').write_text(
+        '[host]\nname="desktop"\nadmission_owner="desktop"\n'
+        '[host.peers.laptop]\nssh="user@example.test"\nroot="/remote"\n')
+    for name, retired in [('remote', False), ('retired', True)]:
+        (root / 'crew' / (name + '.json')).write_text(json.dumps(
+            dict(role='worker', host='laptop', harness='claude', retired=retired)))
+    cfg = config.load(root)
+    policy = gov.Policy(tiers=(gov.Tier(at=50, min_priority=1),), max_agents=3)
+    import time
+    local = gov.Governor(policy, FreshestReader({
+        'desktop': {'five_hour': Reading(pct=10, at=time.time())}}))
+    monkeypatch.setattr(cli, '_local_governors', lambda a: (cfg, {'base': local}))
+    monkeypatch.setattr(cli, 'Tmux', lambda *a, **k: _Panes({'local-pane': IDLE_SCREEN}))
+    def disconnected(*args, **kwargs):
+        raise ConnectionRefusedError('asleep')
+    monkeypatch.setattr(fg.subprocess, 'run', disconnected)
+    args = _Args(root)
+    args.governor = args.json = True
+    assert cli._cmd_crew(args) == cli.OK
+    output = json.loads(capsys.readouterr().out)
+    assert output['errors'] == []
+    assert output['governors']['base']['live'] == 2
+    assert '1 declared cards counted live' in output['warnings'][0]
+    assert [r['name'] for r in output['agents'] if r.get('estimated')] == ['remote']
+    card = next(c for c in cli._registry(args).all().exact() if c.name == 'local')
+    assert cli._account_launch_refusal(args, card) == ''
+    gate = cli._dispatch_gate(args)
+    assert gate is None or not gate(None, 'local')
+    args.json = False
+    assert cli._cmd_crew(args) == cli.OK
+    output = capsys.readouterr().out
+    assert 'laptop unreachable' in output
+    assert 'counted live (offline estimate)' in output

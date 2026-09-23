@@ -7,17 +7,44 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, replace
 from contextlib import contextmanager
 import json
+import hashlib
+import os
 from pathlib import Path
 import select
 import shlex
 import subprocess
 import time
+import tempfile
 
 from . import governor as gov
 from . import governor_balance as balance_mod
 from .governor import GovernorError, Reading
 
 VERSION = 1
+PEER_COUNT_MAX_AGE = 24 * 60 * 60
+
+
+class PeerUnreachable(str):
+    """Transport failure, distinct from a reachable peer's invalid census."""
+
+
+def _peer_cache(root, peer):
+    # Changing the endpoint must not borrow another host's occupancy evidence.
+    key = hashlib.sha256(json.dumps([peer.name, peer.ssh, peer.root]).encode()).hexdigest()
+    return Path(root) / 'governor' / 'peers' / (key + '.json')
+
+
+def _save_peer(path, snapshot, error):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode='w', dir=path.parent, delete=False) as handle:
+            temporary = handle.name
+            json.dump(dict(snapshot=snapshot, error=str(error)), handle)
+        os.replace(temporary, path)
+    finally:
+        if temporary and os.path.exists(temporary):
+            os.unlink(temporary)
 
 
 class AdmissionUnavailable(GovernorError):
@@ -226,12 +253,16 @@ def read_peer(peer):
         result = subprocess.run(
             ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5', '--',
              peer.ssh, command], capture_output=True, text=True, timeout=20)
+        if result.returncode == 255:
+            return None, PeerUnreachable(f'{peer.name} governor unreachable (SSH transport failed)')
         if result.returncode:
             raise ValueError(f'ssh/governor exit {result.returncode}')
         if len(result.stdout) > 1024 * 1024:
             raise ValueError('governor snapshot exceeds 1 MiB')
         return validate(json.loads(result.stdout), peer.name), ''
-    except (OSError, subprocess.TimeoutExpired, ValueError, TypeError, GovernorError) as exc:
+    except (ConnectionError, subprocess.TimeoutExpired) as exc:
+        return None, PeerUnreachable(f'{peer.name} governor unreachable ({type(exc).__name__})')
+    except (OSError, ValueError, TypeError, GovernorError) as exc:
         return None, f'{peer.name} governor unavailable ({type(exc).__name__}: {exc})'
 
 
@@ -266,26 +297,99 @@ class MergedState:
 
 
 class FleetGovernor:
-    """One invocation's account view. No peer failure becomes zero occupancy."""
-    def __init__(self, local, peers, root):
+    """One invocation's account view, with explicit offline occupancy estimates."""
+    def __init__(self, local, peers, root, *, peer_config=None, declared_agents=None, now=None):
         self.local = local['host']
+        clock = time.time() if now is None else now
+        self.warnings = []
+        self.estimated_agents = []
+        cached = []
+        errors = []
+        if peer_config:
+            ordered = sorted(peer_config.values(), key=lambda p: p.name)
+            if len(ordered) != len(peers):
+                errors.append('peer census result count disagrees with declared membership')
+            for peer, (snapshot, error) in zip(ordered, peers):
+                path = _peer_cache(root, peer)
+                if not isinstance(error, PeerUnreachable):
+                    # Remember reachable disagreement/invalid data too. A later
+                    # outage must not erase it into a never-seen permission.
+                    try:
+                        _save_peer(path, snapshot, error)
+                    except OSError:
+                        errors.append(f'{peer.name} governor cache could not be saved')
+                    if error:
+                        errors.append(error)
+                    continue
+                if local.get('admission_owner') != self.local or declared_agents is None:
+                    errors.append(error)
+                    continue
+                try:
+                    try:
+                        record = json.loads(path.read_text())
+                    except FileNotFoundError:
+                        record = None
+                    else:
+                        if not isinstance(record, dict):
+                            raise ValueError('invalid cached census record')
+                    if record is None:
+                        rows = [dict(row, live=True) for row in declared_agents
+                                if row['host'] == peer.name]
+                        detail = f'never seen; count age unknown; {len(rows)} declared cards counted live'
+                    else:
+                        if record['error']:
+                            raise ValueError('last reachable census was invalid: ' + record['error'])
+                        prior = record['snapshot']
+                        validate(prior, peer.name, now=prior['observed_at'])
+                        age = clock - prior['observed_at']
+                        if not -30 <= age <= PEER_COUNT_MAX_AGE:
+                            raise ValueError(f'cached count age {age:.0f}s exceeds 24h or is in the future')
+                        cached.append(prior)
+                        rows = prior['agents']
+                        detail = f'cached count age {max(0, age):.0f}s; {sum(r["live"] for r in rows)} counted live'
+                    self.estimated_agents.extend(dict(row, estimated=True) for row in rows)
+                    self.warnings.append(f'{peer.name} unreachable; {detail}')
+                except (OSError, ValueError, TypeError, KeyError, GovernorError) as exc:
+                    errors.append(f'{peer.name} unreachable; cached count unusable ({exc})')
+        else:
+            errors.extend(error for _, error in peers if error)
         self.snapshots = [local] + [s for s, error in peers if s is not None and not error]
-        self.errors = [error for _, error in peers if error]
+        agreement = self.snapshots + cached
+        self.errors = errors
+        if self.warnings:
+            # Only occupancy is borrowed. Every account window must still have a
+            # usable local observation, even with a warn-on-signal-loss policy.
+            if not local['governors']:
+                self.errors.append('offline peer fallback requires a local account governor')
+            for name, entry in local['governors'].items():
+                policy = gov.parse(entry['policy'])
+                for window in policy.windows():
+                    reading = Reading(**entry['readings'].get(window, {}))
+                    if reading.lost(clock, policy.max_age_seconds):
+                        self.errors.append(f'offline peer fallback requires fresh local usage for {name}/{window}')
+            for prior in cached:
+                if set(prior['governors']) - set(local['governors']):
+                    self.errors.append(f'{prior["host"]} cached governor has no local account reader')
         if len(self.snapshots) > 1 or len(local.get('hosts', [])) > 1:
             owner = local.get('admission_owner')
             if not owner:
                 self.errors.append('missing [host] admission_owner; configure the same authority on every peer')
-            for item in self.snapshots:
+            for item in agreement:
                 if not item.get('admission_owner') or item['admission_owner'] != owner:
                     self.errors.append(f'{item["host"]} admission authority missing or disagrees; '
                                        'upgrade and configure every peer before growth')
         if 'hosts' in local:
-            for item in self.snapshots:
+            for item in agreement:
                 if item.get('hosts') != local['hosts']:
                     self.errors.append(f'{item["host"]} host membership disagrees; '
                                        'cannot establish one admission authority')
         self.governors = {}
         self.policy_hosts = {}
+        for prior in cached:
+            for name, entry in prior['governors'].items():
+                current = local['governors'].get(name)
+                if current and current['policy'] != entry['policy']:
+                    self.errors.append(f'{name} cached governor policies disagree across hosts; growth held')
         lanes = sorted({name for s in self.snapshots for name in s['governors']})
         for name in lanes:
             entries = {s['host']: s['governors'][name] for s in self.snapshots
@@ -305,7 +409,7 @@ class FleetGovernor:
 
     @property
     def agents(self):
-        return [row for snapshot in self.snapshots for row in snapshot['agents']]
+        return [row for snapshot in self.snapshots for row in snapshot['agents']] + self.estimated_agents
 
     def lane(self, harness):
         if harness in self.governors:
@@ -329,7 +433,7 @@ class FleetGovernor:
         if not self.errors:
             return ''
         return ('; '.join(self.errors) + '; local/available usage fallback; '
-                'remote spend UNKNOWN; new launches and dispatch held')
+                'peer occupancy or agreement UNKNOWN; new launches and dispatch held')
 
     def lane_paces(self, now=None, local_agents=None):
         """Each lane's seven_day pace, or the reason it has none (aegis-03cstj).
@@ -366,7 +470,7 @@ class FleetGovernor:
         if local_agents is not None:
             rows += local_agents
         for row in rows:
-            if row['live']:
+            if row['live'] and not row.get('estimated'):
                 h = row.get('harness')
                 live_by_harness[h] = live_by_harness.get(h, 0) + 1
         out = []
