@@ -617,7 +617,7 @@ def triage(panes, target: str, new_work: str) -> Decision:
     # operator cannot tell which happened. `shells=None` says "not reported".
     shells = running_shells(screen)
 
-    # Report the marker from the TAIL — the same text the predicate judged on.
+    # Report each marker from the same window its predicate judged on.
     # Searching the whole screen here would let the Decision name a marker that
     # is not the one that fired, which is an inspectable decision that lies.
     if looks_wedged(screen):
@@ -626,9 +626,11 @@ def triage(panes, target: str, new_work: str) -> Decision:
                          "marker": next(m for m in WEDGED_MARKERS if m in _tail(screen))})
 
     if mid_flight(screen):
+        # Busy chrome can extend above the tail; using the shorter window here
+        # raises StopIteration instead of returning the refusal it just proved.
         return Decision(Action.REFUSE, "in-flight work",
                         {"pane": target, "shells": shells,
-                         "marker": next(m for m in INFLIGHT_MARKERS if m in _tail(screen))})
+                         "marker": next(m for m in INFLIGHT_MARKERS if m in _chrome(screen))})
 
     # The input box, BEFORE any nudge/clear decision (aegis-x6xh). send-keys
     # does not replace a pane's input buffer, it APPENDS to it — so sending into

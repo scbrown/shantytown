@@ -8,7 +8,7 @@ from __future__ import annotations
 import pytest
 
 from shantytown.tmux import NullPanes
-from shantytown.triage import Action, triage
+from shantytown.triage import Action, INFLIGHT_MARKERS, triage
 
 
 def panes(screen="$ ", exists=True):
@@ -29,6 +29,28 @@ def test_refuse_when_mid_flight():
     assert d.action is Action.REFUSE
     # the RED must be a TRUE negative — we know WHY it fired
     assert d.inputs["marker"] == "esc to interrupt"
+
+
+@pytest.mark.parametrize("marker", INFLIGHT_MARKERS)
+@pytest.mark.parametrize("attrs", [False, True])
+def test_refuse_when_busy_marker_is_above_tail(marker, attrs):
+    """The full decision must find the marker that made mid_flight true."""
+    shown = f"\x1b[2m{marker}\x1b[0m" if attrs else marker
+    screen = "\n".join([shown] + ["tool continuation"] * 6
+                       + ["› ", "footer1", "footer2", "footer3"])
+    d = triage(panes(screen), "%1", "new work")
+    assert d.action is Action.REFUSE
+    assert d.why == "in-flight work"
+    assert d.inputs["marker"] == marker
+
+
+def test_refusal_names_chrome_marker_not_scrollback_marker():
+    screen = "\n".join(["esc to interrupt"] + ["old output"] * 20
+                       + ["Running..."] + ["tool continuation"] * 6
+                       + ["› ", "footer1", "footer2", "footer3"])
+    d = triage(panes(screen), "%1", "new work")
+    assert d.action is Action.REFUSE
+    assert d.inputs["marker"] == "Running..."
 
 
 def test_restart_when_no_session():
