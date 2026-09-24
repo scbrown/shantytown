@@ -830,7 +830,22 @@ def _workspace_capture(text: str, root, settings_path=None) -> str:
         return rendered
     if not isinstance(cfg, dict) or not isinstance(role_hooks, dict):
         return rendered
-    from .runtime import _capture_cmd
+    from .runtime import _capture_cmd, incident_recall_hooks
+    # Old role artifacts must acquire recall through normal provisioning too.
+    # Claude combines role and workspace hooks, so keep exactly one owner.
+    recall = incident_recall_hooks("claude")
+    recall_command = recall[0]["hooks"][0]["command"]
+    role_has_recall = any(
+        not g.get("matcher") and any(h.get("command") == recall_command
+                                    for h in g.get("hooks", []))
+        for g in role_hooks.get("UserPromptSubmit", []))
+    prompt = []
+    for group in cfg.setdefault("hooks", {}).get("UserPromptSubmit", []):
+        commands = [h for h in group.get("hooks", [])
+                    if "shantytown.incident_recall" not in h.get("command", "")]
+        if commands:
+            prompt.append({**group, "hooks": commands})
+    cfg["hooks"]["UserPromptSubmit"] = prompt + ([] if role_has_recall else recall)
     command = _capture_cmd(root)["command"]
     for event, groups in role_hooks.items():
         if not isinstance(groups, list):

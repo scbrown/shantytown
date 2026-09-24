@@ -49,10 +49,15 @@ precision score or human-reviewed ground truth. The hook does not implement a
 new semantic relevance classifier on the strength of these labels.
 
 To roll out, merge through the deployment's review gate, let its normal updater
-install the package, and re-emit/provision harness settings through the normal
-role path. Do not restart agents to force adoption. Verify an actual first-prompt
-hook run separately from unit tests. Rollback removes the emitted
-`UserPromptSubmit` registration; existing query-first and other hooks remain.
+install the package, and let normal launch/provision deliver the hook.
+Normal workspace provisioning adds recall to existing Codex
+profiles and supplies a Claude workspace fallback when its role profile lacks
+the hook. Once the Claude role owns recall, provisioning removes the fallback
+to avoid duplicate registration. Operator prompt hooks survive this update.
+Do not hand-edit live role profiles or restart agents to force adoption. Verify
+an actual first-prompt hook run separately from unit tests. Rollback reverts the
+recall emission/provisioning change and removes its existing `UserPromptSubmit`
+registrations; existing query-first and other hooks remain.
 
 ### Redaction before prompt injection
 

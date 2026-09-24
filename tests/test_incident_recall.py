@@ -207,3 +207,62 @@ def test_masker_failure_withholds_every_excerpt(tmp_path, server, credential_mas
     assert 'excerpts withheld: masker unavailable' in r.stdout
     assert 'raw-archive-marker' not in r.stdout
     assert 'fixture-secret' not in r.stdout + r.stderr
+
+
+@pytest.mark.parametrize('fresh_role', [False, True])
+def test_claude_normal_provision_delivers_recall_once(tmp_path, fresh_role):
+    from shantytown.provision import _workspace_capture
+    from shantytown.runtime import incident_recall_hooks
+    role = tmp_path / 'role.json'
+    role.write_text(json.dumps({'hooks': {'UserPromptSubmit': incident_recall_hooks('claude')}} if fresh_role else {}))
+    original = {'hooks': {'UserPromptSubmit': [{'hooks': [{'type': 'command', 'command': 'operator-hook'}]}]}}
+    first = _workspace_capture(json.dumps(original), tmp_path, role)
+    assert _workspace_capture(first, tmp_path, role) == first
+    hooks = json.loads(first)['hooks']['UserPromptSubmit']
+    commands = [h['command'] for g in hooks for h in g['hooks']]
+    assert 'operator-hook' in commands
+    assert sum('shantytown.incident_recall' in c for c in commands) == (0 if fresh_role else 1)
+    # A later role refresh removes the workspace fallback, not the operator hook.
+    role.write_text(json.dumps({'hooks': {'UserPromptSubmit': incident_recall_hooks('claude')}}))
+    updated = json.loads(_workspace_capture(first, tmp_path, role))
+    assert [h['command'] for g in updated['hooks']['UserPromptSubmit'] for h in g['hooks']] == ['operator-hook']
+
+
+def test_codex_normal_provision_delivers_recall_once():
+    from shantytown import codex
+    original = {'hooks': {'UserPromptSubmit': [{'hooks': [{'type': 'command', 'command': 'operator-hook'}]}]},
+                'mcp_servers': {'bobbin': {'url': 'http://archive.example/mcp'}}, 'model': 'operator-model'}
+    first = codex.with_workspace_hooks(codex.dumps(original), 'worker')
+    assert codex.with_workspace_hooks(first, 'worker') == first
+    cfg = __import__('tomllib').loads(first)
+    assert cfg['mcp_servers'] == original['mcp_servers'] and cfg['model'] == original['model']
+    commands = [h['command'] for g in cfg['hooks']['UserPromptSubmit'] for h in g['hooks']]
+    assert 'operator-hook' in commands
+    assert sum('shantytown.incident_recall' in c for c in commands) == 1
+
+
+@pytest.mark.parametrize('harness_name', ['claude', 'codex'])
+def test_real_provision_updates_old_profile_without_role_reemission(tmp_path, monkeypatch, harness_name):
+    from shantytown import provision, harness
+    from shantytown.protocols import Agent
+    root = tmp_path / 'rig'
+    workspace = tmp_path / 'workspace'
+    workspace.mkdir()
+    program = harness.get(harness_name)
+    role = root / 'settings' / program.settings_name('worker')
+    role.parent.mkdir(parents=True)
+    role.write_text('' if harness_name == 'codex' else '{}')
+    monkeypatch.setattr(provision.tooling, 'load', lambda _: None)
+    monkeypatch.setattr(provision, 'link_skills', lambda _: None)
+    monkeypatch.setattr(provision, 'link_instructions', lambda *_: None)
+    card = Agent(name='recall-probe', workspace=str(workspace), harness=harness_name)
+    provision.provision(card, root, settings_path=str(role))
+    path = role if harness_name == 'codex' else workspace / '.claude' / provision.CONSENT_TEMPLATE
+    first = path.read_text()
+    provision.provision(card, root, settings_path=str(role))
+    assert path.read_text() == first
+    cfg = __import__('tomllib').loads(first) if harness_name == 'codex' else json.loads(first)
+    commands = [h['command'] for g in cfg['hooks']['UserPromptSubmit'] for h in g['hooks']]
+    assert sum('shantytown.incident_recall' in c for c in commands) == 1
+    if harness_name == 'claude':
+        assert role.read_text() == '{}'  # workspace fallback leaves role ownership intact

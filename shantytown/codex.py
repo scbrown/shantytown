@@ -314,11 +314,11 @@ def with_workspace_hooks(existing: str, role: str, root=None) -> str:
     every launch.  Keeping the transform here also keeps TOML ownership in the
     Codex adapter; provision.py must not learn Codex's serialization format.
 
-    Existing event groups survive.  Only prior copies of these three commands
+    Existing event groups survive.  Only prior copies of the owned commands
     are replaced, making repeated launches idempotent without disturbing stop
     routing, the deployment Bash guard, hook trust state, or operator keys.
     """
-    from .runtime import _capture_cmd, _stale_hook, _untracked_hook
+    from .runtime import _capture_cmd, _stale_hook, _untracked_hook, incident_recall_hooks
 
     try:
         cfg = tomllib.loads(existing) if existing.strip() else {}
@@ -364,6 +364,13 @@ def with_workspace_hooks(existing: str, role: str, root=None) -> str:
         for h in g.get("hooks", []) if isinstance(h, dict))]
     pre.append({"matcher": ".*", "hooks": [capture]})
     hooks["PreToolUse"] = pre
+    prompt = []
+    for group in hooks.get("UserPromptSubmit", []):
+        commands = [h for h in group.get("hooks", [])
+                    if "shantytown.incident_recall" not in h.get("command", "")]
+        if commands:
+            prompt.append({**group, "hooks": commands})
+    hooks["UserPromptSubmit"] = prompt + incident_recall_hooks("codex")
     return dumps(cfg)
 
 
