@@ -133,6 +133,21 @@ an attached operator. `--no-in-place` forces a respawn when you want the process
 restarted as well as emptied — a wedged runtime, a settings file it must re-read,
 a new model on its card.
 
+Before a restart, cycle checks admission under the same account lock used by
+launches. A replacement reuses its own live local slot; at the cap that permits
+a replacement, but an already over-cap fleet still refuses it. A refused launch
+leaves the existing session running and does not record a deliberate stop.
+The full stop/start fallback checks launch gates before stopping, while holding
+the lock through the replacement.
+
+Cycle's publication check counts only commits reachable from that worktree's
+HEAD, so another agent's unpublished branch in the shared repository does not
+block it. It prune-fetches the current branch's tracked remote and any peers
+explicitly marked `remote.<name>.st-push-allowed=true`. Main's upstream is a
+fallback only when neither is configured. Only successfully refreshed peers can
+prove publication; deleted branches and stale refs on skipped or failed remotes
+cannot. Tracking a fork does not require publishing to the original repository.
+
 **What the emptied session is handed.** A cycle writes a resume brief before it
 touches anything, and a SessionStart hook injects it into the fresh context. It
 carries the checkpoint, the checkpoint bead, the graph nodes named on the request

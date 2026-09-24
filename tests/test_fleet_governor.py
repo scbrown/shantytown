@@ -502,3 +502,85 @@ def test_cli_owner_offline_cards_warnings_and_dispatch(tmp_path, monkeypatch, ca
     output = capsys.readouterr().out
     assert 'laptop unreachable' in output
     assert 'counted live (offline estimate)' in output
+
+
+def test_replacement_at_cap_reuses_only_its_local_slot(tmp_path, monkeypatch):
+    args = fleet_setup(tmp_path, monkeypatch)
+    card = cli._registry(args).all().exact()[0]
+    assert '3/2' in cli._account_launch_refusal(args, card)
+    assert cli._account_launch_refusal(args, card, replacing=True) == ''
+    monkeypatch.setattr(cli, '_governor_agents', lambda a: [
+        agent('laptop', 'local'), agent('laptop', 'extra')])
+    assert '3/2' in cli._account_launch_refusal(args, card, replacing=True)
+
+
+@pytest.mark.parametrize('mode', ['respawn', 'relaunch'])
+def test_cycle_admission_refusal_never_stops_session(tmp_path, monkeypatch, mode):
+    from shantytown import cycle
+    from contextlib import contextmanager
+    args = fleet_setup(tmp_path, monkeypatch)
+    card = cli._registry(args).all().exact()[0]
+    monkeypatch.setattr(cli, '_governor_agents', lambda a: [
+        agent('laptop', 'local'), agent('laptop', 'extra')])
+    monkeypatch.setattr(cli, '_window_launch_gate', lambda a: None)
+    monkeypatch.setattr(cli, '_foreign_session_refusal', lambda *a: '')
+    monkeypatch.setattr(cli, '_capture_history_before_kill', lambda *a: None)
+    monkeypatch.setattr(cli, '_cmd_stop', lambda *a: pytest.fail('stopped live agent'))
+    monkeypatch.setattr(cli, '_refresh_clone', lambda *a, **k: pytest.fail('mutated workspace'))
+    held = []
+    @contextmanager
+    def lock(*a, **kw):
+        assert not held, 'nested admission lock'
+        held.append(True)
+        try:
+            yield
+        finally:
+            held.pop()
+    monkeypatch.setattr(fg, 'admission_lock', lock)
+    panes = SimpleNamespace(exists=lambda s: True)
+    chosen = cycle.Plan(getattr(cycle, mode.upper()), 'fixture')
+    rc, _ = cli._perform_cycle(args, card, card.name, 'fixture', panes, None,
+                               chosen, SimpleNamespace(checkpoint='saved'))
+    assert rc == cli.REFUSED
+    assert not held and not hasattr(args, '_cycle_admission_locked')
+
+
+def test_cycle_holds_admission_lock_from_preflight_through_relaunch(tmp_path, monkeypatch):
+    from shantytown import cycle
+    from contextlib import contextmanager
+    args = fleet_setup(tmp_path, monkeypatch)
+    card = cli._registry(args).all().exact()[0]
+    monkeypatch.setattr(cli, '_window_launch_gate', lambda a: None)
+    held, actions = [], []
+    @contextmanager
+    def lock(*a, **kw):
+        assert not held
+        held.append(True)
+        try:
+            yield
+        finally:
+            held.pop()
+    monkeypatch.setattr(fg, 'admission_lock', lock)
+    def stop(a):
+        assert held
+        actions.append('stop')
+        monkeypatch.setattr(cli, '_governor_agents', lambda a: [])
+        return cli.OK
+    monkeypatch.setattr(cli, '_cmd_stop', stop)
+    admitted = cli._launch_admitted
+    def launch(a, card, panes, runtime, **kw):
+        assert held
+        if kw.get('dry_run'):
+            actions.append('preflight')
+            return admitted(a, card, panes, runtime, **kw)
+        assert cli._account_launch_refusal(a, card) == ''
+        actions.append('launch')
+        return cli.OK
+    monkeypatch.setattr(cli, '_launch_admitted', launch)
+    panes = SimpleNamespace(exists=lambda s: True)
+    runtime = SimpleNamespace(compose=lambda card: 'fixture launch')
+    rc, mode = cli._perform_cycle(args, card, card.name, 'fixture', panes, runtime,
+        cycle.Plan(cycle.RELAUNCH, 'fixture'), SimpleNamespace(checkpoint='saved'))
+    assert rc == cli.OK and mode == cycle.RELAUNCH
+    assert actions == ['preflight', 'stop', 'launch']
+    assert not held

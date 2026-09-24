@@ -46,6 +46,7 @@ def world(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "_cmd_stop", lambda a: actions.append("stop") or cli.OK)
     monkeypatch.setattr(cli, "_panes", lambda a: _NoPane())
     monkeypatch.setattr(cli, "_runtime", lambda *a: object())
+    monkeypatch.setattr(cli, "_launch_admitted", lambda *a, **kw: cli.OK)
     monkeypatch.setattr(cli, "_launch", lambda *a: actions.append("launch") or cli.OK)
     monkeypatch.setattr(cli, "_redispatch_after_cycle", lambda *a: actions.append("dispatch"))
     args = Namespace(root=root, agent="worker", reason="fixture checkpoint",
@@ -137,3 +138,59 @@ def test_scoped_publication_refusal_names_what_was_checked(tmp_path):
     assert not verdict.ok
     assert "not verified on remote origin" in verdict.render()
     assert "on no remote ref" not in verdict.render()
+
+
+def test_feature_tracks_fork_not_main_upstream(tmp_path):
+    upstream = _repo(tmp_path / 'upstream')
+    fork = _clone(upstream, tmp_path / 'fork')
+    clone = _clone(upstream, tmp_path / 'clone')
+    _run(clone, 'remote', 'add', 'fork', str(fork))
+    _run(clone, 'checkout', '-b', 'feature')
+    _commit(clone, 'published-on-fork')
+    _run(clone, 'push', '-u', 'fork', 'feature')
+    # No contact with main's remote is needed; it may belong to someone else.
+    _run(clone, 'remote', 'set-url', 'origin', str(tmp_path / 'absent'))
+    measured = tree_staleness(clone, fetch=True, tracked_only=True)
+    assert measured.error is None and measured.unverified is None
+    assert measured.unpushed == 0
+    assert measured.publication_remote == 'fork'
+    _run(fork, 'branch', '-D', 'feature')
+    assert tree_staleness(clone, fetch=True, tracked_only=True).unpushed == 1
+
+
+def test_explicit_trusted_peer_can_prove_publication(tmp_path):
+    upstream = _repo(tmp_path / 'upstream')
+    fork = _clone(upstream, tmp_path / 'fork')
+    clone = _clone(upstream, tmp_path / 'clone')
+    _run(clone, 'remote', 'add', 'fork', str(fork))
+    _commit(clone, 'published-on-fork')
+    _run(clone, 'push', 'fork', 'HEAD:feature')
+    assert tree_staleness(clone, fetch=True, tracked_only=True).unpushed == 1
+    _run(clone, 'config', 'remote.fork.st-push-allowed', 'true')
+    assert tree_staleness(clone, fetch=True, tracked_only=True).unpushed == 0
+    _run(fork, 'branch', '-D', 'feature')
+    assert tree_staleness(clone, fetch=True, tracked_only=True).unpushed == 1
+
+
+def test_other_worktrees_unpublished_branches_do_not_block(tmp_path):
+    upstream = _repo(tmp_path / 'upstream')
+    clone = _clone(upstream, tmp_path / 'clone')
+    sibling = tmp_path / 'sibling'
+    _run(clone, 'worktree', 'add', '-b', 'other-agent', str(sibling))
+    _commit(sibling, 'other-agents-work')
+    assert tree_staleness(clone, fetch=True, tracked_only=True).unpushed == 0
+    assert tree_staleness(sibling, fetch=True, tracked_only=True).unpushed == 1
+
+
+def test_failed_trusted_fetch_cannot_certify_stale_publication(tmp_path):
+    upstream = _repo(tmp_path / 'upstream')
+    fork = _clone(upstream, tmp_path / 'fork')
+    clone = _clone(upstream, tmp_path / 'clone')
+    _run(clone, 'remote', 'add', 'fork', str(fork))
+    _run(clone, 'config', 'remote.fork.st-push-allowed', 'true')
+    _commit(clone, 'published-on-fork')
+    _run(clone, 'push', 'fork', 'HEAD:feature')
+    _run(clone, 'remote', 'set-url', 'fork', str(tmp_path / 'absent'))
+    measured = tree_staleness(clone, fetch=True, tracked_only=True)
+    assert measured.unverified
+    assert measured.unpushed == 1
