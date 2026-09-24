@@ -649,3 +649,17 @@ def test_codex_stop_reads_work_assigned_after_the_previous_boundary(tmp_path, mo
     active.clear()
     _, second = _haul_at(monkeypatch, capsys, tmp_path, **kwargs)
     assert "work-2" in second["reason"] and claims == ["work-2"]
+
+
+def test_ready_referent_is_never_claimed_but_unlabelled_control_is(monkeypatch, capsys):
+    bead = {"id": "st-referent", "title": "Permanent exception record",
+            "assignee": "billy", "status": "open", "labels": ["anchor"]}
+    claims = []
+    rc, block = _run(monkeypatch, capsys, ready=[bead], claims=claims)
+    assert rc == 0 and block is None
+    assert claims == [], "a referent must never be marked in_progress by the haul"
+    bead["labels"] = []
+    rc, block = _run(monkeypatch, capsys, ready=[bead], claims=claims)
+    assert rc == 0 and block["decision"] == "block"
+    assert "st-referent" in block["reason"]
+    assert claims == ["st-referent"]
