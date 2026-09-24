@@ -33,6 +33,11 @@ through the newest version, because testing only one end lets the other rot sile
 python3 -m pytest -q            # testpaths = ["tests"]
 ```
 
+Tests clear inherited `SHANTY_*`, `ST_*` and `QUIPU_SERVER` settings before each
+case. Tests exercising these settings must set them explicitly through
+`monkeypatch`. CI repeats the Python 3.14 suite with hostile operator defaults
+set, so a clean runner cannot hide a leak into deployment configuration.
+
 Measured 2026-08-26: **2404 passed, 3 skipped, ~119s**. Two places in the repo quote
 older counts (a CI comment says 1770/~57s, the README Principles section said 325); treat
 any hard-coded count as a number that has already drifted once, and re-measure rather
