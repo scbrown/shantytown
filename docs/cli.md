@@ -1781,3 +1781,52 @@ configuration. It is read-only. Run it over SSH from both hosts to exercise both
 directions. `--local` suppresses peer reads; `--json` emits a versioned snapshot.
 Exit 1 means incomplete; exit 2 means an observation is unknown. See
 [new-host setup](new-host.md) for the complete scaffold and repair checklist.
+
+### Pane-state advice (`crew --pane-state`)
+
+`st crew --pane-state` adds a fleet view of Jev's **inferred, advisory-only**
+interpretation beside each agent's mechanical STATE and WORK. It groups names
+under working, waiting-permission, login-expired, looping, idle-done, crashed,
+and insufficient-evidence. `--json` returns the same rows and provenance;
+`--local` skips peers. Ordinary `crew`, dispatch, recovery, tend and status-bar
+counts never consult this inference.
+
+This flag explicitly sends bounded pane text to the configured Jev provider.
+Each host captures at most the last 60 lines / 6,000 characters per live pane,
+up to 64 panes, and asks one batch of typed choices. No capture is saved or
+returned in peer JSON. The response records the capture hash/time, prompt hash,
+model, input-token usage, choice, confidence and probabilities. A hash identifies
+the evidence; it cannot recover it later. Inspect the pane when investigating a
+label. This is a point-in-time view, not proof of continuing liveness. Mechanical
+WORK and the advisory are consecutive observations and may straddle a transition.
+
+A model confidence below 0.6 becomes insufficient-evidence, retaining its raw
+choice. A missing/empty pane also has insufficient evidence; absence does not
+prove a crash. A failed capture, missing client/key, invalid response or timeout
+is **unavailable**, not insufficient-evidence or a regex substitute: the command
+retains mechanical rows, prints `JevUnavailable`, and exits 2. Older peers without
+this flag are explicitly unavailable. This view cannot authorize a restart,
+dispatch, permission grant, or graph promotion.
+
+The client is Camayoc's canonical `scripts/jev.py`, loaded in an isolated worker
+with a 45-second wall deadline. Its default location is
+`$XDG_DATA_HOME/camayoc-src/camayoc/scripts/jev.py` (XDG defaults to
+`~/.local/share`). Set `SHANTY_JEV_CLIENT` to an installed canonical client file
+for other layouts. Credentials stay with that client's file-first configuration;
+Shantytown does not fetch keys or add runtime dependencies. Peer commands use
+their own installed client/configuration and a 65-second SSH deadline.
+
+The labeled regression set is `tests/fixtures/pane_state_labels.json`. Run the
+explicit API evaluation with:
+
+```sh
+python3 scripts/eval-pane-state.py tests/fixtures/pane_state_labels.json \
+  /private/path/real-tails.json --output /private/path/pane-evaluation.json
+```
+
+Real tails must be redacted, labeled before model evaluation, and kept local.
+Each input is a JSON list of `{id, label, tail}` objects. The report includes
+per-label support, correct count, accuracy, precision and a confusion matrix,
+including insufficient-evidence; a label with no examples has null accuracy.
+Synthetic scores measure the authored set only, not fleet accuracy. Evaluation
+outputs omit captures and never promote inference into a knowledge graph.

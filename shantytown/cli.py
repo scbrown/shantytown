@@ -1108,6 +1108,8 @@ def build_parser() -> argparse.ArgumentParser:
     df.add_argument("-n", "--dry-run", action="store_true")
 
     cr = sub.add_parser("crew", help="who exists, what state, what role")
+    cr.add_argument("--pane-state", action="store_true",
+                    help="Jev inferred pane advice beside mechanical work (explicit network opt-in)")
     cr.add_argument("--local", action="store_true",
                     help="read only this host; do not contact configured peers")
     cr.add_argument("--json", action="store_true",
@@ -5364,6 +5366,9 @@ def _cmd_crew(a) -> int:
     answered: a stamp records WHICH BYTES an agent launched with, and one we did
     not observe would be a fabricated measurement, which is worse than a blank.
     """
+    if getattr(a, "pane_state", False):
+        from .pane_state import command
+        return command(a)
     from . import fleet as fleet_mod
     from .deployment import local_host
     cfg, cfg_error = config.load_or_default(Path(a.root))
