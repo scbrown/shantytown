@@ -545,6 +545,18 @@ def _query_first_cmd() -> dict:
             "command": f"{_hook_interpreter()} -m shantytown.query_first"}
 
 
+def incident_recall_hooks(harness: str = "claude") -> list[dict]:
+    """First task prompt recall complements the static query-first directive.
+
+    SessionStart has no prompt. Both harnesses receive this matcher-free event;
+    the module claims once, uses the provisioned MCP URL, and bounds network
+    work to two seconds. A missing adapter makes no request.
+    """
+    return [{"hooks": [{"type": "command",
+                        "command": f"{_hook_interpreter()} -m shantytown.incident_recall --harness {harness}",
+                        "timeout": 3}]}]
+
+
 def _resume_brief_cmd(root=None) -> dict:
     """The SessionStart RESUME BRIEF (Stiwi 2026-09-21). See resume_brief.py.
 
@@ -1147,6 +1159,7 @@ def claude_settings_for_role(role: str, root=None) -> dict:
         "hooks": {
             # QUERY-FIRST at session start (aegis-rcyd). See session_start_hooks.
             "SessionStart": session_start_hooks(root),
+            "UserPromptSubmit": incident_recall_hooks(),
             "Stop": [{"hooks": role_stop_hooks(role, root=root)},
                      {"hooks": [capture]}],
             # yupana policy guard on every edit-shaped tool call. See _YUPANA_GUARD.
