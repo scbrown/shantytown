@@ -97,7 +97,10 @@ missing Remote Control prerequisites does not satisfy an enabled-RC checklist.
 ## Prove incoming SSH exports and run both directions
 
 Run `st --root /opt/second/store ops doctor --relay` for one combined, quoted
-recipe for PATH (including st and tmux), SHANTY_ROOT and SHANTY_BACKEND. For zsh
+recipe for PATH (including st and tmux) and SHANTY_ROOT. The backend is read
+from `[env] SHANTY_BACKEND` in that root's `shantytown.toml`; only deployments
+without that declaration need a SHANTY_BACKEND export. Legacy `env.json` is
+not configuration: migrate any needed values into TOML and archive the old file. For zsh
 put the exports in `${ZDOTDIR:-$HOME}/.zshenv`; use the appropriate non-interactive
 startup mechanism for other shells. Select the intended tracker backend; do not
 inherit a peer's backend by accident.
