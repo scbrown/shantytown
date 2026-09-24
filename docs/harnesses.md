@@ -468,3 +468,13 @@ permissions survive. The launcher performs this before the agent starts; the
 agent never needs to edit its own settings. Already-running sessions pick up the
 change on their next launch. `st agent stats <agent>` verifies recorded events;
 an emitted hook alone is not proof that a running session has fired it.
+
+### Incident recall on the first task message
+
+Both harnesses emit `UserPromptSubmit` beside the existing session-start
+query-first guidance. It queries the provisioned Bobbin HTTP MCP archive tools
+once per session or explicit task dispatch, with a two-second retrieval budget.
+Historical excerpts are bounded and labelled untrusted; unavailable archives do
+not block the prompt. No HTTP Bobbin adapter means no archive request. See
+[incident-recall.md](incident-recall.md) for configuration, duplicate suppression,
+the measured hook contract, and the 30-item inferred benchmark seed set.

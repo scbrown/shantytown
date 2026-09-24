@@ -602,7 +602,7 @@ def test_NO_deployment_guard_still_means_NO_GUARD_COMMAND(monkeypatch):
     """
     monkeypatch.delenv("SHANTY_BASH_GUARD", raising=False)
     settings = codex.settings_for_role("worker", root="/store/r")
-    assert set(settings["hooks"]) == {"SessionStart", "Stop", "PreToolUse"}
+    assert set(settings["hooks"]) == {"SessionStart", "Stop", "PreToolUse", "UserPromptSubmit"}
     cmds = [h["command"] for g in settings["hooks"]["PreToolUse"] for h in g["hooks"]]
     assert cmds == ["yupana hook pre-bash || exit 0"], cmds
 

@@ -200,9 +200,10 @@ def settings_for_role(role: str, root=None) -> dict:
     the key is absent entirely rather than empty when it does not, because an
     empty PreToolUse array is a claim of coverage this file cannot back.
     """
-    from .runtime import bash_group, role_stop_hooks, session_start_hooks
+    from .runtime import bash_group, role_stop_hooks, session_start_hooks, incident_recall_hooks
     hooks: dict[str, Any] = {
         "SessionStart": session_start_hooks(),
+        "UserPromptSubmit": incident_recall_hooks("codex"),
         "Stop": [{"hooks": role_stop_hooks(role, root=root)}],
     }
     # The SAME group Claude gets (runtime.bash_group): the deployment's guard
