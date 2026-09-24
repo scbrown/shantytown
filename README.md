@@ -10,7 +10,7 @@
 *Create a work item. Tell an agent to go get it. That's the whole idea.*
 
 [![dispatch 3.4s](https://img.shields.io/badge/dispatch-3.4s-brightgreen)](docs/why.md#measured-against-gas-town)
-[![33 commands](https://img.shields.io/badge/commands-33-blue)](#-the-whole-surface)
+[![33 commands](https://img.shields.io/badge/commands-34-blue)](#-the-whole-surface)
 [![tests](https://img.shields.io/badge/tests-3489%20passing-blue)](docs/principles.md)
 [![python](https://img.shields.io/badge/python-3.11%2B-blue)](#-install)
 [![dependencies none](https://img.shields.io/badge/dependencies-none-blue)](#-install)
@@ -70,6 +70,7 @@ st work                           the item and the board
   defer <item> <kind> --reason-file <path|->
                                   park it with one blocker-kind label + durable reason, verified
   cost [bead] [--sync]            parser-owned cost reads and closed-bead/metric publication
+  triage [item ...]             preview Jev board suggestions; --publish comments only
   dream [--run]                   inspect or run one bounded spare-capacity reflection cycle
 st agent                          one agent
   new <agent>                     create an agent from a card
@@ -105,7 +106,7 @@ st ops                            the installation
   help <topic>                    rationale pages: handoff/cycle, haul, inbox
 ```
 
-Thirty-three, and the count is load-bearing: six verbs and twenty-seven grouped commands under five
+Thirty-four, and the count is load-bearing: six verbs and twenty-eight grouped commands under five
 groups, and a test pins this block AND this sentence to the parser, so the next command either updates
 both or fails CI. A group is a namespace, not a command; it earns no slot. The flat spellings from
 before the grouping (st cycle for st agent cycle, and so on) still work for two releases and say so on
