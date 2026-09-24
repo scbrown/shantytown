@@ -15,10 +15,10 @@ Choose distinct host and agent names, the existing fleet's exact ontology
 namespace, and absolute store/workspace paths. For example, on the second host:
 
 ```sh
-st --root /opt/second/.shanty fleet init -y \
+st --root /opt/second/store fleet init -y \
   --host second --admin second-admin --crew second-worker \
   --workspaces /opt/second/workspaces \
-  --peer first=operator@first.example,/opt/first/.shanty \
+  --peer first=operator@first.example,/opt/first/store \
   --quipu-server https://graph.example \
   --ontology-namespace https://fleet.example/ontology/
 mkdir -p /opt/second/workspaces/second-admin /opt/second/workspaces/second-worker
@@ -31,14 +31,14 @@ or malformed value needs a boolean decision in its crew JSON; init
 are supported; initialize and configure Git only when the workspace needs it.
 
 On a fresh first host, use its own `fleet init` with the inverse peer:
-`--host first --peer second=operator@second.example,/opt/second/.shanty`.
+`--host first --peer second=operator@second.example,/opt/second/store`.
 For an **existing** first host, preserve its config and add this table to its
 `shantytown.toml` (correct an existing table instead of duplicating it):
 
 ```toml
 [host.peers.second]
 ssh = "operator@second.example"
-root = "/opt/second/.shanty"
+root = "/opt/second/store"
 ```
 
 The second host needs the inverse table. `--force` does not rewrite an existing
@@ -79,8 +79,8 @@ Init emits administrator and worker settings through the normal role emitter.
 For missing or old settings, re-emit through the supported operation:
 
 ```sh
-st --root /opt/second/.shanty fleet roles set second-admin administrator
-st --root /opt/second/.shanty fleet roles set second-worker worker
+st --root /opt/second/store fleet roles set second-admin administrator
+st --root /opt/second/store fleet roles set second-worker worker
 ```
 
 Choose a harness with `st agent harness NAME claude|codex`; do not edit settings
@@ -96,7 +96,7 @@ missing Remote Control prerequisites does not satisfy an enabled-RC checklist.
 
 ## Prove incoming SSH exports and run both directions
 
-Run `st --root /opt/second/.shanty ops doctor --relay` for one combined, quoted
+Run `st --root /opt/second/store ops doctor --relay` for one combined, quoted
 recipe for PATH (including st and tmux), SHANTY_ROOT and SHANTY_BACKEND. For zsh
 put the exports in `${ZDOTDIR:-$HOME}/.zshenv`; use the appropriate non-interactive
 startup mechanism for other shells. Select the intended tracker backend; do not
@@ -106,9 +106,9 @@ From first to second, and then second to first:
 
 ```sh
 ssh -o BatchMode=yes operator@second.example \
-  'st --root /opt/second/.shanty ops doctor --deploy'
+  'st --root /opt/second/store ops doctor --deploy'
 ssh -o BatchMode=yes operator@first.example \
-  'st --root /opt/first/.shanty ops doctor --deploy'
+  'st --root /opt/first/store ops doctor --deploy'
 ```
 
 The doctor checks incoming exports **before** applying `[env]`, so TOML cannot
