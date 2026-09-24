@@ -537,13 +537,18 @@ def _governors(a):
     return replace(cfg, governor=replace(base, by_harness=policies)), fleet.governors
 
 
-def _account_launch_refusal(a, card):
+def _account_launch_refusal(a, card, *, replacing=False):
     try:
         cfg, governors = _governors(a)
         fleet = getattr(a, '_account_governor', None)
         if fleet is None:
             return ''
         rows = _governor_agents(a)
+        if replacing:
+            # A live local session being replaced already owns one slot. Never
+            # subtract a same-named peer or a different harness lane by guess.
+            rows = [dict(row, live=False) if row['name'] == card.name
+                    and row['host'] == fleet.local else row for row in rows]
         refusal = fleet.admits_launch(harness_mod.name_for(card, root=a.root), rows)
         if refusal:
             return refusal
@@ -2512,6 +2517,10 @@ def _launch(a, card, panes, runtime, *, dry_run: bool = False,
     if err:
         print('  refused: ' + str(err), file=sys.stderr)
         return REFUSED
+    if getattr(a, '_cycle_admission_locked', False):
+        return _launch_admitted(a, card, panes, runtime, dry_run=dry_run,
+                                window_restore=window_restore,
+                                reuse_session=reuse_session)
     try:
         with fg.admission_lock(a.root, cfg.host_name, cfg.host_peers,
                                owner=cfg.host_admission_owner):
@@ -2555,7 +2564,7 @@ def _launch_admitted(a, card, panes, runtime, *, dry_run: bool = False,
               "dispatch, respawns and every other launch.", file=sys.stderr)
     if not window_restore and (rc := _window_launch_gate(a)) is not None:
         return rc
-    if refusal := _account_launch_refusal(a, card):
+    if refusal := _account_launch_refusal(a, card, replacing=reuse_session):
         print('  refused: ' + refusal, file=sys.stderr)
         return REFUSED
     # A dead app-server can outlive its pane behind Codex's per-card daemon and
@@ -2675,8 +2684,9 @@ def _launch_admitted(a, card, panes, runtime, *, dry_run: bool = False,
     try:
         mcp_limits.prepare_launch(a.root, card.name, panes, session)
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
-        print(f"  refused: MCP containment preparation failed: {exc}", file=sys.stderr)
-        return REFUSED
+        print(f"  could not tell: pane created but MCP containment preparation failed: {exc}",
+              file=sys.stderr)
+        return CANNOT_TELL
     # Deliver through the seam. Panes stays runtime-blind — sees a finished string.
     runtime.start(card, session)
     # STAMP WHAT IT LAUNCHED ON, before we report anything. The
@@ -7851,6 +7861,29 @@ def _perform_cycle(a, card, agent_name: str, session: str, panes, runtime,
         chosen = cycle_mod.Plan(cycle_mod.RESPAWN, "escalated from an unverified "
                                                    "in-place clear")
 
+    from . import fleet_governor as fg
+    cfg, err = config.load_or_default(Path(a.root))
+    if err:
+        print('  refused: ' + str(err), file=sys.stderr)
+        return REFUSED, chosen.mode
+    try:
+        with fg.admission_lock(a.root, cfg.host_name, cfg.host_peers,
+                               owner=cfg.host_admission_owner):
+            if hasattr(a, '_account_governor'):
+                del a._account_governor
+            a._cycle_admission_locked = True
+            try:
+                return _restart_cycle(a, card, agent_name, session, panes,
+                                      runtime, chosen, verdict)
+            finally:
+                del a._cycle_admission_locked
+    except fg.AdmissionUnavailable as exc:
+        print('  refused: ' + str(exc), file=sys.stderr)
+        return REFUSED, chosen.mode
+
+
+def _restart_cycle(a, card, agent_name, session, panes, runtime, chosen, verdict):
+    """Restart under the admission lock; a refusal must leave the session alive."""
     if chosen.mode == cycle_mod.RESPAWN:
         print(f"  {agent_name}: {chosen.render()}")
         if refusal := _foreign_session_refusal(a, agent_name, session, panes):
@@ -7860,8 +7893,10 @@ def _perform_cycle(a, card, agent_name: str, session: str, panes, runtime,
         # and the same call, `st agent stop` obeys.
         _capture_history_before_kill(a, agent_name, "cycle")
         rc = _launch(a, card, panes, runtime, reuse_session=True)
-        if rc == OK:
-            return OK, cycle_mod.RESPAWN
+        if rc in (OK, REFUSED):
+            # REFUSED is the launcher's pre-mutation result, not a failed
+            # restart. Falling through here used to kill the preserved session.
+            return rc, cycle_mod.RESPAWN
         # The process is already gone by here, so there is no gentler mode left
         # to try and the session may be holding a dead shell. Fall through to the
         # floor, which starts by stopping whatever is there.
@@ -7873,6 +7908,13 @@ def _perform_cycle(a, card, agent_name: str, session: str, panes, runtime,
     # unchanged: st only reaps what st launched, and an unstamped session belongs
     # to another orchestrator. A cycle must not become a second way to kill a
     # foreign pane.
+    # Check all launch gates before recording a deliberate stop. The admission
+    # lock remains held through the actual launch, so a peer cannot take the slot
+    # between this census and the replacement. dry_run performs no pane writes.
+    rc = _launch_admitted(a, card, panes, runtime, dry_run=True,
+                          reuse_session=panes.exists(session))
+    if rc != OK:
+        return rc, cycle_mod.RELAUNCH
     stop_args = argparse.Namespace(**vars(a))
     stop_args.agent = agent_name
     stop_args.reason = f"{cycle_mod.CYCLE_REASON}: {verdict.checkpoint}"

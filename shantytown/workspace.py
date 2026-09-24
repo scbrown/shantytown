@@ -1194,6 +1194,30 @@ def ref_last_updated(dest: Path | str, ref: str) -> "float | None":
     return best
 
 
+def publication_remotes(dest: Path | str, run: GitRunner = _git) -> list[str]:
+    """Current branch's tracked remote plus explicitly trusted publication peers.
+
+    Main's upstream is only a fallback. A fork worktree may deliberately publish
+    somewhere different from the repository's integration branch.
+    """
+    rc, out = run(dest, "remote")
+    names = out.splitlines() if rc == 0 else []
+    rc, branch = run(dest, "symbolic-ref", "--quiet", "--short", "HEAD")
+    tracked = None
+    if rc == 0:
+        rc, value = run(dest, "config", "--get", f"branch.{branch}.remote")
+        if rc == 0 and value in names:
+            tracked = value
+    selected = [tracked] if tracked else []
+    selected += [name for name in names if name not in selected
+                 and _explicit_push_peer(Path(dest), name, run)]
+    if not selected:
+        ref, _ = upstream_ref(dest, run=run)
+        selected = [name for name in sorted(names, key=len, reverse=True)
+                    if ref and ref.startswith(name + "/")][:1]
+    return selected
+
+
 def tree_staleness(dest: Path | str, run: GitRunner = _git,
                    fetch: bool = False,
                    untracked_all: bool = False,
@@ -1207,8 +1231,8 @@ def tree_staleness(dest: Path | str, run: GitRunner = _git,
     point it protects nothing. Reading already-fetched refs is nearly free and is
     honest about what it is: "as of the last fetch". The dispatch path, which
     runs once and can afford it, passes fetch=True.
-    `tracked_only` bounds network work to the resolved upstream remote; its
-    unpushed count then certifies publication only on that refreshed remote.
+    `tracked_only` checks the current branch and explicitly trusted publication
+    remotes. Only refs from successfully refreshed peers certify publication.
     """
     # NOT A GIT WORKING TREE IS NOT AN UNREADABLE GIT WORKING TREE, and the two
     # were the same answer here until 2026-09-21. `upstream_ref` cannot tell them
@@ -1238,18 +1262,20 @@ def tree_staleness(dest: Path | str, run: GitRunner = _git,
         why = (f"{dest} is not a git working tree — nothing here can be "
                f"committed, pushed or stranded")
         return Staleness(ref=None, note=why, error=None)
-    ref, note = upstream_ref(dest, run=run)
-    if ref is None:
-        return Staleness(ref=None, note=note, error=note)
-    unverified = None
-    remote = None
+    selected = publication_remotes(dest, run) if fetch and tracked_only else []
     if fetch and tracked_only:
-        rc, names = run(dest, "remote")
-        # Remote names can contain slashes; choose the longest matching prefix.
-        remote = next((r for r in sorted(names.splitlines(), key=len, reverse=True)
-                       if ref.startswith(r + "/")), None) if rc == 0 else None
-        if remote is None:
-            return Staleness(ref=ref, error="cannot resolve fetch remote for upstream")
+        if not selected:
+            return Staleness(ref=None, error="cannot resolve publication remote")
+        # Publication is about HEAD, not main's freshness. In particular a
+        # deleted tracked feature branch must still yield an orphan count.
+        ref, note = "HEAD", None
+    else:
+        ref, note = upstream_ref(dest, run=run)
+        if ref is None:
+            return Staleness(ref=None, note=note, error=note)
+    unverified = None
+    remote = ", ".join(selected) or None
+    refreshed = []
     if fetch:
         # --prune IS LOAD-BEARING, not tidiness (tim, aegis-ib65p). A plain fetch
         # does NOT delete remote-tracking refs for branches deleted upstream, and
@@ -1267,11 +1293,17 @@ def tree_staleness(dest: Path | str, run: GitRunner = _git,
         #
         # "As of the last fetch" does NOT cover it, which is the subtle part -
         # the lying ref SURVIVES the fetch. Only the prune removes it.
-        fetch_args = ("fetch", "--prune", "--quiet", remote or "--all")
-        if run is _git:
-            rcf, _ = run(dest, *fetch_args, timeout=fetch_timeout)
-        else:
-            rcf, _ = run(dest, *fetch_args)
+        rcf = 0
+        for target in selected or ["--all"]:
+            fetch_args = ("fetch", "--prune", "--quiet", target)
+            if run is _git:
+                result, _ = run(dest, *fetch_args, timeout=fetch_timeout)
+            else:
+                result, _ = run(dest, *fetch_args)
+            if result == 0:
+                refreshed.append(target)
+            else:
+                rcf = result
         if rcf != 0:
             # A FETCH WE ASKED FOR AND DID NOT GET MAKES EVERY COUNT BELOW A LIE
             # (aegis-bqcjws sibling, wu 2026-09-11). The caller passed fetch=True
@@ -1307,12 +1339,21 @@ def tree_staleness(dest: Path | str, run: GitRunner = _git,
             # `unpushed`, `dirty` and `untracked`, which a frozen ref cannot
             # under-report (see Staleness.unverified). The gate keeps the only
             # signal it exists for.
-            unverified = (f"fetch failed against {ref} — the remote-tracking "
+            unverified = (f"fetch failed against {remote or ref} — the remote-tracking "
                           f"ref is frozen, so a behind-count here would compare "
                           f"the tree against itself. Loss risk below IS measured")
-        ref, note = upstream_ref(dest, run=run)
-        if ref is None:
-            return Staleness(ref=None, note=note, error=note)
+        if tracked_only:
+            rc_up, candidate = run(dest, "rev-parse", "--abbrev-ref", "@{upstream}")
+            if rc_up != 0:
+                candidate, _ = upstream_ref(dest, run=run)
+            if candidate and any(candidate.startswith(name + "/") for name in refreshed):
+                ref = candidate
+            else:
+                unverified = unverified or "no refreshed upstream for a currency comparison"
+        else:
+            ref, note = upstream_ref(dest, run=run)
+            if ref is None:
+                return Staleness(ref=None, note=note, error=note)
     rc, behind = run(dest, "rev-list", "--count", f"HEAD..{ref}")
     # NOT `{ref}..HEAD` — see Staleness.unpushed. That measures ahead-of-main and
     # flags every open feature branch as stranded; this asks whether the commits
@@ -1320,8 +1361,9 @@ def tree_staleness(dest: Path | str, run: GitRunner = _git,
     # here" actually means.
     # A skipped remote may retain a deleted branch. It cannot certify that a
     # commit is safely published when only the tracked remote was refreshed.
-    saved_refs = f"--remotes={remote}" if remote else "--remotes"
-    rc2, unpushed = run(dest, "rev-list", "--count", "HEAD", "--not", saved_refs)
+    saved_refs = ([f"--remotes={name}" for name in refreshed]
+                  if selected else ["--remotes"])
+    rc2, unpushed = run(dest, "rev-list", "--count", "HEAD", "--not", *saved_refs)
     if rc != 0 or rc2 != 0:
         return Staleness(ref=ref, note=note,
                          error=f"could not count commits against {ref}")
