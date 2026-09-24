@@ -324,12 +324,8 @@ def test_the_TICK_LINE_reads_wide_open_at_the_boundary_not_unrated():
     `unrated` on a lane that is genuinely wide open is the bug."""
     from shantytown import governor_utilization as gu
 
-    class _R:
-        ok = True
-        pct = 0.0
-        reset_at = T0 + WEEK          # the exact boundary
-
-    line = gu._window_use(gov.Policy(), SEVEN, _R(), T0).render()
+    reading = gov.Reading(pct=0.0, at=T0, reset_at=T0 + WEEK)
+    line = gu._window_use(gov.Policy(), SEVEN, reading, T0).render()
     assert "unrated" not in line, f"the brake still reads blind: {line}"
     assert "0.00x" in line, line
     assert "0%used" in line and "0%elapsed" in line, line
@@ -341,12 +337,8 @@ def test_elapsed_is_never_reported_NEGATIVE_at_the_boundary():
     operator reads a window running backwards."""
     from shantytown import governor_utilization as gu
 
-    class _R:
-        ok = True
-        pct = 0.0
-        reset_at = T0 + WEEK + 30.0
-
-    use = gu._window_use(gov.Policy(), SEVEN, _R(), T0)
+    reading = gov.Reading(pct=0.0, at=T0, reset_at=T0 + WEEK + 30.0)
+    use = gu._window_use(gov.Policy(), SEVEN, reading, T0)
     assert use is not None
     assert use.ratio == pytest.approx(0.0), "and it is rated, not None"
     assert use.elapsed_pct is not None and use.elapsed_pct >= 0.0

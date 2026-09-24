@@ -206,8 +206,8 @@ class _Gov:
 
 def test_st_crew_governor_prints_BOTH_restrictions(monkeypatch, capsys):
     """The whole bug, at the surface it was measured on."""
-    g = _Gov({FIVE_HOUR: Reading(pct=3, source="stub"),
-              SEVEN_DAY: Reading(pct=79, source="stub")},
+    g = _Gov({FIVE_HOUR: Reading(pct=3, at=cli.time.time(), source="stub"),
+              SEVEN_DAY: Reading(pct=79, at=cli.time.time(), source="stub")},
              _verdict(SEVEN_50, SEVEN_70, SEVEN_80_SUPPORT))
     monkeypatch.setattr(cli, "_governor", lambda a: g)
     monkeypatch.setattr(cli.creel_advisory_mod, "controller_line",
