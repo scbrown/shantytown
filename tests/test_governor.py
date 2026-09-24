@@ -340,21 +340,40 @@ def test_probe_success_zero_is_signal_lost(tmp_path):
     assert v.signal_lost
 
 
-def test_rotation_401_reuses_a_recent_cached_reading_only_within_grace():
-    recent = gov.Reading(pct=44, at=999_700, ok=False, cache_age=300,
-                         probe_http_status=401)
-    assert recent.lost(1_000_000, 900) == ""
-
-    expired = gov.Reading(pct=44, at=999_300, ok=False, cache_age=700,
-                          probe_http_status=401)
-    assert "probe FAILED" in expired.lost(1_000_000, 900)
-
-
-@pytest.mark.parametrize("status", [0, 403, 429, 500])
-def test_non_rotation_probe_failures_are_immediately_signal_lost(status):
+@pytest.mark.parametrize("status", [403, 429, 500])
+def test_other_http_failures_freeze_even_with_recent_cache(status):
     reading = gov.Reading(pct=44, at=999_700, ok=False, cache_age=300,
                           probe_http_status=status)
     assert "probe FAILED" in reading.lost(1_000_000, 900)
+
+
+@pytest.mark.parametrize("age,usable", [(840, True), (900, True), (901, False), (960, False)])
+@pytest.mark.parametrize("status", [0, 200])
+def test_failed_probe_cache_grace_is_bounded(age, usable, status):
+    reading = gov.Reading(pct=44, at=1_000_000-age, ok=False, cache_age=age,
+                          probe_http_status=status)
+    assert (reading.lost(1_000_000, 900) == "") is usable
+    # The grace never exceeds 15 minutes even with a longer configured limit.
+    assert (reading.lost(1_000_000, 3600) == "") is usable
+
+
+@pytest.mark.parametrize("changes", [
+    {"at": None}, {"cache_age": None}, {"probe_http_status": None},
+    {"cache_age": float("nan")}, {"at": float("nan")},
+    {"cache_age": -1}, {"pct": None}, {"at": 1_002_000},
+])
+def test_failed_probe_grace_requires_verifiable_cached_measurement(changes):
+    reading = replace(gov.Reading(pct=44, at=999_700, ok=False, cache_age=300,
+                                  probe_http_status=200), **changes)
+    assert reading.lost(1_000_000, 900)
+
+
+def test_failed_probe_grace_uses_older_age_and_honors_stricter_policy():
+    reading = gov.Reading(pct=44, at=999_000, ok=False, cache_age=300,
+                          probe_http_status=200)
+    assert reading.lost(1_000_000, 900)
+    assert replace(reading, at=999_700, cache_age=1000).lost(1_000_000, 900)
+    assert replace(reading, at=999_700).lost(1_000_000, 120)
 
 
 def test_warn_runs_the_fleet_and_alarms_every_pass(tmp_path):
@@ -1266,3 +1285,10 @@ def test_an_unknown_window_is_REFUSED_not_silently_never_engaged(tmp_path):
     with pytest.raises(Exception) as e:
         _policy(tmp_path, TWO_WINDOW.replace('window = "seven_day"', 'window = "7d"'))
     assert "seven_day" in str(e.value)
+
+
+@pytest.mark.parametrize("cache_age,usable", [(300, True), (600, True), (601, False), (840, False)])
+def test_401_rotation_grace_keeps_its_existing_600_second_boundary(cache_age, usable):
+    reading = gov.Reading(pct=44, at=999_700, ok=False, cache_age=cache_age,
+                          probe_http_status=401)
+    assert (reading.lost(1_000_000, 900) == "") is usable

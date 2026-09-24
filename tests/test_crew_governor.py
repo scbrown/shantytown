@@ -79,7 +79,7 @@ class _Gov:
 
 
 def _reading(pct, ok=True):
-    return gov_mod.Reading(pct=pct, ok=ok, source="stub")
+    return gov_mod.Reading(pct=pct, at=cli.time.time(), ok=ok, source="stub")
 
 
 def _verdict(engaged=(), signal_lost=False):
@@ -280,3 +280,29 @@ def test_an_ungoverned_harness_is_counted_by_no_governor():
     live = cli._live_by_governor([_card("x", "gemini")], panes, cfg,
                                  governors, root=None)
     assert live == {"base": 0, "codex": 0}
+
+@pytest.mark.parametrize("age,status,usable", [(840, 200, True), (900, 0, True),
+                                               (960, 200, False), (600, 401, True), (601, 401, False),
+                                               (60, 429, False)])
+def test_real_governor_cached_failure_is_visible_and_bounded(monkeypatch, capsys,
+                                                             age, status, usable):
+    clock = 1_000_000
+    monkeypatch.setattr(cli.time, "time", lambda: clock)
+    reading = gov_mod.Reading(pct=44, at=clock-age, ok=False, cache_age=age,
+                              probe_http_status=status)
+    g = gov_mod.Governor(gov_mod.Policy(tiers=_TIERS, on_signal_lost="freeze"),
+                        _Reader({w: reading for w in (gov_mod.FIVE_HOUR, gov_mod.SEVEN_DAY)}),
+                        now=lambda: clock)
+    verdict = g.evaluate(persist=False)
+    assert verdict.frozen is not usable
+    assert verdict.signal_lost is not usable
+    _, out = _run(monkeypatch, capsys, g)
+    if usable:
+        assert "ok 44/50/- 44/45/-" in out
+        assert "stale-but-usable" in out
+        assert f"age={age}s" in out
+        assert "stale-but-usable" in verdict.render(clock)
+        assert verdict.reading.ok is False  # probe evidence was not rewritten
+        assert verdict.reading.at == clock-age
+    else:
+        assert _capacity(out) == "lost"

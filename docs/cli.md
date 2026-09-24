@@ -1636,8 +1636,15 @@ JSON reply has `scope: "fleet"`, merged counts, policy hosts and per-window
 observation provenance. Human output names each live agent's host.
 
 The freshest producer timestamp wins **per window**, with a deterministic host
-name tie-break. A newer failed probe is still a failed probe; receipt over SSH
-does not refresh stale usage. Hosts without a local policy inherit the peer
+name tie-break. Receipt over SSH does not refresh usage. A transport failure or HTTP 200 body stall
+may use its last complete cached measurement for at most 15 minutes (or a
+stricter configured `max_age_seconds`), labelled `stale-but-usable` in
+`crew --governor` and controller output. Both the original successful timestamp
+and the reported cache age constrain this grace. The existing HTTP 401 rotation
+grace remains bounded by cache age at 600 seconds and the configured age limit.
+HTTP 429, other HTTP errors, unknown or mixed failure status, missing age evidence,
+and older caches remain signal-lost;
+`on_signal_lost = "freeze"` stops new dispatch. The probe still reports failure and never parses partial bodies. Hosts without a local policy inherit the peer
 policy. Multiple declarations for the same provider must agree; disagreement
 holds new launches and dispatch until the policies are reconciled. The strictest
 remembered window hold survives until the ordinary relaxation rules release it.

@@ -198,3 +198,22 @@ def test_a_legacy_line_valued_ledger_still_migrates_without_re_alerting(tmp_path
     assert _alerter(tmp_path, sent, filename="s.json").sweep(
         {"base": "governor recommends 0 — hold"}) == [], \
         "a hold must not re-alert merely because its storage shape changed"
+
+
+def test_cached_failure_adapter_preserves_age_and_freezes_errors(tmp_path):
+    probe = tmp_path / "probe.js"
+    probe.write_text("// injected controller")
+    for age, status, usable in [(840, 200, True), (900, 0, True),
+                                (960, 200, False), (600, 401, True), (601, 401, False), (60, 429, False)]:
+        def run(cmd, **kwargs):
+            state = json.loads(open(cmd[cmd.index("--state")+1]).read())
+            item = state["readings"]["seven_day"]
+            assert item["at"] == 1_000_000-age
+            assert item["pct"] == 26
+            assert ("error" not in item) is usable
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps({
+                "controller_line": "governor recommends -1" if usable else "CONTROLLER FROZEN"}))
+        line = advisory.controller_line({"seven_day": Reading(
+            pct=26, at=1_000_000-age, ok=False, cache_age=age, probe_http_status=status)},
+            running=6, cap=6, now=1_000_000, probe=str(probe), node="node", run=run)
+        assert ("stale-but-usable" in line) is usable

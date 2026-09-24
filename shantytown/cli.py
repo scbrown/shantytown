@@ -6425,7 +6425,7 @@ def _crew_governor(a) -> int:
 
         def _pct(window: str) -> str:
             r = readings.get(window)
-            if r is None or not r.ok or r.pct is None:
+            if r is None or r.lost(clock, multi.policy.max_age_seconds):
                 return "?/?/?"
             now = int(round(r.pct))
             higher = sorted(t.at for t in multi.policy.tiers_for(window)
@@ -6449,11 +6449,14 @@ def _crew_governor(a) -> int:
         label = "; ".join(t.label() for t in verdict.restrictions)
         cap = ("" if verdict.max_agents is None
                else f"CAP[{verdict.max_agents} agents]")
-        detail = " ".join(x for x in (cap, burn, pace, label) if x)
+        stale = ("stale-but-usable[" + "; ".join(verdict.stale_usable) + "]"
+                 if verdict.stale_usable else "")
+        detail = " ".join(x for x in (cap, burn, pace, label, stale) if x)
         usage = (f"ok {_pct(gov_mod.FIVE_HOUR)} "
                  f"{_pct(gov_mod.SEVEN_DAY)} {detail}").rstrip()
         advisory = creel_advisory_mod.controller_line(
             readings, running=running, cap=verdict.max_agents,
+            max_age=multi.policy.max_age_seconds,
             probe=getattr(cfg, "env", {}).get(creel_advisory_mod.PROBE_ENV))
         # UTILIZATION ON ITS OWN LINE, EVERY PASS (aegis-967a9). Same argument
         # the fleet cap earns above: under-cap idleness is invisible exactly when
@@ -9834,6 +9837,7 @@ def _tend_once(a, quiet: bool = False) -> int:
         running = live_by_gov.get(name, 0)
         line = creel_advisory_mod.controller_line(
             readings, running=running, cap=verdicts[name].max_agents,
+            max_age=gov.policy.max_age_seconds,
             probe=cfg.env.get(creel_advisory_mod.PROBE_ENV))
         setpoint_advisories[name] = line
         # Unavailability is pushed once through the deduped alerter below.  A

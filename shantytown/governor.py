@@ -85,6 +85,7 @@ actually be at 95%.
 from __future__ import annotations
 
 import json
+import math
 import re
 import subprocess
 import time
@@ -181,6 +182,7 @@ ACTIONS = (DRAIN,)
 # the producer is a different bead.
 DEFAULT_MAX_AGE_S = 900
 OAUTH_ROTATION_GRACE_S = 600
+STALE_USAGE_GRACE_S = 900
 
 # Leaving a tier requires falling this far BELOW its threshold. Without it a
 # reading oscillating around 70 flips the whole fleet between "P0 only" and "P1+"
@@ -724,9 +726,8 @@ class Reading:
     # be minutes old while everything else about the exposition looks current.
     # None = not published; the timestamp check below still applies.
     cache_age: float | None = None
-    # Exact status from THIS probe run. A 401 at access-token expiry has a
-    # bounded rotation grace; 429 and transport failures remain immediately
-    # actionable and must never inherit that grace.
+    # Exact status from THIS probe run. Preserve the bounded 401 rotation
+    # grace; transport/body stalls have a separate grace. 429 stays unusable.
     probe_http_status: int | None = None
     # WHEN THIS WINDOW'S BUDGET REFILLS, epoch seconds (aegis-9mehy). Unlike
     # everything else on this record it is per-WINDOW, because it describes a
@@ -766,21 +767,18 @@ class Reading:
         """
         if self.error:
             return self.error
-        if not self.ok and not (
-                self.probe_http_status == 401
-                and self.cache_age is not None
-                and self.cache_age <= OAUTH_ROTATION_GRACE_S):
-            # FLYING BLIND, not low usage. The producer RETAINS the last good
-            # percentages when a probe fails and flags them here, so the number
-            # still present alongside this flag is history, not a measurement —
-            # and it is the direction that spends: a retained 11% holds the fleet
-            # wide open for as long as the probe stays down.
-            status = (self.probe_http_status
-                      if self.probe_http_status is not None else "unknown")
-            return (f"{PROBE_OK_METRIC} is 0 (HTTP {status})"
-                    " — a probe FAILED, so the published "
-                    f"percentage is the last good one, not a measurement. This "
-                    f"is flying blind, never low usage")
+        rotation_grace = (self.probe_http_status == 401
+                          and self.cache_age is not None
+                          and self.cache_age <= OAUTH_ROTATION_GRACE_S)
+        if not self.ok and not rotation_grace:
+            # Transport failures have status 0; a body stall retains HTTP 200.
+            # Other HTTP errors and unknown/mixed statuses get no new grace.
+            if (self.probe_http_status not in (0, 200) or self.cache_age is None
+                    or not math.isfinite(self.cache_age) or self.cache_age < 0):
+                return (f"{PROBE_OK_METRIC} is 0 (HTTP "
+                        f"{self.probe_http_status if self.probe_http_status is not None else 'unknown'})"
+                        " — a probe FAILED without usable cached usage")
+            max_age = min(max_age, STALE_USAGE_GRACE_S)
         if self.pct is None:
             # (The producer is a separate, still-open item; cited in the module
             # docstring's comment, never in an emittable string — this repo is
@@ -797,17 +795,19 @@ class Reading:
         # conservative, not less" — the number being governed by is only as fresh
         # as the stalest thing that produced it.
         age = now - self.at
+        if not math.isfinite(age):
+            return "probe timestamp is not finite — its age cannot be trusted"
+        # A clock skew big enough to put the probe in the future is not a
+        # reading either: it would defeat every staleness check that follows.
+        if age < -max_age:
+            return (f"the probe timestamp is {int(-age)}s in the FUTURE — clock "
+                    f"skew, so its age cannot be trusted")
         if self.cache_age is not None:
             age = max(age, self.cache_age)
         if age > max_age:
             return (f"the probe last succeeded {int(age)}s ago (limit "
                     f"{int(max_age)}s) — STALE, and a stale number reads green "
                     f"forever")
-        # A clock skew big enough to put the probe in the future is not a
-        # reading either: it would defeat every staleness check that follows.
-        if age < -max_age:
-            return (f"the probe timestamp is {int(-age)}s in the FUTURE — clock "
-                    f"skew, so its age cannot be trusted")
         return ""
 
 
@@ -1943,6 +1943,7 @@ class Verdict:
     # Verdict stays self-contained — every other field a refusal needs to explain
     # itself is here, and "why was this one let through" is the same question.
     exempt: tuple[str, ...] = ()
+    stale_usable: tuple[str, ...] = ()  # accepted cached windows, with original ages
 
     def resets_in(self, window: str, now: float) -> float | None:
         at = self.resets.get(window)
@@ -2336,9 +2337,11 @@ class Verdict:
         second invites waiting. The number was already in the exposition and the
         governor simply never looked at it.
         """
+        stale = (" · stale-but-usable[" + "; ".join(self.stale_usable) + "]"
+                 if self.stale_usable else "")
         if not self.tier and not self.signal_lost:
             pct = "—" if self.pct is None else f"{self.pct:.0f}%"
-            return f"  governor    usage {pct} · no tier engaged · wide open"
+            return f"  governor    usage {pct} · no tier engaged · wide open" + stale
         if self.signal_lost:
             state = "FROZEN — no new dispatch" if self.frozen else "running UNGOVERNED"
             return f"  governor    SIGNAL LOST · {state} · {self.why}"
@@ -2354,7 +2357,7 @@ class Verdict:
         held = " (held)" if self.held else ""
         line = (f"  governor    {self.tier.window} usage {pct} · "
                 f"{self.tier.at}% tier{held} · {self.effect()}")
-        return line + self.reset_note(now)
+        return line + self.reset_note(now) + stale
 
     def reset_note(self, now: float | None = None) -> str:
         """` · five_hour resets in 1h35m`, or "" when nothing published one.
@@ -2521,6 +2524,7 @@ class Governor:
         # rendered into operator prose in three places, and widening that tuple
         # would touch every one of them for a value none of them print.
         blind_faults: list[str] = []
+        stale_usable: list[str] = []
         resets: dict[str, float] = {}      # window -> epoch the budget refills
         relaxed: list[Relaxed] = []        # windows that LEFT a tier this pass
         prior = self.state.get() if self.state is not None else Engaged()
@@ -2533,6 +2537,9 @@ class Governor:
                 blind.append((w, why_lost))
                 blind_faults.append(r.fault or UNKNOWN_FAULT)
                 continue
+            if not r.ok:
+                age = max(now - r.at, r.cache_age)
+                stale_usable.append(f"{w} age={int(age)}s")
             # RECORDED FROM A READING WE ACCEPTED, never from a blind one. A
             # reset timestamp carried alongside a stale percentage is as stale as
             # the percentage; arming a wake from it would schedule a look based
@@ -2755,6 +2762,9 @@ class Governor:
                "spent)" if w in burning_windows else "")
             for w, (c, h, _, p) in decided.items()) or "no window readable"
 
+        if stale_usable:
+            why += " · stale-but-usable[" + "; ".join(stale_usable) + "]"
+
         alarm = ""
         if blind:
             # HALF-BLIND IS STILL BLIND, and it is still not a reason to stop the
@@ -2775,7 +2785,7 @@ class Governor:
         # available, which is what forced the mismatched messages.
         by_window = {w: p for w, (_, _, _, p) in decided.items()}
         return Verdict(reading=reading, pct=pct, tier=chosen, held=held, why=why,
-                       by_window=by_window,
+                       by_window=by_window, stale_usable=tuple(stale_usable),
                        alarm=alarm, engaged=tuple(engaged_tiers),
                        resets=resets, relaxed=tuple(relaxed),
                        burning=tuple(burning), pacing=tuple(pacing),
