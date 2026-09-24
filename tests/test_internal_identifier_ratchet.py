@@ -40,14 +40,22 @@ PKG = ROOT / "shantytown"
 # Generic by construction: none of these name a real host, network or person, so
 # this file does not reintroduce the thing it forbids.
 FORBIDDEN = {
-    "internal hostname": re.compile(r"\b[a-z0-9][a-z0-9-]*\.(?:lan|svc)\b"),
+    # No "internal hostname" (.lan / .svc) class any more: Stiwi ruled 2026-09-24
+    # that hostnames and crew names are fine in public repos, while secrets and
+    # personal data are still scrubbed (quipu Directive
+    # public-repos-allow-hostnames-and-crew-names; aegis-0mhzqo). The prompt class
+    # below stays because it carries the OPERATOR ACCOUNT, the same personal-data
+    # reason the home-path class stays.
     "private address": re.compile(
         r"\b(?:10\.\d{1,3}|192\.168|172\.(?:1[6-9]|2\d|3[01]))\.\d{1,3}\.\d{1,3}\b"),
     # Any /home/<account>/ except the conventional placeholders. Matching those
     # too would flag the documented fix itself.
     "operator home path": re.compile(
         r"/home/(?!(?:user|you|alice|bob|someone|example|x)/)[a-z][a-z0-9_-]*/"),
-    "internal ticket id": re.compile(r"\b(?:aegis|hq|gassy|qp)-[a-z0-9]{3,6}\b"),
+    # No "internal ticket id" class: bead ids are internal ids, not secrets, so a
+    # bead id in a string literal is a readability matter for review, not a gate
+    # (sattler's ruling on aegis-0mhzqo, under Stiwi's 2026-09-24 ruling). A test
+    # ratchet cannot WARN, so the class is dropped rather than left blocking.
     # A BARE HOSTNAME HAS NO SUFFIX TO MATCH, so "internal hostname" above cannot
     # see one — and the fleet directive this file implements names a bare one as its
     # own example: its list of things to scrub includes a BARE machine name alongside
@@ -200,11 +208,8 @@ def test_the_ratchet_catches_each_class():
     # RFC1918 and so would not match this pattern, hence the canonical textbook
     # private address instead: it exercises the class and names no real host.
     planted = (
-        'x = "connect to db.lan now"\n'
-        'y = "http://thing.svc/mcp"\n'
         'z = "addr 192.168.0.1"\n'
         'w = "/home/jsmith/src/x"\n'
-        'v = "see aegis-1234"\n'
         # SYNTHETIC prompt, and it must NOT be one of the exempted placeholders or
         # this control can never see the class — which is exactly what the first
         # version did: it planted `someone@host-a`, the exemption swallowed it, and
@@ -231,3 +236,14 @@ def test_docstrings_and_comments_are_deliberately_allowed():
     hits = [t for _, t in live_string_literals(src)
             if any(rx.search(t) for rx in FORBIDDEN.values())]
     assert not hits, f"docstring/comment wrongly flagged: {hits}"
+
+
+def test_hostnames_and_crew_names_are_allowed():
+    """The 2026-09-24 ruling is pinned, not just applied (aegis-0mhzqo): a
+    hostname, a service host and a crew name in a live string are NOT offences.
+    If a hostname class comes back, this fails and names the ruling."""
+    src = ('a = "connect to db.lan"\nb = "http://thing.svc/mcp"\n'
+           'c = "ask sattler or dearing"\nd = "see aegis-1234"\n')
+    hits = [(t, label) for _, t in live_string_literals(src)
+            for label, rx in FORBIDDEN.items() if rx.search(t)]
+    assert not hits, f"hostname or crew name flagged against the ruling: {hits}"

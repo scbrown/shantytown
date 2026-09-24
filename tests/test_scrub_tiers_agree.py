@@ -49,16 +49,20 @@ WARN_TIER_CLASS = "internal ticket id"
 
 def test_the_ratchet_keeps_bead_ids_out_of_its_block_tier():
     """The ratchet's half of the agreement, asserted directly rather than
-    assumed — this is the mechanism that was already right, and a later edit
-    'tightening' it would re-open the divergence from the other side."""
+    assumed. Since aegis-0mhzqo (sattler, under Stiwi's 2026-09-24 ruling that
+    internal ids are not secrets) the ratchet does not gate bead ids AT ALL: a
+    test ratchet cannot warn, so the class was dropped rather than left
+    blocking. The invariant this file exists for is unchanged, and it is
+    stronger now: no mechanism blocks a bead id. The edit-time advisory and
+    the pre-push note (the next test) still warn."""
     from tests import test_internal_identifier_ratchet as ratchet
-    assert WARN_TIER_CLASS in ratchet.FORBIDDEN, (
-        "the ratchet no longer knows about bead ids at all — it cannot agree "
-        "or disagree, which is worse than disagreeing")
     assert WARN_TIER_CLASS not in ratchet.BLOCK_TIER, (
         "the ratchet moved bead ids into BLOCK_TIER. The graph rates "
         "pattern_bead-reference `warn`; blocking here re-creates aegis-krlog "
         "from the ratchet's side.")
+    assert not any(rx.search("see aegis-1234") for rx in ratchet.FORBIDDEN.values()), (
+        "the ratchet gates bead ids again. They are internal ids, not secrets "
+        "(aegis-0mhzqo): a readability matter for review, not a gate.")
 
 
 @pytest.mark.skipif(not GUARD.exists(), reason="guard script not present")
