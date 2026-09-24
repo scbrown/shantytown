@@ -57,6 +57,7 @@ class _Args:
         self.crew = kw.get("crew")
         self.workspaces = kw.get("workspaces")
         self.mode = kw.get("mode")
+        self.unattended = kw.get("unattended", False)
         self.hibernate = kw.get("hibernate", False)
         self.yes = kw.get("yes", False)
         self.force = kw.get("force", False)
@@ -292,7 +293,7 @@ def test_dry_run_writes_nothing(tmp_path, capsys):
 
 def test_declining_the_confirmation_writes_nothing(tmp_path, capsys):
     root = tmp_path / ".shanty"
-    rc = cli._cmd_init(_Args(root), ask=_Ask("sattler", "", "", "", "", "no"),
+    rc = cli._cmd_init(_Args(root), ask=_Ask("sattler", "", "", "", "", "", "no"),
                        isatty=lambda: True)
     assert rc == cli.REFUSED
     assert not (root / "crew").exists()
@@ -339,3 +340,54 @@ def test_init_then_start_brings_up_the_admin(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(cli, "_launch", fake_launch)
     assert cli.main(["--root", str(root), "start"]) == cli.OK
     assert launched == [("sattler", "st-sattler")], "lite: the admin, alone"
+
+
+@pytest.mark.parametrize("unattended", [False, True])
+def test_init_permission_choice_reaches_both_harnesses(tmp_path, capsys, unattended):
+    from shantytown.files import FilesRegistry
+    from shantytown import launchable
+    from shantytown.harness import get
+    CLAUDE, CODEX = get("claude"), get("codex")
+    root = tmp_path / "store"
+    assert cli._cmd_init(_Args(root, yes=True, admin="admin", crew="worker",
+                               unattended=unattended)) == cli.OK
+    for card in FilesRegistry(root / "crew").all().exact():
+        assert card.dangerous is unattended
+        manual = [g for g in launchable.launch_gaps(card) if g.short == "MANUAL MODE"]
+        assert bool(manual) is (not unattended)
+        assert ("--dangerously-skip-permissions" in CLAUDE.launch(card, "/settings")) is unattended
+        assert ("--dangerously-bypass-approvals-and-sandbox" in CODEX.launch(card, "/settings")) is unattended
+    assert ("UNATTENDED" if unattended else "--unattended") in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("existing_unattended", [False, True])
+def test_unattended_force_keeps_existing_card_bytes(tmp_path, existing_unattended):
+    root = tmp_path / "store"
+    assert cli._cmd_init(_Args(root, yes=True, admin="admin",
+                               unattended=existing_unattended)) == cli.OK
+    card = root / "crew" / "admin.json"
+    before = card.read_bytes()
+    assert cli._cmd_init(_Args(root, yes=True, force=True, admin="admin",
+                               crew="worker", unattended=True)) == cli.OK
+    assert card.read_bytes() == before
+    assert _card(root, "worker")["dangerous"] is True
+
+
+def test_unattended_dry_run_names_permission_and_writes_nothing(tmp_path, capsys):
+    root = tmp_path / "absent"
+    assert cli._cmd_init(_Args(root, yes=True, dry_run=True, unattended=True)) == cli.OK
+    assert not root.exists()
+    assert "UNATTENDED (bypass harness approvals/sandbox)" in capsys.readouterr().out
+
+
+def test_wizard_explicit_permission_choice_and_manual_default():
+    assert scaffold.ask_all(_Ask()).unattended is False
+    assert scaffold.ask_all(_Ask("", "", "", "", "", "yes")).unattended is True
+    assert scaffold.ask_all(_Ask(), defaults=scaffold.Answers(unattended=True)).unattended is True
+
+
+def test_fleet_init_unattended_cli_flag(tmp_path):
+    root = tmp_path / "store"
+    assert cli.main(["--root", str(root), "fleet", "init", "-y",
+                     "--admin", "admin", "--unattended"]) == cli.OK
+    assert _card(root, "admin")["dangerous"] is True

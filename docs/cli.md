@@ -710,6 +710,8 @@ $ st fleet init
   > idle
     Wake when this % of the answerable crew is idle [60]
   > 70
+  Run NEW cards unattended (bypass harness approval prompts and sandbox)? yes/no [no]
+  > no
 
   store    /home/you/project/.shanty
   dir      crew/
@@ -722,6 +724,22 @@ $ st fleet init
 
   Write this? [yes]
 ```
+
+### Choose permissions when creating cards
+
+`st fleet init --unattended` sets `dangerous: true` on each NEW card. This opts
+those agents into their harness's approval and sandbox bypass; use it for a crew
+that must run without per-command approvals. The wizard asks the same yes/no
+question (default **no**), and the preview and completion output name the choice.
+Without the flag or an explicit yes, cards retain manual approval prompts.
+
+```bash
+st fleet init -y --admin boss --crew ada,bo --unattended
+```
+
+The choice is stored per card, not as a global override. `--force --unattended`
+only affects newly created cards; it preserves existing permission choices.
+Init starts no sessions. A running agent's posture still comes from its launch.
 
 ### It writes through the existing seams, and adds none
 
