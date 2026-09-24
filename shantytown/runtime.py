@@ -348,9 +348,9 @@ def _capture_cmd(root=None) -> dict:
     (aegis-rcyd Phase 0). Capture is fail-open (stats.main never returns nonzero),
     so a broken stats layer is invisible to the tool call it observes.
     """
-    cmd = f"{_hook_interpreter()} -m shantytown.stats capture"
+    cmd = f"{shlex.quote(_hook_interpreter())} -m shantytown.stats capture"
     if root is not None:
-        cmd += f" --root {Path(root).resolve()}"
+        cmd += f" --root {shlex.quote(str(Path(root).resolve()))}"
     return {"type": "command", "command": cmd}
 
 
@@ -1142,20 +1142,20 @@ def claude_settings_for_role(role: str, root=None) -> dict:
     that should call it. The hook EVENTS inside it are shantytown's and come
     from the three shared builders above.
     """
+    capture = _capture_cmd(root)
     return {
         "hooks": {
             # QUERY-FIRST at session start (aegis-rcyd). See session_start_hooks.
             "SessionStart": session_start_hooks(root),
-            "Stop": [{"hooks": role_stop_hooks(role, root=root)}],
+            "Stop": [{"hooks": role_stop_hooks(role, root=root)},
+                     {"hooks": [capture]}],
             # yupana policy guard on every edit-shaped tool call. See _YUPANA_GUARD.
-            "PreToolUse": pre_tool_use_hooks(root),
-            # NOTE: metrics capture (PostToolUse, matcher '.*') is delivered via
-            # the PROVISION consent settings (provision._with_capture_hook), NOT
-            # here — that file is re-applied on EVERY launch so it self-heals,
-            # whereas --settings is only emitted on `role set` and went stale
-            # fleet-wide (aegis-rcyd: 693024d wired it here but running agents
-            # never regenerated it). Keeping it in ONE place avoids double-capture
-            # (Claude Code fires hooks from every settings source it merges).
+            "PreToolUse": pre_tool_use_hooks(root) + [
+                {"matcher": ".*", "hooks": [capture]}],
+            "PostToolUse": [{"matcher": ".*", "hooks": [capture]}],
+            "PostToolUseFailure": [{"matcher": ".*", "hooks": [capture]}],
+            # Metrics must work without an MCP consent template. Provisioning
+            # removes legacy workspace copies when these registrations exist.
         },
         # Pre-answer the project-MCP consent screen. A FRESH workspace makes Claude
         # Code ask "N new MCP servers found — enable?" and that prompt BLOCKS the

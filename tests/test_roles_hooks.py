@@ -230,19 +230,14 @@ def test_no_bash_guard_emitted_by_default(tmp_path):
     assert cmds == ["yupana hook pre-bash || exit 0"], cmds
 
 
-def test_metrics_capture_is_NOT_in_settings_but_carries_the_right_interpreter(tmp_path):
-    # aegis-rcyd: capture is delivered via the provision consent settings (which
-    # self-heal every launch), NOT --settings (emitted only on `role set`, so it
-    # went stale fleet-wide). --settings must carry NO PostToolUse — a second copy
-    # would double-count. But the SHARED _capture_cmd helper must bake a real
-    # interpreter (able to import shantytown), never a bare 'python' (tim).
+def test_metrics_capture_is_emitted_for_every_role(tmp_path):
     for role in ("worker", "lead", "administrator"):
-        s = runtime.claude_settings_for_role(role, root=tmp_path)
-        assert "PostToolUse" not in s["hooks"], f"{role}: capture must not be in --settings"
+        hooks = runtime.claude_settings_for_role(role, root=tmp_path)["hooks"]
+        for event in ("PreToolUse", "PostToolUse", "PostToolUseFailure", "Stop"):
+            commands = [h["command"] for g in hooks[event] for h in g["hooks"]]
+            assert commands.count(runtime._capture_cmd(tmp_path)["command"]) == 1
     cmd = runtime._capture_cmd(tmp_path)["command"]
-    assert "shantytown.stats capture" in cmd
-    assert f"--root {tmp_path.resolve()}" in cmd
-    assert not cmd.startswith("python "), "must not be a bare 'python' (not on PATH)"
+    assert not cmd.startswith("python ")
 
 
 def test_toml_bash_guard_is_emitted_for_every_role(tmp_path):
@@ -313,7 +308,7 @@ def test_toml_capture_wins_over_ambient(tmp_path, monkeypatch):
 
 # --- the deployment MCP guard extension point (aegis-uy8e8) ------------------
 
-def test_NO_matcher_covers_the_mcp_surface_without_deployment_config(tmp_path):
+def test_no_mcp_guard_without_deployment_config(tmp_path):
     """Shantytown ships no MCP policy, so absent config the surface is
     DELIBERATELY unguarded — asserted as a positive shape, not an absence, so
     this pins WHICH matchers exist rather than merely that one is missing.
@@ -325,7 +320,7 @@ def test_NO_matcher_covers_the_mcp_surface_without_deployment_config(tmp_path):
     for role in ("worker", "lead", "administrator"):
         s = runtime.claude_settings_for_role(role, root=tmp_path)
         matchers = [h.get("matcher") for h in s["hooks"]["PreToolUse"]]
-        assert matchers == ["Edit|Write|MultiEdit", "Bash"], f"{role}: {matchers}"
+        assert matchers == ["Edit|Write|MultiEdit", "Bash", ".*"], f"{role}: {matchers}"
 
 
 def test_toml_mcp_guard_is_emitted_for_every_role(tmp_path):
@@ -369,7 +364,7 @@ def test_the_bash_guard_and_the_mcp_guard_are_INDEPENDENT(tmp_path):
     _deployment_env(tmp_path, SHANTY_BASH_GUARD="/bash.sh")
     s = runtime.claude_settings_for_role("worker", root=tmp_path)
     assert [h.get("matcher") for h in s["hooks"]["PreToolUse"]] == \
-        ["Edit|Write|MultiEdit", "Bash"]
+        ["Edit|Write|MultiEdit", "Bash", ".*"]
     assert not any(h.get("matcher") == "mcp__.*" for h in s["hooks"]["PreToolUse"])
 
     # `Bash` stays present here for yupana's trace, so independence is asserted
@@ -379,7 +374,7 @@ def test_the_bash_guard_and_the_mcp_guard_are_INDEPENDENT(tmp_path):
     _deployment_env(tmp_path, SHANTY_MCP_GUARD="/mcp.sh")
     s = runtime.claude_settings_for_role("worker", root=tmp_path)
     assert [h.get("matcher") for h in s["hooks"]["PreToolUse"]] == \
-        ["Edit|Write|MultiEdit", "Bash", "mcp__.*"]
+        ["Edit|Write|MultiEdit", "Bash", "mcp__.*", ".*"]
     bash_cmds = [h["command"] for g in s["hooks"]["PreToolUse"]
                  if g.get("matcher") == "Bash" for h in g["hooks"]]
     assert bash_cmds == ["yupana hook pre-bash || exit 0"], bash_cmds

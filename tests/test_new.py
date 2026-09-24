@@ -748,3 +748,27 @@ def test_a_message_at_the_cap_is_delivered_whole_in_one_batch(tmp_path, capsys):
 
     assert box.unread("ellie") == [], "the largest legal message did not land"
     assert body in panes.sent[-1][1], "it was split or dropped"
+
+
+def test_launch_provisions_capture_against_selected_agent_settings(tmp_path, monkeypatch):
+    """A per-agent override, not the role file, decides which fallback is needed."""
+    from shantytown import runtime
+    ws = tmp_path / "workspace"
+    ws.mkdir()
+    root = _world(tmp_path, workspace=str(ws))
+    cli._emit_role_settings(root, {"worker"}, harness_name="claude")
+    override = root / "settings" / "agent-ellie.settings.json"
+    override.write_text("{}")
+    panes = NullPanes(screen=READY, live=set())
+    monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: panes)
+    assert cli._cmd_new(_Args(root=root)) == cli.OK
+    local = json.loads((ws / ".claude" / "settings.local.json").read_text())
+    assert any("shantytown.stats capture" in h["command"]
+               for g in local["hooks"]["PostToolUse"] for h in g["hooks"])
+    # Regenerate that override and start again: the workspace duplicate retires.
+    override.write_text(json.dumps(runtime.claude_settings_for_role("worker", root)))
+    panes = NullPanes(screen=READY, live=set())
+    assert cli._cmd_new(_Args(root=root)) == cli.OK
+    local = json.loads((ws / ".claude" / "settings.local.json").read_text())
+    assert not any("shantytown.stats capture" in h["command"]
+                   for g in local["hooks"]["PostToolUse"] for h in g["hooks"])
