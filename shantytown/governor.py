@@ -181,6 +181,7 @@ ACTIONS = (DRAIN,)
 # open for an hour. Overridable — it is a property of the producer's cadence, and
 # the producer is a different bead.
 DEFAULT_MAX_AGE_S = 900
+OAUTH_ROTATION_GRACE_S = 600
 STALE_USAGE_GRACE_S = 900
 
 # Leaving a tier requires falling this far BELOW its threshold. Without it a
@@ -725,8 +726,8 @@ class Reading:
     # be minutes old while everything else about the exposition looks current.
     # None = not published; the timestamp check below still applies.
     cache_age: float | None = None
-    # Exact status from THIS probe run. Authentication and rate-limit failures
-    # remain immediately unusable; other failures may use bounded cached usage.
+    # Exact status from THIS probe run. Preserve the bounded 401 rotation
+    # grace; transport/body stalls have a separate grace. 429 stays unusable.
     probe_http_status: int | None = None
     # WHEN THIS WINDOW'S BUDGET REFILLS, epoch seconds (aegis-9mehy). Unlike
     # everything else on this record it is per-WINDOW, because it describes a
@@ -766,17 +767,17 @@ class Reading:
         """
         if self.error:
             return self.error
-        if self.probe_http_status in (401, 429):
-            return f"probe FAILED (HTTP {self.probe_http_status}) — usage is unavailable"
-        if not self.ok:
-            # A failed probe is still a failure. Only a timestamped cached value
-            # with explicit cache age/status may steer during the bounded grace.
-            # Unknown/mixed statuses cannot hide an authentication failure.
-            if (self.probe_http_status is None or self.cache_age is None
+        rotation_grace = (self.probe_http_status == 401
+                          and self.cache_age is not None
+                          and self.cache_age <= OAUTH_ROTATION_GRACE_S)
+        if not self.ok and not rotation_grace:
+            # Transport failures have status 0; a body stall retains HTTP 200.
+            # Other HTTP errors and unknown/mixed statuses get no new grace.
+            if (self.probe_http_status not in (0, 200) or self.cache_age is None
                     or not math.isfinite(self.cache_age) or self.cache_age < 0):
                 return (f"{PROBE_OK_METRIC} is 0 (HTTP "
                         f"{self.probe_http_status if self.probe_http_status is not None else 'unknown'})"
-                        " — a probe FAILED without verifiable cached usage")
+                        " — a probe FAILED without usable cached usage")
             max_age = min(max_age, STALE_USAGE_GRACE_S)
         if self.pct is None:
             # (The producer is a separate, still-open item; cited in the module

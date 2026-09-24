@@ -340,15 +340,15 @@ def test_probe_success_zero_is_signal_lost(tmp_path):
     assert v.signal_lost
 
 
-@pytest.mark.parametrize("status", [401, 429])
-def test_auth_and_rate_limit_failures_freeze_even_with_recent_cache(status):
+@pytest.mark.parametrize("status", [403, 429, 500])
+def test_other_http_failures_freeze_even_with_recent_cache(status):
     reading = gov.Reading(pct=44, at=999_700, ok=False, cache_age=300,
                           probe_http_status=status)
     assert "probe FAILED" in reading.lost(1_000_000, 900)
 
 
 @pytest.mark.parametrize("age,usable", [(840, True), (900, True), (901, False), (960, False)])
-@pytest.mark.parametrize("status", [0, 200, 500])
+@pytest.mark.parametrize("status", [0, 200])
 def test_failed_probe_cache_grace_is_bounded(age, usable, status):
     reading = gov.Reading(pct=44, at=1_000_000-age, ok=False, cache_age=age,
                           probe_http_status=status)
@@ -561,7 +561,7 @@ def test_a_retained_percentage_with_a_climbing_cache_age_is_STALE(tmp_path):
         "a 4000s-old cached percentage read as a current measurement")
 
 
-def test_textfile_401_and_429_are_immediately_lost(tmp_path):
+def test_textfile_rotation_401_is_bounded_but_429_is_not(tmp_path):
     p = tmp_path / "claude.prom"
     rotation = (TEXTFILE
                 .replace('claude_usage_probe_success{account="acct-a"} 1',
@@ -571,7 +571,7 @@ def test_textfile_401_and_429_are_immediately_lost(tmp_path):
                 .replace('claude_usage_cache_age_seconds{account="acct-a"} 0',
                          'claude_usage_cache_age_seconds{account="acct-a"} 300'))
     p.write_text(rotation)
-    assert "HTTP 401" in gov.TextfileReader(p, gov.FIVE_HOUR).read().lost(1_000_000, 900)
+    assert gov.TextfileReader(p, gov.FIVE_HOUR).read().lost(1_000_000, 900) == ""
 
     p.write_text(rotation.replace(
         'claude_usage_probe_http_status{account="acct-a"} 401',
@@ -1285,3 +1285,10 @@ def test_an_unknown_window_is_REFUSED_not_silently_never_engaged(tmp_path):
     with pytest.raises(Exception) as e:
         _policy(tmp_path, TWO_WINDOW.replace('window = "seven_day"', 'window = "7d"'))
     assert "seven_day" in str(e.value)
+
+
+@pytest.mark.parametrize("cache_age,usable", [(300, True), (600, True), (601, False), (840, False)])
+def test_401_rotation_grace_keeps_its_existing_600_second_boundary(cache_age, usable):
+    reading = gov.Reading(pct=44, at=999_700, ok=False, cache_age=cache_age,
+                          probe_http_status=401)
+    assert (reading.lost(1_000_000, 900) == "") is usable

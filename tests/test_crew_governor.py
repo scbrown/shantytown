@@ -282,7 +282,7 @@ def test_an_ungoverned_harness_is_counted_by_no_governor():
     assert live == {"base": 0, "codex": 0}
 
 @pytest.mark.parametrize("age,status,usable", [(840, 200, True), (900, 0, True),
-                                               (960, 200, False), (60, 401, False),
+                                               (960, 200, False), (600, 401, True), (601, 401, False),
                                                (60, 429, False)])
 def test_real_governor_cached_failure_is_visible_and_bounded(monkeypatch, capsys,
                                                              age, status, usable):

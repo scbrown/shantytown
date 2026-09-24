@@ -204,7 +204,7 @@ def test_cached_failure_adapter_preserves_age_and_freezes_errors(tmp_path):
     probe = tmp_path / "probe.js"
     probe.write_text("// injected controller")
     for age, status, usable in [(840, 200, True), (900, 0, True),
-                                (960, 200, False), (60, 401, False), (60, 429, False)]:
+                                (960, 200, False), (600, 401, True), (601, 401, False), (60, 429, False)]:
         def run(cmd, **kwargs):
             state = json.loads(open(cmd[cmd.index("--state")+1]).read())
             item = state["readings"]["seven_day"]
