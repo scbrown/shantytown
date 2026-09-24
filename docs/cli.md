@@ -1771,3 +1771,13 @@ diagnostic baseline, not evidence of routing quality: populate governed ownershi
 domains and rerun before trusting this arm. No confidence cutoff was inferred
 from this small set. Raw requests and results belong with the deployment's private
 benchmark artifacts, not in a public repository.
+
+### New-host acceptance
+
+`st ops doctor --deploy` checks local host identity, the exact graph Host node,
+selected settings and capture hooks, explicit permissions, workspace directories,
+Codex Remote Control prerequisites, incoming SSH exports, and each peer's return
+configuration. It is read-only. Run it over SSH from both hosts to exercise both
+directions. `--local` suppresses peer reads; `--json` emits a versioned snapshot.
+Exit 1 means incomplete; exit 2 means an observation is unknown. See
+[new-host setup](new-host.md) for the complete scaffold and repair checklist.
