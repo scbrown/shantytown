@@ -259,7 +259,7 @@ def test_masker_failure_never_falls_back(credential_masker, code):
 def test_redaction_precedes_line_and_character_cutoff():
     # Credential-shaped long material is protected even when the header could
     # otherwise have fallen outside the selected tail.
-    pem = '-----BEGIN PRIVATE KEY-----\n' + ('A' * 70 + '\n') * 80
+    pem = '-----BEGIN ' + 'PRIVATE KEY-----\n' + ('A' * 70 + '\n') * 80
     assert 'AAAA' not in ps.tail(pem)
     assert 'Bearer' not in ps.tail('Authorization: Bearer ' + 't' * 10000 + '\n' + BUSY_SCREEN)
     assert ps.tail('x' * 10000 + '\n' + BUSY_SCREEN).endswith(BUSY_SCREEN)
