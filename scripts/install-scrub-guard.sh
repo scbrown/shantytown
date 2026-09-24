@@ -264,6 +264,7 @@ if [ "${1:-}" = "--selftest" ]; then
   export SCRUB_PATTERNS_FILE="$tmp/scrub-patterns.conf"
   SOURCE_DIR="$tmp/neutral-source"
   LIVE_GUARD="$SOURCE_DIR/pre-push-scrub-guard.sh"
+  LIVE_GITLEAKS="$SOURCE_DIR/pre-push-gitleaks.sh"
   re='forge\.invalid'
   fail=0
   # A "public" repo: remote on a non-invalid host.
