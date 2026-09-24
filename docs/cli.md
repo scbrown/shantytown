@@ -891,6 +891,15 @@ stop with no shared answer; the full argument is in
 Read the order as the answer to *"why did my coordinator not stop?"* — it is
 answerable from this table alone, which is the property the old chain lacked.
 
+### Permanent referents are not haul work
+
+Label permanent inventory or exception records `anchor`. The assigned haul,
+stop-hook advance and coordinator feed list exclude that label, including when
+an earlier mistaken dispatch left the record `in_progress`. A standing work
+queue remains feedable unless it carries `anchor`; reserve the label for records
+that have no completion state. Existing legacy coordinator title exclusions
+remain, but haul exclusion uses the explicit label.
+
 ### `dispatchable` means *passes the priority floor*
 
 Measured live, within sixty seconds of itself:

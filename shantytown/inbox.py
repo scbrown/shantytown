@@ -115,6 +115,15 @@ def is_decision(labels) -> bool:
                for lbl in (labels or []))
 
 
+def is_anchor(labels) -> bool:
+    """A permanent referent record has no completion state; it is not work.
+
+    Use the explicit label, not a title guess: a standing work queue remains
+    actionable even when its title describes it as an anchor.
+    """
+    return any((label or "").strip().lower() == "anchor" for label in (labels or []))
+
+
 # Labels meaning NO AGENT can clear this bead, whoever it is handed to: the
 # action belongs to a human with access crew does not have. Distinct from
 # _DECISION_LABELS, which gate a decision an agent could otherwise implement —
@@ -166,7 +175,7 @@ def is_unfeedable(title, labels) -> bool:
     if any(t.startswith(p) for p in _RECORD_TITLE_PREFIXES):
         return True
     low = {(lbl or "").strip().lower() for lbl in (labels or [])}
-    return bool(low & (_HUMAN_BLOCKED_LABELS | _RECORD_LABELS))
+    return is_anchor(labels) or bool(low & (_HUMAN_BLOCKED_LABELS | _RECORD_LABELS))
 
 
 def is_blocked(status) -> bool:

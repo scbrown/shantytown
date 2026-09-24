@@ -138,3 +138,28 @@ def test_the_same_bead_in_both_sources_is_not_doubled():
 
     b = {"id": "b-1", "assignee": "ellie", "title": "t"}
     assert hauls([b], [b]) == {"ellie": ["b-1"]}
+
+
+def test_anchor_label_excludes_ready_and_in_progress_referents():
+    from shantytown.feed_check import dispatchable
+    for status in ["open", "in_progress"]:
+        bead = dict(_bead("st-referent", "Permanent inventory exception", status=status),
+                    labels=["monitoring", "anchor"])
+        assert _assigned_to("weaver", [bead]) == []
+        assert hauls([bead]) == {}
+        assert hauls([], [bead]) == {}
+        assert dispatchable({"weaver"}, [dict(bead, assignee="")]) == []
+        # The identical record without the label is actionable: neither title
+        # wording nor a blanket exclusion of standing queues supplies the fix.
+        bead["labels"] = ["monitoring"]
+        assert _assigned_to("weaver", [bead]) == [bead]
+        assert hauls([bead]) == {"weaver": ["st-referent"]}
+        assert hauls([], [bead]) == {"weaver": ["st-referent"]}
+        assert dispatchable({"weaver"}, [dict(bead, assignee="")])
+
+
+def test_standing_work_queue_is_still_feedable():
+    bead = dict(_bead("st-queue", "Standing vulnerability triage queue"),
+                labels=["security", "queue"])
+    assert _assigned_to("weaver", [bead]) == [bead]
+    assert hauls([bead]) == {"weaver": ["st-queue"]}

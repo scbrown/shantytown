@@ -46,7 +46,7 @@ import sys
 from pathlib import Path
 
 from .answer import Answer
-from .inbox import is_decision, is_message, is_unfeedable
+from .inbox import is_anchor, is_decision, is_message, is_unfeedable
 from . import handoff_text
 
 
@@ -453,7 +453,7 @@ def hauls(ready_beads, in_progress_beads=()) -> dict[str, list[str]]:
         # it must stay on the coordinator's feedable free list rather than read
         # as self-feeding (aegis-2og7d) — the same reasoning as messages above.
         if (not assignee or is_message(b.get("title", ""))
-                or is_decision(b.get("labels"))):
+                or is_decision(b.get("labels")) or is_anchor(b.get("labels"))):
             continue
         name = assignee.split("/")[-1]
         if not name:
