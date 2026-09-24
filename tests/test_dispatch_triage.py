@@ -62,6 +62,21 @@ def test_in_flight_pane_is_refused_AND_not_written(world):
     assert panes.sent == [], "refused but sent anyway — interrupted the agent"
 
 
+def test_busy_marker_above_tail_refuses_without_side_effects(world):
+    crew, trk = world
+    screen = "\n".join(["esc to interrupt"] + ["tool continuation"] * 6
+                       + ["› ", "footer1", "footer2", "footer3"])
+    panes = NullPanes(screen=screen)
+    d = Dispatcher(FilesRegistry(crew), trk, panes)
+    with pytest.raises(TriageRefused) as ei:
+        d.go("item-1", "ellie")
+    assert ei.value.decision.action.value == "refuse"
+    assert ei.value.decision.inputs["marker"] == "esc to interrupt"
+    assert trk.updates == 0
+    assert trk.get("item-1").status == "open"
+    assert panes.sent == []
+
+
 def test_wedged_pane_is_refused_not_dispatched(world):
     crew, trk = world
     panes = NullPanes(screen="[Process completed]")
