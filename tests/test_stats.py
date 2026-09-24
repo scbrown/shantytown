@@ -6,7 +6,9 @@ from __future__ import annotations
 import io
 import json
 import sqlite3
+import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -273,6 +275,24 @@ def test_stop_scrubs_full_transcript_before_counting(tmp_path, monkeypatch):
 
 
 # --- fail-open: the contract ----------------------------------------------
+
+@pytest.mark.parametrize("args", [
+    ["capture"],
+    ["capture", "--root"],
+    ["capture", "--root", "unused", "--unknown"],
+    [],
+    ["invalid-command"],
+])
+def test_argument_errors_exit_zero(args):
+    result = subprocess.run(
+        [sys.executable, "-m", "shantytown.stats", *args],
+        input="{}", text=True, capture_output=True,
+        cwd=Path(__file__).resolve().parents[1], timeout=10,
+    )
+    assert result.returncode == 0
+    assert "error:" in result.stderr
+    assert result.stdout == ""
+
 
 def test_garbage_stdin_exits_zero(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "stdin", io.StringIO("{{{ not json"))

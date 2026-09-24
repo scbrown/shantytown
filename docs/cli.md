@@ -1314,6 +1314,10 @@ running sessions may lack starts and must report UNKNOWN; installing code does
 not prove those sessions adopted new hook settings. No restart is required by
 this command.
 
+The stats capture hook fails open on runtime errors and malformed arguments
+(including a missing `--root`): it prints diagnostics to stderr and exits zero
+so a configuration mistake cannot block a tool call. Argument errors skip capture.
+
 ### Gaming hold
 
 `st fleet hold gaming` sets a persistent local manual hold; `st fleet hold gaming --clear`
