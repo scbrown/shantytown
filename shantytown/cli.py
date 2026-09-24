@@ -1398,6 +1398,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     dr = leaf("doctor", help="what tools are installed, what's stale, what's missing")
     dr.add_argument("tool", nargs="?", help="check one tool; all if omitted")
+    dr.add_argument("--relay", action="store_true",
+                    help="check incoming SSH environment and print one shell setup recipe (read-only)")
     dr.add_argument("--install", action="store_true",
                     help="install/upgrade the missing or stale tools (refuses if a toolchain is absent)")
     dr.add_argument("-n", "--dry-run", action="store_true",
@@ -1825,6 +1827,9 @@ def main(argv: list[str] | None = None) -> int:
     # to explain an empty or surprising store can say which leg answered.
     a.root, a.root_how = resolve_root(a.root, discover=(a.cmd != "init"))
     _warn_if_no_store(a)
+    # A deployment's [env] would mask the missing SSH exports this check diagnoses.
+    if a.cmd == "doctor" and a.relay:
+        return _cmd_doctor(a)
     from .deployment import command_environment
     from .quipu import NamespaceUnconfigured
     with command_environment(a.root):
@@ -3589,6 +3594,14 @@ def _cmd_doctor(a) -> int:
     even --install touch nothing (it prints the plan). Exit: 0 all present &
     current, 1 something absent/stale, 2 something could-not-tell (quipu's broken
     --version, or an unreachable release source)."""
+    if getattr(a, "relay", False):
+        if a.tool or a.install or a.dry_run:
+            print("--relay cannot be combined with a tool, --install or --dry-run", file=sys.stderr)
+            return REFUSED
+        from .relay_doctor import check
+        code, report = check(a.root, backend=a.backend)
+        print(report)
+        return code
     from . import doctor as doc
     from . import stats as stats_mod
 

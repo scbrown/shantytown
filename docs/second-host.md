@@ -104,6 +104,31 @@ workspace has no Git currency measurement.
 
 ## Prove messaging across the boundary
 
+First check the receiving host's **non-interactive** SSH environment. An interactive
+terminal can work while SSH sends cannot find `tmux`, cannot find the intended
+store for journaling, or choose an unintended beads backend for durable mail:
+
+```sh
+ssh -o BatchMode=yes operator@peer.example \
+  'st --root "/opt/fleet/.shanty" ops doctor --relay'
+```
+
+If SSH cannot find `st` yet, use its absolute installed path for this first check.
+The diagnostic checks incoming `PATH` for `st` and `tmux`, an exported absolute
+`SHANTY_ROOT` matching the selected directory, and an explicit `SHANTY_BACKEND`.
+It runs before deployment `[env]` settings are applied, so those settings cannot
+hide a missing shell export. It prints the three exports as one safely quoted
+recipe for `${ZDOTDIR:-$HOME}/.zshenv`, including Homebrew paths on macOS. Put
+them in the shell's non-interactive startup file, then repeat the SSH check.
+With no backend declaration it suggests `files`; use `--backend` before `ops`
+to select your intended backend, and reconcile any conflicting deployment setting.
+
+Exit 0 means the environment checks passed, 1 means a requirement is missing or
+wrong, and 2 means configuration could not be read reliably. No files are changed,
+no tracker is opened, and no message is sent. A local run proves only the local
+environment; neither a local nor SSH pass proves message delivery or backend
+connectivity. Continue with the delivery checks below.
+
 Use `st inbox <remote-agent> '<short message>'` for ephemeral delivery and
 `st inbox -d <remote-agent> '<short message>'` when it must survive. Declared peers
 supply the relay; no custom SSH wrapper is needed. Inspect the delivery line for

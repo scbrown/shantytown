@@ -986,6 +986,14 @@ next real crash read as somebody's decision.
 
 ## `st ops doctor` — the out-of-box feature
 
+`st --root "/path/to/.shanty" ops doctor --relay` checks incoming SSH environment
+requirements together: `PATH` for `st` and `tmux`, `SHANTY_ROOT`, and
+`SHANTY_BACKEND`. It prints one quoted shell setup recipe without changing files
+or sending messages. Run it through non-interactive SSH on the receiving host;
+an interactive local pass cannot prove that path. See [second-host setup](second-host.md#prove-messaging-across-the-boundary).
+`--relay` is a separate read-only mode and cannot be combined with a tool name,
+`--install`, or `--dry-run`.
+
 ```
 $ st ops doctor
   • beads    1.0.5 installed
