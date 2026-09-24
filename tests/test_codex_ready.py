@@ -30,16 +30,18 @@ def command(tmp_path, body):
 ])
 def test_only_confirmed_connected_status_admits_tui(tmp_path, payload, rc, capsys):
     cmd = command(tmp_path, f"print({json.dumps(payload)!r})\nraise SystemExit({rc})\n")
+    assert codex_ready._attempt(cmd, timeout=2) != "connected"
     assert not codex_ready.wait_ready(cmd, timeout=.15, interval=.01)
     assert "TUI not started" in capsys.readouterr().err
 
 
 def test_malformed_and_sensitive_provider_output_is_not_repeated(tmp_path, capsys):
     cmd = command(tmp_path, "import sys\nprint('PRIVATE-OUTPUT')\nprint('PRIVATE-ERROR',file=sys.stderr)\n")
-    assert not codex_ready.wait_ready(cmd, timeout=.15, interval=.01)
-    err = capsys.readouterr().err
-    assert "invalid status response" in err
-    assert "PRIVATE" not in err
+    # Test the completed response, not which attempt happens to be last at a
+    # 150ms deadline. CI can correctly end on a final truncated attempt timeout.
+    assert codex_ready._attempt(cmd, timeout=2) == "invalid status response"
+    captured = capsys.readouterr()
+    assert "PRIVATE" not in captured.out + captured.err
 
 
 def test_hung_command_is_bounded_and_reaped(tmp_path):
