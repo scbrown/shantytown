@@ -127,6 +127,55 @@ def test_no_workspace_is_nothing_to_pull_not_a_failure(monkeypatch):
     assert cli._keep_current(object(), "w") is None
 
 
+def test_plain_workspace_is_quiet_and_untouched(tmp_path, monkeypatch):
+    ws = tmp_path / "workspaces" / "worker"
+    ws.mkdir(parents=True)
+    kit = ws / ".mcp.json"
+    kit.write_text("fixture kit")
+    before = kit.stat().st_mtime_ns
+    monkeypatch.setattr(cli, "_registry", lambda a: _Reg([Agent(name="worker", workspace=str(ws))]))
+    assert cli._keep_current(object(), "worker") is None
+    assert kit.read_text() == "fixture kit" and kit.stat().st_mtime_ns == before
+    assert not (ws / ".git").exists(), "no invented local repository or remote"
+
+
+def test_plain_workspace_never_pulls_its_ancestor_repo(repo_pair):
+    _origin, clone = repo_pair
+    nested = clone / "workspaces" / "worker"
+    nested.mkdir(parents=True)
+    assert cli._refresh_clone(nested) is None
+    assert (clone / "a.txt").read_text() == "one\n", "parent must stay behind"
+    assert cli._refresh_clone(clone) is None
+    assert (clone / "a.txt").read_text() == "two\n", "real repo still refreshes"
+
+
+@pytest.mark.parametrize("marker", ["file", "directory", "dangling-symlink"])
+def test_broken_repository_marker_remains_loud(tmp_path, marker):
+    git = tmp_path / ".git"
+    if marker == "file":
+        git.write_text("gitdir: /nonexistent-fixture-repository\n")
+    elif marker == "directory":
+        git.mkdir()
+    else:
+        git.symlink_to(tmp_path / "missing")
+    assert cli._refresh_clone(tmp_path) is not None
+
+
+def test_real_repo_without_upstream_remains_loud(tmp_path):
+    _git(tmp_path, "init", "-q", "-b", "main")
+    assert cli._refresh_clone(tmp_path) is not None
+
+
+def test_linked_worktree_git_file_still_refreshes(repo_pair, tmp_path):
+    _origin, clone = repo_pair
+    linked = tmp_path / "linked"
+    _git(clone, "worktree", "add", "-q", "-b", "linked", str(linked), "HEAD")
+    _git(linked, "branch", "--set-upstream-to=origin/main")
+    assert (linked / ".git").is_file()
+    assert cli._refresh_clone(linked) is None
+    assert (linked / "a.txt").read_text() == "two\n"
+
+
 # --- the cycle pulls too -----------------------------------------------------
 
 IDLE_SAT = ("❯ \n"
