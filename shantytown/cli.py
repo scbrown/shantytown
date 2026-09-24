@@ -1,4 +1,4 @@
-"""st — the CLI. Six verbs, five groups, twenty-eight grouped commands: thirty-four, and the count is load-bearing: each earns its slot.
+"""st — the CLI. Six verbs, five groups, twenty-nine grouped commands: thirty-five, and the count is load-bearing: each earns its slot.
 
     task · go · inbox [--count] · crew [--count|--governor]
     · anchor [--short|--events|--harness] · attach [-r|--no-start]
@@ -9,7 +9,7 @@
             · roles [--check|set|band|sync] · init · hold gaming [--clear|--status|--probe]
             · window {plan|drain|clear|release|abort} · dashboard [admin]
     repo  → worktree [--gc] · push [--branch] · context
-    ops   → doctor [--install] · subscribe · help <topic>
+    ops   → doctor [--install] · provision [agent] · subscribe · help <topic>
 
 THE SURFACE WAS REGROUPED, and the count did not move (Stiwi, 2026-09-17). Six
 verbs stay top-level — the ones typed all day, and the ones an external status
@@ -882,7 +882,7 @@ _GROUP_HELP = {
     "agent": "one agent: new, stop, harness, cycle, input, ask, answer, log, history, stats",
     "fleet": "the fleet: start, tend, roles, init, hold, window, dashboard",
     "repo": "a shared project repo: worktree, push, context",
-    "ops": "the installation: doctor, subscribe, help",
+    "ops": "the installation: doctor, provision, subscribe, help",
 }
 #: Set to silence the one-line notice an old spelling prints. For tests and
 #: hooks — an operator typing `st cycle` is exactly who the line is for.
@@ -1406,6 +1406,10 @@ def build_parser() -> argparse.ArgumentParser:
     cx.add_argument("--none", action="store_true",
                     help="use the none-adapter (the leak test: harness works without bobbin)")
 
+    pv = leaf("provision", help="register canonical tooling for local crew without launching agents")
+    pv.add_argument("agent", nargs="?", help="one local crew card; all local cards if omitted")
+    pv.add_argument("--json", action="store_true", help="versioned registration receipt; no credentials")
+
     dr = leaf("doctor", help="what tools are installed, what's stale, what's missing")
     dr.add_argument("tool", nargs="?", help="check one tool; all if omitted")
     dr.add_argument("--deploy", action="store_true",
@@ -1892,6 +1896,8 @@ def _run_command(a) -> int:
         return _cmd_task(a)
     if a.cmd == "context":
         return _cmd_context(a)
+    if a.cmd == "provision":
+        return _cmd_provision(a)
     if a.cmd == "doctor":
         return _cmd_doctor(a)
     if a.cmd == "stop":
@@ -3624,6 +3630,46 @@ def _cmd_graph_adoption(a) -> int:
             print(f"    {n:>3}  {node}")
     print("  server-side denominator: quipu_http_client_requests_total{client=...} "
           "in prometheus — this ledger counts DISPATCHES, not reads.")
+    return OK
+
+
+def _cmd_provision(a) -> int:
+    """Registration is a write of its own, never a side effect of crew inspection."""
+    from .deployment import local_host
+    try:
+        if a.registry == "files" and not (a.root / "crew").exists():
+            raise ValueError("no crew on this rig yet - run st fleet init / st agent new first")
+        cards = _registry(a).all().exact()
+        host = local_host(a.root)
+        cards = [card for card in cards if card.host in (None, host)]
+        if not cards:
+            raise ValueError("no crew on this rig yet - run st fleet init / st agent new first")
+        settings = _default_settings(a.root, cards)
+        if a.agent:
+            cards = [card for card in cards if card.name == a.agent]
+            if not cards:
+                raise ValueError("requested agent is not in this rig's local crew")
+        # Refuse the whole selection before changing any workspace when the
+        # roster lacks a target. Never quietly report an empty registration.
+        for card in cards:
+            if not card.workspace or not Path(card.workspace).expanduser().is_dir():
+                raise ValueError(f"crew workspace missing for {card.name}; configure it first")
+        results = []
+        for card in sorted(cards, key=lambda card: card.name):
+            servers = provision_ws(card, a.root, settings_path=settings(card),
+                                   require_manifest=True)
+            results.append({"name": card.name, "harness": card.harness,
+                            "servers": servers})
+    except (ValueError, OSError, LookupError, ProvisionError, CouldNotLook,
+            PartialAnswer, QuipuQueryRejected) as e:
+        print(f"registration refused: {e}", file=sys.stderr)
+        return REFUSED
+    if a.json:
+        print(json.dumps({"version": 1, "owner": "shantytown", "agents": results}))
+    else:
+        for result in results:
+            print(f"  {result['name']}: registered " + ", ".join(result["servers"]))
+        print("  Existing sessions read this configuration on their next start.")
     return OK
 
 

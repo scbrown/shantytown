@@ -79,6 +79,7 @@ st repo                       a shared project repo
   context <query>             what code should I be looking at? (bobbin)
 st ops                        the installation
   doctor [--install]          what's installed, stale, missing (out-of-box)
+  provision [agent]           register Quipu tooling for local crew without launching
   subscribe                   watch quipu entity events; route governed workflows to the admin
   help <topic>                rationale pages: handoff/cycle, haul, inbox
 st <launch cmd> --despite-hold  launch THROUGH a gaming hold, for that one command
@@ -208,7 +209,7 @@ Codex input already includes its cached subset. This makes
 `cache_read / usage_in` a provider-independent prompt-cache hit rate. The fields
 are omitted—not zeroed—when every matching transcript is unknown.
 
-Thirty-four. Six verbs at the top level and twenty-eight grouped commands under five groups
+Thirty-five. Six verbs at the top level and twenty-nine grouped commands under five groups
 (`work`, `agent`, `fleet`, `repo`, `ops`). A group is a namespace and runs nothing, so it earns no
 slot; the count is the leaves. The flat spellings from before the grouping (st cycle for
 st agent cycle, and so on) still parse into the same handler, print one line on stderr saying
@@ -1837,3 +1838,20 @@ per-label support, correct count, accuracy, precision and a confusion matrix,
 including insufficient-evidence; a label with no examples has null accuracy.
 Synthetic scores measure the authored set only, not fleet accuracy. Evaluation
 outputs omit captures and never promote inference into a knowledge graph.
+
+## `st ops provision` — register the rig's tooling
+
+`st ops provision [agent] --json` reads the selected registry's local crew cards
+and projects the deployment's Quipu MCP/skill manifest through the existing
+harness adapters. Use `--root` to select a rig and `--registry` to select its
+identity source. With no agent argument it equips every local crew workspace.
+It never creates, starts, stops, or restarts an agent. Existing sessions pick up
+registration on their next start.
+
+Caboodle owns binary installation and functional proof; this command owns harness
+registration. It requires existing crew workspaces and a nonempty
+`SHANTY_TOOLING_MANIFEST`. Missing crew, an unavailable graph, unresolved secrets,
+or failed configuration read-back return nonzero. No local-template fallback is
+accepted. The version-1 JSON receipt lists only agent names, harnesses and server
+names, never endpoints or credentials. A failure after an earlier card was
+provisioned can leave that earlier card updated; rerunning converges.

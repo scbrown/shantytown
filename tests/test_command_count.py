@@ -166,8 +166,8 @@ def test_six_verbs_five_groups_twenty_seven_leaves():
     groups = {n: leaves for n, leaves in surface.items() if leaves is not None}
     assert len(verbs) == 6, verbs
     assert len(groups) == 5, sorted(groups)
-    assert sum(len(l) for l in groups.values()) == 28
-    assert len(_actual_leaves()) == 34, (
+    assert sum(len(l) for l in groups.values()) == 29
+    assert len(_actual_leaves()) == 35, (
         "the command count changed. If that's intended, update the number here, "
         "cli.SURFACE and the cli.py docstring together — and say why the surface "
         "grew in docs/cli.md."
@@ -186,7 +186,7 @@ def test_the_grouping_is_the_one_ruled():
         "fleet": frozenset({"start", "tend", "roles", "init", "hold", "window",
                             "dashboard"}),
         "repo": frozenset({"worktree", "push", "context"}),
-        "ops": frozenset({"doctor", "subscribe", "help"}),
+        "ops": frozenset({"doctor", "provision", "subscribe", "help"}),
     }
 
 
