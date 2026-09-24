@@ -211,7 +211,16 @@ codex --dangerously-bypass-hook-trust
 ```
 
 When `[env] SHANTY_REMOTE_CONTROL = "true"`, the Codex harness first starts the
-managed standalone app-server daemon idempotently, then attaches the TUI. Each card
+managed standalone app-server daemon idempotently, then attaches the TUI only
+when `remote-control start --json` reports `status: connected`, `timedOut: false`,
+and exits successfully. Startup checks retry every half second for at most 20
+seconds, with each CLI attempt capped at 5 seconds. Transient `errored` or
+`connecting` states do not launch the TUI. A timeout prints the last safe status
+and refuses attachment; raw provider output is not echoed. The daemon is not
+stopped between attempts, and every attempt keeps the card's identity and policy.
+The existing `st agent new` UI observation window may return could-not-tell while
+this longer readiness wait is still active; inspect the pane before recovery.
+Each card
 gets its own identity-bearing daemon and socket under
 `$XDG_RUNTIME_DIR/shantytown/codex/<agent>/` (falling back to the user's cache
 directory); sharing one role daemon would make

@@ -1066,16 +1066,18 @@ class CodexHarness:
                 f"{codex_mod().HOME_VAR}={daemon_home} "
                 "codex remote-control start "
                 f"{daemon_sandbox}"
-                "--json >/dev/null"
+                "--json"
             )
             stop = (
                 f"{codex_mod().HOME_VAR}={daemon_home} "
                 "codex remote-control stop --json >/dev/null"
             )
-            # On a cold 0.151.0 start the daemon can be fully spawned while the
-            # relay's first status read still returns "connection is errored".
-            # The same idempotent command immediately reports connected. Retry
-            # exactly once: a persistent error still refuses the TUI launch.
+            # Live JSON readiness, not a successful spawn or two immediate
+            # retries: a fresh daemon can remain errored/connecting for seconds.
+            # The helper bounds every attempt and the whole wait, preserving
+            # this exact per-card identity and permission policy on each call.
+            ready = (f"{shlex.quote(sys.executable)} -m shantytown.codex_ready "
+                     f"-- {start}")
             # Bootstrap BEFORE stop.  A card that has never run Codex has no
             # per-card home yet; asking Codex to resolve that empty CODEX_HOME
             # makes stop refuse, and the shell's && then prevents start (and
@@ -1098,7 +1100,7 @@ class CodexHarness:
             # nothing to show anything was wrong. Hence the explicit migrate.
             sessions_setup = codex_sessions_setup(daemon_home, durable_sessions)
             daemon_start = (f"{bootstrap} && {stop} && {sessions_setup} && "
-                            f"({start} || {start}){repair_after_start} && "
+                            f"{ready}{repair_after_start} && "
                             f"{path_shim_setup} && ")
             flags += f" --remote unix://{socket}"
             if card.workspace:
