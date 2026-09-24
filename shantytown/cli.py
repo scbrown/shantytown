@@ -2250,7 +2250,17 @@ def _observe_live(runtime, panes, session, card=None) -> bool:
     verify here must never be read as 'hooks registered'."""
     answered = False
     chrome_answered = False
-    for _ in range(_LIVE_ATTEMPTS):
+    attempts = _LIVE_ATTEMPTS
+    if (card is not None and _LIVE_DELAY > 0
+            and harness_mod.name_for(card, root=getattr(runtime, "_root", None)) == "codex"):
+        from .codex_ready import TIMEOUT
+        import math
+        # Allow the entire daemon readiness wait, then the normal UI window.
+        # A shorter outer observer makes a healthy slow connect trigger cycle's
+        # destructive full-relaunch fallback. Share the readiness constant so
+        # increasing that bound cannot silently recreate the race.
+        attempts += math.ceil(TIMEOUT / _LIVE_DELAY) + 1
+    for _ in range(attempts):
         screen = panes.capture(session)
         if runtime.is_live(screen):
             return True
