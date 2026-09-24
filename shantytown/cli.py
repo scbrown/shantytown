@@ -2619,7 +2619,9 @@ def _launch_admitted(a, card, panes, runtime, *, dry_run: bool = False,
     # ops tools, and looks identical to a healthy one on every surface. Five
     # agents worked P1 beads for a night that way. Refuse instead.
     try:
-        servers = provision_ws(card, Path(a.root))
+        selected_settings = (runtime.settings_path(card)
+                             if hasattr(runtime, "settings_path") else None)
+        servers = provision_ws(card, Path(a.root), settings_path=selected_settings)
     except ProvisionError as e:
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED

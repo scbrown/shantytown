@@ -622,12 +622,10 @@ def _with_capture_hook(text: str, root) -> str:
     trusting the registration. The token write is an UPSERT keyed by session
     holding ABSOLUTE totals, so re-firing is idempotent by construction.
 
-    WHY HERE and not in --settings (claude_settings_for_role): this consent file
-    is re-applied on EVERY launch (provision is idempotent, the launcher calls it
-    each start), so it SELF-HEALS — a fleet whose settings went stale picks the
-    hook up on next launch. --settings is emitted only on `role set`, which is
-    exactly why the 693024d wiring never collected fleet-wide: running agents
-    never regenerated it. Single home, so no double-capture.
+    Legacy role settings need this launch-time fallback. Newly emitted roles
+    carry capture themselves so a fresh host does not depend on an MCP consent
+    template. _workspace_capture removes this fallback per event when the
+    selected role/agent file supplies it, keeping one registration per event.
 
     The interpreter + store root are BAKED at provision time (in the st process,
     i.e. the pipx venv python that can actually import shantytown) via
@@ -648,10 +646,12 @@ def _with_capture_hook(text: str, root) -> str:
     if not isinstance(cfg, dict):
         return text
     hooks = cfg.setdefault("hooks", {})
+    original = dict(hooks)
     pre = hooks.get("PreToolUse", [])
-    pre = [g for g in pre if not any(
-        "shantytown.stats capture" in h.get("command", "")
-        for h in g.get("hooks", []) if isinstance(h, dict))]
+    pre = [{**g, "hooks": [h for h in g.get("hooks", [])
+                           if "shantytown.stats capture" not in h.get("command", "")]}
+           for g in pre]
+    pre = [g for g in pre if g["hooks"]]
     hooks["PreToolUse"] = pre + [{"matcher": ".*", "hooks": [_capture_cmd(root)]}]
     hooks["PostToolUse"] = [
         {"matcher": ".*", "hooks": [_capture_cmd(root), _yupana_post_tool_cmd()]},
@@ -676,6 +676,18 @@ def _with_capture_hook(text: str, root) -> str:
     # that has nothing to match is the aegis-ac5x failure — a registration that
     # looks specific and fires zero times.
     hooks["Stop"] = [{"hooks": [_capture_cmd(root)]}]
+    # No-kit launches may start from operator-owned workspace settings. Preserve
+    # unrelated commands, including those sharing a group with an old capture.
+    for event in ("PostToolUse", "PostToolUseFailure", "Stop"):
+        owned = {h["command"] for g in hooks[event] for h in g["hooks"]}
+        preserved = []
+        for group in original.get(event, []):
+            commands = [h for h in group.get("hooks", [])
+                        if h.get("command") not in owned
+                        and "shantytown.stats capture" not in h.get("command", "")]
+            if commands:
+                preserved.append({**group, "hooks": commands})
+        hooks[event] = preserved + hooks[event]
     return json.dumps(cfg, indent=2) + "\n"
 
 
@@ -798,7 +810,58 @@ def _with_precompact_hook(text: str, role: str, root) -> str:
     return json.dumps(cfg, indent=2) + "\n"
 
 
-def provision(card: Agent, root, *, secrets=None) -> list[str]:
+def _workspace_capture(text: str, root, settings_path=None) -> str:
+    """Fill missing role capture registrations, never count an event twice.
+
+    The launcher passes the actual selected settings file (including per-agent
+    overrides). Old settings keep their workspace fallback; freshly emitted
+    settings own capture even on a host that has never configured an MCP kit.
+    """
+    role_hooks = {}
+    if settings_path is not None:
+        try:
+            role_hooks = json.loads(Path(settings_path).read_text()).get("hooks", {})
+        except (OSError, ValueError, AttributeError):
+            pass
+    rendered = _with_capture_hook(text, root)
+    try:
+        cfg = json.loads(rendered)
+    except ValueError:
+        return rendered
+    if not isinstance(cfg, dict) or not isinstance(role_hooks, dict):
+        return rendered
+    from .runtime import _capture_cmd
+    command = _capture_cmd(root)["command"]
+    for event, groups in role_hooks.items():
+        if not isinstance(groups, list):
+            continue
+        # Only a match-all registration to this store replaces the fallback.
+        if not any(isinstance(g, dict) and
+                   (event == "Stop" and not g.get("matcher") or
+                    event != "Stop" and g.get("matcher") == ".*") and
+                   any(h.get("command") == command for h in g.get("hooks", [])
+                       if isinstance(h, dict)) for g in groups):
+            continue
+        kept = []
+        for group in cfg.get("hooks", {}).get(event, []):
+            commands = [h for h in group.get("hooks", [])
+                        if "shantytown.stats capture" not in h.get("command", "")]
+            if commands:
+                kept.append({**group, "hooks": commands})
+        cfg["hooks"][event] = kept
+    return json.dumps(cfg, indent=2) + "\n"
+
+
+def _provision_capture_without_kit(card: Agent, root, ws: Path, settings_path) -> None:
+    if card.harness == "codex":
+        return  # Codex's config was refreshed above; it does not read this file.
+    path = ws / ".claude" / CONSENT_TEMPLATE
+    text = path.read_text() if path.is_file() else "{}"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(_workspace_capture(text, root, settings_path))
+
+
+def provision(card: Agent, root, *, secrets=None, settings_path=None) -> list[str]:
     """Equip the agent's workspace. Returns the server names it can now reach.
 
     IDEMPOTENT: re-rendering the same template with the same secrets rewrites the
@@ -916,6 +979,7 @@ def provision(card: Agent, root, *, secrets=None) -> list[str]:
                 f"half-equipped agent that looks identical to a healthy one on "
                 f"every surface. Restore {tmpl}, or empty {d} to declare that this "
                 f"fleet wants no MCP servers.")
+        _provision_capture_without_kit(card, root, ws, settings_path)
         return []
 
     if rendered is None:
@@ -948,11 +1012,13 @@ def provision(card: Agent, root, *, secrets=None) -> list[str]:
         final = _with_precompact_hook(
             _with_stale_hook(
                 _with_untracked_hook(
-                    _with_capture_hook(_consent_for_role(text, card.role), root),
+                    _workspace_capture(_consent_for_role(text, card.role), root, settings_path),
                     card.role, root),
                 card.role, root),
             card.role, root)
         (out / CONSENT_TEMPLATE).write_text(final)
+    else:
+        _provision_capture_without_kit(card, root, ws, settings_path)
 
     got = servers_in(target)
     want = sorted(manifest.mcp) if manifest is not None else servers_in_text(tmpl.read_text())

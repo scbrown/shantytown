@@ -430,3 +430,19 @@ separates *claims about the program* from *claims about the seam*, which is the 
 
 Nothing in the tier, the emitter, the resolver or the capability gate should need to change. If it
 does, that is the leak, and it is the signal the two-implementations rule exists to produce.
+
+### Claude metrics on a fresh host
+
+Emitted Claude role settings include metrics capture for `PreToolUse`,
+`PostToolUse`, `PostToolUseFailure`, and `Stop`. No MCP provisioning template is
+required. The command carries the installed Python interpreter and the selected
+store root, including paths containing spaces.
+
+On launch, provisioning reads the selected role or per-agent settings file and
+supplies workspace capture only for events that file does not already provide.
+This keeps older settings collecting and removes legacy workspace registrations
+when a role is regenerated, without double-counting. Other workspace hooks and
+permissions survive. The launcher performs this before the agent starts; the
+agent never needs to edit its own settings. Already-running sessions pick up the
+change on their next launch. `st agent stats <agent>` verifies recorded events;
+an emitted hook alone is not proof that a running session has fired it.
