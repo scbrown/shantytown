@@ -45,6 +45,14 @@ def test_empty_and_uninitialized_are_both_empty():
     assert bix.files_from_status({"status": "ready"}) is None
 
 
+def test_remote_mode_http_status_shape_is_read():
+    # Shape of a bobbin server's HTTP /status, which a remote-mode MCP passes through.
+    http_status = {"status": "ok", "index": {"total_files": 44729, "total_chunks": 189406},
+                   "sources": {}, "quipu_endpoint": "http://quipu.example"}
+    assert bix.files_from_status(http_status) == 44729
+    assert bix.files_from_status({"status": "ok", "index": {"total_files": 0}}) == 0
+
+
 def test_a_zero_file_local_index_fails_while_the_shared_server_passes(tmp_path):
     shared = {"type": "http", "url": "http://bobbin.example/mcp"}
     cards = [

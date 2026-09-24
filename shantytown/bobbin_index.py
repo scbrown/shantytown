@@ -63,6 +63,10 @@ def files_from_status(status: dict) -> int | None:
     if status.get("status") == "not_initialized":
         return 0
     value = status.get("total_files")
+    if value is None and isinstance(status.get("index"), dict):
+        # A remote-mode bobbin MCP proxies the server's HTTP /status verbatim,
+        # where the count is nested under `index`.
+        value = status["index"].get("total_files")
     return value if isinstance(value, int) else None
 
 
