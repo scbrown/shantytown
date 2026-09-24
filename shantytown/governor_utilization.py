@@ -187,7 +187,7 @@ def _ceiling(policy, window: str) -> float:
 
 
 def _window_use(policy, window: str, reading, now: float) -> WindowUse | None:
-    if reading is None or not reading.ok or reading.pct is None:
+    if reading is None or reading.lost(now, policy.max_age_seconds):
         return None
     pace = policy.pace_for(window) if hasattr(policy, "pace_for") else None
     bound = pace.ratio if pace is not None else LINEAR

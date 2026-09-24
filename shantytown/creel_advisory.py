@@ -17,6 +17,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from .governor import DEFAULT_MAX_AGE_S
+
 
 PROBE_ENV = "SHANTY_CREEL_ADMISSION_PROBE"
 
@@ -162,7 +164,8 @@ def _unavailable(why: str) -> str:
 
 def controller_line(readings, *, running: int, cap: int | None,
                     probe: str | None = None, node: str | None = None,
-                    now: float | None = None, run=subprocess.run) -> str:
+                    now: float | None = None, max_age: float = DEFAULT_MAX_AGE_S,
+                    run=subprocess.run) -> str:
     """Return Creel's line, or an explicit unavailable result.
 
     ``readings`` are Shantytown ``Reading`` objects.  Their timestamps and reset
@@ -181,6 +184,7 @@ def controller_line(readings, *, running: int, cap: int | None,
 
     clock = int(now if now is not None else time.time())
     state = {"readings": {}}
+    stale = []
     for window, reading in readings.items():
         item = {
             "pct": reading.pct,
@@ -189,8 +193,11 @@ def controller_line(readings, *, running: int, cap: int | None,
             "resetAt": reading.reset_at,
             "limitId": reading.limit_id,
         }
-        if not reading.ok:
-            item["error"] = reading.error or "usage reading unavailable"
+        lost = reading.lost(clock, max_age)
+        if lost:
+            item["error"] = lost
+        elif not reading.ok:
+            stale.append(f"{window} age={int(max(clock-reading.at, reading.cache_age))}s")
         state["readings"][window] = {k: v for k, v in item.items() if v is not None}
 
     path = None
@@ -224,4 +231,5 @@ def controller_line(readings, *, running: int, cap: int | None,
         return _unavailable("creel probe returned no controller record")
     if not line:
         return _unavailable("creel probe returned an empty advisory")
-    return " · ".join(part.strip() for part in line.splitlines() if part.strip())
+    rendered = " · ".join(part.strip() for part in line.splitlines() if part.strip())
+    return rendered + (" · stale-but-usable[" + "; ".join(stale) + "]" if stale else "")
