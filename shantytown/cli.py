@@ -4384,21 +4384,64 @@ def _cmd_inbox(a) -> int:
 
 def _message_recipient(a):
     """An off-host graph member need not have a local projected card."""
-    registry = _registry(a)
+    from .quipu import QuipuUnreachable, QuipuNotQuipu
     try:
-        return registry.get(a.agent)
-    except LookupError:
-        from .deployment import local_host, deployment_default
-        local = local_host(a.root)
-        # Offline/file-only deployments keep their existing no-network lookup.
-        if (getattr(a, "registry", "files") != "files" or not local
-                or not deployment_default(a.root, "QUIPU_SERVER")):
+        registry = _registry(a)
+        try:
+            return registry.get(a.agent)
+        except LookupError:
+            from .deployment import local_host, deployment_default
+            local = local_host(a.root)
+            # Offline/file-only deployments keep their existing no-network lookup.
+            if (getattr(a, "registry", "files") != "files" or not local
+                    or not deployment_default(a.root, "QUIPU_SERVER")):
+                raise
+            member = QuipuRegistry(root=a.root).get(a.agent)
+            if member.host and member.host != local:
+                return member
+            # A missing LOCAL projection is not a licence to guess a local pane.
+            raise LookupError(f"{a.agent} has no off-host placement; sync local cards first")
+    except QuipuNotQuipu:
+        raise
+    except QuipuUnreachable:
+        if getattr(a, "durable", False):
             raise
-        member = QuipuRegistry(root=a.root).get(a.agent)
-        if member.host and member.host != local:
-            return member
-        # A missing LOCAL projection is not a licence to guess a local pane.
-        raise LookupError(f"{a.agent} has no off-host placement; sync local cards first")
+        member = _files_message_recipient(a)
+        print("  warning: Quipu unavailable; using files registry fallback "
+              f"for recipient {a.agent}", file=sys.stderr)
+        return member
+
+
+def _files_message_recipient(a):
+    """Resolve through projected cards, including the declared peers' cards.
+
+    Host-scoped projection deliberately excludes remote agents. A fallback
+    limited to this host's crew directory would still strand every first send
+    off-host. Read the peers before sending; never broadcast the message to
+    discover who owns the recipient.
+    """
+    from .protocols import Agent
+    try:
+        return FilesRegistry(a.root / "crew").get(a.agent)
+    except LookupError:
+        pass
+    except (OSError, ValueError) as exc:
+        raise CouldNotLook("files registry fallback could not read local cards") from exc
+    from . import fleet as fleet_mod
+    from .deployment import local_host
+    cfg, err = config.load_or_default(a.root)
+    if err or not local_host(a.root):
+        raise CouldNotLook("files registry fallback needs valid declared host configuration")
+    results = fleet_mod.collect(cfg.host_peers)
+    errors = fleet_mod.errors(results)
+    if errors:
+        raise CouldNotLook("files registry fallback incomplete: " + "; ".join(errors))
+    matches = [row for row in fleet_mod.rows(results) if row["name"] == a.agent]
+    if len(matches) != 1:
+        raise CouldNotLook(f"files registry fallback found {len(matches)} peer owners "
+                           f"for {a.agent}; refusing to guess a destination")
+    row = matches[0]
+    return Agent(name=a.agent, role=row["role"].split(",")[0], host=row["host"])
 
 
 def _relay_if_offhost(a, agent, typed: str, sender: str | None) -> int | None:
@@ -4431,7 +4474,7 @@ def _relay_if_offhost(a, agent, typed: str, sender: str | None) -> int | None:
     remote_cmd = (
         (f"SHANTY_AGENT={q(sender)} " if sender else "")
         + 'PATH="$HOME/.local/bin:$PATH" '
-        + f"st --root {q(peer.root)} inbox {q(agent.name)} {q(typed)}")
+        + f"st --registry files --root {q(peer.root)} inbox {q(agent.name)} {q(typed)}")
     if a.dry_run:
         print(f"  would: relay via ssh {peer.ssh} -> host {agent.host} "
               f"(st --root {peer.root} inbox {agent.name} …)")
