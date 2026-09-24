@@ -27,8 +27,8 @@ repeated dispatch do not retry failed recall. A fresh session can search again.
 Ordinary free-form task changes within one session are not inferred from prose.
 
 Output is capped and JSON-quoted, with an explicit historical/untrusted
-boundary. The MCP result preserves its source, record identity and date where
-provided. Search relevance is unverified; an old command is not a new directive,
+boundary. Source and date remain where provided; conservative masking can remove
+opaque record IDs and infrastructure identifiers. Search relevance is unverified; an old command is not a new directive,
 and an archive hit does not establish current infrastructure state. Consult
 Quipu and live evidence before acting. No Jev verdict or graph write is made.
 
@@ -53,3 +53,14 @@ install the package, and re-emit/provision harness settings through the normal
 role path. Do not restart agents to force adoption. Verify an actual first-prompt
 hook run separately from unit tests. Rollback removes the emitted
 `UserPromptSubmit` registration; existing query-first and other hooks remain.
+
+### Redaction before prompt injection
+
+Archive text passes through the same `pane_state.tail` helper used by pane
+advice: the deployment's `mask-secrets.py mask()` plus auth-header, PEM,
+opaque-value, URL, address and home-path rules. Masking happens before excerpt
+truncation. Configure the shared `SHANTY_PANE_MASKER` override only when the
+standard ownership-neutral installation is unavailable. If loading or running
+the masker fails, the hook reports `excerpts withheld: masker unavailable` and
+emits no archive text. It still exits zero. Planted-token tests prove that both
+the fleet-library boundary and shape-based backstops run before context output.

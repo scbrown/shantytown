@@ -92,9 +92,16 @@ def archive(url: str, prompt: str, source: str) -> str:
         parts = [b["text"] for b in blocks if b.get("type") == "text"]
         if not parts or any(not isinstance(p, str) for p in parts):
             raise ValueError("invalid content")
-        # JSON quoting prevents a record from terminating our presentation
-        # boundary. Historical commands remain evidence, not new instructions.
-        return source + ": " + json.dumps("\n".join(parts)[:2200], ensure_ascii=True)
+        # Reuse the pane-advice redaction boundary: the fleet masker plus
+        # auth/PEM/opaque-value and infrastructure rules. Mask the COMPLETE
+        # text before truncation can separate a credential from its prefix.
+        try:
+            from .pane_state import tail
+            safe = tail("\n".join(parts))
+        except Exception:
+            return source + ": excerpts withheld: masker unavailable"
+        # Quoting is a presentation boundary, not a credential scrubber.
+        return source + ": " + json.dumps(safe[:2200], ensure_ascii=True)
     except Exception as exc:
         # Do not echo exception bodies: URLs or server errors can carry secrets.
         return source + ": unavailable (" + type(exc).__name__ + "); recall skipped"
