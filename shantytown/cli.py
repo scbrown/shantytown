@@ -1248,6 +1248,9 @@ def build_parser() -> argparse.ArgumentParser:
     it.add_argument("--canonical-source", default=None, help="local canonical shantytown checkout")
     it.add_argument("--mode", default=None, choices=["lite", "heavy"],
                     help="the startup mode to write into the config (default lite)")
+    it.add_argument("--unattended", action="store_true",
+                    help="opt NEW cards into bypassing harness approval prompts "
+                         "and sandbox (default: manual; existing cards preserved)")
     it.add_argument("--hibernate", action="store_true",
                     help="let the administrator go quiet when there is nothing "
                          "to dispatch (default: off)")
@@ -3062,14 +3065,15 @@ def _cmd_init(a, *, ask=_prompt, isatty=None) -> int:
         workers=tuple(w.strip() for w in (a.crew or "").split(",") if w.strip()),
         workspaces=a.workspaces,
         mode=a.mode or config.DEFAULT_MODE,
-        hibernate=bool(a.hibernate), host=host, peers=tuple(peers), env=plumbing)
+        hibernate=bool(a.hibernate), host=host, peers=tuple(peers), env=plumbing,
+        unattended=bool(getattr(a, "unattended", False)))
     try:
         if a.yes:
             answers = scaffold.make_answers(
                 admin=defaults.admin, workers=defaults.workers,
                 workspaces=defaults.workspaces, mode=defaults.mode,
                 hibernate=defaults.hibernate, host=defaults.host,
-                peers=defaults.peers, env=defaults.env)
+                peers=defaults.peers, env=defaults.env, unattended=defaults.unattended)
         elif not isatty():
             print(f"  refused: stdin is not a terminal, so `st fleet init` cannot ask "
                   f"its questions. Pass -y/--yes to take the flags and defaults "
@@ -3118,7 +3122,8 @@ def _init_apply(a, root: Path, plan, answers) -> int:
             print(f"  kept     {name:<12} (card already exists — not touched)")
             continue
         ws = f"{answers.workspaces.rstrip('/')}/{name}" if answers.workspaces else None
-        reg.set(Agent(name=name, role="worker", workspace=ws, host=answers.host))
+        reg.set(Agent(name=name, role="worker", workspace=ws, host=answers.host,
+                      dangerous=answers.unattended))
         print(f"  card     {name:<12} {root / 'crew' / f'{name}.json'}")
 
     # ROLES + ROUTING through the generative op, so the cards and the stop hooks
@@ -3152,6 +3157,10 @@ def _init_apply(a, root: Path, plan, answers) -> int:
         return CANNOT_TELL
 
     print()
+    print("  NEW cards: " + ("UNATTENDED (harness approval/sandbox bypass)"
+                              if answers.unattended else
+                              "MANUAL (approval prompts); choose --unattended at init "
+                              "for unattended operation"))
     print(f"  ready. {len(plan.cards)} card(s), mode {answers.mode!r}.")
     print(f"    st fleet start          # bring up mode {answers.mode!r}")
     print(f"    st attach         # the admin's pane (starts it if it is down)")

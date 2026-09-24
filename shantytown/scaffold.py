@@ -65,6 +65,7 @@ class Answers:
     host: str | None = None
     peers: tuple[tuple[str, str, str], ...] = ()
     env: tuple[tuple[str, str], ...] = ()
+    unattended: bool = False
 
     def names(self) -> tuple[str, ...]:
         return (self.admin, *self.workers)
@@ -92,6 +93,9 @@ class Plan:
             lines.append(f"  card     {name:<12} {role:<14} pane {pane}{ws}")
         for role in self.settings_roles:
             lines.append(f"  hooks    settings/{role}.settings.json")
+        lines.append("  permissions for NEW cards: " + (
+            "UNATTENDED (bypass harness approvals/sandbox)"
+            if self.answers.unattended else "MANUAL (approval prompts enabled)"))
         lines.append(f"  config   {self.config_path}")
         lines.append("")
         lines.append(f"  {len(self.cards)} agent(s) · startup mode "
@@ -110,7 +114,8 @@ def validate_name(name: str, what: str = "agent name") -> str:
 
 
 def make_answers(*, admin, workers=(), workspaces=None, mode=config.DEFAULT_MODE,
-                 hibernate=False, max_quiet_minutes=60, host=None, peers=(), env=()) -> Answers:
+                 hibernate=False, max_quiet_minutes=60, host=None, peers=(), env=(),
+                 unattended=False) -> Answers:
     """Validate raw values into Answers. The ONE gate — the interactive path and
     the flags path both come through here, so a rule cannot apply to only one."""
     if host is not None:
@@ -131,6 +136,8 @@ def make_answers(*, admin, workers=(), workspaces=None, mode=config.DEFAULT_MODE
             raise ScaffoldError(f"{w!r} is named twice — each agent needs one card")
         seen.add(w)
         clean.append(w)
+    if not isinstance(unattended, bool):
+        raise ScaffoldError("unattended must be true or false")
     if not isinstance(hibernate, bool):
         raise ScaffoldError(f"hibernate must be true or false, got {hibernate!r}")
     if not (isinstance(max_quiet_minutes, int) and max_quiet_minutes >= 0):
@@ -144,7 +151,7 @@ def make_answers(*, admin, workers=(), workspaces=None, mode=config.DEFAULT_MODE
     return Answers(admin=admin, workers=tuple(clean),
                    workspaces=(workspaces or None), mode=mode,
                    hibernate=hibernate, max_quiet_minutes=max_quiet_minutes,
-                   host=host, peers=tuple(peers), env=tuple(env))
+                   host=host, peers=tuple(peers), env=tuple(env), unattended=unattended)
 
 
 # --- the question script ----------------------------------------------------
@@ -204,9 +211,13 @@ def ask_all(ask, *, defaults: Answers | None = None, note=print) -> Answers:
                       "(0 = only when something pushes)", mins,
                       lambda v: _an_int(v, 0, 10_080, "minutes"))
 
+    unattended = asking(
+        "Run NEW cards unattended (bypass harness approval prompts and sandbox)? yes/no",
+        "yes" if d.unattended else "no", lambda v: _a_bool(v, "unattended"))
+
     return make_answers(admin=admin, workers=workers, workspaces=workspaces,
                         mode=mode, hibernate=hib, max_quiet_minutes=mins,
-                        host=d.host, peers=d.peers, env=d.env)
+                        host=d.host, peers=d.peers, env=d.env, unattended=unattended)
 
 
 def _one_of(value: str, allowed: list[str], what: str) -> str:

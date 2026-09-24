@@ -50,6 +50,11 @@ st --root "/opt/fleet/.shanty" fleet init -y \
   --workspaces "$HOME/workspaces"
 ```
 
+For unattended operation, add `--unattended` to init. It explicitly enables
+harness approval/sandbox bypass on new cards. Without it, cards use manual
+approval prompts. The wizard offers the same choice; `--force` preserves existing
+cards even when this flag is supplied. Init itself launches no agents.
+
 Init queries the configured graph before writing anything. If members already
 exist, missing `--host` refuses. A failed graph read also refuses; it does not
 mean the fleet is empty. A configured graph requires its exact namespace so the

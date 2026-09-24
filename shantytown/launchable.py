@@ -100,7 +100,9 @@ def launch_gaps(card) -> list[Gap]:
             f"construction, and it reads `up`, `current` and `busy` the whole "
             f"time it is stopped dead. If that is deliberate, nothing here is "
             f"wrong. If it is not: `dangerous` on the card AND a relaunch (the "
-            f"mode is read at launch)"), blocking=False))
+            f"mode is read at launch). For NEW deployments choose "
+            f"`st fleet init --unattended`; existing cards are never changed "
+            f"by init, even with --force"), blocking=False))
     return gaps
 
 
