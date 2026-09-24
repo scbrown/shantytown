@@ -1063,8 +1063,15 @@ In a deployment with a declared host and graph authority, an absent local recipi
 card falls through to the graph for an **off-host** member. No shadow local card is
 needed. Ephemeral delivery uses the declared host peer; durable delivery uses the
 selected inbox backend and never types into a coincidentally named local pane.
-An unreachable graph is reported as an unknown lookup, not a missing agent. Sender
-pane ownership remains a local check even with `--registry quipu`.
+If the graph is unreachable or times out, an ephemeral send tries the files
+registry: first this host's projected cards, then the declared peers' local crew
+snapshots over SSH. A successful fallback is named in the warning output. The
+peer census must be complete and name exactly one owner; an unavailable peer,
+missing recipient, or ambiguous ownership remains an unknown lookup with nothing
+sent. No shadow card is written. A graph protocol/query error does not trigger
+this fallback. Durable delivery keeps its existing lookup and persistence rules.
+Sender pane ownership remains a local check even with `--registry quipu`, and the
+receiving host resolves delivery through its own files registry.
 
 ```
 st inbox ian "go read st-1"          send: straight into ian's pane (send-keys)
@@ -1554,7 +1561,9 @@ its own pane-content readiness checks. Local diagnostics follow the table.
 `complete`, `agents`, and `errors`. Each agent includes its host, name, role,
 state, work verdict, posture, live flag, executing harness (card fallback), pane,
 settings verdict, and tree verdict. The peer protocol requests
-`st --root <peer.root> crew --json --local` to prevent recursive polling.
+`st --registry files --backend files --root <peer.root> crew --json --local`
+to prevent recursive polling and keep the census independent of graph and tracker
+availability.
 SSH connects within five seconds and each request has a twenty-second total
 limit; peers are polled concurrently (up to sixteen at a time).
 

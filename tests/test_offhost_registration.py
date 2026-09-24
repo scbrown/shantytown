@@ -112,6 +112,10 @@ def test_durable_remote_delivery_never_uses_a_colliding_local_pane(fleet, capsys
 
 def test_failed_graph_lookup_is_unknown_not_absence(fleet, monkeypatch, capsys):
     root, graph, _ = fleet
+    from shantytown import fleet as peer_census
+    monkeypatch.setattr(peer_census, "collect", lambda peers: [
+        {"host": "laptop", "agents": [], "error": "test peer unreachable"},
+    ])
 
     def unavailable(name):
         raise QuipuUnreachable("test offline")
@@ -119,6 +123,106 @@ def test_failed_graph_lookup_is_unknown_not_absence(fleet, monkeypatch, capsys):
     monkeypatch.setattr(graph, "get", unavailable)
     assert cli.main(["--root", str(root), "inbox", "remote_admin", "hello"]) == cli.CANNOT_TELL
     assert "nothing was sent" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("registry", ["files", "quipu"])
+@pytest.mark.parametrize("cached", [False, True])
+def test_graph_outage_uses_files_for_offhost_recipient(
+        fleet, monkeypatch, capsys, registry, cached):
+    root, graph, panes = fleet
+    if cached:
+        (root / "crew/remote_admin.json").write_text(json.dumps({
+            "role": "administrator", "host": "laptop", "pane": "session-remote",
+        }))
+
+    def unavailable(name):
+        raise QuipuUnreachable("test timeout")
+
+    monkeypatch.setattr(graph, "get", unavailable)
+    calls = []
+    real_run = subprocess.run
+
+    def ssh(argv, **kwargs):
+        if argv[0] != "ssh":
+            return real_run(argv, **kwargs)
+        calls.append(argv[-1])
+        assert "--registry files" in argv[-1]
+        if "crew --json --local" in argv[-1]:
+            body = dict(version=1, scope="local", complete=True, host="laptop", agents=[dict(
+                name="remote_admin", role="administrator", state="up", work="idle",
+                posture="normal", harness="codex", settings="current", tree="current",
+                pane="session-remote", live=True,
+            )])
+            return subprocess.CompletedProcess(argv, 0, json.dumps(body), "")
+        assert "SHANTY_AGENT=local_admin" in argv[-1]
+        assert "inbox remote_admin hello" in argv[-1]
+        return subprocess.CompletedProcess(argv, 0, "remote accepted\n", "")
+
+    monkeypatch.setattr(subprocess, "run", ssh)
+    assert cli.main(["--root", str(root), "--registry", registry,
+                     "inbox", "remote_admin", "hello"]) == cli.OK
+    assert len(calls) == (1 if cached else 2)
+    captured = capsys.readouterr()
+    if registry == "quipu" or not cached:
+        assert "files registry fallback" in captured.err
+    assert "relayed to host laptop" in captured.out
+    assert panes.sent == []
+    assert (root / "crew/remote_admin.json").exists() == cached
+
+
+def test_graph_outage_files_fallback_keeps_sender_disagreement_refusal(
+        fleet, monkeypatch, capsys):
+    root, graph, panes = fleet
+    monkeypatch.setenv("SHANTY_AGENT", "remote_admin")
+
+    def unexpected(*args, **kwargs):
+        pytest.fail("sender disagreement must refuse before recipient lookup")
+
+    monkeypatch.setattr(graph, "get", unexpected)
+    assert cli.main(["--root", str(root), "--registry", "quipu",
+                     "inbox", "remote_admin", "hello"]) == cli.REFUSED
+    assert "identity disagreement" in capsys.readouterr().err
+    assert not panes.sent
+
+
+@pytest.mark.parametrize("owners", [0, 2])
+def test_graph_outage_never_guesses_between_peer_owners(fleet, monkeypatch, capsys, owners):
+    from shantytown import fleet as peer_census
+    root, graph, panes = fleet
+
+    def unavailable(name):
+        raise QuipuUnreachable("test timeout")
+
+    monkeypatch.setattr(graph, "get", unavailable)
+    monkeypatch.setattr(peer_census, "collect", lambda peers: [
+        {"host": f"peer{n}", "error": None, "agents": [
+            {"name": "remote_admin", "role": "administrator", "host": f"peer{n}"},
+        ]} for n in range(owners)
+    ])
+    assert cli.main(["--root", str(root), "inbox", "remote_admin", "hello"]) == cli.CANNOT_TELL
+    assert "nothing was sent" in capsys.readouterr().err
+    assert not panes.sent
+
+
+@pytest.mark.parametrize("error", ["rejected", "wrong-service"])
+def test_graph_protocol_errors_do_not_fall_back(fleet, monkeypatch, capsys, error):
+    from shantytown.quipu import QuipuNotQuipu, QuipuQueryRejected
+    from shantytown import fleet as peer_census
+    root, graph, panes = fleet
+
+    def failed(name):
+        if error == "wrong-service":
+            raise QuipuNotQuipu("test wrong server")
+        raise QuipuQueryRejected("test refused query")
+
+    def unexpected(*args):
+        pytest.fail("protocol errors must not be treated as a transport outage")
+
+    monkeypatch.setattr(graph, "get", failed)
+    monkeypatch.setattr(peer_census, "collect", unexpected)
+    assert cli.main(["--root", str(root), "inbox", "remote_admin", "hello"]) == cli.CANNOT_TELL
+    assert "nothing was sent" in capsys.readouterr().err
+    assert not panes.sent
 
 
 def create_args(root, *extra):

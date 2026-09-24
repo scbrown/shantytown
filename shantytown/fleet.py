@@ -8,7 +8,7 @@ VERSION = 1
 
 
 def read_peer(peer):
-    command = ('PATH="$HOME/.local/bin:$PATH" st --root '
+    command = ('PATH="$HOME/.local/bin:$PATH" st --registry files --backend files --root '
                + shlex.quote(peer.root) + ' crew --json --local')
     try:
         result = subprocess.run(
