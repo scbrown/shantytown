@@ -861,7 +861,8 @@ def _provision_capture_without_kit(card: Agent, root, ws: Path, settings_path) -
     path.write_text(_workspace_capture(text, root, settings_path))
 
 
-def provision(card: Agent, root, *, secrets=None, settings_path=None) -> list[str]:
+def provision(card: Agent, root, *, secrets=None, settings_path=None,
+              require_manifest=False) -> list[str]:
     """Equip the agent's workspace. Returns the server names it can now reach.
 
     IDEMPOTENT: re-rendering the same template with the same secrets rewrites the
@@ -880,6 +881,10 @@ def provision(card: Agent, root, *, secrets=None, settings_path=None) -> list[st
     # must never silently fall back to a stale, locally consistent template.
     try:
         manifest = tooling.load(root)
+        if require_manifest and (manifest is None or not manifest.mcp):
+            raise ProvisionError(
+                "registration requires a nonempty Quipu tooling manifest; "
+                "configure SHANTY_TOOLING_MANIFEST in the deployment first")
         updates = tooling.instruction_updates(ws, manifest) if manifest is not None else {}
         retired = tooling.retired_links(ws, manifest) if manifest is not None else []
     except tooling.ToolingError as e:

@@ -19,7 +19,7 @@ SURFACE: dict[str, tuple[str, ...] | None] = {
               "log", "history", "stats"),
     "fleet": ("start", "tend", "roles", "init", "hold", "window", "dashboard"),
     "repo": ("worktree", "push", "context"),
-    "ops": ("doctor", "subscribe", "help"),
+    "ops": ("doctor", "provision", "subscribe", "help"),
 }
 
 #: leaf -> its group. Every key here is ALSO an old top-level spelling, aliased
