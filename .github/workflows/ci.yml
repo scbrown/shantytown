@@ -82,6 +82,19 @@ jobs:
       - name: Test
         run: python -m pytest -q
 
+      # A clean runner cannot expose operator-shell leakage. Keep the normal
+      # run above, then repeat one matrix arm with deliberately hostile defaults.
+      - name: Test with operator environment
+        if: matrix.python-version == '3.14'
+        env:
+          SHANTY_AGENT: fixture-operator
+          SHANTY_ROOT: /tmp/fixture-not-a-deployment
+          SHANTY_CANONICAL_SOURCE: /tmp/fixture-not-a-source
+          SHANTY_ONTO_NS: https://example.invalid/fixture/
+          ST_ROLES: /tmp/fixture-no-roles
+          QUIPU_SERVER: http://127.0.0.1:9
+        run: python -m pytest -q
+
       # A package that imports but whose entry point does not run is a broken
       # install that every test would still pass through, because the tests
       # import the modules directly rather than invoking the script.

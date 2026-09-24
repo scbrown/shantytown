@@ -52,7 +52,23 @@ def pytest_configure(config):
 
 
 @pytest.fixture(autouse=True)
-def _quiet_aliases(monkeypatch):
+def _no_ambient_operator_env(monkeypatch):
+    """CI and an operator shell must start each test with the same defaults.
+
+    Clearing a few known fields missed new fleet plumbing: an inherited graph
+    endpoint made fifteen init tests consult a service outside their fixtures.
+    Tests that exercise configuration set their own values after this fixture.
+    Repeating the boundary per test also contains environment left by a prior
+    test, rather than relying on file order or a clean process at suite start.
+    """
+    import os
+    for name in tuple(os.environ):
+        if name.startswith(("SHANTY_", "ST_")) or name == "QUIPU_SERVER":
+            monkeypatch.delenv(name, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _quiet_aliases(monkeypatch, _no_ambient_operator_env):
     """The suite drives many commands by their OLD top-level spelling (`main(
     ["cycle", ...])`), which is the aliased path and prints one notice line to
     stderr. Silence it here — a test asserting on stderr should see what the
