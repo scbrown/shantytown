@@ -166,6 +166,12 @@ def test_real_repo_without_upstream_remains_loud(tmp_path):
     assert cli._refresh_clone(tmp_path) is not None
 
 
+def test_bare_repository_is_not_treated_as_a_plain_workspace(tmp_path):
+    bare = tmp_path / "bare.git"
+    _git(tmp_path, "init", "--bare", "-q", str(bare))
+    assert cli._refresh_clone(bare) is not None
+
+
 def test_linked_worktree_git_file_still_refreshes(repo_pair, tmp_path):
     _origin, clone = repo_pair
     linked = tmp_path / "linked"
