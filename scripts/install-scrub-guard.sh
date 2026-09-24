@@ -60,6 +60,10 @@ SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GUARD="$SELF/pre-push-scrub-guard.sh"
 SOURCE_DIR="${SCRUB_GUARD_SOURCE_DIR:-$HOME/.local/share/shantytown-guard}"
 LIVE_GUARD="$SOURCE_DIR/pre-push-scrub-guard.sh"
+# Credentials are gitleaks' job, chained after the scrub (aegis-0mhzqo): the scrub
+# patterns are identifier regexes and never recognised a secret.
+GITLEAKS_HOOK="$SELF/pre-push-gitleaks.sh"
+LIVE_GITLEAKS="$SOURCE_DIR/pre-push-gitleaks.sh"
 
 internal_re() {
   # The forge that may receive internal names, from the generated config. If the
@@ -92,6 +96,11 @@ publish_source() {
   install -m 0555 "$GUARD" "$staged" || return
   mv -f "$staged" "$LIVE_GUARD"
   chmod a-w "$LIVE_GUARD"
+  local gstaged="$SOURCE_DIR/.pre-push-gitleaks.sh.new"
+  chmod u+w "$LIVE_GITLEAKS" 2>/dev/null || true
+  install -m 0555 "$GITLEAKS_HOOK" "$gstaged" || return
+  mv -f "$gstaged" "$LIVE_GITLEAKS"
+  chmod a-w "$LIVE_GITLEAKS"
 }
 
 hook_path() {
@@ -220,6 +229,8 @@ arm_one() {
   hook="$(hook_path "$dir")" || return 1
   mkdir -p "$(dirname "$hook")"
   ln -sfn "$LIVE_GUARD" "$hook"
+  mkdir -p "$(dirname "$hook")/pre-push.d"
+  ln -sfn "$LIVE_GITLEAKS" "$(dirname "$hook")/pre-push.d/50-gitleaks"
 }
 
 is_armed() {
@@ -229,7 +240,12 @@ is_armed() {
   target="$(readlink -f "$hook")" || return 1
   [ "$target" = "$LIVE_GUARD" ] || return 1
   [ -x "$target" ] && [ ! -w "$target" ] || return 1
-  cmp -s "$GUARD" "$target"
+  cmp -s "$GUARD" "$target" || return 1
+  # The credential scan is part of "armed": a repo with the scrub but without the
+  # gitleaks link pushes secrets unchecked, so it must count as UNARMED.
+  local gl
+  gl="$(dirname "$hook")/pre-push.d/50-gitleaks"
+  [ -L "$gl" ] && [ "$(readlink -f "$gl")" = "$LIVE_GITLEAKS" ] && cmp -s "$GITLEAKS_HOOK" "$LIVE_GITLEAKS"
 }
 
 if [ "${1:-}" = "--selftest" ]; then
