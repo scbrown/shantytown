@@ -1406,6 +1406,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     dr = leaf("doctor", help="what tools are installed, what's stale, what's missing")
     dr.add_argument("tool", nargs="?", help="check one tool; all if omitted")
+    dr.add_argument("--deploy", action="store_true",
+                    help="read-only new-host checklist, including reciprocal peers and graph Host")
+    dr.add_argument("--local", action="store_true",
+                    help="with --deploy: inspect only this host (no peer recursion)")
+    dr.add_argument("--json", action="store_true",
+                    help="with --deploy: machine-readable checklist")
     dr.add_argument("--relay", action="store_true",
                     help="check incoming SSH environment and print one shell setup recipe (read-only)")
     dr.add_argument("--install", action="store_true",
@@ -1836,7 +1842,7 @@ def main(argv: list[str] | None = None) -> int:
     a.root, a.root_how = resolve_root(a.root, discover=(a.cmd != "init"))
     _warn_if_no_store(a)
     # A deployment's [env] would mask the missing SSH exports this check diagnoses.
-    if a.cmd == "doctor" and a.relay:
+    if a.cmd == "doctor" and (a.relay or a.deploy):
         return _cmd_doctor(a)
     from .deployment import command_environment
     from .quipu import NamespaceUnconfigured
@@ -3175,6 +3181,7 @@ def _init_apply(a, root: Path, plan, answers) -> int:
     print(f"    st fleet start          # bring up mode {answers.mode!r}")
     print(f"    st attach         # the admin's pane (starts it if it is down)")
     print(f"    st crew           # who exists, who is up")
+    print(f"    st ops doctor --deploy  # verify new-host setup and reciprocal peers")
     print()
     return OK
 
@@ -3625,6 +3632,17 @@ def _cmd_doctor(a) -> int:
     even --install touch nothing (it prints the plan). Exit: 0 all present &
     current, 1 something absent/stale, 2 something could-not-tell (quipu's broken
     --version, or an unreachable release source)."""
+    if getattr(a, "deploy", False):
+        if a.tool or a.install or a.dry_run or a.relay:
+            print("--deploy cannot be combined with a tool, --install, --dry-run or --relay", file=sys.stderr)
+            return REFUSED
+        from . import deploy_doctor
+        report = deploy_doctor.check(a.root, backend=a.backend, local=a.local)
+        print(json.dumps(report) if a.json else deploy_doctor.render(report))
+        return deploy_doctor.exit_code(report)
+    if getattr(a, "local", False) or getattr(a, "json", False):
+        print("doctor --local/--json require --deploy", file=sys.stderr)
+        return REFUSED
     if getattr(a, "relay", False):
         if a.tool or a.install or a.dry_run:
             print("--relay cannot be combined with a tool, --install or --dry-run", file=sys.stderr)
