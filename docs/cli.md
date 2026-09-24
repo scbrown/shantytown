@@ -681,6 +681,13 @@ transitions use ordinary `roles set`. `--lead` names the new worker's supervisor
 
 ## `st fleet init` — the scaffold wizard
 
+Agent workspaces may be plain directories or Git checkout roots. Keep-current
+quietly skips an existing plain directory: it does not initialize a repository,
+invent a remote, or pull a repository above that directory. Clones and linked
+worktrees still get the normal fast-forward-only pull. Missing workspaces,
+broken Git metadata, missing upstreams, and refused pulls remain visible errors.
+
+
 Joining an existing fleet? Follow [the second-host guide](second-host.md), including
 `--host`, repeatable `--peer NAME=SSH,ROOT`, `--quipu-server`,
 `--ontology-namespace`, and `--canonical-source`. Host-scoped sync invocations

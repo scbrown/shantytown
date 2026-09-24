@@ -8444,7 +8444,7 @@ def _restore_tooling_block(path, instructions) -> None:
 def _refresh_clone(path) -> str | None:
     """ff-only pull at a SAFE moment: the agent is down, between items, or being
     relaunched — nothing holds the checkout mid-thought. Returns an error
-    string (loud) or None. NEVER raises — a failure here must not stop a
+    string (loud) or None (including an existing plain workspace). NEVER raises — a failure here must not stop a
     respawn or a dispatch, because trading an outage for a stale checkout is
     the worse deal. And NEVER anything but --ff-only: force/reset against a
     crew clone is the aegis-repg/iaef data-loss class.
@@ -8458,6 +8458,17 @@ def _refresh_clone(path) -> str | None:
     without-tools class, via a new door)."""
     import subprocess
     try:
+        path = Path(path).expanduser()
+        if path.is_dir():
+            try:
+                (path / ".git").lstat()
+            except FileNotFoundError:
+                # A plain workspace has no repository to update. Do not let git
+                # discover and pull an unrelated ancestor repository instead.
+                # lstat keeps broken .git files/symlinks on the loud error path;
+                # bare repositories are also errors, not plain workspaces.
+                if not ((path / "HEAD").is_file() and (path / "objects").is_dir()):
+                    return None
         mcp = Path(path) / ".mcp.json"
         saved = mcp.read_bytes() if mcp.is_file() else None
         block = _set_aside_tooling_block(path)
