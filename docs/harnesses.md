@@ -218,8 +218,11 @@ seconds, with each CLI attempt capped at 5 seconds. Transient `errored` or
 `connecting` states do not launch the TUI. A timeout prints the last safe status
 and refuses attachment; raw provider output is not echoed. The daemon is not
 stopped between attempts, and every attempt keeps the card's identity and policy.
-The existing `st agent new` UI observation window may return could-not-tell while
-this longer readiness wait is still active; inspect the pane before recovery.
+The launcher gives Codex the full readiness bound plus the normal five-second
+UI observation window before reporting could-not-tell. This also protects a
+cold cycle from falling back to a second launch while readiness is still running.
+The longer observation budget applies to local Codex launches too; a ready UI
+returns immediately, while a failed launch remains bounded.
 Each card
 gets its own identity-bearing daemon and socket under
 `$XDG_RUNTIME_DIR/shantytown/codex/<agent>/` (falling back to the user's cache
