@@ -52,7 +52,10 @@ FORBIDDEN = {
     # too would flag the documented fix itself.
     "operator home path": re.compile(
         r"/home/(?!(?:user|you|alice|bob|someone|example|x)/)[a-z][a-z0-9_-]*/"),
-    "internal ticket id": re.compile(r"\b(?:aegis|hq|gassy|qp)-[a-z0-9]{3,6}\b"),
+    # No "internal ticket id" class: bead ids are internal ids, not secrets, so a
+    # bead id in a string literal is a readability matter for review, not a gate
+    # (sattler's ruling on aegis-0mhzqo, under Stiwi's 2026-09-24 ruling). A test
+    # ratchet cannot WARN, so the class is dropped rather than left blocking.
     # A BARE HOSTNAME HAS NO SUFFIX TO MATCH, so "internal hostname" above cannot
     # see one — and the fleet directive this file implements names a bare one as its
     # own example: its list of things to scrub includes a BARE machine name alongside
@@ -207,7 +210,6 @@ def test_the_ratchet_catches_each_class():
     planted = (
         'z = "addr 192.168.0.1"\n'
         'w = "/home/jsmith/src/x"\n'
-        'v = "see aegis-1234"\n'
         # SYNTHETIC prompt, and it must NOT be one of the exempted placeholders or
         # this control can never see the class — which is exactly what the first
         # version did: it planted `someone@host-a`, the exemption swallowed it, and
@@ -240,7 +242,8 @@ def test_hostnames_and_crew_names_are_allowed():
     """The 2026-09-24 ruling is pinned, not just applied (aegis-0mhzqo): a
     hostname, a service host and a crew name in a live string are NOT offences.
     If a hostname class comes back, this fails and names the ruling."""
-    src = 'a = "connect to db.lan"\nb = "http://thing.svc/mcp"\nc = "ask sattler or dearing"\n'
+    src = ('a = "connect to db.lan"\nb = "http://thing.svc/mcp"\n'
+           'c = "ask sattler or dearing"\nd = "see aegis-1234"\n')
     hits = [(t, label) for _, t in live_string_literals(src)
             for label, rx in FORBIDDEN.items() if rx.search(t)]
     assert not hits, f"hostname or crew name flagged against the ruling: {hits}"
