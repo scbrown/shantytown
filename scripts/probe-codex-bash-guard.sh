@@ -45,17 +45,18 @@ command -v codex >/dev/null || { echo "no codex on PATH"; exit 2; }
 CONTROL=0
 [ "${1:-}" = "--control" ] && CONTROL=1
 
-GUARD="${SHANTY_BASH_GUARD:-}"
-if [ -z "$GUARD" ]; then
-  for f in "$HOME/.shanty/env.json" "${SHANTY_ROOT:-$HOME/gt/shantytown/.shanty}/env.json"; do
-    [ -r "$f" ] || continue
-    GUARD=$(python3 -c "
-import json,sys
-try: print(json.load(open(sys.argv[1])).get('SHANTY_BASH_GUARD','') or '')
-except Exception: print('')" "$f")
-    [ -n "$GUARD" ] && break
-  done
-fi
+# Resolve exactly as st does: selected root's TOML, then ambient environment.
+# env.json is retired and must not select a different guard for this probe.
+GUARD=$(python3 - "$(cd "$(dirname "$0")/.." && pwd)" <<'PYGUARD'
+import sys
+sys.path.insert(0, sys.argv[1])
+from shantytown import config
+from shantytown.deployment import resolve_root, deployment_default
+root, _ = resolve_root(None)
+config.load(root)  # refuse malformed configuration rather than test another guard
+print(deployment_default(root, "SHANTY_BASH_GUARD") or "")
+PYGUARD
+) || { echo "could not resolve deployment guard"; exit 2; }
 if [ -z "$GUARD" ] || [ ! -x "$GUARD" ]; then
   echo "no executable SHANTY_BASH_GUARD configured — nothing to prove."
   echo "This is a legitimate state (shantytown ships no guard); it is not a pass."

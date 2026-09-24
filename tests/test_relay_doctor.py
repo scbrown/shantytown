@@ -41,7 +41,7 @@ def test_healthy_does_not_run_tools_or_open_tracker(relay_env, monkeypatch, caps
     assert not list(relay_env.iterdir())
 
 
-@pytest.mark.parametrize("missing", ["PATH", "SHANTY_ROOT", "SHANTY_BACKEND"])
+@pytest.mark.parametrize("missing", ["PATH", "SHANTY_ROOT"])
 def test_each_missing_export_fails_despite_deployment_config(relay_env, monkeypatch, missing):
     # Config must not silently repair the input before doctor sees it.
     (relay_env / "shantytown.toml").write_text('[env]\nSHANTY_BACKEND = "files"\n')
@@ -114,3 +114,31 @@ def test_scratch_subprocess_reproduces_noninteractive_ssh_environment(relay_env)
         assert "MISSING/WRONG " + name in result.stdout
     assert not list(relay_env.iterdir())
     assert not (Path(env["HOME"]) / ".beads").exists()
+
+
+@pytest.mark.parametrize("incoming", [None, "beads", "br", "typo"])
+def test_declared_backend_matches_actual_resolver_without_duplicate_export(relay_env, monkeypatch, incoming):
+    from argparse import Namespace
+    (relay_env / "shantytown.toml").write_text('[env]\nSHANTY_BACKEND = "br"\n')
+    (relay_env / "env.json").write_text('{"SHANTY_BACKEND":"beads"}')
+    if incoming is None:
+        monkeypatch.delenv("SHANTY_BACKEND")
+    else:
+        monkeypatch.setenv("SHANTY_BACKEND", incoming)
+    assert cli._backend(Namespace(root=relay_env, backend=None)) == "br"
+    code, report = relay_doctor.check(relay_env)
+    assert code == 0
+    assert "shantytown.toml [env]" in report
+    assert "  export SHANTY_BACKEND=" not in report
+    if incoming and incoming != "br":
+        assert "Remove the redundant shell export" in report
+
+
+def test_backend_still_required_without_declaration(relay_env, monkeypatch):
+    monkeypatch.delenv("SHANTY_BACKEND")
+    assert relay_doctor.check(relay_env)[0] == 1
+
+
+def test_unknown_declared_backend_refuses(relay_env):
+    (relay_env / "shantytown.toml").write_text('[env]\nSHANTY_BACKEND = "typo"\n')
+    assert relay_doctor.check(relay_env)[0] == 1

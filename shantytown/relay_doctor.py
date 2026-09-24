@@ -17,7 +17,8 @@ def check(root: Path, *, backend: str | None = None) -> tuple[int, str]:
 
     An explicit --root lets the operator name the intended deployment while the
     check still catches its absence from the incoming environment. It must run
-    before command_environment: a TOML value is not an exported SSH variable.
+    before command_environment: PATH and the root must arrive from SSH.
+    The backend may be declared in that root, just as for normal commands.
     """
     root = Path(root).resolve()
     cfg, error = config.load_or_default(root)
@@ -44,10 +45,15 @@ def check(root: Path, *, backend: str | None = None) -> tuple[int, str]:
     incoming_backend = os.environ.get("SHANTY_BACKEND", "")
     declared_backend = cfg.env.get("SHANTY_BACKEND")
     expected_backend = backend or declared_backend or incoming_backend or "files"
-    backend_ok = (incoming_backend in BACKENDS and incoming_backend == expected_backend
-                  and (not declared_backend or declared_backend == expected_backend))
+    effective_backend = declared_backend or incoming_backend
+    backend_ok = (effective_backend in BACKENDS and effective_backend == expected_backend)
+    source = "shantytown.toml [env]" if declared_backend else "incoming environment"
     row(backend_ok, "SHANTY_BACKEND", f"expected {expected_backend!r}; "
-        "an unset backend can route a durable send to an unintended beads store")
+        f"resolved from {source}" if effective_backend else
+        f"expected {expected_backend!r}; declare a backend in shantytown.toml [env] or export it")
+    if declared_backend and incoming_backend and incoming_backend != declared_backend:
+        rows.append("  NOTE incoming SHANTY_BACKEND differs; shantytown.toml is authoritative. "
+                    "Remove the redundant shell export.")
     if declared_backend and backend and declared_backend != backend:
         rows.append("  The requested backend conflicts with [env] SHANTY_BACKEND; reconcile the deployment config.")
     if not backend and not declared_backend and not incoming_backend:
@@ -66,7 +72,9 @@ def check(root: Path, *, backend: str | None = None) -> tuple[int, str]:
     rows += ["", "For zsh, put these exports together in ${ZDOTDIR:-$HOME}/.zshenv:",
              "  export PATH=" + shlex.quote(":".join(directories)) + ':"$PATH"',
              "  export SHANTY_ROOT=" + shlex.quote(str(root))]
-    if expected_backend in BACKENDS:
+    if declared_backend:
+        rows.append("  # Backend comes from shantytown.toml [env]; no backend export needed.")
+    elif expected_backend in BACKENDS:
         rows.append("  export SHANTY_BACKEND=" + shlex.quote(expected_backend))
     else:
         rows.append("  Choose --backend files|beads|br|forgejo before setting SHANTY_BACKEND.")
