@@ -62,6 +62,7 @@ from dataclasses import dataclass
 import json
 import os
 import shlex
+import sys
 from pathlib import Path
 from typing import Protocol, runtime_checkable, TYPE_CHECKING
 
@@ -931,15 +932,25 @@ class CodexHarness:
         # naming. An agent whose stop events vanish is the aegis-nipg incident.
         flags = "--dangerously-bypass-hook-trust"
         daemon_start = ""
-        if self._remote_control(root):
+        remote_control = self._remote_control(root)
+        if remote_control:
             managed = codex_standalone_binary(home)
             if not managed.is_file():
-                raise Unsupported(
-                    f"Codex Remote Control is enabled, but the managed standalone "
-                    f"install is missing at {managed}. Install it with OpenAI's "
-                    f"standalone installer under CODEX_HOME={home}; npm Codex cannot "
-                    "start the Remote Control app-server daemon."
+                # A copied relay preference is not a standalone installation.
+                # A fresh host must still be able to start its first worker;
+                # leave its config intact so installing the payload enables
+                # Remote Control on the next launch.
+                remote_control = False
+                print(
+                    f"  warning: Codex Remote Control is unavailable: managed "
+                    f"standalone install is missing at {managed}; launching local "
+                    f"Codex without Remote Control. To enable it, install OpenAI's "
+                    f"standalone package under CODEX_HOME={shlex.quote(str(home))}. "
+                    'To keep it off, set SHANTY_REMOTE_CONTROL = "false" in '
+                    '[env] in shantytown.toml.',
+                    file=sys.stderr,
                 )
+        if remote_control:
             current = managed.parent
             path_shim_setup = codex_path_shim_setup(managed)
             repair_after_start = ""
