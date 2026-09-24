@@ -3693,6 +3693,18 @@ def _cmd_doctor(a) -> int:
             print("\n" + uniform)
             if uniform_broken:
                 code = _fold_generic(code, 1)
+            # BOBBIN INDEX (aegis-m8beqp): provisioned is not working. An agent
+            # whose bobbin MCP serves 0 files has no code search and no symptom.
+            from . import bobbin_index as bix
+            try:
+                b_rows = bix.survey(
+                    [c for c in _registry(a).all().exact() if not c.retired],
+                    workspace_of=lambda c: Path(c.workspace) if c.workspace else None)
+                print("\n" + bix.render(b_rows))
+                code = _fold_generic(code, bix.worst_exit(b_rows))
+            except Exception as e:       # doctor reports uncertainty, never dies
+                print(f"\n  BOBBIN INDEX\n  ? {e}")
+                code = _fold_generic(code, CANNOT_TELL)
             from . import untracked_health as uh
             uh_rows, uh_text = _untracked_health(a)
             if uh_text is not None:
