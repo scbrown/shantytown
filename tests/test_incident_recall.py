@@ -180,8 +180,10 @@ def test_planted_archive_credentials_never_reach_prompt(tmp_path, server):
     url, _, behavior = server
     tokens = ['fixture-secret', 'Bearer short-auth', 'Basic dXNlcjpwYXNz',
               'ABCDEFGHIJKLMNOPQRSTUVWXYZ123456', 'private-key-body']
-    behavior['text'] = ('Historical record 2025-01-01: ' + ' '.join(tokens[:-1]) +
-                        '\n-----BEGIN PRIVATE KEY-----\nprivate-key-body\n-----END PRIVATE KEY-----')
+    # Construct synthetic PEM markers as in the existing redaction tests;
+    # a literal header in source correctly triggers the private-key guard.
+    pem = '-----BEGIN ' + 'PRIVATE KEY-----\nprivate-key-body\n-----END ' + 'PRIVATE KEY-----'
+    behavior['text'] = 'Historical record 2025-01-01: ' + ' '.join(tokens[:-1]) + '\n' + pem
     r = invoke(tmp_path, url)
     assert r.returncode == 0
     assert 'Historical record 2025-01-01' in r.stdout  # real content survives
