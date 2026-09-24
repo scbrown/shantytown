@@ -221,17 +221,7 @@ separate from the existing `codex/agent-<name>` override namespace. The harness 
 passes `--cd <workspace>`: a remote TUI inherits the daemon's directory otherwise,
 regardless of the shell's preceding `cd`. Codex requires the official standalone
 install at `<CODEX_HOME>/packages/standalone/current/codex`; an npm-only install can
-run the TUI but cannot start Remote Control. If that managed payload is missing,
-`st` warns with its expected path and launches local Codex without Remote Control.
-This lets a new host start workers even when it inherits an enabled relay setting.
-The warning also appears during `st agent new <agent> --dry-run`.
-
-Install the standalone package under the `CODEX_HOME` named in the warning to
-enable Remote Control on the next launch, or set `SHANTY_REMOTE_CONTROL = "false"`
-under `[env]` in `shantytown.toml` to keep Remote Control off. The fallback does not
-change that file, install packages, or remove the worker's governed settings.
-An installed payload still uses the daemon path; invalid boolean settings and
-daemon startup failures still refuse rather than silently switching modes.
+run the TUI but cannot start Remote Control, so `st` refuses that configured launch.
 
 Unlike Claude's compatibility default, an absent `SHANTY_REMOTE_CONTROL` does not
 opt Codex into this new binary prerequisite. Set the deployment value explicitly to

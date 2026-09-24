@@ -210,50 +210,14 @@ def test_codex_remote_control_absence_does_not_add_a_binary_prerequisite(tmp_pat
     assert "--remote" not in launch
 
 
-@pytest.mark.parametrize("source", ["config", "environment"])
-def test_codex_remote_control_missing_payload_launches_locally(
-        tmp_path, monkeypatch, capsys, source):
+def test_codex_remote_control_refuses_when_standalone_payload_is_missing(tmp_path):
     root = tmp_path / ".shanty"
     root.mkdir()
-    if source == "config":
-        (root / "shantytown.toml").write_text(
-            '[env]\nSHANTY_REMOTE_CONTROL = "true"\n')
-    else:
-        monkeypatch.setenv("SHANTY_REMOTE_CONTROL", "true")
-    cfg = root / "settings/codex/worker/config.toml"
-    card = Agent(name="ellie", role="worker", dangerous=True)
-    launch = CODEX.launch(card, str(cfg), root=root)
-    warning = capsys.readouterr().err
-    assert "Remote Control is unavailable" in warning
-    assert "launching local Codex" in warning
-    assert str(cfg.parent / "packages/standalone/current/codex") in warning
-    assert 'SHANTY_REMOTE_CONTROL = "false"' in warning
-    assert "remote-control" not in launch
-    assert "--remote" not in launch
-    assert "--dangerously-bypass-approvals-and-sandbox" in launch
-    assert CODEX.settings_in_cmdline(launch) == str(cfg)
-    assert not cfg.parent.exists(), "composing must not install or edit configuration"
-
-
-def test_new_codex_on_fresh_host_with_remote_control_enabled(tmp_path, capsys):
-    """A copied deployment setting must not prevent the first worker launch."""
-    root = tmp_path / ".shanty"
-    (root / "crew").mkdir(parents=True)
-    (root / "crew/ada.json").write_text(json.dumps({
-        "role": "worker", "harness": "codex", "workspace": str(tmp_path),
-    }))
     (root / "shantytown.toml").write_text(
         '[env]\nSHANTY_REMOTE_CONTROL = "true"\n')
-    cfg = root / "settings/codex/worker/config.toml"
-    cfg.parent.mkdir(parents=True)
-    cfg.write_text("")
-    args = ["--root", str(root), "--backend", "files", "agent", "new", "ada", "--dry-run"]
-    assert cli.main(args) == cli.OK
-    captured = capsys.readouterr()
-    assert "launching local Codex" in captured.err
-    assert "--remote" not in captured.out
-    assert f"CODEX_HOME={cfg.parent}" in captured.out
-    assert not (cfg.parent / "packages").exists()
+    with pytest.raises(harness_mod.Unsupported, match="managed standalone install is missing"):
+        CODEX.launch(Agent(name="ellie", role="worker"),
+                     str(root / "settings/codex/worker/config.toml"), root=root)
 
 
 @pytest.mark.parametrize("stale_target", [
