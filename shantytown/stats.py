@@ -903,7 +903,12 @@ def main(argv=None) -> int:
         ap = argparse.ArgumentParser(prog="shantytown.stats")
         ap.add_argument("cmd", choices=["capture"])
         ap.add_argument("--root", required=True)
-        a = ap.parse_args(argv)
+        try:
+            a = ap.parse_args(argv)
+        except SystemExit:
+            # argparse exits 2 on malformed arguments, which blocks PreToolUse.
+            # It already printed a diagnostic (or help); do not capture anything.
+            return 0
         payload = json.load(sys.stdin)
         capture(Path(a.root), payload)
     except Exception as e:  # noqa: BLE001 — the contract IS the breadth
