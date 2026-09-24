@@ -10,6 +10,16 @@ from shantytown.config import HostPeer
 from test_crew_work import _Args, _Panes, _roster, BUSY_SCREEN, IDLE_SCREEN
 
 
+@pytest.fixture(autouse=True)
+def credential_masker(tmp_path, monkeypatch):
+    # CI has no fleet checkout. Exercise the documented library boundary with
+    # a deliberately distinctive short secret that no shape backstop catches.
+    path = tmp_path / 'mask-secrets.py'
+    path.write_text("def mask(text):\n    return text.replace('fixture-secret', '<masked>')\n")
+    monkeypatch.setenv('SHANTY_PANE_MASKER', str(path))
+    return path
+
+
 class Client:
     def __init__(self, label='working', confidence=.9):
         self.label, self.confidence, self.calls = label, confidence, []
@@ -203,3 +213,64 @@ def test_peer_is_included_and_never_recursively_polled(tmp_path, monkeypatch, ca
 def test_parser_opt_in():
     args = cli.build_parser().parse_args(['crew', '--pane-state', '--local', '--json'])
     assert args.pane_state and args.local and args.json
+
+
+def test_planted_secrets_and_identifiers_never_reach_client(tmp_path, monkeypatch, capsys):
+    import hashlib
+    args, panes = args_and_panes(tmp_path, monkeypatch)
+    token = 'ghp_' + 'x' * 36
+    host = 'database.' + 'svc'
+    private_ip = '.'.join(['192', '168', '20', '31'])
+    home = '/home/' + 'example/private/project'
+    auth = 'small-auth-value'
+    raw = (f'token={token}\npassword=fixture-secret\nAuthorization: Bearer {auth}\n'
+           f'connect {host} {private_ip} {home}\n' + BUSY_SCREEN)
+    panes._screens['p0'] = raw
+    client = Client()
+    monkeypatch.setattr(ps, 'classify', lambda c: ps.decide(client, c))
+    assert cli._cmd_crew(args) == 0
+    payload = json.dumps(client.calls)
+    for secret in (token, 'fixture-secret', host, private_ip, home, auth):
+        assert secret not in payload
+    assert 'Envisioning' in payload  # redaction did not erase the state evidence
+    result = json.loads(capsys.readouterr().out)
+    active = next(r for r in result['agents'] if r['name'] == 'active')
+    assert active['pane_state']['capture_sha256'] == hashlib.sha256(ps.tail(raw).encode()).hexdigest()
+    assert active['pane_state']['capture_sha256'] != hashlib.sha256(raw.encode()).hexdigest()
+
+
+def test_masker_missing_refuses_before_client(tmp_path, monkeypatch):
+    monkeypatch.setenv('SHANTY_PANE_MASKER', str(tmp_path / 'missing.py'))
+    client = Client()
+    with pytest.raises(ps.JevUnavailable):
+        ps.decide(client, {'p0': BUSY_SCREEN})
+    assert client.calls == []
+
+
+@pytest.mark.parametrize('code', ['raise RuntimeError("sensitive")', 'return None'])
+def test_masker_failure_never_falls_back(credential_masker, code):
+    credential_masker.write_text('def mask(text):\n    ' + code + '\n')
+    client = Client()
+    with pytest.raises(ps.JevUnavailable):
+        ps.decide(client, {'p0': 'secret capture'})
+    assert client.calls == []
+
+
+def test_redaction_precedes_line_and_character_cutoff():
+    # Credential-shaped long material is protected even when the header could
+    # otherwise have fallen outside the selected tail.
+    pem = '-----BEGIN PRIVATE KEY-----\n' + ('A' * 70 + '\n') * 80
+    assert 'AAAA' not in ps.tail(pem)
+    assert 'Bearer' not in ps.tail('Authorization: Bearer ' + 't' * 10000 + '\n' + BUSY_SCREEN)
+    assert ps.tail('x' * 10000 + '\n' + BUSY_SCREEN).endswith(BUSY_SCREEN)
+
+
+def test_classify_masks_stdin_before_worker(monkeypatch):
+    client = Client()
+    def run(argv, **kw):
+        assert 'fixture-secret' not in kw['input']
+        assert '<masked>' in kw['input']
+        return SimpleNamespace(returncode=0, stdout=json.dumps(ps.decide(client, json.loads(kw['input']))))
+    monkeypatch.setattr(ps.subprocess, 'run', run)
+    ps.classify({'p0': 'fixture-secret\n' + BUSY_SCREEN})
+    assert client.calls

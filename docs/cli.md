@@ -1791,7 +1791,12 @@ and insufficient-evidence. `--json` returns the same rows and provenance;
 `--local` skips peers. Ordinary `crew`, dispatch, recovery, tend and status-bar
 counts never consult this inference.
 
-This flag explicitly sends bounded pane text to the configured Jev provider.
+This flag sends **redacted pane tails to an external service** (the configured
+Jev provider). The fleet credential masker runs before inference; authorization
+values, opaque credential-shaped strings, internal hostnames, IP addresses and
+home paths are removed before truncation. Missing or failed masking refuses
+inference. Capture hashes refer to redacted text only. Shape masking cannot
+recognize every arbitrary secret in prose; keep secrets out of pane output.
 Each host captures at most the last 60 lines / 6,000 characters per live pane,
 up to 64 panes, and asks one batch of typed choices. No capture is saved or
 returned in peer JSON. The response records the capture hash/time, prompt hash,
@@ -1812,7 +1817,9 @@ The client is Camayoc's canonical `scripts/jev.py`, loaded in an isolated worker
 with a 45-second wall deadline. Its default location is
 `$XDG_DATA_HOME/camayoc-src/camayoc/scripts/jev.py` (XDG defaults to
 `~/.local/share`). Set `SHANTY_JEV_CLIENT` to an installed canonical client file
-for other layouts. Credentials stay with that client's file-first configuration;
+for other layouts. `SHANTY_PANE_MASKER` selects the fleet `mask-secrets.py`
+library (default `$XDG_DATA_HOME/aegis-exec-src/scripts/mask-secrets.py`). It must
+export `mask(text)`; there is no unmasked fallback. Credentials stay with that client's file-first configuration;
 Shantytown does not fetch keys or add runtime dependencies. Peer commands use
 their own installed client/configuration and a 65-second SSH deadline.
 

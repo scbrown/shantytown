@@ -46,11 +46,46 @@ class JevUnavailable(RuntimeError):
     """The advisory could not be obtained; never substitute a regex verdict."""
 
 
+def _credential_masker():
+    """The fleet's tested masker; missing protection refuses external inference."""
+    base = Path(os.environ.get('XDG_DATA_HOME', str(Path.home() / '.local/share')))
+    path = Path(os.environ.get('SHANTY_PANE_MASKER', str(base / 'aegis-exec-src/scripts/mask-secrets.py')))
+    try:
+        spec = importlib.util.spec_from_file_location('_st_pane_masker', path)
+        if spec is None or spec.loader is None:
+            raise ValueError('masker missing')
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        if not callable(module.mask):
+            raise ValueError('masker missing')
+        return module.mask
+    except Exception as exc:
+        raise JevUnavailable('credential masker unavailable') from exc
+
+
 def tail(text):
     from .triage import strip_attrs
     clean = strip_attrs(text)
-    # Control bytes must not become terminal instructions in an operator's report.
     clean = ''.join(c for c in clean if c in '\n\t' or c.isprintable())
+    # Mask BEFORE truncation: otherwise a cutoff can remove a credential's key
+    # or PEM header while leaving the value in the externally transmitted tail.
+    clean = re.sub(r'-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)',
+                   '<masked>', clean, flags=re.S)
+    clean = re.sub(r'(?i)\b(?:Bearer|Basic)\s+[A-Za-z0-9_.+/=~-]+', '<masked-auth>', clean)
+    try:
+        clean = _credential_masker()(clean)
+        if not isinstance(clean, str):
+            raise ValueError('invalid masker result')
+    except Exception as exc:
+        raise JevUnavailable('credential masking failed') from exc
+    # Opaque values cover truncated/wrapped key material whose identifying
+    # prefix is outside the captured region. This is deliberately conservative.
+    clean = re.sub(r'(?<![\w])(?:[A-Za-z0-9_+/=-]{24,})(?![\w])', '<masked-value>', clean)
+    clean = re.sub(r'https?://[^\s\"\'<>]+', '<url>', clean)
+    clean = re.sub(r'(?i)\b[\w.-]+\.(?:svc|lan|local|internal)\b', '<host>', clean)
+    clean = re.sub(r'\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b', '<ip>', clean)
+    clean = re.sub(r'(?i)(?<![\w:])(?:[a-f0-9]{0,4}:){2,}[a-f0-9:]{0,39}(?:%[\w]+)?', '<ip>', clean)
+    clean = re.sub(r'(?:/(?:home|Users)/|~/)[^\s\"\'<>]+', '<home>', clean)
     return '\n'.join(clean.splitlines()[-MAX_LINES:])[-MAX_CHARS:]
 
 
@@ -62,6 +97,7 @@ def decide(client, captures):
     """Shared-client seam; injectable transport in tests, no alternate inference."""
     if not captures or len(captures) > MAX_PANES:
         raise JevUnavailable("invalid capture batch")
+    captures = {key: tail(text) for key, text in captures.items()}
     questions = {key: {"type": "choice", "instructions": INSTRUCTIONS +
                       f" Judge only the capture with id {key}.", "criteria": STATES}
                  for key in captures}
@@ -112,6 +148,7 @@ def _worker():
 
 def classify(captures):
     """A whole-call deadline, including client loading, auth and body reads."""
+    captures = {key: tail(text) for key, text in captures.items()}
     try:
         proc = subprocess.run([sys.executable, '-m', 'shantytown.pane_state'],
                               input=json.dumps(captures), capture_output=True, text=True,
@@ -146,6 +183,9 @@ def local_snapshot(a, agents, panes, runtime, host):
             continue
         try:
             text = tail(panes.capture(ag.pane, history=MAX_LINES))
+        except JevUnavailable:
+            row['pane_state'] = _advice('unavailable', reason='JevUnavailable: credential masker failed')
+            continue
         except Exception:
             row['pane_state'] = _advice('unavailable', reason='capture failed')
             continue
