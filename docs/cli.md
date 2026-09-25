@@ -1733,6 +1733,10 @@ notice and loss-risk policy. Other keep-current pull paths retain their own boun
 
 ### Stop after the current turn
 
+For opt-in, local-only stop-hook evidence collection, see
+[Private stop samples](stop-samples.md). It collects a finite human-labelling set;
+it never changes stop or respawn decisions.
+
 `st agent stop <agent> --after-turn --reason 'budget hold'` persists a hold
 immediately without interrupting the live turn. Haul continuation, idle feeding,
 explicit dispatch and tend respawn refuse held agents. `st crew` reports who

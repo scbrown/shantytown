@@ -62,7 +62,7 @@ class _Panes:
     # screens, so honouring the flag would mean handing back a stripped one.
     # The signature must match the Panes protocol or the double diverges from
     # the thing it stands in for (aegis-c6hli: _liveness now passes attrs=True).
-    def capture(self, pane, history=0, attrs=False): return self._screens.get(pane, "")
+    def capture(self, pane, history=0, attrs=False, *, timeout=None): return self._screens.get(pane, "")
     def cmdline(self, pane):
         if self._cmdlines is not None:
             return self._cmdlines.get(pane)

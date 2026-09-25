@@ -340,6 +340,26 @@ def _send(reg: FilesRegistry, events: FilesEvents, panes, me: str,
     ev = events.persist(to=routing.to, frm=me, reason=reason, rose=routing.rose,
                         shells=shells, item=item, item_status=item_status,
                         context_k=context_k, detail=routing.detail or None)
+    samples_path = deployment_default(root, "SHANTY_STOP_SAMPLES") if root is not None else None
+    if samples_path:
+        from .stop_samples import collect
+        try:
+            from dataclasses import asdict
+            sample_root = Path(samples_path)
+            if not sample_root.is_absolute():
+                raise ValueError("sample root must be absolute")
+            card = reg.get(me)
+            stopped = FilesStops(root / "stopped").get(me)
+            result = collect(sample_root, {"event_id": ev.id, "event_at": ev.ts,
+                                   "agent": me, "item": item, "item_status": item_status,
+                                   "routing_reason": reason,
+                                   "explicit_stop": asdict(stopped) if stopped else None},
+                             lambda: panes.capture(card.pane, timeout=2.0))
+            print(f"stop samples: {result}", file=sys.stderr)
+        except Exception as exc:
+            # The normal event is already durable. Evidence failure must neither
+            # block delivery nor echo the pane text in an exception message.
+            print(f"stop samples unavailable: {type(exc).__name__}", file=sys.stderr)
     _offhost_durable(reg, root, routing.to, me, item, ev.id)
     over = context_k is not None and context_k >= CYCLE_THRESHOLD_K
     # Silent on stdout (a non-blocking Stop hook's stdout is discarded anyway);
