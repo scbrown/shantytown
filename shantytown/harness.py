@@ -1077,7 +1077,7 @@ class CodexHarness:
             # The helper bounds every attempt and the whole wait, preserving
             # this exact per-card identity and permission policy on each call.
             ready = (f"{shlex.quote(sys.executable)} -m shantytown.codex_ready "
-                     f"-- {start}")
+                     f"--agent {shlex.quote(card.name)} -- {start}")
             # Bootstrap BEFORE stop.  A card that has never run Codex has no
             # per-card home yet; asking Codex to resolve that empty CODEX_HOME
             # makes stop refuse, and the shell's && then prevents start (and

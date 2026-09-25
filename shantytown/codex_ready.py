@@ -57,12 +57,30 @@ def _attempt(command: list[str], timeout: float) -> str:
 
 
 def wait_ready(command: list[str], *, timeout: float = TIMEOUT,
-               interval: float = INTERVAL) -> bool:
+               interval: float = INTERVAL, agent: str | None = None) -> bool:
     deadline = time.monotonic() + timeout
     last = "not checked"
     print("  waiting for Codex Remote Control to connect "
           f"(up to {timeout:g}s)", file=sys.stderr, flush=True)
     while (remaining := deadline - time.monotonic()) > 0:
+        # The launcher's repair precedes pane replacement and the emitted
+        # remote-control stop. Either can leave a stale startup lock AFTER that
+        # check. Retry only the existing ownership-proven repair here, at the
+        # actual start boundary; a timed-out start can leave the same residue.
+        if agent:
+            from . import codex_daemon
+            try:
+                fixed = codex_daemon.repair(agent)
+            except OSError:
+                print(f"  refused: cannot repair Codex daemon for {agent}; "
+                      "TUI not started", file=sys.stderr, flush=True)
+                return False
+            if fixed.blocked:
+                print(f"  repaired {codex_daemon.FLAG} for {agent}: "
+                      f"{fixed.reason()}", file=sys.stderr, flush=True)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
         last = _attempt(command, min(ATTEMPT_TIMEOUT, remaining))
         if last == "connected":
             print("  Codex Remote Control connected; attaching TUI",
@@ -81,6 +99,7 @@ def wait_ready(command: list[str], *, timeout: float = TIMEOUT,
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--agent", help="card whose proven stale daemon may be repaired")
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
     command = args.command
@@ -88,7 +107,7 @@ def main(argv=None) -> int:
         command = command[1:]
     if not command:
         parser.error("a daemon start command is required after --")
-    return 0 if wait_ready(command) else 1
+    return 0 if wait_ready(command, agent=args.agent) else 1
 
 
 if __name__ == "__main__":

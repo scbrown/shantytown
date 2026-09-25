@@ -95,7 +95,7 @@ def test_codex_remote_control_is_explicit_and_attaches_to_managed_daemon(tmp_pat
     assert f"BEADS_ACTOR=ellie" in launch
     assert f"CODEX_HOME={daemon_home} codex remote-control start --json" in launch
     assert launch.count("codex remote-control start --json") == 1
-    assert "-m shantytown.codex_ready -- env -u TMUX_PANE" in launch
+    assert "-m shantytown.codex_ready --agent ellie -- env -u TMUX_PANE" in launch
     assert f"--remote unix://{socket}" in launch
     assert "--cd '/work with space'" in launch
     assert f"ln -sfn {cfg} {daemon_home / 'config.toml'}" in launch
