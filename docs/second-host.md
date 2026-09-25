@@ -107,6 +107,43 @@ Check `git -C <workspace> remote -v` and `git -C <workspace> status -sb`. Do not
 a fictitious remote merely to remove an UNKNOWN verdict. A deliberately nongit
 workspace has no Git currency measurement.
 
+## Use one board on every host
+
+Declare the fleet's tracker in each host's `shantytown.toml`. A host that leaves
+`SHANTY_BACKEND=files` uses its own local items even if a separate board command
+can reach the primary. For a shared `br` board reached through an installed
+transport executable:
+
+```toml
+[env]
+SHANTY_BACKEND = "br"
+SHANTY_BR_BIN = "/opt/fleet/bin/shared-board"
+```
+
+`shared-board` must accept ordinary `br` arguments, preserve stdout and exit
+status, and pin the authoritative store on the primary. For example, it can
+forward arguments over SSH to `br --db /srv/board/beads.db`; quote every argument
+and do not retry an indeterminate write. This is the existing tracker executable
+adapter, not a second database. Do not put the primary's filesystem path in
+`SHANTY_BR_REPO` on a host where that path does not exist. No per-command backend
+flag is required: `st task`, `st go`, `st work` and durable inboxes use the declared
+transport. Config overrides a stale shell backend export.
+
+`st go <item> <agent>` resolves the agent's host from its card (or the configured
+graph for an off-host member without a local card), then invokes `st go` on that
+host through its declared peer. The receiving host runs its usual triage,
+governor, workspace preparation, pane verification and tracker read-back. Both
+hosts must use the same board and run a version supporting host dispatch.
+A colliding local pane name is never a fallback destination.
+
+Notes travel on SSH stdin; graph context, reassign, worktree and dry-run options
+travel with the command. `--worktree` is interpreted on the destination. A
+cross-host `--repo` is refused because a caller-local store path has no defined
+meaning on another host. `--dry-run` contacts the destination and runs its normal
+preview without dispatching or assigning. A mismatched receiving host refuses
+without forwarding again. SSH failure or timeout means delivery is unconfirmed;
+inspect the destination and board before retrying.
+
 ## Prove messaging across the boundary
 
 First check the receiving host's **non-interactive** SSH environment. An interactive

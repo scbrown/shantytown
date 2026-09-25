@@ -98,3 +98,30 @@ def test_deployed_beads_name_selects_br_not_retired_bd(br_store, tmp_path):
     assert isinstance(tracker, BrTracker)
     made = tracker.create("deployed-name proof", priority=1)
     assert tracker.get(made.id).title == "deployed-name proof"
+
+
+def test_default_commands_share_configured_transport_from_unrelated_cwd(
+        br_store, tmp_path, monkeypatch, capsys):
+    import shlex
+    root = _root(tmp_path)
+    relay = tmp_path / 'board-relay'
+    relay.write_text('#!/bin/sh\nexec ' + shlex.quote(BR) + ' --db '
+                     + shlex.quote(str(br_store / '.beads/beads.db')) + ' "$@"\n')
+    relay.chmod(0o700)
+    (root / 'shantytown.toml').write_text(
+        '[env]\nSHANTY_BACKEND="br"\nSHANTY_BR_BIN=' + json.dumps(str(relay)) + '\n')
+    monkeypatch.setenv('SHANTY_BACKEND', 'files')  # stale shell export loses
+    monkeypatch.chdir(tmp_path)
+    panes = NullPanes(screen='')
+    monkeypatch.setattr(cli, 'Tmux', lambda *args, **kwargs: panes)
+    args = ['--root', str(root)]  # no --backend or --repo
+    assert cli.main([*args, 'task', 'remote board proof']) == cli.OK
+    made = next(row for row in rows(BrTracker(str(br_store)))
+                if row['title'] == 'remote board proof')
+    assert cli.main([*args, 'go', made['id'], 'arnold']) == cli.OK
+    assert str(relay) in panes.sent[0][1]
+    assert BrTracker(str(br_store)).get(made['id']).assignee == 'arnold'
+    assert cli.main([*args, 'work', 'repool', made['id']]) == cli.OK
+    got = BrTracker(str(br_store)).get(made['id'])
+    assert got.status == 'open' and not got.assignee
+    assert not (root / 'items').exists()

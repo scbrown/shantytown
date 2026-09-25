@@ -249,6 +249,15 @@ def hook_tag(tracker, workspace: str | None) -> str | None:
     a bare path, so it is actionable rather than merely informative.
     """
     repo = store_of(tracker)
+    # A configured executable may reach a remote board. A local store walk
+    # cannot describe it, and telling the recipient to run bare br sends them
+    # to a different database than the one which just assigned their work.
+    transport = os.environ.get("SHANTY_BR_BIN", "br")
+    if getattr(tracker, "_tool", None) == "br" and transport != "br":
+        command = shlex.quote(transport)
+        if repo:
+            command = f"cd {shlex.quote(repo)} && {command}"
+        return f"[st store: {command} — configured board transport]"
     if not repo:
         return None
     if not Path(repo).expanduser().is_dir():

@@ -27,6 +27,12 @@ class BrTracker(BeadsTracker):
         return subprocess.run(cmd, cwd=repo, capture_output=True, text=True,
                               timeout=self.timeout)
 
+    def _get_failure(self, item_id, result) -> str:
+        transport = os.environ.get("SHANTY_BR_BIN", "br")
+        return (f"br show {item_id} failed: {_failure_reason(result)} — "
+                f"configured board via {transport}, cwd={self.repo or '(default)'}; "
+                "check this deployment's board transport, not unrelated local stores")
+
     def _bd(self, *args: str) -> subprocess.CompletedProcess:
         # Defined here (rather than inherited) so bd-specific test guards and
         # monkeypatches cannot accidentally turn a br call into a bd call.
