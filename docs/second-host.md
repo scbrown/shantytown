@@ -99,6 +99,9 @@ st --root "/opt/fleet/.shanty" ops doctor
 
 Review the preview: it should list only this host's intended members and explicitly
 name skipped remote members. An error or unknown verdict is not successful setup.
+Sync also projects missing host placement on existing cards whose role and
+supervisor already match. Replacing a live card's existing host still requires
+`--force`; an omitted source host preserves its current placement.
 
 The `--workspaces` option records paths; it does not clone repositories or add
 remotes. Clone the intended workspace repository into each path, or configure and

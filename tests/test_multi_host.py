@@ -319,3 +319,39 @@ def test_offhost_stop_event_goes_durable_and_local_one_does_not(tmp_path, monkey
     # a recipient on THIS host: nothing relayed
     stop_event._offhost_durable(reg, root, "hammond", "lex", None, "ev-2")
     assert len(calls) == 1
+
+
+def test_sync_repairs_missing_host_on_live_unchanged_card(tmp_path, monkeypatch, capsys):
+    root = crew(tmp_path, chief={"role": "administrator", "pane": "p", "model": "keep"})
+    declare_host(root, "desktop")
+    graph(monkeypatch, Agent(name="chief", role="administrator", host="desktop"))
+    panes(monkeypatch, "p")
+    args = ["--root", str(root), "fleet", "roles", "sync"]
+    assert main([*args, "--dry-run"]) == OK
+    assert "host — -> desktop" in capsys.readouterr().out
+    assert "host" not in card(root, "chief")
+    assert main(args) == OK
+    assert card(root, "chief")["host"] == "desktop"
+    assert card(root, "chief")["model"] == "keep"
+    assert main(args) == OK
+    assert "already projected" in capsys.readouterr().out
+
+
+def test_sync_still_guards_live_host_replacement(tmp_path, monkeypatch):
+    root = crew(tmp_path, chief={"role": "administrator", "pane": "p", "host": "old"})
+    declare_host(root, "desktop")
+    graph(monkeypatch, Agent(name="chief", role="administrator", host="desktop"))
+    panes(monkeypatch, "p")
+    args = ["--root", str(root), "fleet", "roles", "sync"]
+    assert main(args) == REFUSED
+    assert card(root, "chief")["host"] == "old"
+    assert main([*args, "--force"]) == OK
+    assert card(root, "chief")["host"] == "desktop"
+
+
+def test_unplaced_graph_preserves_existing_card_host(tmp_path, monkeypatch):
+    root = crew(tmp_path, chief={"role": "administrator", "pane": "p", "host": "desktop"})
+    graph(monkeypatch, Agent(name="chief", role="administrator"))
+    panes(monkeypatch, "p")
+    assert main(["--root", str(root), "fleet", "roles", "sync"]) == OK
+    assert card(root, "chief")["host"] == "desktop"
