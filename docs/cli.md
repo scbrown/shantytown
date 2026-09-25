@@ -1464,6 +1464,13 @@ Both haul triggers honour a current deliberate-stop stamp and a gaming hold befo
 claiming or resuming work. A held pass spends neither delivery dedup nor the resume
 backoff. Release the hold through the existing lifecycle or gaming controls.
 
+Before selecting new work, both haul triggers apply the target card's governor
+verdict, including its harness-specific priority floor and explicit exemptions.
+Refused items remain assigned and ready; the log names each item as `parked by
+governor`. An admitted item later in the queue can still be served. A fully held
+queue spends no claim, session item, delivery receipt, or context-cycle prompt.
+Existing active anchors remain continuations rather than new admissions.
+
 
 ## Per-bead costs
 

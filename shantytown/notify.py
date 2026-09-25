@@ -693,7 +693,8 @@ class IdleFleetAlerter:
     def __init__(self, root, reg, panes, runtime, *, push=push_to_admin,
                  bd_ready=None, bd_in_progress=None, context_k=None,
                  handoff_k=None, log=None, audit=None, input_preflight=None,
-                 turn_receipts=None, balance=None):
+                 turn_receipts=None, balance=None, verdict_for=None):
+        self._verdict_for = verdict_for
         # WHICH LANE to feed first (aegis-03cstj). A CALLABLE, so the cost is paid
         # only when there is something to feed, and OPTIONAL so every existing
         # caller — including every test that constructs this class — keeps today's
@@ -920,6 +921,23 @@ class IdleFleetAlerter:
         # feed_check gate: an item the worker already started is its next work,
         # and `bd ready` structurally cannot report it. Fails open.
         queues = feed_check.hauls(ready_beads, active)
+        # Gate before choosing/deduplicating the next head: a governor-held
+        # first item must neither hide an admitted sibling nor consume delivery
+        # state. Active anchors are continuations, not new admissions.
+        active_ids = {b.get("id") for b in active}
+        for worker, queue in queues.items():
+            if worker not in observed_idle:
+                continue
+            candidates = [b for b in ready_beads
+                          if b.get("id") in queue and b.get("id") not in active_ids]
+            if not candidates:
+                continue
+            card = self._reg.get(worker)
+            verdict = (self._verdict_for(card) if self._verdict_for else
+                       feed_check.haul_governor_verdict(self._shanty_root, card))
+            admitted = feed_check.admitted_haul(candidates, card, verdict, self._log)
+            allowed_ids = active_ids | {b.get("id") for b in admitted}
+            queues[worker] = [bid for bid in queue if bid in allowed_ids]
         # A whole turn can fit between idle scrapes, and assignments can arrive
         # after an idle alert. Dedup the next item, not just the worker's name.
         # Reading the queue BEFORE dedup is essential: otherwise new work is
@@ -938,7 +956,7 @@ class IdleFleetAlerter:
         if not newly:
             self._save(already, heads=heads)
             return []
-        hauling_newly = [w for w in newly if w in queues]
+        hauling_newly = [w for w in newly if queues.get(w)]
         unhauled_free = [w for w in free if w not in queues]
         newly = [w for w in newly if w not in queues]
 

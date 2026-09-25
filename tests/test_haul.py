@@ -663,3 +663,90 @@ def test_ready_referent_is_never_claimed_but_unlabelled_control_is(monkeypatch, 
     assert rc == 0 and block["decision"] == "block"
     assert "st-referent" in block["reason"]
     assert claims == ["st-referent"]
+
+
+# Governor admission must apply to the actual card, before any haul side effect.
+def _haul_policy(root, base=60, codex=5):
+    (root / 'shantytown.toml').write_text(f'''
+[governor]
+source = "stub"
+stub_pct = {base}.0
+[[governor.tier]]
+at = 50
+min_priority = 1
+[governor.by_harness.codex]
+source = "stub"
+stub_pct = {codex}.0
+[[governor.by_harness.codex.tier]]
+at = 50
+min_priority = 1
+''')
+
+
+@pytest.mark.parametrize('screen', ['❯ ', SATURATED_PANE])
+def test_governed_p3_only_haul_stays_ready_without_spending(tmp_path, monkeypatch, capsys, screen):
+    from shantytown import session_budget
+    _haul_policy(tmp_path)
+    claims, spent = [], []
+    monkeypatch.setattr(session_budget, 'record_item', lambda *a: spent.append(a))
+    _bd(monkeypatch, ready=[{'id': 'low', 'priority': 3, 'assignee': 'billy'}], claims=claims)
+    assert stop_event._haul(_Reg([WORKER]), _Panes({'p-b': screen}), 'billy', tmp_path) == 0
+    captured = capsys.readouterr()
+    assert captured.out == ''  # no feed OR unnecessary context-cycle instruction
+    assert 'low parked by governor' in captured.err
+    assert claims == spent == []
+    assert not (tmp_path / 'governor').exists(), 'read must not advance hysteresis'
+
+
+@pytest.mark.parametrize('priority', [None, 'unknown', 2, 3])
+def test_governor_skips_held_head_and_serves_p1(tmp_path, monkeypatch, capsys, priority):
+    _haul_policy(tmp_path)
+    claims = []
+    rc, block = _haul_at(monkeypatch, capsys, tmp_path, claims=claims, ready=[
+        {'id': 'held', 'priority': priority, 'assignee': 'billy'},
+        {'id': 'urgent', 'priority': 1, 'assignee': 'billy'},
+    ])
+    assert rc == 0 and 'urgent' in block['reason']
+    assert claims == ['urgent']
+
+
+@pytest.mark.parametrize('base,codex,harness,allowed', [
+    (60, 5, 'codex', True), (5, 60, 'codex', False),
+    (60, 5, 'claude', False), (5, 60, 'claude', True),
+])
+def test_haul_uses_target_harness_not_base_or_sender(tmp_path, monkeypatch, capsys,
+                                                     base, codex, harness, allowed):
+    _haul_policy(tmp_path, base, codex)
+    monkeypatch.setenv('SHANTY_HARNESS', 'claude' if harness == 'codex' else 'codex')
+    card = Agent(name='billy', role='worker', pane='p-b', harness=harness)
+    claims = []
+    rc, block = _haul_at(monkeypatch, capsys, tmp_path, reg=_Reg([card]), claims=claims,
+                         ready=[{'id': 'low', 'priority': 3, 'assignee': 'billy'}])
+    assert rc == 0
+    assert bool(block) == allowed
+    assert claims == (['low'] if allowed else [])
+
+
+def test_governor_hold_does_not_interrupt_active_codex_anchor(tmp_path, monkeypatch, capsys):
+    _haul_policy(tmp_path, 60, 60)
+    card = Agent(name='billy', role='worker', pane='p-b', harness='codex')
+    _, block = _haul_at(monkeypatch, capsys, tmp_path, reg=_Reg([card]),
+                        in_progress=[{'id': 'existing', 'priority': 3, 'assignee': 'billy'}])
+    assert 'HAUL RESUME' in block['reason']
+
+
+@pytest.mark.parametrize('mode,allowed', [('exempt', True), ('drain', False), ('freeze', False)])
+def test_haul_respects_verdict_exemptions_drain_and_freeze(tmp_path, monkeypatch, capsys, mode, allowed):
+    from shantytown import feed_check
+    from shantytown.governor import Reading, Tier, Verdict
+    tier = Tier(at=50, min_priority=1, action='drain' if mode == 'drain' else 'hold')
+    verdict = Verdict(reading=Reading(), tier=tier, engaged=(tier,),
+                      exempt=('billy',), frozen=mode == 'freeze')
+    monkeypatch.setattr(feed_check, 'haul_governor_verdict', lambda *a: verdict)
+    claims = []
+    _bd(monkeypatch, ready=[{'id': 'low', 'priority': 3, 'assignee': 'billy'}], claims=claims)
+    stop_event._haul(_Reg([WORKER]), _Panes({'p-b': '❯ '}), 'billy', tmp_path)
+    captured = capsys.readouterr()
+    assert bool(captured.out) == allowed
+    assert claims == (['low'] if allowed else [])
+    assert ('FLOOR-EXEMPT' if allowed else 'parked by governor') in captured.err

@@ -237,3 +237,43 @@ def test_tend_says_NOTHING_when_the_marker_is_for_another_session(tmp_path,
     alerter._log = logged.append
     assert alerter.sweep([]) == ["dearing"]
     assert not any("ALREADY told to stop" in m for m in logged)
+
+
+def test_tend_governor_holds_without_dedup_then_relaxation_feeds(tmp_path, monkeypatch):
+    from shantytown.governor import Reading, Tier, Verdict
+    claims, logs = [], []
+    alerter, panes = _lead_hauling_world(tmp_path, monkeypatch, claims)
+    ready = [{'id': 'low', 'priority': 3, 'assignee': 'dearing'}]
+    alerter._bd_ready = lambda: ready
+    tier = Tier(at=50, min_priority=1)
+    held = Verdict(reading=Reading(), pct=60, tier=tier, engaged=(tier,))
+    current = [held]
+    alerter._verdict_for = lambda card: current[0]
+    alerter._log = logs.append
+    assert alerter.sweep([]) == []
+    assert alerter.sweep([]) == []
+    assert claims == panes.sent == []
+    assert any('low parked by governor' in line for line in logs)
+    current[0] = Verdict(reading=Reading())
+    assert alerter.sweep([]) == ['dearing']
+    assert claims == ['low']
+    assert len(panes.sent) == 1
+
+
+def test_tend_governor_chooses_admitted_head_before_delivery_dedup(tmp_path, monkeypatch):
+    from shantytown.governor import Reading, Tier, Verdict
+    claims = []
+    alerter, panes = _lead_hauling_world(tmp_path, monkeypatch, claims)
+    alerter._bd_ready = lambda: [
+        {'id': 'low', 'priority': 3, 'assignee': 'dearing'},
+        {'id': 'urgent', 'priority': 1, 'assignee': 'dearing'},
+    ]
+    tier = Tier(at=50, min_priority=1)
+    current = [Verdict(reading=Reading(), pct=60, tier=tier, engaged=(tier,))]
+    alerter._verdict_for = lambda card: current[0]
+    assert alerter.sweep([]) == ['dearing']
+    assert claims == ['urgent']
+    assert alerter.sweep([]) == []
+    current[0] = Verdict(reading=Reading())
+    assert alerter.sweep([]) == ['dearing']
+    assert claims == ['urgent', 'low']
