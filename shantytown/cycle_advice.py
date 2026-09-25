@@ -79,7 +79,7 @@ class Policy:
     # threshold where we always decide to just clear context"). At or above it the
     # answer is CYCLE and nobody is asked: `--json` says ask=false, so a caller
     # never ships a request judging a context nobody would keep anyway.
-    always_cycle_above_k: int = 250
+    always_cycle_above_k: int = 350
     # What a caller is handed to judge from, bounded (Stiwi: "we dont want to
     # dump like 750k tokens on this request"). A judge that needs more asks for
     # it with --brief-chars, never past the max.
@@ -108,6 +108,10 @@ class Signal:
     related: float | None = None
     decision: str | None = None
     reason: str = ""
+    # How much context the NEXT task is predicted to consume, in k tokens, from a
+    # fresh session. Post a high estimate (the upper edge of a judge's likely
+    # band), not the mean: this only ever moves a cycle EARLIER.
+    next_need_k: float | None = None
 
 
 @dataclass(frozen=True)
@@ -192,13 +196,21 @@ def decide(sit: Situation, signal: Signal | None, policy: Policy = Policy()) -> 
         return Advice(DEFAULT, f"signal from {signal.by} is about {signal.next_task}, "
                                f"but the plate says {sit.next_task}; ignored",
                       cache_lapsed=lapsed)
+    if (signal.next_need_k is not None and sit.depth_k is not None
+            and sit.depth_k + signal.next_need_k >= sit.cycle_line_k):
+        return Advice(CYCLE, f"{signal.by} predicts the next task needs "
+                             f"~{signal.next_need_k:.0f}k; {sit.depth_k:.0f}k + that "
+                             f"crosses the {sit.cycle_line_k:.0f}k cycle line mid-task, "
+                             "so cycle at the boundary instead", cache_lapsed=lapsed)
     if signal.decision in DECISIONS:
         return Advice(signal.decision, f"{signal.by} decided {signal.decision}"
                       + (f": {signal.reason}" if signal.reason else ""),
                       cache_lapsed=lapsed)
     if signal.related is None:
-        return Advice(DEFAULT, f"signal from {signal.by} carries neither a decision "
-                               "nor a relatedness", cache_lapsed=lapsed)
+        why = ("the predicted need fits under the cycle line; no relatedness to "
+               "weigh" if signal.next_need_k is not None
+               else "carries neither a decision nor a relatedness")
+        return Advice(DEFAULT, f"signal from {signal.by}: {why}", cache_lapsed=lapsed)
     p = signal.related
     if p >= policy.keep_at:
         return Advice(KEEP, f"{signal.by} rates the next task {p:.2f} related "
@@ -266,8 +278,10 @@ def post(root, agent: str, signal: Signal) -> None:
         raise ValueError("related must be between 0 and 1")
     if signal.decision is not None and signal.decision not in DECISIONS:
         raise ValueError(f"decision must be one of {', '.join(DECISIONS)}")
-    if signal.related is None and signal.decision is None:
-        raise ValueError("a signal needs --related or --decision")
+    if signal.next_need_k is not None and signal.next_need_k < 0:
+        raise ValueError("next_need_k must be non-negative")
+    if signal.related is None and signal.decision is None and signal.next_need_k is None:
+        raise ValueError("a signal needs --related, --decision or --next-need-k")
     path = _signals_path(root)
     data = _load(root)
     data[agent] = asdict(signal)

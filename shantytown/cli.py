@@ -1558,6 +1558,9 @@ def build_parser() -> argparse.ArgumentParser:
                     help="post: how related the next task is to this session, 0-1")
     ad.add_argument("--decision", choices=("keep", "cycle"),
                     help="post: a verdict instead of a relatedness. The cycle line still wins")
+    ad.add_argument("--next-need-k", type=float, metavar="K",
+                    help="post: predicted context the next task needs, in k tokens. "
+                         "If depth + K crosses the cycle line, cycle at the boundary")
     ad.add_argument("--by", default="",
                     help="who is posting (jev, the agent, a script); required with a post")
     ad.add_argument("--next", default="", metavar="BEAD",
@@ -7799,14 +7802,15 @@ def _cmd_advise(a) -> int:
     if err:
         print(f"  note: {err}; advising on default [cycle_advice]", file=sys.stderr)
     sit, transcript = _advise_situation(a, agent, cfg)
-    if a.related is not None or a.decision:
+    if a.related is not None or a.decision or a.next_need_k is not None:
         if not a.by:
             print("  refused: say who is posting with --by", file=sys.stderr)
             return REFUSED
         try:
             cycle_advice.post(a.root, agent, cycle_advice.Signal(
                 by=a.by, at=time.time(), next_task=a.next or sit.next_task,
-                related=a.related, decision=a.decision, reason=a.reason))
+                related=a.related, decision=a.decision, reason=a.reason,
+                next_need_k=a.next_need_k))
         except ValueError as e:
             print(f"  refused: {e}", file=sys.stderr)
             return REFUSED
@@ -7849,9 +7853,10 @@ def _cmd_advise(a) -> int:
            else "TTL unrecorded")
     print(f"  {agent}: {depth}, {idle}, {ttl}, next {sit.next_task or 'none on plate'}")
     if signal:
-        print(f"  signal: {signal.by} "
-              + (f"related={signal.related:.2f}" if signal.related is not None
-                 else f"decision={signal.decision}"))
+        bits = [f"related={signal.related:.2f}" if signal.related is not None else "",
+                f"decision={signal.decision}" if signal.decision else "",
+                f"next_need={signal.next_need_k:.0f}k" if signal.next_need_k is not None else ""]
+        print(f"  signal: {signal.by} " + " ".join(b for b in bits if b))
     print(f"  {advice.render()}")
     return OK
 

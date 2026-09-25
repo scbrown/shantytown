@@ -187,3 +187,38 @@ def test_cli_json_brief_carries_the_checkpoint_bounded(tmp_path, capsys, monkeyp
     assert out["ask"] is False, "depth unknown: nothing to ask"
     assert len(out["brief"]["parts"]["current_session"]) <= 300
     assert out["brief"]["truncated"] is True
+
+
+# --- predicted need: cycle at the boundary rather than mid-task -----------------
+
+def test_a_big_next_task_cycles_now_even_when_related():
+    advice = ca.decide(_sit(depth=200), ca.Signal("jev", NOW, "aegis-a", 0.95,
+                                                   next_need_k=250))
+    assert advice.decision == ca.CYCLE and "mid-task" in advice.why
+
+
+def test_a_small_next_task_leaves_relatedness_to_decide():
+    advice = ca.decide(_sit(depth=200), ca.Signal("jev", NOW, "aegis-a", 0.95,
+                                                   next_need_k=80))
+    assert advice.decision == ca.KEEP
+
+
+def test_need_alone_that_fits_decides_nothing():
+    advice = ca.decide(_sit(depth=100), ca.Signal("jev", NOW, "aegis-a", next_need_k=50))
+    assert advice.decision == ca.DEFAULT
+
+
+def test_the_default_hard_limit_is_350k():
+    assert ca.Policy().always_cycle_above_k == 350
+    assert ca.decide(_sit(depth=355), None).decision == ca.CYCLE
+    assert ca.should_ask(_sit(depth=340), ca.Policy()) is True
+
+
+def test_cli_posts_need(tmp_path, capsys, monkeypatch):
+    monkeypatch.setattr(cli, "_cycle_anchor_bead", lambda a, agent: "aegis-a")
+    root = ["--root", str(tmp_path)]
+    assert cli.main([*root, "agent", "advise", "ada", "--next-need-k", "-5",
+                     "--by", "jev"]) == cli.REFUSED
+    assert cli.main([*root, "agent", "advise", "ada", "--next-need-k", "120",
+                     "--by", "jev"]) == cli.OK
+    assert ca.latest(tmp_path, "ada").next_need_k == 120
