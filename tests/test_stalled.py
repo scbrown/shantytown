@@ -167,3 +167,66 @@ def test_undelivered_escalation_does_not_burn_the_stage(tmp_path):
     assert mk().sweep(reg.all().exact()) == {"nudged": [], "escalated": []}  # not claimed
     panes._live.add("p-admin")
     assert mk().sweep(reg.all().exact()) == {"nudged": [], "escalated": ["weaver"]}  # retried
+
+
+def _governed(tmp_path, priorities, verdict):
+    held = [{"id": f"item-{i}", "assignee": "weaver", "priority": p}
+            for i, p in enumerate(priorities)]
+    reg, panes, clock, _ = _world(tmp_path, held=held)
+    logs = []
+    current = {"verdict": verdict}
+    def make():
+        return StalledAlerter(
+            tmp_path, reg, panes, _Runtime(), bd_in_progress=lambda: held,
+            threshold_min=15, now=lambda: clock["t"], log=logs.append,
+            verdict_for=lambda card: current["verdict"])
+    return reg, panes, clock, make, current, logs
+
+
+def _p0_only(**kwargs):
+    from shantytown.governor import Reading, Tier, Verdict
+    tier = Tier(at=100, min_priority=0)
+    return Verdict(Reading(), tier=tier, engaged=(tier,), **kwargs)
+
+
+def test_governor_parked_anchor_never_nudged_or_escalated(tmp_path):
+    reg, panes, clock, make, _, logs = _governed(tmp_path, [2], _p0_only())
+    for _ in range(4):
+        assert make().sweep(reg.all().exact()) == {"nudged": [], "escalated": []}
+        clock["t"] += 3600
+    assert panes.sent == []
+    assert any("item-0 parked by governor" in line for line in logs)
+
+
+def test_mixed_priorities_only_admitted_anchor_is_nudged(tmp_path):
+    reg, panes, clock, make, _, logs = _governed(tmp_path, [2, 0], _p0_only())
+    make().sweep(reg.all().exact())
+    clock["t"] += 960
+    assert make().sweep(reg.all().exact())["nudged"] == ["weaver"]
+    assert "item-1" in panes.sent[0][1]
+    assert "item-0" not in panes.sent[0][1]
+    assert logs
+
+
+def test_governor_engagement_clears_pending_escalation_and_relaxation_rearms(tmp_path):
+    reg, panes, clock, make, current, _ = _governed(tmp_path, [2], None)
+    make().sweep(reg.all().exact())
+    clock["t"] += 960
+    assert make().sweep(reg.all().exact())["nudged"] == ["weaver"]
+    current["verdict"] = _p0_only()
+    clock["t"] += 3600
+    assert make().sweep(reg.all().exact())["escalated"] == []
+    current["verdict"] = None
+    assert make().sweep(reg.all().exact())["nudged"] == []
+    clock["t"] += 960
+    assert make().sweep(reg.all().exact())["nudged"] == ["weaver"]
+    assert all(pane == "p-weaver" for pane, _ in panes.sent)
+
+
+def test_floor_exempt_agent_is_still_monitored(tmp_path):
+    reg, panes, clock, make, _, logs = _governed(
+        tmp_path, [2], _p0_only(exempt=("weaver",)))
+    make().sweep(reg.all().exact())
+    clock["t"] += 960
+    assert make().sweep(reg.all().exact())["nudged"] == ["weaver"]
+    assert not logs

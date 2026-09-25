@@ -10508,7 +10508,8 @@ def _tend_once(a, quiet: bool = False) -> int:
         # pane/item/shell change across the whole threshold window. The weaver
         # case: hours parked on a bead whose blocker had already resolved.
         stalled = _sweep("stalled", lambda: notify_mod.StalledAlerter(
-            Path(a.root), _registry(a), panes, runtime, log=_log).sweep(agents))
+            Path(a.root), _registry(a), panes, runtime, log=_log,
+            verdict_for=_card_verdict).sweep(agents))
         # aegis-es1tt: the stalled sweep now REMEDIATES — a self-heal nudge to the
         # agent first, coordinator escalation only if that goes unanswered. (_sweep
         # returns [] on crash, a dict on success.)

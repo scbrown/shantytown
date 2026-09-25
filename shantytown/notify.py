@@ -1211,8 +1211,9 @@ class StalledAlerter:
 
     def __init__(self, root, reg, panes, runtime, *, push=push_to_admin,
                  bd_in_progress=None, threshold_min=None,
-                 escalate_after_min=None, now=None, log=None):
+                 escalate_after_min=None, now=None, log=None, verdict_for=None):
         self._root = root          # aegis-mxgzh: the sweeps need it to resolve the br backend
+        self._verdict_for = verdict_for
         self.path = Path(root) / "notify" / "stalled.json"
         self._reg = reg
         self._panes = panes
@@ -1292,11 +1293,11 @@ class StalledAlerter:
         from .runtime import asks_a_question, auth_expired
 
         try:
-            held: dict[str, list[str]] = {}
+            held: dict[str, list[dict]] = {}
             for b in self._bd_in_progress():
                 w = (b.get("assignee") or "").split("/")[-1]
                 if w and not self._blocked_on_decision(b):
-                    held.setdefault(w, []).append(b.get("id", "?"))
+                    held.setdefault(w, []).append(b)
         except Exception:
             return {"nudged": [], "escalated": []}   # bd hiccup -> fail open
         store = self._load()
@@ -1306,7 +1307,8 @@ class StalledAlerter:
             for ag in agents:
                 if ag.role != "worker" or not ag.pane:
                     continue
-                items = sorted(held.get(ag.name, []))
+                beads = held.get(ag.name, [])
+                items = sorted(b.get("id", "?") for b in beads)
                 if not items or not self._panes.exists(ag.pane):
                     store.pop(ag.name, None)   # nothing NEGLECTED held -> not ours
                     continue
@@ -1320,6 +1322,23 @@ class StalledAlerter:
                 if state != triage_mod.IDLE or (shells is not None and shells > 0):
                     store.pop(ag.name, None)   # busy/waiting/auth-dead, or a live
                     continue                   # shell: that is progress, re-arm
+                # Use this pass's per-card verdict, including floor exemptions;
+                # a base-lane reread could misclassify a mixed-provider fleet.
+                verdict = self._verdict_for(ag) if self._verdict_for else None
+                if verdict is not None:
+                    from .feed_check import _Item
+                    admitted = []
+                    for bead in beads:
+                        reason = verdict.admits(_Item(bead), agent=ag.name)
+                        if reason:
+                            self._log(f"stalled: {ag.name} {bead.get('id', '?')} "
+                                      f"parked by governor: {reason}")
+                        else:
+                            admitted.append(bead.get("id", "?"))
+                    items = sorted(admitted)
+                    if not items:
+                        store.pop(ag.name, None)
+                        continue
                 key = hashlib.sha256(
                     (plain + "\n" + "|".join(items)).encode()).hexdigest()
                 ep = store.get(ag.name)

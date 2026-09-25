@@ -1249,3 +1249,43 @@ def test_the_two_commands_cannot_drift_apart_again(tmp_path):
     assert "Still respawned by" not in body, "the false promise is back"
     assert "does not respawn an unstamped agent" not in body, \
         "a call site is re-spelling the fate instead of asking for it"
+
+
+def test_stalled_sweep_receives_each_cards_own_governor(tmp_path, monkeypatch):
+    from shantytown import notify
+    from shantytown.feed_check import _Item
+    root = _roster(tmp_path, {
+        "claude-worker": {"role": "worker", "pane": "p-a", "harness": "claude"},
+        "codex-worker": {"role": "worker", "pane": "p-b", "harness": "codex"},
+    })
+    (root / "shantytown.toml").write_text('''
+[governor]
+source = "stub"
+stub_pct = 10.0
+[[governor.tier]]
+at = 50
+min_priority = 1
+[governor.by_harness.codex]
+source = "stub"
+stub_pct = 100.0
+metric = "codex:usage_utilization_pct:max"
+[[governor.by_harness.codex.tier]]
+at = 80
+min_priority = 0
+''')
+    panes = _Panes(screens={"p-a": IDLE, "p-b": IDLE})
+    monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: panes)
+    seen = {}
+    class Probe:
+        def __init__(self, *args, verdict_for, **kwargs):
+            self.verdict_for = verdict_for
+        def sweep(self, agents):
+            for agent in agents:
+                verdict = self.verdict_for(agent)
+                seen[agent.name] = verdict.admits(_Item({"id": "work", "priority": 2}),
+                                                   agent=agent.name)
+            return {"nudged": [], "escalated": []}
+    monkeypatch.setattr(notify, "StalledAlerter", Probe)
+    cli._tend_once(_Args(root))
+    assert seen["claude-worker"] == ""
+    assert seen["codex-worker"]
