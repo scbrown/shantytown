@@ -241,6 +241,13 @@ seconds, with each CLI attempt capped at 5 seconds. Transient `errored` or
 `connecting` states do not launch the TUI. A timeout prints the last safe status
 and refuses attachment; raw provider output is not echoed. The daemon is not
 stopped between attempts, and every attempt keeps the card's identity and policy.
+After the old daemon stops, the readiness helper rechecks the named card's
+startup lock before each start attempt. It uses the same ownership-checked
+repair as an ordinary launch, so a lock left during pane replacement or a
+failed start does not require a second manual launch. Fresh locks with uncertain
+process ownership remain untouched; an unconfirmed connection still refuses
+TUI attachment.
+
 The launcher gives Codex the full readiness bound plus the normal five-second
 UI observation window before reporting could-not-tell. This also protects a
 cold cycle from falling back to a second launch while readiness is still running.

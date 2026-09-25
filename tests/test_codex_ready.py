@@ -55,7 +55,8 @@ def test_hung_command_is_bounded_and_reaped(tmp_path):
         os.kill(pid, 0)
 
 
-def test_emitted_shell_waits_through_transient_status_before_tui(tmp_path, monkeypatch):
+@pytest.mark.parametrize("stale_after_stop", [False, True])
+def test_emitted_shell_waits_through_transient_status_before_tui(tmp_path, monkeypatch, stale_after_stop):
     # Short runtime path is required by the real Unix socket pathname ceiling.
     # All binaries are new fixture files, never symlinks to tools we might stub.
     with tempfile.TemporaryDirectory(prefix="st-rc-") as runtime:
@@ -81,8 +82,16 @@ kind='stop' if a[:2]==['remote-control','stop'] else 'start' if a[:2]==['remote-
 n=sum(r['kind']=='start' for r in rows)+1
 row={{'kind':kind,'agent':os.environ.get('SHANTY_AGENT'),'actor':os.environ.get('BEADS_ACTOR'),'tmux':os.environ.get('TMUX_PANE'),'args':a}}
 with p.open('a') as f: f.write(json.dumps(row)+'\\n')
+lock=pathlib.Path(os.environ['CODEX_HOME'])/'app-server-control/app-server-startup.lock'
+if kind=='stop' and {stale_after_stop!r}:
+ lock.parent.mkdir(parents=True,exist_ok=True)
+ lock.touch()
+ os.utime(lock,(0,0))
+ record=lock.parent.parent/'app-server-daemon/app-server.pid'
+ record.parent.mkdir(parents=True,exist_ok=True)
+ record.write_text(json.dumps({{'pid':os.getpid()}}))
 if kind=='start':
- status=['errored','connecting','connected'][min(n-1,2)]
+ status='errored' if lock.exists() else ['errored','connecting','connected'][min(n-1,2)]
  print(json.dumps({{'status':status,'timedOut':False}}))
  sys.exit(1 if n==1 else 0)
 if kind=='tui': sys.exit(0 if n>=4 else 17)
@@ -93,7 +102,7 @@ if kind=='tui': sys.exit(0 if n>=4 else 17)
             Agent(name="fixture", role="worker", dangerous=True), str(config), root=root)
         # Negative control: the previous pair of immediate starts admits the
         # connecting daemon and our TUI double exits, just like the incident.
-        prefix, tail = line.split(f"{shlex.quote(sys.executable)} -m shantytown.codex_ready -- ", 1)
+        prefix, tail = line.split(f"{shlex.quote(sys.executable)} -m shantytown.codex_ready --agent fixture -- ", 1)
         start, suffix = tail.split(" && ", 1)
         legacy = f"{prefix}({start} || {start}) && {suffix}"
         old = subprocess.run(["sh", "-c", legacy], capture_output=True, text=True, timeout=8)
@@ -112,3 +121,59 @@ if kind=='tui': sys.exit(0 if n>=4 else 17)
             assert 'approval_policy=never' in row['args']
         assert rows[-1]['tmux'] == '%fixture'
         assert "connected; attaching TUI" in done.stderr
+
+
+def test_post_stop_stale_lock_is_repaired_before_start(tmp_path, monkeypatch):
+    """The launcher checked while the old server was healthy; stop came later."""
+    from shantytown import codex_daemon
+    proc = tmp_path / 'proc'
+    proc.mkdir()
+    runtime = tmp_path / 'run'
+    home = runtime / 'shantytown/codex/fixture'
+    lock = home / 'app-server-control/app-server-startup.lock'
+    lock.parent.mkdir(parents=True)
+    lock.touch()
+    record = home / 'app-server-daemon/app-server.pid'
+    record.parent.mkdir()
+    record.write_text('{"pid": 101}')
+    # This is the actual repair algorithm, restricted to a fake proc/runtime.
+    repair = codex_daemon.repair
+    monkeypatch.setattr(codex_daemon, 'repair', lambda agent: repair(
+        agent, proc=proc, runtime_dir=runtime,
+        kill=lambda *args: pytest.fail('absent PID must never be signalled')))
+    observed = []
+    def attempt(command, timeout):
+        observed.append(lock.exists())
+        return 'command timed out' if lock.exists() else 'connected'
+    monkeypatch.setattr(codex_ready, '_attempt', attempt)
+    # Negative control: the same start cannot succeed while repair is a no-op.
+    actual_repair = codex_daemon.repair
+    monkeypatch.setattr(codex_daemon, 'repair', lambda agent: codex_daemon.Health(agent))
+    assert not codex_ready.wait_ready(['fake'], agent='fixture', timeout=.02, interval=.01)
+    assert observed and all(observed) and lock.exists()
+    observed.clear()
+    monkeypatch.setattr(codex_daemon, 'repair', actual_repair)
+    assert codex_ready.wait_ready(['fake'], agent='fixture', timeout=.1, interval=.01)
+    assert observed == [False]
+    assert not lock.exists()
+
+
+def test_ambiguous_fresh_lock_is_preserved_and_cannot_admit_tui(tmp_path, monkeypatch):
+    from shantytown import codex_daemon
+    proc = tmp_path / 'proc'
+    (proc / '101').mkdir(parents=True)  # PID exists; ownership is unknown.
+    runtime = tmp_path / 'run'
+    home = runtime / 'shantytown/codex/fixture'
+    lock = home / 'app-server-control/app-server-startup.lock'
+    lock.parent.mkdir(parents=True)
+    lock.touch()
+    record = home / 'app-server-daemon/app-server.pid'
+    record.parent.mkdir()
+    record.write_text('{"pid": 101}')
+    repair = codex_daemon.repair
+    monkeypatch.setattr(codex_daemon, 'repair', lambda agent: repair(
+        agent, proc=proc, runtime_dir=runtime,
+        kill=lambda *args: pytest.fail('unknown PID must never be signalled')))
+    monkeypatch.setattr(codex_ready, '_attempt', lambda *args: 'command timed out')
+    assert not codex_ready.wait_ready(['fake'], agent='fixture', timeout=.02, interval=.01)
+    assert lock.exists()
