@@ -43,6 +43,15 @@ judge's input small:
   `--brief-chars N`, which is capped at `max_brief_chars`. That is the
   "ask for more" step: start small and widen only on doubt.
 
+**Predicted need.** `--next-need-k K` posts how much context the next task is
+expected to consume from a fresh session. If current depth plus K would cross
+the cycle line, keeping only postpones the cycle to the middle of the task, so
+st cycles now. Post the upper edge of the estimate, not the mean. A Jev `score`
+over bands works (under 50k / 50–120k / 120–250k / 250–400k / over 400k):
+post the top of the highest band holding meaningful probability. A vague task
+spreads its probability, so it gets a larger K and cycles sooner, which is the
+safe direction.
+
 A signal is dropped when:
 
 - it names a different next task than the plate,
@@ -54,8 +63,9 @@ A signal is dropped when:
 | situation | advice |
 |---|---|
 | past the cycle line | `cycle`. No signal keeps a saturated context |
-| at or past `always_cycle_above_k` (250k) | `cycle`, and nobody is asked (`ask: false`) |
+| at or past `always_cycle_above_k` (350k) | `cycle`, and nobody is asked (`ask: false`) |
 | no signal / stale / wrong task | `default`. Depth lines decide, as before |
+| depth + posted `--next-need-k` ≥ cycle line | `cycle` at the boundary, not mid-task |
 | posted `--decision` | that decision |
 | related ≥ `keep_at` | `keep`. The reasoning in flight is worth more than the arithmetic |
 | related < `cycle_below` | `cycle`. Unrelated work |
@@ -82,7 +92,7 @@ window, which st cannot see into, so every number is configurable.
 
 ```toml
 [cycle_advice]            # every key optional
-always_cycle_above_k = 250  # at or past this: cycle, and never ask a judge
+always_cycle_above_k = 350  # at or past this: cycle, and never ask a judge
 brief_chars = 1500          # the first brief a judge gets
 max_brief_chars = 6000      # the most any --brief-chars can widen it to
 keep_at = 0.8
@@ -112,7 +122,8 @@ materially benefit from keeping the working context of current_session (same \
 code, same files, same decisions in flight), rather than starting fresh from a \
 written handoff? Sharing only a broad topic or the same repo is not enough. If \
 the relationship is unclear or not stated, answer no.")
-st agent advise "$AGENT" --related "$p" --by jev
+need=$(jev-score-need --state "$STATE")          # e.g. 120 for "50-120k"
+st agent advise "$AGENT" --related "$p" --next-need-k "$need" --by jev
 ```
 
 The abstain direction ("if unclear, answer no") sits inside the question, so a

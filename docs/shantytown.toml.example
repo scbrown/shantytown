@@ -565,7 +565,7 @@ min_sync_version = 1
 # ---------------------------------------------------------------------------
 
 # [cycle_advice]
-# always_cycle_above_k = 250   # at or past this: cycle, never ask a judge
+# always_cycle_above_k = 350   # at or past this: cycle, never ask a judge
 # brief_chars = 1500           # bounded input a judge gets; widen with --brief-chars
 # keep_at = 0.8
 # cycle_below = 0.3
