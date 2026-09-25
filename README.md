@@ -10,7 +10,7 @@
 *Create a work item. Tell an agent to go get it. That's the whole idea.*
 
 [![dispatch 3.4s](https://img.shields.io/badge/dispatch-3.4s-brightgreen)](docs/why.md#measured-against-gas-town)
-[![33 commands](https://img.shields.io/badge/commands-35-blue)](#-the-whole-surface)
+[![33 commands](https://img.shields.io/badge/commands-36-blue)](#-the-whole-surface)
 [![tests](https://img.shields.io/badge/tests-3489%20passing-blue)](docs/principles.md)
 [![python](https://img.shields.io/badge/python-3.11%2B-blue)](#-install)
 [![dependencies none](https://img.shields.io/badge/dependencies-none-blue)](#-install)
@@ -79,6 +79,8 @@ st agent                          one agent
                                   harness when the target is omitted
   cycle <agent> [--self]          clear context WITHOUT destroying the runtime: checkpoint ->
                                   stop -> relaunch -> re-dispatch (/clear drops bypass; this keeps it)
+  advise <agent> [--related P]    keep or cycle at a handoff: depth + cache TTL, plus a
+                                  relatedness signal anything outside st may post
   input <agent>                   what's in their input box: EMPTY | TYPED | GHOST (never submits)
   ask <agent>                     the question they're blocked on, options read verbatim
   answer <agent> <N>              select option N. refuses unless a picker is really up
@@ -107,7 +109,7 @@ st ops                            the installation
   help <topic>                    rationale pages: handoff/cycle, haul, inbox
 ```
 
-Thirty-five, and the count is load-bearing: six verbs and twenty-nine grouped commands under five
+Thirty-six, and the count is load-bearing: six verbs and thirty grouped commands under five
 groups, and a test pins this block AND this sentence to the parser, so the next command either updates
 both or fails CI. A group is a namespace, not a command; it earns no slot. The flat spellings from
 before the grouping (st cycle for st agent cycle, and so on) still work for two releases and say so on

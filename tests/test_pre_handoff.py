@@ -141,3 +141,47 @@ def test_an_unreadable_pane_gives_the_coordinator_no_line(tmp_path):
 
     assert stop_policy._own_context_line(
         tmp_path, "sattler", {"reg": _Reg(), "panes": None}) == ""
+
+
+# --- cycle advice (st agent advise): a posted signal may ESCALATE the band ------
+
+def _advisor(decision):
+    from shantytown import cycle_advice as ca
+    return lambda agent, depth_k: ca.Advice(decision, f"test says {decision}")
+
+
+def test_advice_to_cycle_turns_the_nudge_into_the_cycle_prompt(tmp_path):
+    reg, panes, rt = _world({"shanty-gennaro": _saturated_pane(340.0)})
+    d = _driver(tmp_path, reg, panes, advise=_advisor("cycle"))
+    assert d.sweep(reg.all().exact(), rt) == ["gennaro"]
+    assert _ledger(d).get("gennaro") == "advised"
+    assert "CONTEXT HIGH" in panes.sent[-1][1]
+    before = len(panes.sent)
+    d.sweep(reg.all().exact(), rt)
+    assert len(panes.sent) == before, "advised once per episode, not per sweep"
+
+
+def test_advice_landing_after_the_nudge_still_escalates(tmp_path):
+    reg, panes, rt = _world({"shanty-gennaro": _saturated_pane(340.0)})
+    d = _driver(tmp_path, reg, panes)
+    d.sweep(reg.all().exact(), rt)
+    assert _ledger(d).get("gennaro") == "prehandoff"
+    d._advise = _advisor("cycle")
+    assert d.sweep(reg.all().exact(), rt) == ["gennaro"]
+
+
+def test_keep_and_default_advice_leave_the_nudge_alone(tmp_path):
+    for decision in ("keep", "default"):
+        reg, panes, rt = _world({"shanty-gennaro": _saturated_pane(340.0)})
+        d = _driver(tmp_path / decision, reg, panes, advise=_advisor(decision))
+        assert d.sweep(reg.all().exact(), rt) == []
+        assert _ledger(d).get("gennaro") == "prehandoff"
+
+
+def test_a_failing_advisor_falls_back_to_the_nudge(tmp_path):
+    def boom(agent, depth_k):
+        raise RuntimeError("advisor down")
+    reg, panes, rt = _world({"shanty-gennaro": _saturated_pane(340.0)})
+    d = _driver(tmp_path, reg, panes, advise=boom)
+    assert d.sweep(reg.all().exact(), rt) == []
+    assert _ledger(d).get("gennaro") == "prehandoff"

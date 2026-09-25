@@ -15,7 +15,7 @@ from __future__ import annotations
 SURFACE: dict[str, tuple[str, ...] | None] = {
     "task": None, "go": None, "inbox": None, "crew": None, "anchor": None, "attach": None,
     "work": ("repool", "defer", "cost", "dream", "triage"),
-    "agent": ("new", "stop", "harness", "cycle", "input", "ask", "answer",
+    "agent": ("new", "stop", "harness", "cycle", "advise", "input", "ask", "answer",
               "log", "history", "stats"),
     "fleet": ("start", "tend", "roles", "init", "hold", "window", "dashboard"),
     "repo": ("worktree", "push", "context"),

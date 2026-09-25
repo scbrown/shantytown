@@ -29,6 +29,7 @@
 - [Integrations](integrations.md)
 - [The stop decision (spec)](stop-policy-spec.md)
 - [Cross-harness handoff envelope](handoff-envelope.md)
+- [Cycle advice: keep or cycle at a handoff](cycle-advice.md)
 - [Durable browser handoffs](inbox-bridge.md)
 - [MCP containment](mcp-containment.md)
 - [Private-key checks](private-key-checks.md)

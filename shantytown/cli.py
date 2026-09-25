@@ -1,9 +1,9 @@
-"""st — the CLI. Six verbs, five groups, twenty-nine grouped commands: thirty-five, and the count is load-bearing: each earns its slot.
+"""st — the CLI. Six verbs, five groups, thirty grouped commands: thirty-six, and the count is load-bearing: each earns its slot.
 
     task · go · inbox [--count] · crew [--count|--governor]
     · anchor [--short|--events|--harness] · attach [-r|--no-start]
     work  → repool · defer · cost [--sync] · dream [--run] · triage
-    agent → new · stop · harness · cycle [--self|--allow-loss]
+    agent → new · stop · harness · cycle [--self|--allow-loss] · advise [--related|--decision]
             · input [--show|--clear|--dismiss] · ask · answer · log · history <agent> · stats
     fleet → start [--mode] · tend [--install|--status|--reauth|--target]
             · roles [--check|set|band|sync] · init · hold gaming [--clear|--status|--probe]
@@ -128,6 +128,7 @@ comment, and in a repo whose whole thesis is the exact count, that is the bug.
 """
 from __future__ import annotations
 import argparse
+import dataclasses
 import json
 import os
 import sys
@@ -1546,6 +1547,32 @@ def build_parser() -> argparse.ArgumentParser:
     hp.add_argument("topic", nargs="?", default="",
                     help="handoff | cycle | haul | inbox; omit to list")
 
+    ad = leaf("advise",
+              help="keep or cycle at a handoff: depth + measured cache TTL, "
+                   "plus a relatedness signal anything outside st may post")
+    ad.add_argument("agent", nargs="?", help="whose session; defaults to $SHANTY_AGENT")
+    # THE CALL-IN (Stiwi 2026-09-25: "allow a way for an agent, or process, to
+    # call in"). st names no model and needs no key: Jev, the agent at its own
+    # checkpoint or a script posts here, and with nothing posted st decides nothing.
+    ad.add_argument("--related", type=float, metavar="P",
+                    help="post: how related the next task is to this session, 0-1")
+    ad.add_argument("--decision", choices=("keep", "cycle"),
+                    help="post: a verdict instead of a relatedness. The cycle line still wins")
+    ad.add_argument("--by", default="",
+                    help="who is posting (jev, the agent, a script); required with a post")
+    ad.add_argument("--next", default="", metavar="BEAD",
+                    help="the next task this signal is about; defaults to the plate item")
+    ad.add_argument("--reason", default="", help="post: one line, shown with the advice")
+    ad.add_argument("--json", action="store_true",
+                    help="print the situation, a bounded brief and the advice as JSON "
+                         "(what a caller judges from; ask=false means do not ask)")
+    ad.add_argument("--checkpoint-file", default="", metavar="FILE",
+                    help="the handoff just written: goes into the brief as what "
+                         "this session was doing, bounded like the rest")
+    ad.add_argument("--brief-chars", type=int, default=None, metavar="N",
+                    help="a larger brief when the first was truncated; capped at "
+                         "[cycle_advice] max_brief_chars")
+
     cy = leaf("cycle",
                         help="clear an agent's context WITHOUT destroying its "
                              "runtime: checkpoint -> stop -> relaunch -> "
@@ -1995,6 +2022,8 @@ def _run_command(a) -> int:
 
     if a.cmd == "cycle":
         return _cmd_cycle(a)
+    if a.cmd == "advise":
+        return _cmd_advise(a)
     if a.cmd == "worktree":
         return _cmd_worktree(a)
     if a.cmd == "push":
@@ -7711,6 +7740,122 @@ def _durable_checkpoint_gate(a, agent_name: str):
     return cycle_mod.durable_gate(agent_name, bead, since, got)
 
 
+def _advise_situation(a, agent: str, cfg):
+    """The measured half of cycle_advice: depth and cache timing from the transcript
+    the Stop hook last recorded (context_hint), and the next task from the plate."""
+    from . import context_spend, cycle_advice, triage as triage_mod
+    transcript = None
+    try:
+        obs = json.loads((Path(a.root) / "context_budget" / f"{agent}.json").read_text())
+        transcript = (obs.get("payload") or {}).get("transcript_path")
+    except (OSError, ValueError, AttributeError):
+        pass
+    if not transcript:
+        # No context hint recorded (it needs [session_budget] context_window).
+        # Fall back to the EXACT session the stats store last saw, never the
+        # newest file in the project dir, which can be a different session.
+        try:
+            from . import session_budget, stats
+            ws = _registry(a).get(agent).workspace
+            sid = session_budget.current_session(Path(a.root), agent)
+            if ws and sid:
+                path = (Path.home() / ".claude" / "projects"
+                        / stats._claude_project_dir(ws) / f"{sid}.jsonl")
+                transcript = str(path) if path.exists() else None
+        except Exception:  # noqa: BLE001 — advice degrades to unknown, never fails
+            pass
+    got = context_spend.read_consumed(transcript) if transcript else None
+    return cycle_advice.Situation(
+        agent=agent, depth_k=(got[0] / 1000 if got else None),
+        cycle_line_k=triage_mod.CYCLE_THRESHOLD_K,
+        next_task=_cycle_anchor_bead(a, agent),
+        cache=cycle_advice.read_cache(transcript)), transcript
+
+
+def _cycle_advisor(a):
+    """CycleDriver's advisor: the same decision `st agent advise` prints, with the
+    depth the sweep just read off the pane. Returns None for an agent with no
+    signal posted, so the driver never pays for a transcript read it cannot use."""
+    from . import cycle_advice
+    cfg, _ = config.load_or_default(Path(a.root))
+
+    def advise(agent, depth_k):
+        if cycle_advice.latest(a.root, agent) is None:
+            return None
+        sit, _ = _advise_situation(a, agent, cfg)
+        sit = dataclasses.replace(sit, depth_k=depth_k)
+        return cycle_advice.decide(sit, cycle_advice.latest(a.root, agent),
+                                   cfg.cycle_advice)
+    return advise
+
+
+def _cmd_advise(a) -> int:
+    from . import cycle_advice
+    agent = a.agent or os.environ.get("SHANTY_AGENT", "")
+    if not agent:
+        print("  refused: name an agent, or set $SHANTY_AGENT", file=sys.stderr)
+        return REFUSED
+    cfg, err = config.load_or_default(Path(a.root))
+    if err:
+        print(f"  note: {err}; advising on default [cycle_advice]", file=sys.stderr)
+    sit, transcript = _advise_situation(a, agent, cfg)
+    if a.related is not None or a.decision:
+        if not a.by:
+            print("  refused: say who is posting with --by", file=sys.stderr)
+            return REFUSED
+        try:
+            cycle_advice.post(a.root, agent, cycle_advice.Signal(
+                by=a.by, at=time.time(), next_task=a.next or sit.next_task,
+                related=a.related, decision=a.decision, reason=a.reason))
+        except ValueError as e:
+            print(f"  refused: {e}", file=sys.stderr)
+            return REFUSED
+    signal = cycle_advice.latest(a.root, agent)
+    advice = cycle_advice.decide(sit, signal, cfg.cycle_advice)
+    if a.json:
+        item = None
+        try:
+            item = _tracker_plate(_tracker(a), agent)
+        except Exception:  # noqa: BLE001 — the brief degrades, the advice stands
+            pass
+        policy = cfg.cycle_advice
+        # NEVER the transcript: the judge sees the next task, not the session.
+        checkpoint = ""
+        if a.checkpoint_file:
+            try:
+                # Read no more than the brief could ever carry.
+                with open(a.checkpoint_file, encoding="utf-8", errors="replace") as fh:
+                    checkpoint = fh.read(cfg.cycle_advice.max_brief_chars)
+            except OSError as e:
+                print(f"  note: checkpoint unreadable ({e}); brief omits it",
+                      file=sys.stderr)
+        parts = [("current_session", checkpoint),
+                 ("next_task", f"{sit.next_task} {getattr(item, 'title', '') or ''}"),
+                 ("next_task_notes", getattr(item, "notes", "") or "")]
+        print(json.dumps(dict(
+            agent=agent, depth_k=sit.depth_k, cycle_line_k=sit.cycle_line_k,
+            always_cycle_above_k=policy.always_cycle_above_k,
+            ask=cycle_advice.should_ask(sit, policy),
+            brief=cycle_advice.brief(parts, a.brief_chars or policy.brief_chars, policy),
+            next_task=sit.next_task, transcript=transcript,
+            idle_seconds=sit.idle_seconds, cache_ttl_seconds=sit.cache.ttl_seconds,
+            signal=(dataclasses.asdict(signal) if signal else None),
+            advice=dataclasses.asdict(advice)), indent=1))
+        return OK
+    depth = f"{sit.depth_k:.0f}k" if sit.depth_k is not None else "depth unknown"
+    idle = (f"idle {sit.idle_seconds / 60:.0f}m" if sit.idle_seconds is not None
+            else "idle unknown")
+    ttl = (f"TTL {sit.cache.ttl_seconds // 60}m" if sit.cache.ttl_seconds
+           else "TTL unrecorded")
+    print(f"  {agent}: {depth}, {idle}, {ttl}, next {sit.next_task or 'none on plate'}")
+    if signal:
+        print(f"  signal: {signal.by} "
+              + (f"related={signal.related:.2f}" if signal.related is not None
+                 else f"decision={signal.decision}"))
+    print(f"  {advice.render()}")
+    return OK
+
+
 def _cmd_cycle(a) -> int:
     """cycle <agent> — clear context WITHOUT destroying the runtime (aegis-3laza).
 
@@ -8259,6 +8404,12 @@ def _redispatch_after_cycle(a, agent_name: str, checkpoint_bead: str = "") -> No
     plate item runs `st anchor` and finds its own work; that is a slower path, not
     a broken one.
     """
+    # The signal was about the session that just ended; the new one starts clean.
+    from . import cycle_advice
+    try:
+        cycle_advice.clear(a.root, agent_name)
+    except OSError:
+        pass
     try:
         tracker = _tracker(a)
         item = _tracker_plate(tracker, agent_name)
@@ -10357,7 +10508,7 @@ def _tend_once(a, quiet: bool = False) -> int:
         # saturation episode; the instruction checkpoints BEFORE clearing.
         cycled = _sweep("saturation-cycle", lambda: notify_mod.CycleDriver(
             Path(a.root), _registry(a), panes, refresh=_refresh_clone,
-            log=_log).sweep(agents, runtime))
+            log=_log, advise=_cycle_advisor(a)).sweep(agents, runtime))
         if cycled:
             print(f"  ⚠ prompted {len(cycled)} saturated agent(s) to cycle: "
                   f"{', '.join(cycled)}", file=sys.stderr)
