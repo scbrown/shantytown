@@ -673,6 +673,11 @@ Creation requires declared `QUIPU_SERVER`, `SHANTY_ONTO_NS`, and `[host] name`. 
 supervisor must already be a lead or administrator. The new graph identity carries
 this host's placement; the next sync projects it here and skips other hosts. An
 existing local card retains its launch settings; otherwise deployment defaults apply.
+Sync previews role, supervisor, host, explicit role stack, and domain. Changes to a
+live agent's effective role stack or domain require `--force`, just like role or
+supervisor changes. Omitted source stacks/domains/hosts preserve local values;
+making an equivalent implicit stack explicit is shown but needs no force.
+Sync preserves local launch and retirement settings.
 The hierarchy and harness checks run before writing, and creation verifies the graph
 read-back. If verification fails, inspect the graph before retrying.
 

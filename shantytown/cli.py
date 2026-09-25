@@ -7155,11 +7155,9 @@ def _would_break(files, graph_agents, catalog, remote=()):
         resolvable against the whole set: drop the untouched cards and every
         remaining `reports_to` pointing at one turns into a false `lead is not in
         the registry`.
-      · for a card that IS in the graph we replace role and reports_to ONLY,
-        mirroring FilesRegistry.set, which preserves every other field. Taking the
-        graph's Agent wholesale would silently blank the stacked role set and make
-        `unattached by role` — the one legitimate reason to have no lead — read as
-        an orphan.
+      · for a card that IS in the graph we use the same five projected fields
+        as the preview and write. Omitted roles/domain/host preserve the card,
+        matching FilesRegistry.set; local launch settings remain local.
 
     Best-effort by construction, never fatal: an unreadable registry means we
     could not ask, and returning "nothing would break" from here is a false
@@ -7174,7 +7172,10 @@ def _would_break(files, graph_agents, catalog, remote=()):
     after = dict(current)
     for ag in graph_agents:
         cur = current.get(ag.name)
-        after[ag.name] = (replace(cur, role=ag.role, reports_to=ag.reports_to)
+        after[ag.name] = (replace(cur, role=ag.role, reports_to=ag.reports_to,
+                                  roles=ag.roles or cur.roles,
+                                  domain=ag.domain if ag.domain is not None else cur.domain,
+                                  host=ag.host if ag.host is not None else cur.host)
                           if cur is not None else ag)
     # A lead on ANOTHER HOST is not "not in the registry" (aegis-5du1bz): the
     # graph knows it, the host-scoped sync just does not write a card for it
@@ -7213,8 +7214,8 @@ def _cmd_project(a) -> int:
     `for ag in agents: files.set(ag)`.
 
     So: always print the diff; write nothing on --dry-run; and REFUSE (1) when the
-    projection would change the role or supervisor of an agent that is LIVE RIGHT
-    NOW, unless --force. Being the declared authority is not the same as being
+    projection would change the role, supervisor, effective role stack, domain or
+    existing host of an agent that is LIVE RIGHT NOW, unless --force. Being the declared authority is not the same as being
     right, and a projection that cannot be previewed is a footgun regardless of
     which side of the divergence is correct.
     """
@@ -7315,6 +7316,12 @@ def _cmd_project(a) -> int:
             return CANNOT_TELL
         agents = [replace(ag, host=local) for ag in mine]
 
+    from .protocols import Agent
+
+    # Sync owns these five fields only. Never carry launch or retirement data
+    # from a source into FilesRegistry.set's broader write interface.
+    agents = [Agent(name=ag.name, role=ag.role, reports_to=ag.reports_to,
+                    host=ag.host, roles=ag.roles, domain=ag.domain) for ag in agents]
     files = FilesRegistry(a.root / "crew")
     panes = _panes(a)
     dry = getattr(a, "dry_run", False)
@@ -7334,19 +7341,23 @@ def _cmd_project(a) -> int:
     for ag in sorted(agents, key=lambda x: x.name):
         try:
             cur = files.get(ag.name)
-            before = (cur.role, cur.reports_to, cur.host)
+            before = (cur.role, cur.reports_to, cur.host, cur.roles, cur.domain)
         except LookupError:
             cur, before = None, None
         # An omitted source host preserves the card, just as FilesRegistry.set
         # does. A declared placement must project even when rank is unchanged.
         after = (ag.role, ag.reports_to,
-                 ag.host if ag.host is not None else (cur.host if cur else None))
+                 ag.host if ag.host is not None else (cur.host if cur else None),
+                 ag.roles or (cur.roles if cur else ()),
+                 ag.domain if ag.domain is not None else (cur.domain if cur else None))
         if before == after:
             continue
         is_live = live(ag.name)
         changes.append((ag.name, before, after, is_live, cur is None))
         if is_live and (before is None or before[:2] != after[:2]
-                        or (before[2] is not None and before[2] != after[2])):
+                        or (before[2] is not None and before[2] != after[2])
+                        or (before[3] or (before[0],)) != (after[3] or (after[0],))
+                        or before[4] != after[4]):
             harm.append(ag.name)
 
     # The subtle one, and the reason a per-agent diff is not enough: an agent that
@@ -7404,11 +7415,13 @@ def _cmd_project(a) -> int:
         mark = "LIVE " if is_live else "     "
         if is_new:
             print(f"  {mark}+ {name:<10} NEW CARD -> {after[0]}, reports_to {after[1] or '—'}, "
-                  f"host {after[2] or '—'}")
+                  f"host {after[2] or '—'}, roles {list(after[3])}, domain {after[4]!r}")
         else:
             print(f"  {mark}~ {name:<10} {before[0]} -> {after[0]}, "
                   f"reports_to {before[1] or '—'} -> {after[1] or '—'}, "
-                  f"host {before[2] or '—'} -> {after[2] or '—'}")
+                  f"host {before[2] or '—'} -> {after[2] or '—'}, "
+                  f"roles {list(before[3])} -> {list(after[3])}, "
+                  f"domain {before[4]!r} -> {after[4]!r}")
     if dangling:
         print(f"\n  and {len(dangling)} card(s) NOT in the graph would be left pointing at a "
               f"demoted supervisor:")
@@ -7471,7 +7484,7 @@ def _cmd_project(a) -> int:
         print(f"\n  REFUSED: {len(harm)} LIVE agent(s) would be restructured: "
               f"{', '.join(sorted(harm))}.", file=sys.stderr)
         print("  They are running right now. Projecting would change their role, "
-              "supervisor or existing host placement underneath them.", file=sys.stderr)
+              "supervisor, role stack, domain or existing host placement underneath them.", file=sys.stderr)
         print("  Reconcile the graph first, or re-run with --force if you mean it.\n",
               file=sys.stderr)
     if broke and not getattr(a, "allow_breakage", False):
