@@ -7319,15 +7319,19 @@ def _cmd_project(a) -> int:
     for ag in sorted(agents, key=lambda x: x.name):
         try:
             cur = files.get(ag.name)
-            before = (cur.role, cur.reports_to)
+            before = (cur.role, cur.reports_to, cur.host)
         except LookupError:
             cur, before = None, None
-        after = (ag.role, ag.reports_to)
+        # An omitted source host preserves the card, just as FilesRegistry.set
+        # does. A declared placement must project even when rank is unchanged.
+        after = (ag.role, ag.reports_to,
+                 ag.host if ag.host is not None else (cur.host if cur else None))
         if before == after:
             continue
         is_live = live(ag.name)
         changes.append((ag.name, before, after, is_live, cur is None))
-        if is_live:
+        if is_live and (before is None or before[:2] != after[:2]
+                        or (before[2] is not None and before[2] != after[2])):
             harm.append(ag.name)
 
     # The subtle one, and the reason a per-agent diff is not enough: an agent that
@@ -7384,10 +7388,12 @@ def _cmd_project(a) -> int:
     for name, before, after, is_live, is_new in changes:
         mark = "LIVE " if is_live else "     "
         if is_new:
-            print(f"  {mark}+ {name:<10} NEW CARD -> {after[0]}, reports_to {after[1] or '—'}")
+            print(f"  {mark}+ {name:<10} NEW CARD -> {after[0]}, reports_to {after[1] or '—'}, "
+                  f"host {after[2] or '—'}")
         else:
             print(f"  {mark}~ {name:<10} {before[0]} -> {after[0]}, "
-                  f"reports_to {before[1] or '—'} -> {after[1] or '—'}")
+                  f"reports_to {before[1] or '—'} -> {after[1] or '—'}, "
+                  f"host {before[2] or '—'} -> {after[2] or '—'}")
     if dangling:
         print(f"\n  and {len(dangling)} card(s) NOT in the graph would be left pointing at a "
               f"demoted supervisor:")
@@ -7449,8 +7455,8 @@ def _cmd_project(a) -> int:
         refused = True
         print(f"\n  REFUSED: {len(harm)} LIVE agent(s) would be restructured: "
               f"{', '.join(sorted(harm))}.", file=sys.stderr)
-        print("  They are running right now. Projecting would change their role or "
-              "supervisor underneath them.", file=sys.stderr)
+        print("  They are running right now. Projecting would change their role, "
+              "supervisor or existing host placement underneath them.", file=sys.stderr)
         print("  Reconcile the graph first, or re-run with --force if you mean it.\n",
               file=sys.stderr)
     if broke and not getattr(a, "allow_breakage", False):
