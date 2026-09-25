@@ -4813,7 +4813,22 @@ def _cmd_task(a) -> int:
         print("\n  0 writes.")
         return OK
     try:
-        item = _tracker(a).create(title, assignee=a.assignee)
+        tracker = _tracker(a)
+        # Advisory failures cannot change create's status or reach scripted br users.
+        if os.environ.get("SHANTY_AGENT"):
+            from .create_advisory import advise
+            try:
+                from .br import BrTracker
+                message = advise(dict(title=title, source="st-task",
+                    cwd=tracker.repo if isinstance(tracker, BrTracker) else None,
+                    skip=None if isinstance(tracker, BrTracker) else "advisory requires br tracker",
+                    server=_deployment_default(a, "BOBBIN_SERVER"),
+                    jev_command=_deployment_default(a, "SHANTY_CREATE_JEV_COMMAND")))
+            except Exception:
+                message = "advisory skipped: unexpected advisory failure"
+            if message:
+                print(message, file=sys.stderr)
+        item = tracker.create(title, assignee=a.assignee)
     except Exception as e:
         print(f"  could not tell: tracker create failed: {e}", file=sys.stderr)
         return CANNOT_TELL
