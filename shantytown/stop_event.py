@@ -606,6 +606,15 @@ def _haul(reg: FilesRegistry, panes, me: str, root: Path) -> int:
             mine = _assigned_to(me, _bd_json(["ready", "--limit", "0"], cwd, root=root, reg=reg))
             if not mine:
                 return 0
+            # A ready assignment is not governor admission (aegis-4kd6ux).
+            # Filter before claiming, spending a session item, or requesting a
+            # context cycle. In-flight anchors above retain continuation semantics.
+            from .feed_check import admitted_haul, haul_governor_verdict
+            mine = admitted_haul(
+                mine, card, haul_governor_verdict(root, card),
+                lambda msg: print(msg, file=sys.stderr))
+            if not mine:
+                return 0
 
         # THE SESSION CEILING, ASKED BEFORE THE CONTEXT HANDOFF (aegis-xxae9).
         # Order matters and this is the deliberate one: the handoff is a RECYCLE

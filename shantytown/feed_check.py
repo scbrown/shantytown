@@ -582,6 +582,35 @@ def governor_admits(root):
         return None
 
 
+def haul_governor_verdict(root, card):
+    """Read the dispatch governor for this card without advancing hysteresis."""
+    if root is None:
+        return None
+    from types import SimpleNamespace
+    from .cli import _governors, _governor_for
+    cfg, governors = _governors(SimpleNamespace(root=Path(root)))
+    if not governors:
+        return None
+    _harness, governor, unconfigured = _governor_for(cfg, governors, card, root)
+    return (unconfigured if unconfigured is not None else
+            governor.evaluate(persist=False))
+
+
+def admitted_haul(beads, card, verdict, log):
+    """Keep refused work queued; both haul triggers use dispatch's own rule."""
+    admitted = []
+    for bead in beads:
+        item = _Item(bead)
+        why = verdict.admits(item, card.name) if verdict is not None else ""
+        if why:
+            log(f"haul: {card.name} {item.id} parked by governor — {why}")
+            continue
+        if verdict is not None and verdict.waives(item, card.name):
+            log(f"haul: {verdict.waiver_says(item, card.name)}")
+        admitted.append(bead)
+    return admitted
+
+
 def gate_inputs(root, reg, panes, runtime, me: str | None = None, admits=None):
     """(free feedable workers, dispatchable ready beads, HELD-BY-GOVERNOR beads).
 

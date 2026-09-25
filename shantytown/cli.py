@@ -10590,7 +10590,8 @@ def _tend_once(a, quiet: bool = False) -> int:
         # reuses the SAME free/dispatchable computation as hfta's hard gate.
         idle = _sweep("idle-fleet", lambda: notify_mod.IdleFleetAlerter(
             Path(a.root), _registry(a), panes, runtime, log=_log,
-            balance=lambda: _fleet_balance(a)).sweep(agents))
+            balance=lambda: _fleet_balance(a),
+            verdict_for=_card_verdict).sweep(agents))
         if idle:
             print(f"  ⚠ alerted the coordinator — {len(idle)} newly-idle feedable "
                   f"worker(s) with work ready: {', '.join(idle)}", file=sys.stderr)
