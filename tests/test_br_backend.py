@@ -118,6 +118,7 @@ def test_default_commands_share_configured_transport_from_unrelated_cwd(
     made = next(row for row in rows(BrTracker(str(br_store)))
                 if row['title'] == 'remote board proof')
     assert cli.main([*args, 'go', made['id'], 'arnold']) == cli.OK
+    assert str(relay) in capsys.readouterr().out
     assert BrTracker(str(br_store)).get(made['id']).assignee == 'arnold'
     assert cli.main([*args, 'work', 'repool', made['id']]) == cli.OK
     got = BrTracker(str(br_store)).get(made['id'])
