@@ -19,7 +19,9 @@ TAIL_BYTES = 8192
 
 
 def _private_fd(path: Path, flags: int) -> int:
-    fd = os.open(path, flags | os.O_NOFOLLOW, 0o600)
+    # Check AFTER open to avoid a path race, but open nonblocking: a FIFO can
+    # otherwise hang before fstat gets the chance to reject its file type.
+    fd = os.open(path, flags | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
     info = os.fstat(fd)
     if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
             or stat.S_IMODE(info.st_mode) != 0o600 or info.st_nlink != 1):

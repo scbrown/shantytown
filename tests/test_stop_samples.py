@@ -1,7 +1,9 @@
 """Privacy, finite collection and failures must be real, not banner checks."""
 import json
+import os
 import stat
 import subprocess
+import sys
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
@@ -73,6 +75,19 @@ def test_public_directory_refused(tmp_path):
     with pytest.raises(ValueError):
         samples.collect(tmp_path, event(), lambda: "tail")
     assert not list(directory.iterdir())
+
+
+@pytest.mark.parametrize("leaf", ["lock", "collection.json"])
+def test_fifo_refused_before_it_can_block_delivery(tmp_path, leaf):
+    directory = tmp_path / "stop_samples"
+    directory.mkdir(mode=0o700)
+    os.mkfifo(directory / leaf, mode=0o600)
+    result = subprocess.run(
+        [sys.executable, "-m", "shantytown.stop_samples", "--root", str(tmp_path)],
+        capture_output=True, text=True, timeout=3,
+    )
+    assert result.returncode == 1
+    assert result.stdout.strip() == "stop samples unavailable: ValueError"
 
 
 def test_corrupt_collection_is_not_replaced(tmp_path):
