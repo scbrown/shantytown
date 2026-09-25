@@ -5097,6 +5097,11 @@ def _go_on_host(a, note: str | None) -> int | None:
     """
     from .deployment import local_host
     from .quipu import QuipuNotQuipu, QuipuUnreachable
+    cfg, err = config.load_or_default(a.root)
+    if err:
+        print(f"  could not tell: dispatch host configuration — {err}; nothing sent",
+              file=sys.stderr)
+        return CANNOT_TELL
     local = local_host(a.root)
     receiving = getattr(a, "receiving_host", None)
     if receiving and receiving != local:
@@ -5122,9 +5127,8 @@ def _go_on_host(a, note: str | None) -> int | None:
         return None
     if agent.host is None or agent.host == local:
         return None
-    cfg, err = config.load_or_default(a.root)
     peer = cfg.host_peers.get(agent.host)
-    if err or peer is None:
+    if peer is None:
         print(f"  refused: {agent.name} lives on host {agent.host}; declare "
               f"[host.peers.{agent.host}] ssh and root before dispatch", file=sys.stderr)
         return REFUSED

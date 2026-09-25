@@ -142,3 +142,10 @@ def test_destination_governor_is_not_bypassed(fleet, monkeypatch):
     assert go(roots[0], 'laptop-worker') == cli.REFUSED
     assert len(calls) == 1 and not any(p.sent for p in panes.values())
     assert json.loads((board / 'work-1.json').read_text())['status'] == 'open'
+
+
+def test_bad_host_config_cannot_fall_back_to_colliding_local_pane(fleet):
+    roots, board, panes, calls = fleet
+    (roots[0] / 'shantytown.toml').write_text('[host\nname="desktop"\n')
+    assert go(roots[0], 'laptop-worker') == cli.CANNOT_TELL
+    assert not calls and not any(p.sent for p in panes.values())
