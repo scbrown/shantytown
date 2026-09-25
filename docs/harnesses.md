@@ -88,8 +88,31 @@ SHANTY_TOOLING_MANIFEST = "urn:example:crew-tooling"
 
 The selected entity must have exactly one `rdf:value` literal containing this
 versioned JSON document. Use an existing governed configuration entity type in
-your graph. Keep credentials in `provision/secrets.env` or the environment;
+your graph. Keep shared credentials in `provision/secrets.env` or the environment;
 the graph stores variable references, never bearer values.
+
+For a named agent, optionally place raw `KEY=value` lines in
+`provision/agents/<agent-name>/secrets.env`. The file must belong to the user
+running `st`, have no group/other permissions (use mode `0600` or `0400`), and
+must not be a symlink. These values override shared file/environment values
+only for that agent; unspecified keys keep the shared defaults. Comments and
+blank lines are allowed; quoting and shell expansion are not performed.
+An absent file preserves shared provisioning. An invalid or unreadable file
+refuses provisioning before rewriting the kit, rather than silently using a
+different identity. Explicit `secrets=` passed by library callers remains an
+authoritative override.
+
+Named Codex credentials additionally require an independent
+`settings/codex/agent-<agent-name>/config.toml`. A shared role config, or a
+symlink to another agent/role config, is refused before any kit is changed.
+Use the per-agent settings path when launching the agent.
+
+Provisioning writes these values directly into private Claude and Codex
+configuration files; it does not export them into the agent environment.
+Activate and verify the server-side credential and all downstream mappings
+before adding an agent override. This file selects an existing identity; it
+does not issue or revoke credentials. The shared Unix account can read each
+agent's files, so this provides attribution, not isolation from sibling agents.
 
 ```json
 {

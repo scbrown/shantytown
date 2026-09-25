@@ -81,8 +81,8 @@ def provision_dir(root) -> Path:
     return Path(root) / PROVISION_DIR
 
 
-def load_secrets(root, template: str | None = None) -> dict:
-    """Secrets for rendering: the environment WINS over the file.
+def load_secrets(root, template: str | None = None, *, agent: str | None = None) -> dict:
+    """Shared secrets: environment wins; an agent's private file wins over both.
 
     Two sources on purpose. The file is the fleet's one copy — the thing that did
     not exist when this bug happened, when the token lived in seventeen working
@@ -104,6 +104,12 @@ def load_secrets(root, template: str | None = None) -> dict:
     for k in list(out) + needed:
         if os.environ.get(k):
             out[k] = os.environ[k]
+    if agent is not None:
+        from .provision_credentials import agent_overrides
+        try:
+            out.update(agent_overrides(root, agent))
+        except ValueError as exc:
+            raise ProvisionError(str(exc)) from None
     return out
 
 
@@ -430,7 +436,7 @@ def _manifest_gaps(card: Agent, root, manifest: tooling.Manifest, secrets=None) 
     try:
         from . import mcp_limits
         rendered = mcp_limits.project(
-            _render_manifest(manifest, secrets if secrets is not None else load_secrets(root, template)),
+            _render_manifest(manifest, secrets if secrets is not None else load_secrets(root, template, agent=card.name)),
             root, card.name)
     except (ProvisionError, ValueError):
         return ["tooling-source(unresolved credentials)"]
@@ -892,6 +898,24 @@ def provision(card: Agent, root, *, secrets=None, settings_path=None,
             f"cannot provision {card.name}: workspace {ws} does not exist. "
             f"ensure_workspace runs first, and refuses before this is reached.")
 
+    # A role config is shared by all agents in that role. A named credential
+    # must never be projected into it, including through a per-agent symlink.
+    if secrets is None and card.harness == "codex":
+        from .provision_credentials import agent_overrides
+        try:
+            named = bool(agent_overrides(root, card.name))
+        except ValueError as exc:
+            raise ProvisionError(str(exc)) from None
+        if named:
+            parent = Path(root) / "settings" / "codex"
+            config = parent / f"agent-{card.name}" / "config.toml"
+            if (not config.is_file()
+                    or any(p.resolve() == config.resolve() for p in parent.glob("*/config.toml")
+                           if p != config)
+                    or (settings_path is not None
+                        and Path(settings_path).resolve() != config.resolve())):
+                raise ProvisionError("named credentials require an independent per-agent Codex config")
+
     # Establish the authority before touching any realized kit. A graph outage
     # must never silently fall back to a stale, locally consistent template.
     try:
@@ -913,7 +937,7 @@ def provision(card: Agent, root, *, secrets=None, settings_path=None,
             canonical_consent = _manifest_consent(consent_path.read_text(), manifest)
         elif card.harness != "codex":
             raise ProvisionError("canonical MCP consent template is missing")
-        rendered = json.dumps(_render_manifest(manifest, secrets if secrets is not None else load_secrets(root, template)))
+        rendered = json.dumps(_render_manifest(manifest, secrets if secrets is not None else load_secrets(root, template, agent=card.name)))
         try:
             json.loads(rendered)
         except ValueError:
@@ -1004,7 +1028,7 @@ def provision(card: Agent, root, *, secrets=None, settings_path=None,
 
     if rendered is None:
         rendered = render(tmpl.read_text(), secrets if secrets is not None
-                          else load_secrets(root))
+                          else load_secrets(root, agent=card.name))
     from . import mcp_limits
     try:
         rendered = json.dumps(mcp_limits.project(json.loads(rendered), root, card.name), indent=2)
