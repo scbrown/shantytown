@@ -555,3 +555,18 @@ min_sync_version = 1
 # max_items = 4
 # max_risk = 3
 # on_signal_lost = "warn"
+
+# ---------------------------------------------------------------------------
+# [cycle_advice] — keep or cycle at a handoff (docs/cycle-advice.md).
+#
+# INERT UNTIL SOMETHING CALLS IN. st judges no relatedness itself: a model, the
+# agent, or a script posts it with `st agent advise <agent> --related P --by WHO`.
+# With nothing posted, this table is never consulted. Every key is optional.
+# ---------------------------------------------------------------------------
+
+# [cycle_advice]
+# always_cycle_above_k = 250   # at or past this: cycle, never ask a judge
+# brief_chars = 1500           # bounded input a judge gets; widen with --brief-chars
+# keep_at = 0.8
+# cycle_below = 0.3
+# expected_turns = 10

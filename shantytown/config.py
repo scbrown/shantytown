@@ -67,6 +67,7 @@ from .hostmem import Limits as HostMemLimits
 from .session_budget import Limits as SessionLimits
 from .protocols import Agent
 from .dream import Policy as DreamPolicy
+from .cycle_advice import Policy as CycleAdvicePolicy
 
 CONFIG_NAME = "shantytown.toml"
 
@@ -224,6 +225,9 @@ class Config:
     # [dream] — bounded background reflection on measured spare provider budget.
     # Default OFF: silence must never start spending tokens.
     dream: DreamPolicy = field(default_factory=DreamPolicy)
+    # [cycle_advice] — keep-or-cycle tunables. Inert with no signal posted: the
+    # table only prices a signal something outside st chose to send.
+    cycle_advice: CycleAdvicePolicy = field(default_factory=CycleAdvicePolicy)
     # [harness] — WHICH AGENT PROGRAM, for cards that do not say (harness.py).
     # Two levels, and a card still beats both:
     #
@@ -327,7 +331,7 @@ def load_or_default(root) -> tuple[Config, str | None]:
 _TOP_KEYS = {"startup", "modes", "hibernate", "fleet", "crew", "env", "tmux", "dream",
              "roles", "precedence", "governor", "session_budget", "hostmem", "quiet_time",
              "harness",
-             "model", "host", "keep_current"}
+             "model", "host", "keep_current", "cycle_advice"}
 _HARNESS_KEYS = {"default", "by_role", "required_by_role"}
 _MODEL_KEYS = {"default", "by_role", "fallback", "fallback_by_role"}
 _STARTUP_KEYS = {"mode"}
@@ -336,6 +340,7 @@ _TMUX_KEYS = {"socket"}
 _HOST_KEYS = {"name", "peers", "min_sync_version", "admission_owner"}
 _HOST_PEER_KEYS = {"ssh", "root"}
 _DREAM_KEYS = {"enabled", "interval_minutes", "min_headroom_pct", "domains"}
+_CYCLE_ADVICE_KEYS = set(CycleAdvicePolicy.__dataclass_fields__)
 
 
 def _refuse_unknown(path: Path, where: str, got, allowed: set[str]) -> None:
@@ -420,6 +425,7 @@ def _resolve(data: dict, path: Path) -> Config:
                       path, _table(path, data, "session_budget")),
                   hostmem=_hostmem(path, _table(path, data, "hostmem")),
                   dream=_dream(path, _table(path, data, "dream")),
+                  cycle_advice=_cycle_advice(path, _table(path, data, "cycle_advice")),
                   path=path)
 
 
@@ -443,6 +449,21 @@ def _dream(path: Path, tbl: dict) -> DreamPolicy:
     return DreamPolicy(enabled=enabled, interval_minutes=interval,
                        min_headroom_pct=headroom,
                        domains=tuple(x.strip() for x in domains))
+
+
+def _cycle_advice(path: Path, tbl: dict) -> CycleAdvicePolicy:
+    _refuse_unknown(path, "cycle_advice", tbl, _CYCLE_ADVICE_KEYS)
+    out = {}
+    for key, default in vars(CycleAdvicePolicy()).items():
+        value = tbl.get(key, default)
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+            raise ConfigError(f"{path}: cycle_advice.{key} must be a non-negative number")
+        if isinstance(default, int) and not isinstance(value, int):
+            raise ConfigError(f"{path}: cycle_advice.{key} must be an integer")
+        if key in ("keep_at", "cycle_below") and value > 1:
+            raise ConfigError(f"{path}: cycle_advice.{key} must be 0-1")
+        out[key] = value
+    return CycleAdvicePolicy(**out)
 
 
 def _harness(path: Path, tbl: dict,

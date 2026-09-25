@@ -286,7 +286,7 @@ class CycleDriver:
     """
 
     def __init__(self, root, reg, panes, *, push=push_to_own_pane, wiring=None,
-                 refresh=None, log=None):
+                 refresh=None, log=None, advise=None):
         self._root = root          # aegis-mxgzh: the sweeps need it to resolve the br backend
         self.path = Path(root) / "notify" / "cycling.json"
         self._reg = reg
@@ -301,6 +301,10 @@ class CycleDriver:
         # changed. None = no pulling (tests, dry contexts).
         self._refresh = refresh
         self._log = log or (lambda msg: None)
+        # (agent, depth_k) -> cycle_advice.Advice | None (aegis cycle-advice). Only
+        # ever ESCALATES a pre-handoff agent to the cycle prompt; None = no advisor,
+        # which is every deployment where nothing posts a signal.
+        self._advise = advise
 
     def _load(self) -> dict:
         try:
@@ -386,7 +390,7 @@ class CycleDriver:
             if read is None or read.depth_k is None:
                 continue                       # no pane, or depth unreadable
             line = (triage_mod.PRE_CYCLE_THRESHOLD_K
-                    if ledger.get(agent) == "prehandoff"
+                    if ledger.get(agent) in ("prehandoff", "advised")
                     else triage_mod.CYCLE_THRESHOLD_K)
             if read.depth_k < line:
                 del ledger[agent]
@@ -397,11 +401,25 @@ class CycleDriver:
         # still deliver the cycle prompt, so this state cannot be allowed to
         # look like "already handled".
         for agent in sorted(nearing):
-            if ledger.get(agent) in ("prehandoff", "saturated"):
+            if ledger.get(agent) in ("saturated", "advised"):
                 continue
             wiring = self._wiring_fn(agent)
             if wiring is None or not wiring.directions:
                 continue                       # dark — not st's to drive
+            # CYCLE EARLY ON ADVICE: a signal posted through `st agent advise`
+            # says the next task is not worth this context. Checked even after
+            # the pre-handoff nudge, because the signal may land after it.
+            advice = self._advice(agent, states[agent].depth_k)
+            if advice is not None and advice.decision == "cycle":
+                if self._push(self._reg, self._panes, agent, _cycle_message()) is None:
+                    continue                   # unreachable pane: retry next sweep
+                ledger[agent] = "advised"
+                prompted.append(agent)
+                self._log(f"cycle: prompted {agent} to cycle early at "
+                          f"{int(states[agent].depth_k)}k on advice — {advice.why}")
+                continue
+            if ledger.get(agent) == "prehandoff":
+                continue
             if self._push(self._reg, self._panes, agent,
                           _pre_handoff_message(states[agent].depth_k)) is None:
                 continue                       # unreachable pane: retry next sweep
@@ -459,6 +477,17 @@ class CycleDriver:
 
         self._save(ledger)
         return prompted
+
+    def _advice(self, agent: str, depth_k):
+        """Advice, or None. An advisor fault must never stop the sweep: the
+        pre-handoff nudge below is the behaviour without one."""
+        if self._advise is None:
+            return None
+        try:
+            return self._advise(agent, depth_k)
+        except Exception as e:  # noqa: BLE001
+            self._log(f"cycle: advice for {agent} failed ({e!r}); depth lines decide")
+            return None
 
     def _wiring(self, agent: str):
         """The live wiring of `agent`'s pane process, or None (= unreadable,

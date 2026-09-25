@@ -44,6 +44,9 @@ st agent                      one agent
                               drops bypass into MANUAL; this keeps it. --self REQUESTS
                               your own cycle (an agent cannot stop itself), honoured
                               by `st fleet tend`. --allow-loss to cycle over unsaved work.
+  advise <agent>              keep or cycle at a handoff: depth, measured cache TTL and
+                              idle time, and any posted relatedness signal. --related P
+                              / --decision keep|cycle --by WHO posts one. --json.
   input <agent>               what's in their input box: EMPTY | TYPED | GHOST, with the
                               SGR evidence. --clear (typed only) --dismiss. NEVER submits.
   ask <agent>                 the QUESTION they're blocked on: prompt, the command being
@@ -209,7 +212,7 @@ Codex input already includes its cached subset. This makes
 `cache_read / usage_in` a provider-independent prompt-cache hit rate. The fields
 are omitted—not zeroed—when every matching transcript is unknown.
 
-Thirty-five. Six verbs at the top level and twenty-nine grouped commands under five groups
+Thirty-six. Six verbs at the top level and thirty grouped commands under five groups
 (`work`, `agent`, `fleet`, `repo`, `ops`). A group is a namespace and runs nothing, so it earns no
 slot; the count is the leaves. The flat spellings from before the grouping (st cycle for
 st agent cycle, and so on) still parse into the same handler, print one line on stderr saying
@@ -261,6 +264,15 @@ while any recorded pane or writer remains; `release` and `abort` restore only th
 recorded roster and timer state and verify the result. A second window ID cannot
 overwrite the first. Human GO/FIRE, rollback, scope-widening and destructive decisions
 remain outside the command.
+
+The thirtieth is **advise**: keep-or-cycle at a handoff (docs/cycle-advice.md).
+Depth said whether a session CAN continue, never whether it SHOULD: a session
+about to start the next bead in the same module was cycled anyway, and one idle
+past its cache TTL carried its whole transcript into unrelated work, paying a
+full cache write to do it. It is a command and not a flag on `cycle` because it
+is the CALL-IN surface: whatever judges relatedness (Jev, the agent at its own
+checkpoint, a script) posts through it, so st names no model, needs no key, and
+with nothing posted decides nothing.
 
 The binary is **`st`**, not `shanty`: `shanty` is Stiwi's own tmux command and ours would shadow it
 on PATH. This doc said `shanty` in all 29 of its examples long after the entry point was `st`, so
