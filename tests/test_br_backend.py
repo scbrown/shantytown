@@ -112,13 +112,14 @@ def test_default_commands_share_configured_transport_from_unrelated_cwd(
         '[env]\nSHANTY_BACKEND="br"\nSHANTY_BR_BIN=' + json.dumps(str(relay)) + '\n')
     monkeypatch.setenv('SHANTY_BACKEND', 'files')  # stale shell export loses
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(cli, 'Tmux', lambda *args, **kwargs: NullPanes(screen=''))
+    panes = NullPanes(screen='')
+    monkeypatch.setattr(cli, 'Tmux', lambda *args, **kwargs: panes)
     args = ['--root', str(root)]  # no --backend or --repo
     assert cli.main([*args, 'task', 'remote board proof']) == cli.OK
     made = next(row for row in rows(BrTracker(str(br_store)))
                 if row['title'] == 'remote board proof')
     assert cli.main([*args, 'go', made['id'], 'arnold']) == cli.OK
-    assert str(relay) in capsys.readouterr().out
+    assert str(relay) in panes.sent[0][1]
     assert BrTracker(str(br_store)).get(made['id']).assignee == 'arnold'
     assert cli.main([*args, 'work', 'repool', made['id']]) == cli.OK
     got = BrTracker(str(br_store)).get(made['id'])
