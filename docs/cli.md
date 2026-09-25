@@ -1855,3 +1855,54 @@ or failed configuration read-back return nonzero. No local-template fallback is
 accepted. The version-1 JSON receipt lists only agent names, harnesses and server
 names, never endpoints or credentials. A failure after an earlier card was
 provisioned can leave that earlier card updated; rerunning converges.
+
+### Agent create duplicate advisory
+
+When `SHANTY_AGENT` is set, `st task` checks up to three indexed open candidates
+from Bobbin's `search_beads` HTTP endpoint (`GET /beads`) and verifies each against
+the selected `br` store before asking Camayoc's `jev_noul` whether it describes the
+same concrete work and acceptance outcome. A probability of at least 0.90 warns;
+creation still proceeds. Verdicts remain inferred and are never published to the
+board or knowledge graph. No warning is evidence of exhaustive duplicate absence:
+retrieval is bounded, indexed open status can lag, and in-progress items are not
+retrieved by this initial open-only filter.
+
+Configure `BOBBIN_SERVER` and `SHANTY_CREATE_JEV_COMMAND` (the same quoted argv
+used by `st work triage --jev-command`). Missing configuration, failed reads,
+invalid responses and timeouts print `advisory skipped: <reason>`. There is no
+lexical fallback. A separate process group is killed after 1.6 seconds, leaving
+headroom for startup and rendering within the two-second advisory budget.
+Dry runs and creates outside an agent environment do not invoke it.
+
+A deployment's PreToolUse Bash chain can call the **same implementation** using
+the installed st Python interpreter:
+
+```sh
+python -m shantytown.create_advisory --envelope
+```
+
+Pass the original hook JSON on stdin. `SHANTY_ADVISORY_PRIOR`, if present, contains
+the existing hook JSON envelope; its context and permission fields are preserved.
+The adapter requires both `SHANTY_AGENT` and a hook `session_id`, recognizes literal
+`br create`/`br-aegis create` titles and descriptions, and never executes shell
+text. Compound creates, substitutions and unsupported options produce a skip.
+Quoted mentions and heredoc bodies are not creates. Producer scripts are not
+instrumented, and the tracker backend itself is unchanged.
+
+Every considered advisory appends `fired`, `skipped` or `no-match` and elapsed
+milliseconds to `~/.local/state/shantytown/create-advisory.jsonl` (override with
+`SHANTY_CREATE_ADVISORY_LOG`). It includes event IDs, candidate IDs, probabilities,
+model/usage and request/title hashes; it does not persist title/description text.
+Telemetry failure is visible. After a week, independently label fired events in
+JSONL, one `{"event_id":"...","duplicate":true}` per reviewed warning. True means
+at least one warned candidate represents the same work. Review missing labels and
+skips separately; do not infer correctness from whether a user created the bead.
+
+```sh
+python -m shantytown.create_advisory --report /path/events.jsonl --labels /path/labels.jsonl
+```
+
+The report counts unlabelled warnings and returns null precision when nothing has
+been judged. This is distinct from the frozen synthetic 30-pair smoke evaluation
+in `tests/fixtures/create_advisory_pairs.jsonl`; synthetic precision is not measured
+precision on real creates. Neither report enables blocking.
