@@ -744,6 +744,14 @@ def _dispatch_gate(a):
     cards = {card.name: card for card in _registry(a).all().exact()}
     verdicts = {}
     sender = cards.get(_me(a))
+    if sender is None and _me(a) and getattr(a, "receiving_host", None):
+        # Host-scoped cards omit the remote coordinator. Losing its harness
+        # would silently skip the source subscription's delegation reserve.
+        try:
+            sender = QuipuRegistry(root=a.root).get(_me(a))
+        except Exception:
+            return lambda item, agent=None: (
+                "remote sender identity unavailable; cannot check delegation reserve")
     sender_harness = (harness_mod.name_for(sender, root=a.root)
                       if sender is not None else None)
 
@@ -1051,6 +1059,7 @@ def build_parser() -> argparse.ArgumentParser:
                            "for anything long or containing quotes/backticks — "
                            "shell expansion in a --note string is a real "
                            "footgun.")
+    go.add_argument("--receiving-host", default=None, help=argparse.SUPPRESS)
     go.add_argument("-n", "--dry-run", action="store_true")
     go.add_argument("--reassign", action="store_true",
                     help="take an item another agent already holds. Without this, "
@@ -5079,11 +5088,93 @@ def _graph_context(a):
     return ctx, None
 
 
-def _cmd_go(a) -> int:
-    if held := agent_hold.reason(a.root, a.agent):
-        print(f"  refused: {a.agent} {held}", file=sys.stderr)
+def _go_on_host(a, note: str | None) -> int | None:
+    """Run dispatch where the card lives, never against a colliding local pane.
+
+    The destination owns triage, workspace preparation, delivery verification
+    and the shared-board update. Pin its declared host to prevent a stale peer
+    or conflicting card from bouncing the same dispatch between machines.
+    """
+    from .deployment import local_host
+    from .quipu import QuipuNotQuipu, QuipuUnreachable
+    local = local_host(a.root)
+    receiving = getattr(a, "receiving_host", None)
+    if receiving and receiving != local:
+        print(f"  refused: dispatch addressed to host {receiving}, "
+              f"but this deployment declares {local!r}; nothing sent", file=sys.stderr)
         return REFUSED
-    d = _wire(a)
+    if not local:
+        return None
+    try:
+        agent = _message_recipient(a)
+    except LookupError as exc:
+        print(f"  refused: dispatch destination — {exc}", file=sys.stderr)
+        return REFUSED
+    except (CouldNotLook, PartialAnswer, QuipuNotQuipu, QuipuUnreachable,
+            OSError, ValueError) as exc:
+        print(f"  could not tell: dispatch destination — {exc}; nothing sent", file=sys.stderr)
+        return CANNOT_TELL
+    if receiving:
+        if agent.host != local:
+            print(f"  refused: {agent.name} is not placed on receiving host {local}; "
+                  "sync the destination card; nothing sent", file=sys.stderr)
+            return REFUSED
+        return None
+    if agent.host is None or agent.host == local:
+        return None
+    cfg, err = config.load_or_default(a.root)
+    peer = cfg.host_peers.get(agent.host)
+    if err or peer is None:
+        print(f"  refused: {agent.name} lives on host {agent.host}; declare "
+              f"[host.peers.{agent.host}] ssh and root before dispatch", file=sys.stderr)
+        return REFUSED
+    if getattr(a, "repo", None):
+        print("  refused: cross-host dispatch cannot reinterpret --repo on another "
+              "host; configure the shared board in each deployment", file=sys.stderr)
+        return REFUSED
+    import shlex
+    import subprocess
+    argv = ["st", "--root", peer.root, "--registry", "files"]
+    if getattr(a, "backend", None):
+        argv += ["--backend", a.backend]
+    argv += ["go", a.item, a.agent, "--receiving-host", agent.host, "--note-file", "-"]
+    for flag, value in (("--worktree", a.worktree),
+                        ("--no-graph-context", a.no_graph_context)):
+        if value:
+            argv += [flag, value]
+    for node in a.quipu_node:
+        argv += ["--quipu-node", node]
+    if a.reassign:
+        argv.append("--reassign")
+    if a.dry_run:
+        argv.append("--dry-run")
+    command = ('PATH="$HOME/.local/bin:$PATH" '
+               + "SHANTY_AGENT=" + shlex.quote(_me(a) or "") + " "
+               + shlex.join(argv))
+    try:
+        result = subprocess.run(
+            ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "--",
+             peer.ssh, command], input=note or "", capture_output=True, text=True, timeout=180)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        print(f"  could not tell: dispatch to host {agent.host} ({type(exc).__name__}); "
+              "delivery may have happened. Inspect the destination and board before retrying.",
+              file=sys.stderr)
+        return CANNOT_TELL
+    for line in ((result.stdout or "").splitlines() + (result.stderr or "").splitlines()):
+        print(f"  [{agent.host}] {line}",
+              file=sys.stdout if result.returncode == OK else sys.stderr)
+    if result.returncode == OK:
+        print(f"  -> {agent.name}    {'previewed' if a.dry_run else 'dispatched'} "
+              f"on host {agent.host} via {peer.ssh}")
+        return OK
+    if result.returncode == REFUSED:
+        return REFUSED
+    print(f"  could not tell: host {agent.host} dispatch exit {result.returncode}; "
+          "inspect destination and board before retrying", file=sys.stderr)
+    return CANNOT_TELL
+
+
+def _cmd_go(a) -> int:
     try:
         note = _read_note(a)
     except OSError as e:
@@ -5092,6 +5183,13 @@ def _cmd_go(a) -> int:
         # without it is the exact failure aegis-8013 is about.
         print(f"  refused: could not read --note-file: {e}", file=sys.stderr)
         return REFUSED
+    relayed = _go_on_host(a, note)
+    if relayed is not None:
+        return relayed
+    if held := agent_hold.reason(a.root, a.agent):
+        print(f"  refused: {a.agent} {held}", file=sys.stderr)
+        return REFUSED
+    d = _wire(a)
     # GRAPH CONTEXT IS REQUIRED (aegis-rcyd.1). Checked BEFORE triage and before
     # anything is typed into a pane: a refusal here costs nothing, while a
     # dispatch that reached an agent citing a node nobody can look up cannot be

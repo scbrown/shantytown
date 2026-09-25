@@ -252,6 +252,14 @@ class BeadsTracker:
                 return r
         return first
 
+    def _get_failure(self, item_id, result) -> str:
+        msg = f"{self._tool} show {item_id} failed: {result.stderr.strip()[:120]}"
+        try:
+            msg += f" — {stores.not_found_here(self.repo, item_id)}"
+        except Exception:
+            pass
+        return msg
+
     def get(self, item_id: str) -> WorkItem:
         r = self._bd_for(item_id, "show", item_id, "--json")
         if r.returncode != 0:
@@ -266,12 +274,7 @@ class BeadsTracker:
             # named, and the unsearched remainder is counted. The enumeration is
             # best-effort and never raises: a diagnostic that fails must not
             # replace the real error with its own.
-            msg = f"{self._tool} show {item_id} failed: {r.stderr.strip()[:120]}"
-            try:
-                msg += f" — {stores.not_found_here(self.repo, item_id)}"
-            except Exception:
-                pass
-            raise LookupError(msg)
+            raise LookupError(self._get_failure(item_id, r))
         d = json.loads(r.stdout)
         if isinstance(d, list):
             d = d[0]

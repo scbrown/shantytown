@@ -290,7 +290,8 @@ def test_dispatch_gate_resolves_the_governor_for_the_target_card(monkeypatch):
     assert gate(item, "sattler") == ""
 
 
-def test_delegation_reserve_holds_same_subscription_and_admits_other(monkeypatch):
+@pytest.mark.parametrize("remote_sender", [False, True])
+def test_delegation_reserve_holds_same_subscription_and_admits_other(monkeypatch, remote_sender):
     base = gov.Policy(source="stub", stub_pct=91, tiers=(
         gov.Tier(at=50, min_priority=4),), by_harness={})
     codex = gov.Policy(source="stub", stub_pct=10, tiers=(
@@ -303,13 +304,18 @@ def test_delegation_reserve_holds_same_subscription_and_admits_other(monkeypatch
     cards = [Agent(name="claire", role="administrator", pane="p1", harness="claude"),
              Agent(name="ian", role="worker", pane="p2", harness="claude"),
              Agent(name="arnold", role="worker", pane="p3", harness="codex")]
+    if remote_sender:
+        sender = cards.pop(0)
+        monkeypatch.setattr(cli, "QuipuRegistry", lambda **kw: types.SimpleNamespace(
+            get=lambda name: sender))
     cfg = types.SimpleNamespace(governor=base,
                                 fleet=types.SimpleNamespace(stood_down=False))
     monkeypatch.setattr(cli, "_governors", lambda a: (cfg, governors))
     monkeypatch.setattr(cli, "_registry", lambda a: types.SimpleNamespace(
         all=lambda: Answer.complete_read(cards, how="test registry")))
     monkeypatch.setattr(cli, "_me", lambda a: "claire")
-    gate = cli._dispatch_gate(types.SimpleNamespace(root="/tmp"))
+    gate = cli._dispatch_gate(types.SimpleNamespace(
+        root="/tmp", receiving_host="secondary" if remote_sender else None))
     item = types.SimpleNamespace(id="x", priority=1)
 
     assert "delegation reserve" in gate(item, "ian")
