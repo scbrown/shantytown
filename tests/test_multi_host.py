@@ -355,3 +355,64 @@ def test_unplaced_graph_preserves_existing_card_host(tmp_path, monkeypatch):
     panes(monkeypatch, "p")
     assert main(["--root", str(root), "fleet", "roles", "sync"]) == OK
     assert card(root, "chief")["host"] == "desktop"
+
+
+@pytest.mark.parametrize('source, expected', [
+    ({'roles': ('lead',)}, "roles ['lead', 'support'] -> ['lead']"),
+    ({'domain': 'new'}, "domain 'old' -> 'new'"),
+])
+def test_sync_previews_and_guards_stack_and_domain_changes(
+        tmp_path, monkeypatch, capsys, source, expected):
+    root = crew(tmp_path,
+                chief={'role': 'administrator', 'pane': 'chief'},
+                worker={'role': 'lead', 'reports_to': 'chief', 'pane': 'p',
+                        'roles': ['lead', 'support'], 'domain': 'old',
+                        'model': 'local', 'workspace': '/local', 'dangerous': True})
+    graph(monkeypatch, Agent(name='chief', role='administrator'),
+          Agent(name='worker', role='lead', reports_to='chief', **source))
+    panes(monkeypatch, 'p')
+    args = ['--root', str(root), 'fleet', 'roles', 'sync']
+    before = {p: p.read_bytes() for p in (root / 'crew').glob('*.json')}
+    assert main([*args, '--dry-run']) == OK
+    assert expected in capsys.readouterr().out
+    assert all(p.read_bytes() == content for p, content in before.items())
+    assert main(args) == REFUSED
+    assert all(p.read_bytes() == content for p, content in before.items())
+    assert main([*args, '--force']) == OK
+    changed = card(root, 'worker')
+    assert changed['roles'] == list(source.get('roles', ('lead', 'support')))
+    assert changed['domain'] == source.get('domain', 'old')
+    assert changed['model'] == 'local'
+    assert changed['workspace'] == '/local'
+    assert changed['dangerous'] is True
+
+
+def test_sync_previews_equivalent_explicit_stack_without_live_refusal(
+        tmp_path, monkeypatch, capsys):
+    root = crew(tmp_path, chief={'role': 'administrator', 'pane': 'p'})
+    graph(monkeypatch, Agent(name='chief', role='administrator', roles=('administrator',)))
+    panes(monkeypatch, 'p')
+    args = ['--root', str(root), 'fleet', 'roles', 'sync']
+    assert main([*args, '--dry-run']) == OK
+    assert "roles [] -> ['administrator']" in capsys.readouterr().out
+    assert 'roles' not in card(root, 'chief')
+    assert main(args) == OK
+    assert card(root, 'chief')['roles'] == ['administrator']
+
+
+def test_sync_omitted_fields_and_source_launch_data_preserve_local_card(
+        tmp_path, monkeypatch):
+    root = crew(tmp_path, chief={'role': 'administrator', 'pane': 'p',
+                                'roles': ['administrator', 'support'], 'domain': 'local',
+                                'model': 'local', 'workspace': '/local', 'harness': 'codex',
+                                'retired': True, 'retired_by': 'operator'})
+    # A host repair forces the actual write path, exposing hidden writes even
+    # when all the other projected fields match.
+    declare_host(root, 'desktop')
+    graph(monkeypatch, Agent(name='chief', role='administrator', host='desktop',
+                             model='remote', workspace='/remote', harness='claude',
+                             retired=False, pane='remote', dangerous=True))
+    panes(monkeypatch, 'p')
+    before = card(root, 'chief')
+    assert main(['--root', str(root), 'fleet', 'roles', 'sync']) == OK
+    assert card(root, 'chief') == dict(before, host='desktop', reports_to=None)
