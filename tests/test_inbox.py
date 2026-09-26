@@ -331,3 +331,38 @@ def test_an_unattributable_send_stays_BARE_rather_than_inventing_a_name(tmp_path
                     _store_with_dearing(tmp_path))
     assert "hello" in out, out
     assert "[from" not in out, out
+
+
+def test_one_slow_close_does_not_abandon_the_batch_ack(tmp_path: Path):
+    """aegis-6sws17. A 178-pointer `st inbox --read` died on ONE `br close` that
+    hit the 30s subprocess timeout: 60 closed, the rest never attempted, and the
+    60 that DID close were never returned, so their bodies were never shown.
+    The ack must keep going, return what it marked, and name what it could not
+    confirm."""
+    import subprocess
+    from shantytown.inbox import MarkReadIncomplete
+
+    trk = FilesTracker(tmp_path / "items")
+    box = TrackerInbox(trk, lambda: files_items(trk))
+    msgs = [box.deliver("dearing", f"note {i}") for i in range(3)]
+    slow = msgs[1].id
+    real_update = trk.update
+
+    def flaky(item_id, **fields):
+        if item_id == slow and fields.get("status") == "closed":
+            raise subprocess.TimeoutExpired(["br", "close", item_id], 30)
+        return real_update(item_id, **fields)
+
+    trk.update = flaky
+    with pytest.raises(MarkReadIncomplete) as ei:
+        box.mark_read("dearing")
+    assert sorted(m.body for m in ei.value.marked) == ["note 0", "note 2"], (
+        "the closes on either side of the slow one must both land and be returned")
+    assert [m.id for m, _ in ei.value.failed] == [slow]
+    # The whole message rides along, so its body can still be shown.
+    assert ei.value.failed[0][0].body == "note 1"
+    assert "TimeoutExpired" in ei.value.failed[0][1]
+    # The unconfirmed one is still unread here, so a re-run acks exactly it.
+    trk.update = real_update
+    assert [m.id for m in box.unread("dearing")] == [slow]
+    assert [m.id for m in box.mark_read("dearing")] == [slow]

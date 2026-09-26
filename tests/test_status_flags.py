@@ -349,3 +349,33 @@ def test_a_durable_send_is_readable_by_the_recipient(tmp_path, monkeypatch, caps
     assert _run(["inbox", "--count", "ellie"], tmp_path, monkeypatch,
                 NullPanes()) == cli.OK
     assert capsys.readouterr().out == "1\n"
+
+
+def test_inbox_read_prints_what_it_did_consume_when_a_close_is_unconfirmed(
+        tmp_path, monkeypatch, capsys):
+    """aegis-6sws17. A partial ack must still show the bodies it consumed (they
+    are gone from the unread set either way), name the unconfirmed ids, and exit
+    CANNOT_TELL: a timed-out close may have landed, so it is neither OK nor a
+    clean failure."""
+    from shantytown.inbox import MarkReadIncomplete, Message
+
+    _card(tmp_path, "sattler", role="administrator")
+    box = FilesInbox(tmp_path / "inbox")
+    kept = box.deliver("sattler", "the body you must see")
+
+    def partial(self, me, ids=None):
+        # The failed close raised but may have LANDED: its body must still be
+        # printed, because a re-run shows only what is still unread.
+        raise MarkReadIncomplete(
+            [Message(id=kept.id, to=me, body=kept.body, read=True)],
+            [(Message(id="aegis-slow1", to=me, body="the landed-but-unconfirmed body",
+                      frm="wu"),
+              "TimeoutExpired: timed out after 30 seconds")])
+
+    monkeypatch.setattr(FilesInbox, "mark_read", partial)
+    assert _run(["inbox", "--read", "sattler"], tmp_path, monkeypatch,
+                NullPanes()) == cli.CANNOT_TELL
+    out, err = capsys.readouterr()
+    assert "the body you must see" in out and "marked 1" in out
+    assert "aegis-slow1" in err and "UNCONFIRMED" in err
+    assert "the landed-but-unconfirmed body" in err and "from wu" in err

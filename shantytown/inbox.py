@@ -353,6 +353,29 @@ class MessageTooLong(ValueError):
         self.budget = budget
 
 
+class MarkReadIncomplete(RuntimeError):
+    """Some pointers were marked, some could not be CONFIRMED (aegis-6sws17).
+
+    A batch ack is N independent closes. One slow close used to raise straight
+    out of the loop: the rest were never attempted, and the ones already closed
+    were never returned, so `st inbox --read` could not print their bodies — the
+    only copy the reader had a right to see (GitHub #14). Measured: 60 of 178
+    pointers closed, zero bodies shown, one TimeoutExpired traceback.
+
+    `failed` is NOT "still unread". A close that timed out may have landed, so
+    each entry is unconfirmed; the caller must say so rather than promise a
+    retry is safe. It carries the whole Message, not just the id: a close that
+    timed out but LANDED leaves the unread set, so a re-run will never show its
+    body, and this is the last chance to print it (sattler, #93 review)."""
+
+    def __init__(self, marked: list, failed: list[tuple["Message", str]]):
+        self.marked = marked
+        self.failed = failed
+        super().__init__(
+            f"{len(failed)} pointer close(s) not confirmed after marking "
+            f"{len(marked)}: " + ", ".join(m.id for m, _ in failed[:10]))
+
+
 @runtime_checkable
 class Inbox(Protocol):
     """Messages addressed to an agent. Three methods — see the module docstring
@@ -545,11 +568,17 @@ class TrackerInbox:
         ]
 
     def mark_read(self, me: str, ids: list[str] | None = None) -> list[Message]:
-        marked = []
+        marked, failed = [], []
         for msg in self.unread(me):
             if ids is not None and msg.id not in ids:
                 continue
-            self._tracker.update(msg.id, status="closed")
+            try:
+                self._tracker.update(msg.id, status="closed")
+            except Exception as e:  # noqa: BLE001 -- one slow close must not abandon the batch
+                failed.append((msg, f"{type(e).__name__}: {str(e)[:120]}"))
+                continue
             marked.append(Message(id=msg.id, to=msg.to, body=msg.body,
                                   frm=msg.frm, read=True))
+        if failed:
+            raise MarkReadIncomplete(marked, failed)
         return marked
