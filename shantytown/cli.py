@@ -5299,7 +5299,7 @@ def _cmd_go(a) -> int:
         return REFUSED
     if a.dry_run:
         try:
-            decision = d.triage(a.item, a.agent, note)
+            decision = d.triage(a.item, a.agent, note, reassign=a.reassign)
             p = d.go(a.item, a.agent, dry_run=True, note=note, reassign=a.reassign,
                      quipu_nodes=getattr(a, "quipu_node", []))
         except Closed as e:

@@ -364,6 +364,11 @@ $ st go st-9h2 ellie --dry-run
 during this design and hooked an agent with work nobody meant to assign. *Make the question askable
 without the consequence.*
 
+Use `--dry-run --reassign` to preview deliberately taking an item from its current
+assignee. The override applies to preliminary triage as well as the dispatch plan;
+the governor and pane checks still apply. The preview neither updates the tracker
+nor sends input to the pane.
+
 ### Every dispatch names its STORE
 
 A dispatch used to be an id and a title. This host has **125 bd stores** (measured 2026-08-01), of

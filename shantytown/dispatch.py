@@ -710,7 +710,8 @@ class Dispatcher:
             orphaned_in_progress=orphaned,
         )
 
-    def triage(self, item_id: str, agent_name: str, note: str | None = None) -> Decision:
+    def triage(self, item_id: str, agent_name: str, note: str | None = None,
+               *, reassign: bool = False) -> Decision:
         """What st go WOULD do to that pane, without touching it. Read-only.
 
         Closes shantytown #1: st go sent into mid-flight panes. It went straight
@@ -719,7 +720,9 @@ class Dispatcher:
         NUDGE proceeds. This method exposes that judgement for --dry-run and for
         `st go` to print before it refuses.
         """
-        p = self.plan(item_id, agent_name, note)  # resolve + precondition-check
+        # Preview the same ownership decision as go(); otherwise --dry-run
+        # refuses an explicitly requested reassignment before it can show triage.
+        p = self.plan(item_id, agent_name, note, reassign=reassign)
         return triage(self.panes, p.pane, p.text)
 
     def go(self, item_id: str, agent_name: str, dry_run: bool = False,
