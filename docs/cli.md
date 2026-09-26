@@ -1754,7 +1754,8 @@ root; a failed stop leaves feeding held. A successful `st agent new <agent>`
 clears the hold. Dry-run and ownership guards still apply.
 
 Both immediate and after-turn stops cancel pending self-cycle requests, even
-when the pane is already down. Tend refuses queued cycles for stopped or held
+when the pane is already down (the record names a request, not a claimed
+shutdown cause). Tend refuses queued cycles for stopped or held
 agents and rechecks intent immediately before changing a pane. Stop and cycle
 mutations are serialized per agent, so a request read before a stop cannot
 relaunch it afterward. The internal stop/start fallback of a cycle retains its

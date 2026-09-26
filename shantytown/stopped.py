@@ -47,7 +47,7 @@ from .answer import Answer
 @dataclass(frozen=True)
 class Stop:
     """One deliberate stop."""
-    at: float                    # epoch seconds, when st agent stop killed it
+    at: float                    # epoch seconds of the deliberate stop request
     by: str = ""                 # who ran it, when we can tell ($SHANTY_AGENT)
     reason: str = ""             # `st agent stop --reason`, free text, may be empty
 

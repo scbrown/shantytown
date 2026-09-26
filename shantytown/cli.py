@@ -3528,7 +3528,8 @@ def _stop_locked(a) -> int:
                 agent_hold.hold(a.root, a.agent, _actor(), getattr(a, "reason", ""))
             _launches(a).forget(a.agent)
             _stops(a).record(a.agent, time.time(), by=_actor(),
-                             reason=getattr(a, "reason", "") or "")
+                             reason="stop requested while already down: "
+                             + (getattr(a, "reason", "") or ""))
             _cancel_cycle_for_stop(a)
         if harness_mod.name_for(agent, root=a.root) == "codex" and not a.dry_run:
             from . import codex_daemon
