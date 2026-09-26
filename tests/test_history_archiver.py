@@ -64,6 +64,44 @@ def _run(script, *args, env=None, agent=None):
                           env=e, timeout=120)
 
 
+@pytest.mark.parametrize("encoding", ["multiline", "literal-escapes", "truncated"])
+def test_private_key_body_is_removed_from_invocations_and_mirrors(tmp_path, encoding):
+    keyfile = tmp_path / "disposable-key"
+    subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(keyfile)],
+                   check=True, capture_output=True)
+    key = keyfile.read_text()
+    body_lines = key.splitlines()[1:-1]
+    payload = key
+    if encoding == "literal-escapes":
+        payload = key.replace("\n", "\\n")
+    elif encoding == "truncated":
+        payload = key.split("-----END", 1)[0]
+    command = "before control\n" + payload + "\nafter control"
+    body = json.dumps({"type": "assistant", "message": {"content": [
+        {"type": "tool_use", "input": {"command": command}},
+    ]}, "mirror": {"command": command}, "control": "separate field control"}) + "\n"
+    raw, out, env = _archive(tmp_path, body=body)
+    original = raw / "tester/a.jsonl"
+    before = original.stat().st_mtime_ns
+    result = _run(SCRUB, env=env)
+    assert result.returncode == 0, result.stderr
+    text = (out / "tester/a.jsonl").read_text()
+    assert all(line not in text for line in body_lines)
+    assert "END OPENSSH PRIVATE KEY" not in text
+    assert text.count("[REDACTED:privkey:") == 2
+    assert "before control" in text and "separate field control" in text
+    assert ("after control" in text) == (encoding != "truncated")
+    assert original.read_text() == body and original.stat().st_mtime_ns == before
+
+
+def test_public_key_envelope_is_retained(tmp_path):
+    public = "-----BEGIN PUBLIC KEY-----\npublic control\n-----END PUBLIC KEY-----"
+    _, out, env = _archive(tmp_path, body=json.dumps({"text": public}) + "\n")
+    result = _run(SCRUB, env=env)
+    assert result.returncode == 0
+    assert json.loads((out / "tester/a.jsonl").read_text())["text"] == public
+
+
 @pytest.mark.parametrize("script", [CAPTURE, SCRUB], ids=["capture", "scrub"])
 def test_empty_agent_is_refused_not_treated_as_no_filter(script, tmp_path):
     """The silent scope explosion. `--agent ""` and no `--agent` at all are two

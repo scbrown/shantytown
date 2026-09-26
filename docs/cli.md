@@ -336,7 +336,9 @@ messages. Unparseable records are omitted rather than copied without a known
 schema. The raw records remain available for investigation.
 
 Retained dialogue, reasoning and tool invocations receive credential-pattern
-redaction. The directory name `history-scrubbed` does **not** mean arbitrary
+redaction. Private-key PEM envelopes are redacted with their full body; an
+unfinished envelope removes the remaining text in that string. The directory
+name `history-scrubbed` does **not** mean arbitrary
 credentials are absent: an unrecognized value pasted into dialogue can remain.
 A successful scrub proves only the named patterns and supported result types
 are absent. Off-host publication needs its own credential checks.
