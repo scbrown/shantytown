@@ -46,7 +46,8 @@ def test_long_note_full_comment_bounded_pointer_idempotent_closed_receipt(tmp_pa
     plan = sling.prepare(sling.design(tracker, 'design-1'), 'author', boss(), note)
     assert len(plan['payload'].encode()) <= 493
     receipt = sling.deliver(plan, tracker, box, tmp_path)
-    box.mark_read(receipt.id)
+    box.mark_read('chief', ids=[receipt.id])
+    assert not box.unread('chief')
     assert sling.deliver(plan, tracker, box, tmp_path).id == receipt.id
     row = json.loads(tracker._path('design-1').read_text())
     assert len(row['comments']) == 1
