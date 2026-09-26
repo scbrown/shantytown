@@ -330,7 +330,8 @@ but the guard against that is now the test, not this sentence.
 
 The raw transcript archive stays local and unindexed. `st-history-scrub.sh`
 creates a separate derivative: it omits supported harness tool-result objects
-wholesale, including nested Claude results, Codex call outputs and tool-role
+wholesale, including nested Claude results and their `toolUseResult` mirrors,
+Codex call outputs and tool-role
 messages. Unparseable records are omitted rather than copied without a known
 schema. The raw records remain available for investigation.
 

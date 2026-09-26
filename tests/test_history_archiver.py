@@ -370,3 +370,23 @@ def test_non_scalar_type_in_tool_arguments_does_not_crash_scrubbing(tmp_path):
     result = _run(SCRUB, env=env)
     assert result.returncode == 0, result.stderr
     assert "dialogue control" in (out / "tester/a.jsonl").read_text()
+
+
+@pytest.mark.parametrize("mirror", [
+    {"stdout": "unrecognizable-live-value", "stderr": "unrecognizable-live-value"},
+    "unrecognizable-live-value",
+    [{"text": "unrecognizable-live-value"}],
+])
+def test_claude_result_mirror_is_removed_alongside_the_content_block(tmp_path, mirror):
+    body = json.dumps({"type": "user", "message": {"content": [
+        {"type": "text", "text": "dialogue control"},
+        {"type": "tool_result", "content": "unrecognizable-live-value"},
+    ]}, "toolUseResult": mirror}) + "\n"
+    raw, out, env = _archive(tmp_path, body=body)
+    result = _run(SCRUB, env=env)
+    assert result.returncode == 0, result.stderr
+    text = (out / "tester/a.jsonl").read_text()
+    assert "unrecognizable-live-value" not in text and "toolUseResult" not in text
+    assert "dialogue control" in text
+    assert (raw / "tester/a.jsonl").read_text() == body
+    assert "2 tool result(s) omitted" in result.stdout

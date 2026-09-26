@@ -85,6 +85,11 @@ def omit_results(value):
             return OMITTED, 1
         result, count = {}, 0
         for key, child in value.items():
+            # Claude mirrors output beside message.content, in dict/string/list
+            # form. Removing only the typed content block leaves that copy live.
+            if key in ("toolUseResult", "tool_use_result"):
+                count += 1
+                continue
             result[key], n = omit_results(child)
             count += n
         return result, count
