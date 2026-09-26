@@ -197,6 +197,37 @@ ticket_files() {
   printf '%s\n' "$names" | grep -v '^$' || true
 }
 
+# One reviewed upstream artifact has a version that resembles RFC1918 text.
+# This is a byte-exact record exception, NOT a private-address pattern change.
+# Only the known public destination and manifest path qualify. Extra fields or
+# extra text on the line refuse the exception; only the URL bytes are filtered.
+PUBLIC_ARTIFACT_URL='https://files.pythonhosted.org/packages/fb/aa/6584b56dc84ebe9cf93226a5cde4d99080c8e90ab40f0c27bda7a0f29aa1/nvidia_curand_cu12-10.3.9.90-py3-none-manylinux_2_27_x86_64.whl'
+PUBLIC_ARTIFACT_RECORD='  {"name": "nvidia-curand-cu12", "sha256": "b32331d4f4df5d6eefa0554c565b626c7216f87a06a4f56fab27c3b68a830ec9", "url": "https://files.pythonhosted.org/packages/fb/aa/6584b56dc84ebe9cf93226a5cde4d99080c8e90ab40f0c27bda7a0f29aa1/nvidia_curand_cu12-10.3.9.90-py3-none-manylinux_2_27_x86_64.whl"}'
+scrub_added_lines() {
+  local line path="" eligible=0 header=0
+  case "${REMOTE_URL:-}" in
+    https://github.com/scbrown/bobbin|https://github.com/scbrown/bobbin.git|git@github.com:scbrown/bobbin.git|ssh://git@github.com/scbrown/bobbin.git) eligible=1 ;;
+  esac
+  while IFS= read -r line; do
+    case "$line" in
+      'diff --git '*) path=""; header=1 ;;
+      '+++ b/'*) [ "$header" -eq 1 ] && path=${line#+++ b/} ;;
+      '@@ '*) header=0 ;;
+    esac
+    case "$line" in
+      +*)
+        if [ "$eligible" -eq 1 ] && [ "$path" = 'src/gpu_runtime/artifacts.json' ]; then
+          case "$line" in
+            "+$PUBLIC_ARTIFACT_RECORD"|"+$PUBLIC_ARTIFACT_RECORD,")
+              line=${line/"$PUBLIC_ARTIFACT_URL"/PUBLIC_ARTIFACT_VERIFIED} ;;
+          esac
+        fi
+        printf '%s\n' "$line"
+        ;;
+    esac
+  done
+}
+
 if [ "${1:-}" = "--selftest" ]; then
   # Synthesises its own config, so the controls run without the real names ever
   # appearing in this repo — and so the test proves the MECHANISM, which is the
@@ -582,6 +613,52 @@ PROBE
     rm -rf "$r"
   fi
 
+  # Exercise the exact artifact exception through the real hook and matcher.
+  r=$(mktemp -d)
+  (
+    cd "$r" || exit 1
+    git init -q
+    git config user.name test
+    git config user.email test@example.invalid
+    git -c core.hooksPath=/dev/null commit -qm base --allow-empty
+    base=$(git rev-parse HEAD)
+    cf="$r/patterns.conf"
+    printf 'internal_host_re=forge\.invalid\npatterns=%s\n' "$BUILTIN_RFC1918" > "$cf"
+    mkdir -p src/gpu_runtime
+    fixture='src/gpu_runtime/artifacts.json'
+    for arm in valid checksum extra_address extra_field other_file other_repo later_leak; do
+      mkdir -p src/gpu_runtime || exit 1
+      record=$PUBLIC_ARTIFACT_RECORD
+      destination=https://github.com/scbrown/bobbin.git
+      path=$fixture
+      case "$arm" in
+        checksum) record=${record/b32331d4/wrongpin} ;;
+        extra_address) record="$record 10.255.255.2" ;;
+        extra_field) record=${record%\}}', "endpoint": "10.255.255.2"}' ;;
+        other_file) path=another.json ;;
+        other_repo) destination=https://github.com/scbrown/another.git ;;
+      esac
+      printf '[\n%s\n]\n' "$record" > "$path" || exit 1
+      [ "$arm" = later_leak ] && printf '\n10.255.255.2\n' >> "$path"
+      git add "$path" || exit 1
+      git -c core.hooksPath=/dev/null commit -qm "$arm" --allow-empty || exit 1
+      head=$(git rev-parse HEAD)
+      out=$(printf 'refs/heads/topic %s refs/heads/topic %s\n' "$head" "$base" |
+        SCRUB_PATTERNS_FILE="$cf" bash "$SELF" origin "$destination" 2>&1)
+      rc=$?
+      if { [ "$arm" = valid ] && [ "$rc" -eq 0 ]; } ||
+         { [ "$arm" != valid ] && [ "$rc" -ne 0 ]; }; then
+        echo "ok   exact artifact exception: $arm"
+      else
+        echo "FAIL exact artifact exception: $arm (rc=$rc) $out"
+        exit 1
+      fi
+      # Reset only this disposable fixture, never an operator checkout.
+      git reset -q --hard "$base"
+    done
+  ) || fail=1
+  rm -rf "$r"
+
   [ "$fail" -eq 0 ] && echo "selftest PASSED" || echo "selftest FAILED"
   exit "$fail"
 fi
@@ -756,7 +833,8 @@ while read -r _lref lsha _rref rsha; do
     rawmsgs=""
     ticketlines=""
     for c in $newcommits; do
-      addedlines+=$(git show --format= "$c" -- . "${GUARD_EXCLUDE[@]}" 2>/dev/null | grep -E '^\+' || true)$'\n'
+      commit_added=$(git show --format= "$c" -- . "${GUARD_EXCLUDE[@]}" 2>/dev/null | scrub_added_lines)
+      addedlines+="$commit_added"$'\n'
       tf=$(ticket_files "$c")
       [ -n "$tf" ] && ticketlines+=$(printf '%s\n' "$tf" | tr '\n' '\0' \
         | xargs -0 git show --format= "$c" -- 2>/dev/null | grep -E '^\+' || true)$'\n'
@@ -764,7 +842,7 @@ while read -r _lref lsha _rref rsha; do
       # ATTRIBUTION, per commit: which commit carries the leak, and is it one
       # this push introduces? Same matcher as the aggregate below, so the two can
       # never disagree about what counts as a hit.
-      if git show --format= "$c" -- . "${GUARD_EXCLUDE[@]}" 2>/dev/null | grep -E '^\+' | grep -qE "$PATTERNS" \
+      if printf '%s\n' "$commit_added" | grep -qE "$PATTERNS" \
          || git log -1 --format=%B "$c" 2>/dev/null | grep -qE "$PATTERNS"; then
         where=$(already_elsewhere "$c" || true)
         [ -z "$where" ] && offenders_mine=$((offenders_mine + 1))
@@ -800,7 +878,8 @@ while read -r _lref lsha _rref rsha; do
     rawmsgs=""
     ticketlines=""
     for c in $newcommits; do
-      addedlines+=$(git show --format= "$c" -- . "${GUARD_EXCLUDE[@]}" 2>/dev/null | grep -E '^\+' || true)$'\n'
+      commit_added=$(git show --format= "$c" -- . "${GUARD_EXCLUDE[@]}" 2>/dev/null | scrub_added_lines)
+      addedlines+="$commit_added"$'\n'
       tf=$(ticket_files "$c")
       [ -n "$tf" ] && ticketlines+=$(printf '%s\n' "$tf" | tr '\n' '\0' \
         | xargs -0 git show --format= "$c" -- 2>/dev/null | grep -E '^\+' || true)$'\n'
@@ -808,7 +887,7 @@ while read -r _lref lsha _rref rsha; do
       # ATTRIBUTION, per commit: which commit carries the leak, and is it one
       # this push introduces? Same matcher as the aggregate below, so the two can
       # never disagree about what counts as a hit.
-      if git show --format= "$c" -- . "${GUARD_EXCLUDE[@]}" 2>/dev/null | grep -E '^\+' | grep -qE "$PATTERNS" \
+      if printf '%s\n' "$commit_added" | grep -qE "$PATTERNS" \
          || git log -1 --format=%B "$c" 2>/dev/null | grep -qE "$PATTERNS"; then
         where=$(already_elsewhere "$c" || true)
         [ -z "$where" ] && offenders_mine=$((offenders_mine + 1))

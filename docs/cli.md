@@ -1993,3 +1993,14 @@ The report counts unlabelled warnings and returns null precision when nothing ha
 been judged. This is distinct from the frozen synthetic 30-pair smoke evaluation
 in `tests/fixtures/create_advisory_pairs.jsonl`; synthetic precision is not measured
 precision on real creates. Neither report enables blocking.
+
+
+### Configured pace in the Creel advisory
+
+The headless Creel controller receives each lane's `[[governor.pace]]` rows
+alongside its usage evidence. A ratio of `1.5` sets the trajectory to 1.5 times
+linear usage, capped at 100%; an optional window length is carried unchanged.
+Unconfigured windows retain Creel's declared trajectory. Admission caps and drain
+thresholds are unchanged. Both `st crew --governor` and `st fleet tend` use this
+same target. If the configured Creel probe predates this contract, the adapter
+reports the advisory unavailable rather than displaying an outdated target.

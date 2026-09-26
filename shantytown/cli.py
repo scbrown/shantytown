@@ -185,7 +185,8 @@ from . import guard as guard_mod
 from . import attribution as attribution_mod
 from .attribution import attribute
 from .events import FilesEvents
-from .inbox import FilesInbox, MessageTooLong, TrackerInbox, is_message
+from .inbox import (FilesInbox, MarkReadIncomplete, MessageTooLong,
+                    TrackerInbox, is_message)
 from .triage import Action
 from . import supervisor as sup_mod
 from . import tend as tend_mod
@@ -4869,7 +4870,13 @@ def _inbox_read(a, me: str) -> int:
                       f"{me}: {', '.join(missing)}. Nothing marked read.",
                       file=sys.stderr)
                 return REFUSED
-        marked = box.mark_read(me, ids=read_ids or None)
+        failed: list = []
+        try:
+            marked = box.mark_read(me, ids=read_ids or None)
+        except MarkReadIncomplete as e:
+            # Print what WAS consumed before saying what was not (aegis-6sws17):
+            # those bodies are gone from the unread set either way.
+            marked, failed = e.marked, e.failed
         # PRINT WHAT IT CONSUMED (GitHub #14). --read is the ACK, and it is the
         # only thing that consumes a message. A count is not the message: the
         # bodies are gone from the unread set the instant this returns, so a
@@ -4881,6 +4888,21 @@ def _inbox_read(a, me: str) -> int:
             for line in (m.body or "").splitlines() or [""]:
                 print(f"    {line}")
         print(f"\n  marked {len(marked)} message(s) read for {me}.")
+        if failed:
+            # NOT "still unread": a close that timed out may have landed. Say
+            # which, and that a re-run acks only what is still open.
+            # Print the BODY too: a close that timed out but landed has left the
+            # unread set, so a re-run will never show it (sattler, #93 review).
+            print(f"\n  ⚠ UNCONFIRMED: {len(failed)} close(s) may or may not have "
+                  f"landed. Their bodies are below because a re-run shows only "
+                  f"what is still unread; re-run `st inbox --read` to ack the rest.",
+                  file=sys.stderr)
+            for m, err in failed:
+                frm = f" from {m.frm}" if getattr(m, "frm", None) else ""
+                print(f"\n  {m.id}{frm}  [{err}]", file=sys.stderr)
+                for line in (m.body or "").splitlines() or [""]:
+                    print(f"    {line}", file=sys.stderr)
+            return CANNOT_TELL
         return OK
 
     print()
@@ -6743,7 +6765,7 @@ def _crew_governor(a) -> int:
                  f"{_pct(gov_mod.SEVEN_DAY)} {detail}").rstrip()
         advisory = creel_advisory_mod.controller_line(
             readings, running=running, cap=verdict.max_agents,
-            max_age=multi.policy.max_age_seconds,
+            max_age=multi.policy.max_age_seconds, paces=multi.policy.paces,
             probe=getattr(cfg, "env", {}).get(creel_advisory_mod.PROBE_ENV))
         # UTILIZATION ON ITS OWN LINE, EVERY PASS (aegis-967a9). Same argument
         # the fleet cap earns above: under-cap idleness is invisible exactly when
@@ -10524,7 +10546,7 @@ def _tend_once(a, quiet: bool = False) -> int:
         running = live_by_gov.get(name, 0)
         line = creel_advisory_mod.controller_line(
             readings, running=running, cap=verdicts[name].max_agents,
-            max_age=gov.policy.max_age_seconds,
+            max_age=gov.policy.max_age_seconds, paces=gov.policy.paces,
             probe=cfg.env.get(creel_advisory_mod.PROBE_ENV))
         setpoint_advisories[name] = line
         # Unavailability is pushed once through the deduped alerter below.  A
