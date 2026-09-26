@@ -33,6 +33,8 @@ part whose failure destroys work.
 """
 from __future__ import annotations
 import fnmatch
+import fcntl
+from contextlib import contextmanager
 import json
 import posixpath
 import time
@@ -43,6 +45,19 @@ from pathlib import Path
 # The stop reason prefix that marks a deliberate cycle, so a drain can tell one
 # from a crash or a retirement. `st fleet tend` matches on it.
 CYCLE_REASON = "cycle-requested"
+
+
+@contextmanager
+def lifecycle_lock(root, agent):
+    """Order stop against cycle mutation, without locking slow Git preflight."""
+    path = Path(root) / "lifecycle-locks" / f"{agent}.lock"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
 
 
 # Untracked names that may carry a credential. Deliberately OVER-broad: a false
@@ -586,7 +601,8 @@ class Requests:
         return {agent: norm(value) for agent, value in self._load().items()}
 
     def clear(self, agent: str) -> None:
-        """Drop a request. Called AFTER the cycle is performed, never before — a
+        """Drop a completed or explicitly cancelled request. Otherwise only AFTER
+        the cycle is performed — a
         request cleared on intent rather than on completion is a request that
         vanishes when the relaunch refuses, and the agent waits forever for a
         cycle nobody is going to do."""

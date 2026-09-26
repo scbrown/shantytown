@@ -1753,6 +1753,14 @@ Its output is retained under `agent-holds/<agent>.stop.log` in the deployment
 root; a failed stop leaves feeding held. A successful `st agent new <agent>`
 clears the hold. Dry-run and ownership guards still apply.
 
+Both immediate and after-turn stops cancel pending self-cycle requests, even
+when the pane is already down. Tend refuses queued cycles for stopped or held
+agents and rechecks intent immediately before changing a pane. Stop and cycle
+mutations are serialized per agent, so a request read before a stop cannot
+relaunch it afterward. The internal stop/start fallback of a cycle retains its
+request when launch fails, allowing a retry; an operator stop cancels that retry.
+Explicit `st agent new` clears stop/hold intent.
+
 Cost synchronization publishes a scheduler heartbeat before selecting an active
 source. An UNKNOWN source-selection tick updates the attempt timestamp and
 records `unknown_reason=source_selection`; it does not look like a stopped
