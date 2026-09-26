@@ -111,3 +111,60 @@ def test_tmux_send_journals_before_delivering(tmp_path, monkeypatch):
     tmux_mod.Tmux().send("aegis-crew-arnold", "probe text")
     assert len(calls) == 2, "literal text + Enter"
     assert "text=probe text" in _read_log(tmp_path)
+
+
+# --- aegis-0681f6: a CRON send (no SHANTY_ROOT) journals into the store the CLI FOUND ---
+
+def _cron_env(tmp_path, monkeypatch):
+    """Cron's shape: no SHANTY_ROOT, cwd in an unrelated directory with no .shanty,
+    and the box's pointer naming the deployment."""
+    store = tmp_path / "deploy" / ".shanty"
+    store.mkdir(parents=True)
+    xdg = tmp_path / "xdg"
+    (xdg / "shantytown").mkdir(parents=True)
+    (xdg / "shantytown" / "root").write_text(str(store) + "\n")
+    elsewhere = tmp_path / "cron-cwd"
+    elsewhere.mkdir()
+    monkeypatch.delenv("SHANTY_ROOT", raising=False)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(xdg))
+    monkeypatch.chdir(elsewhere)
+    return store, elsewhere
+
+
+def test_a_cron_send_resolved_by_pointer_is_journaled(tmp_path, monkeypatch, capsys):
+    from shantytown.deployment import BY_POINTER, command_environment, resolve_root
+    store, _ = _cron_env(tmp_path, monkeypatch)
+    root, how = resolve_root(None)
+    assert how == BY_POINTER          # the premise: this is the cron population
+    with command_environment(root, how):
+        tmux_mod._journal_send("shanty-dearing", "detector finding for cron")
+    assert "text=detector finding for cron" in _read_log(store)
+    assert "UNJOURNALED" not in capsys.readouterr().err
+    # restored at the CLI boundary, like every other carried variable
+    assert "SHANTY_ROOT" not in os.environ
+
+
+def test_the_cwd_guess_is_never_carried_into_the_journal(tmp_path, monkeypatch, capsys):
+    """CONTROL. With no pointer, the CLI falls back to cwd/.shanty — a guess against
+    wherever cron runs. It must stay unjournaled and loud, never fragment the
+    journal into a random directory (the nipg mode)."""
+    from shantytown.deployment import BY_CWD, command_environment, resolve_root
+    _, elsewhere = _cron_env(tmp_path, monkeypatch)
+    (tmp_path / "xdg" / "shantytown" / "root").unlink()
+    (elsewhere / ".shanty").mkdir()   # even a real dir there is not a FOUND store
+    root, how = resolve_root(None, discover=False)
+    assert how == BY_CWD
+    with command_environment(root, how):
+        tmux_mod._journal_send("shanty-dearing", "guessed root")
+    assert "UNJOURNALED" in capsys.readouterr().err
+    assert not (elsewhere / ".shanty" / "logs" / "sends.log").exists()
+
+
+def test_an_explicit_shanty_root_is_never_overridden(tmp_path, monkeypatch):
+    from shantytown.deployment import BY_POINTER, command_environment
+    store, _ = _cron_env(tmp_path, monkeypatch)
+    mine = tmp_path / "mine"
+    mine.mkdir()
+    monkeypatch.setenv("SHANTY_ROOT", str(mine))
+    with command_environment(store, BY_POINTER):
+        assert os.environ["SHANTY_ROOT"] == str(mine)
