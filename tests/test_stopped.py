@@ -208,14 +208,15 @@ def test_a_dry_run_stop_records_nothing(tmp_path, monkeypatch):
     assert FilesStops(root / "stopped").get("ellie") is None
 
 
-def test_stopping_an_already_down_agent_records_nothing(tmp_path, monkeypatch):
-    """st did not put it in that state and cannot know who did. Claiming the stop
-    would be a fabricated fact — `st fleet tend --retire` is how an operator adopts an
-    agent that is already down."""
+def test_stopping_an_already_down_agent_records_intent_not_cause(tmp_path, monkeypatch):
+    """A stop request supersedes queued cycles even after the pane disappeared.
+    Record that intent without claiming this invocation caused the shutdown."""
     root = _world(tmp_path)
     monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: NullPanes(live=set()))
     cli._cmd_stop(_Args(root))
-    assert FilesStops(root / "stopped").get("ellie") is None
+    record = FilesStops(root / "stopped").get("ellie")
+    assert record is not None
+    assert record.reason.startswith("stop requested while already down:")
 
 
 def test_the_record_does_not_outlive_a_relaunch(tmp_path):
