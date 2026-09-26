@@ -618,9 +618,15 @@ def _yupana_brief_cmd() -> dict:
 # budget, so yupana opened its 30s default. Its briefing sources then ran a ~12s
 # `/context` past the kill, and because stdout is echoed only on exit 0, the
 # agent received NOTHING: a briefing that never once printed in a live session.
-# With a total below the parent, yupana stops starting calls when the budget is
-# spent and prints the sections that finished; `/context`, the slowest, runs
-# last so it is the one skipped.
+#
+# WHAT THIS BUYS, BY YUPANA VERSION (measured by dearing and grant, 2026-09-26).
+# Up to yupana 0.10.5 the briefing's quipu calls honour only the PER-CALL cap;
+# the total is ignored (brief_sources used http_timeout()). This ladder then
+# caps each call at 5s, but several slow calls can still add up past the parent.
+# With yupana #113 the briefing uses the remaining total budget, starts no call
+# once it is spent, and runs `/context` (the slowest) last, so it prints the
+# sections that finished. Real hook, TOTAL=1: 0.10.5 took 6.0s, #113 took 1.1s.
+# Until that release is installed, the ordering below is necessary, not sufficient.
 SESSION_START_PARENT_TIMEOUT_SECS = 10
 SESSION_START_TOTAL_BUDGET_SECS = 8
 SESSION_START_PER_CALL_SECS = 5
