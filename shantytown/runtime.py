@@ -1155,6 +1155,16 @@ def claude_settings_for_role(role: str, root=None) -> dict:
     from the three shared builders above.
     """
     capture = _capture_cmd(root)
+    artifact_hooks = []
+    # Deployment-owned publication policy must survive settings regeneration.
+    # Scope it to administrators; workers and other harnesses do not publish
+    # through Claude's Artifact tool. No deployment paths live in this package.
+    artifact_guard = deployment_default(root, "SHANTY_ADMIN_ARTIFACT_GUARD")
+    if role == "administrator" and artifact_guard:
+        artifact_hooks.append({
+            "matcher": "Artifact",
+            "hooks": [{"type": "command", "command": artifact_guard, "timeout": 120}],
+        })
     return {
         "hooks": {
             # QUERY-FIRST at session start (aegis-rcyd). See session_start_hooks.
@@ -1163,7 +1173,7 @@ def claude_settings_for_role(role: str, root=None) -> dict:
             "Stop": [{"hooks": role_stop_hooks(role, root=root)},
                      {"hooks": [capture]}],
             # yupana policy guard on every edit-shaped tool call. See _YUPANA_GUARD.
-            "PreToolUse": pre_tool_use_hooks(root) + [
+            "PreToolUse": pre_tool_use_hooks(root) + artifact_hooks + [
                 {"matcher": ".*", "hooks": [capture]}],
             "PostToolUse": [{"matcher": ".*", "hooks": [capture]}],
             "PostToolUseFailure": [{"matcher": ".*", "hooks": [capture]}],
