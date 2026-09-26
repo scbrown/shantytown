@@ -161,9 +161,11 @@ def capture_fault(conn, payload, now, agent):
 
 def report(root, since_epoch=0, agent=None):
     """Read without creating/migrating a database; missing evidence is UNKNOWN."""
+    from .task_order_observation import supplemental
     p = Path(root) / 'stats.sqlite'
     base = {'scope': 'explicit session-local task declarations; not all dispatches',
             'contexts': [], 'unbound_events': 0, 'status': 'UNKNOWN'}
+    base.update(supplemental([], []))
     if not p.exists():
         return base
     with sqlite3.connect(f'file:{p}?mode=ro', uri=True) as conn:
@@ -177,6 +179,7 @@ def report(root, since_epoch=0, agent=None):
             'SELECT count(*) FROM task_order_events WHERE ts>=? AND context_id IS NULL '
             'AND kind!=? AND (? IS NULL OR agent=?)',
             (since_epoch, 'boundary_start', agent, agent)).fetchone()[0]
+        evidence = []
         for ctx in contexts:
             if agent and ctx['agent'] != agent:
                 continue
@@ -201,6 +204,8 @@ def report(root, since_epoch=0, agent=None):
             base['contexts'].append({**dict(ctx), 'verdict': verdict, 'reason': reason,
                                      'reads': len(reads), 'first_read': min(reads) if reads else None,
                                      'first_material_action': min(material) if material else None})
+            evidence.append(rows)
+        base.update(supplemental(base['contexts'], evidence))
         base['status'] = 'OBSERVED' if base['contexts'] else 'UNKNOWN'
     return base
 

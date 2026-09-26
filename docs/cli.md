@@ -1420,6 +1420,23 @@ operations, and scopes with no definite action remain UNKNOWN. Shell commands
 are ambiguous; edit/write tools are definite. A successful hook result proves
 completion, not the usefulness of the answer.
 
+The report also includes `weak_observation`, labelled
+`read-before-first-possible-op (weak)`. Its four buckets are always reported:
+`read_before`, `reverse_or_concurrent`, `incomplete`, and `no_matched_read`.
+They compare completed reads with recorded definite **or ambiguous** operations.
+This observation never changes a verdict, feeds a gate, or supplies an adoption
+denominator. A read followed by a shell command can satisfy this weaker ordering
+while its strict verdict remains UNKNOWN.
+
+`strict_population` independently counts existing PASS/FAIL/UNKNOWN verdicts for
+contexts containing possibly-material operations, including CLI-only work. Its
+headline fraction keeps UNKNOWN in the denominator; the separately labelled
+secondary fraction is PASS/(PASS+FAIL). Empty denominators produce `null`.
+Read-only/no-operation contexts are excluded and explicitly counted with their
+context IDs. Incomplete capture is retained as UNKNOWN even when no operation
+start survived: missing evidence does not prove read-only work. All four weak
+buckets exclude the separately counted read-only/no-operation contexts.
+
 This is **declared-scope evidence, not whole-dispatch coverage**. Undeclared tasks
 remain outside this report; reconcile against the dispatch ledger and haul records
 before calculating adoption. A declaration made late cannot certify earlier work.
