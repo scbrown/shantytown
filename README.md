@@ -10,7 +10,7 @@
 *Create a work item. Tell an agent to go get it. That's the whole idea.*
 
 [![dispatch 3.4s](https://img.shields.io/badge/dispatch-3.4s-brightgreen)](docs/why.md#measured-against-gas-town)
-[![33 commands](https://img.shields.io/badge/commands-37-blue)](#-the-whole-surface)
+[![38 commands](https://img.shields.io/badge/commands-38-blue)](#-the-whole-surface)
 [![tests](https://img.shields.io/badge/tests-3489%20passing-blue)](docs/principles.md)
 [![python](https://img.shields.io/badge/python-3.11%2B-blue)](#-install)
 [![dependencies none](https://img.shields.io/badge/dependencies-none-blue)](#-install)
@@ -61,6 +61,7 @@ could not tell. The longer walk-through, including boot modes and the anchor, is
 ```
 st task <title>                   create work, get an id back
 st go <item> <agent>              dispatch. the one that matters. the agent is named, never guessed.
+st sling <bead>                  hand a beaded design to the executive for scheduling.
 st inbox <agent> <message>        a message into a pane. send-keys, nothing more.
 st crew                           who exists, what state, what role
 st anchor                         who am I, what's on my plate      ← the anchor
@@ -110,7 +111,7 @@ st ops                            the installation
   help <topic>                    rationale pages: handoff/cycle, haul, inbox
 ```
 
-Thirty-seven, and the count is load-bearing: six verbs and thirty-one grouped commands under five
+Thirty-eight, and the count is load-bearing: seven verbs and thirty-one grouped commands under five
 groups, and a test pins this block AND this sentence to the parser, so the next command either updates
 both or fails CI. A group is a namespace, not a command; it earns no slot. The flat spellings from
 before the grouping (st cycle for st agent cycle, and so on) still work for two releases and say so on

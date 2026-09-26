@@ -228,7 +228,7 @@ def test_cli_md_stated_count_matches_the_wired_count():
              21: "Twenty-one", 22: "Twenty-two",
              23: "Twenty-three", 24: "Twenty-four", 25: "Twenty-five",
              26: "Twenty-six", 27: "Twenty-seven", 28: "Twenty-eight",
-             29: "Twenty-nine", 30: "Thirty", 31: "Thirty-one", 32: "Thirty-two", 33: "Thirty-three", 34: "Thirty-four", 35: "Thirty-five", 36: "Thirty-six", 37: "Thirty-seven"}
+             29: "Twenty-nine", 30: "Thirty", 31: "Thirty-one", 32: "Thirty-two", 33: "Thirty-three", 34: "Thirty-four", 35: "Thirty-five", 36: "Thirty-six", 37: "Thirty-seven", 38: "Thirty-eight"}
     n = _leaf_count()
     assert n in words, "add the number word and update docs/cli.md"
     text = CLI_MD.read_text()
@@ -447,7 +447,7 @@ def test_readme_prose_count_matches_the_parser():
              24: "twenty-four", 25: "twenty-five", 26: "twenty-six",
              27: "twenty-seven", 28: "twenty-eight", 29: "twenty-nine",
              30: "thirty", 31: "thirty-one", 32: "thirty-two", 33: "thirty-three",
-             34: "thirty-four", 35: "thirty-five", 36: "thirty-six", 37: "thirty-seven"}
+             34: "thirty-four", 35: "thirty-five", 36: "thirty-six", 37: "thirty-seven", 38: "thirty-eight"}
     m = re.search(r"^([A-Z][a-z-]+), and the count is load-bearing", README.read_text(), re.M)
     assert m, "the README's 'and the count is load-bearing' sentence is gone"
     n = _leaf_count()

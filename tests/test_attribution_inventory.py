@@ -41,6 +41,10 @@ ATTRIBUTED_UPSTREAM = "attributed-upstream"  # the composer signed it already
 BARE = "bare-by-design"                      # not prose; signing it would break it
 
 INVENTORY: dict[tuple[str, str], tuple[str, str]] = {
+    ("sling_cli.py", "command"): (
+        ATTRIBUTED_UPSTREAM,
+        "sling.prepare signs the pointer with attribute() after its receipt marker. "
+        "test_sling_multihost verifies the source identity at the receiving inbox."),
     ("notify.py", "wake_recipient"): (
         ATTRIBUTED_HERE,
         "blocked-worker push into a coordinator's pane; sender is `st fleet tend`."),

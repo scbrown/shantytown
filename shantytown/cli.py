@@ -1,6 +1,6 @@
-"""st — the CLI. Six verbs, five groups, thirty-one grouped commands: thirty-seven, and the count is load-bearing: each earns its slot.
+"""st — the CLI. Seven verbs, five groups, thirty-one grouped commands: thirty-eight, and the count is load-bearing: each earns its slot.
 
-    task · go · inbox [--count] · crew [--count|--governor]
+    task · go · sling · inbox [--count] · crew [--count|--governor]
     · anchor [--short|--events|--harness] · attach [-r|--no-start]
     work  → repool · defer · cost [--sync] · dream [--run] · triage
             · jobs [list|check|run|history]
@@ -1039,6 +1039,15 @@ def build_parser() -> argparse.ArgumentParser:
     mr.add_argument("--harness", action="store_true",
                     help="print ONLY this agent's harness name (e.g. claude)")
 
+    sling = sub.add_parser("sling", help="hand a beaded design to the executive administrator")
+    sling.add_argument("item")
+    note = sling.add_mutually_exclusive_group()
+    note.add_argument("--note")
+    note.add_argument("--note-file", type=Path)
+    sling.add_argument("--dry-run", "-n", action="store_true")
+    sling.add_argument("--receiving-host", help=argparse.SUPPRESS)
+    sling.add_argument("--executive", help=argparse.SUPPRESS)
+
     go = sub.add_parser("go", help="dispatch an item to an agent")
     go.add_argument("item")
     go.add_argument("agent")
@@ -1934,6 +1943,9 @@ def _run_command(a) -> int:
         return _cmd_hold(a)
     if a.cmd == "anchor":
         return _cmd_anchor(a)
+    if a.cmd == "sling":
+        from .sling_cli import command
+        return command(a)
     if a.cmd == "go":
         return _cmd_go(a)
     if a.cmd == "repool":
@@ -5186,7 +5198,7 @@ def _graph_context(a):
     return ctx, None
 
 
-def _go_on_host(a, note: str | None) -> int | None:
+def _go_on_host(a, note: str | None, *, recipient=None) -> int | None:
     """Run dispatch where the card lives, never against a colliding local pane.
 
     The destination owns triage, workspace preparation, delivery verification
@@ -5209,7 +5221,7 @@ def _go_on_host(a, note: str | None) -> int | None:
     if not local:
         return None
     try:
-        agent = _message_recipient(a)
+        agent = recipient if recipient is not None else _message_recipient(a)
     except LookupError as exc:
         print(f"  refused: dispatch destination — {exc}", file=sys.stderr)
         return REFUSED
@@ -5239,15 +5251,19 @@ def _go_on_host(a, note: str | None) -> int | None:
     argv = ["st", "--root", peer.root, "--registry", "files"]
     if getattr(a, "backend", None):
         argv += ["--backend", a.backend]
-    argv += ["go", a.item, a.agent, "--receiving-host", agent.host, "--note-file", "-"]
-    for flag, value in (("--worktree", a.worktree),
-                        ("--no-graph-context", a.no_graph_context)):
-        if value:
-            argv += [flag, value]
-    for node in a.quipu_node:
-        argv += ["--quipu-node", node]
-    if a.reassign:
-        argv.append("--reassign")
+    if getattr(a, "cmd", "go") == "sling":
+        argv += ["sling", a.item, "--executive", a.agent,
+                 "--receiving-host", agent.host, "--note-file", "-"]
+    else:
+        argv += ["go", a.item, a.agent, "--receiving-host", agent.host, "--note-file", "-"]
+        for flag, value in (("--worktree", a.worktree),
+                            ("--no-graph-context", a.no_graph_context)):
+            if value:
+                argv += [flag, value]
+        for node in a.quipu_node:
+            argv += ["--quipu-node", node]
+        if a.reassign:
+            argv.append("--reassign")
     if a.dry_run:
         argv.append("--dry-run")
     command = ('PATH="$HOME/.local/bin:$PATH" '
@@ -5266,7 +5282,8 @@ def _go_on_host(a, note: str | None) -> int | None:
         print(f"  [{agent.host}] {line}",
               file=sys.stdout if result.returncode == OK else sys.stderr)
     if result.returncode == OK:
-        print(f"  -> {agent.name}    {'previewed' if a.dry_run else 'dispatched'} "
+        action = 'handed off' if getattr(a, 'cmd', 'go') == 'sling' else 'dispatched'
+        print(f"  -> {agent.name}    {'previewed' if a.dry_run else action} "
               f"on host {agent.host} via {peer.ssh}")
         return OK
     if result.returncode == REFUSED:
@@ -5689,6 +5706,7 @@ def _cmd_crew(a) -> int:
                     pass
             local_rows.append(dict(
                 name=ag.name, host=local or "local", role=",".join(ag.effective_roles()),
+                tree_role=ag.role, retired=bool(ag.retired),
                 state=state, work=work, posture=posture, pane=ag.pane or "—",
                 live=live, harness=actual or harness_mod.name_for(ag, root=a.root),
                 settings=_settings_verdict(launches, ag.name, state == "up"),
