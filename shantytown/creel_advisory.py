@@ -165,7 +165,7 @@ def _unavailable(why: str) -> str:
 def controller_line(readings, *, running: int, cap: int | None,
                     probe: str | None = None, node: str | None = None,
                     now: float | None = None, max_age: float = DEFAULT_MAX_AGE_S,
-                    run=subprocess.run) -> str:
+                    paces=(), run=subprocess.run) -> str:
     """Return Creel's line, or an explicit unavailable result.
 
     ``readings`` are Shantytown ``Reading`` objects.  Their timestamps and reset
@@ -184,6 +184,10 @@ def controller_line(readings, *, running: int, cap: int | None,
 
     clock = int(now if now is not None else time.time())
     state = {"readings": {}}
+    pace_targets = {p.window: {"ratio": p.ratio, "length": p.window_length()}
+                    for p in paces}
+    if pace_targets:
+        state["paceTargets"] = pace_targets
     stale = []
     for window, reading in readings.items():
         item = {
@@ -229,6 +233,16 @@ def controller_line(readings, *, running: int, cap: int | None,
         line = record["controller_line"].strip()
     except (ValueError, KeyError, AttributeError):
         return _unavailable("creel probe returned no controller record")
+    # An older probe accepts unknown state keys. Require evidence that the
+    # configured target was applied, rather than displaying its old default.
+    controller = record.get("controller")
+    applied = controller.get("windows") if isinstance(controller, dict) else None
+    for window, target in pace_targets.items():
+        row = applied.get(window) if isinstance(applied, dict) else None
+        row = row if isinstance(row, dict) else {}
+        if (row.get("paceRatio") != target["ratio"]
+                or row.get("windowLength") != target["length"]):
+            return _unavailable(f"creel probe did not apply configured pace for {window}")
     if not line:
         return _unavailable("creel probe returned an empty advisory")
     rendered = " · ".join(part.strip() for part in line.splitlines() if part.strip())

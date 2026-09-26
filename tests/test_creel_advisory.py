@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import subprocess
 
+import pytest
+
 from shantytown import creel_advisory as advisory
 from shantytown.governor import Reading
 
@@ -217,3 +219,56 @@ def test_cached_failure_adapter_preserves_age_and_freezes_errors(tmp_path):
             pct=26, at=1_000_000-age, ok=False, cache_age=age, probe_http_status=status)},
             running=6, cap=6, now=1_000_000, probe=str(probe), node="node", run=run)
         assert ("stale-but-usable" in line) is usable
+
+
+@pytest.mark.parametrize("applied", [True, False])
+def test_configured_pace_is_transmitted_and_must_be_applied(tmp_path, applied):
+    from shantytown.governor import Pace
+    probe = tmp_path / "probe.js"
+    probe.write_text("// fixture")
+    def run(cmd, **kwargs):
+        state = json.loads(open(cmd[cmd.index("--state") + 1]).read())
+        assert state["paceTargets"] == {"seven_day": {"ratio": 1.5, "length": 604800}}
+        result = {"controller_line": "governor recommends +1"}
+        if applied:
+            result["controller"] = {"windows": {
+                "seven_day": {"paceRatio": 1.5, "windowLength": 604800}}}
+        return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(result))
+    line = advisory.controller_line({}, running=6, cap=9,
+        paces=(Pace("seven_day", 1.5),), probe=str(probe), node="node", run=run)
+    if applied:
+        assert line == "governor recommends +1"
+    else:
+        assert line == "advisory unavailable: creel probe did not apply configured pace for seven_day"
+
+
+@pytest.mark.parametrize('surface', ['crew', 'tend'])
+def test_both_governor_surfaces_forward_the_configured_pace(tmp_path, monkeypatch, surface):
+    from types import SimpleNamespace
+    from shantytown import cli, config
+    from shantytown.files import FilesRegistry
+    from shantytown.tmux import NullPanes
+    from tests.test_crew_governor import _Gov, _reading, _verdict
+    from tests.test_tend import _Args
+
+    (tmp_path / 'shantytown.toml').write_text(
+        '[governor]\n[[governor.tier]]\nwindow="seven_day"\nat=70\nmin_priority=1\n'
+        '[[governor.pace]]\nwindow="seven_day"\nratio=1.5\n')
+    cfg = config.load(tmp_path)
+    (tmp_path / 'crew').mkdir()
+    gov = _Gov({'seven_day': _reading(62)}, _verdict())
+    gov.policy = cfg.governor
+    gov.evaluate = lambda **kwargs: _verdict()
+    monkeypatch.setattr(cli, '_governors', lambda a: (cfg, {'base': gov}))
+    monkeypatch.setattr(cli, '_registry', lambda a: FilesRegistry(tmp_path / 'crew'))
+    monkeypatch.setattr(cli, '_panes', lambda a: NullPanes(live=set()))
+    seen = []
+    def record(readings, **kwargs):
+        seen.extend(kwargs['paces'])
+        return 'governor recommends +1'
+    monkeypatch.setattr(cli.creel_advisory_mod, 'controller_line', record)
+    if surface == 'crew':
+        cli._crew_governor(SimpleNamespace(root=tmp_path))
+    else:
+        cli._tend_once(_Args(tmp_path, backend='files'))
+    assert [(p.window, p.ratio) for p in seen] == [('seven_day', 1.5)]
