@@ -1329,6 +1329,15 @@ code that looks shipped and has never run. The Claude Code path is pinned byte-f
 pre-split launch strings (`tests/test_harness.py`) and its emitted settings file is pinned against
 the pre-codex bytes (`tests/test_codex_harness.py`).
 
+`st crew` reports `stalled` in WORK when a live, otherwise idle agent has an
+`in_progress` item at the top of its plate. The summary names these agents so
+their assigned work can be resumed; they are neither free nor busy. Busy panes,
+unknown observations, running background shells, holds and planned cycles keep
+their existing verdicts. An unreadable assignment store makes an otherwise idle
+agent unknown, rather than free. The table and `--json` use the same verdict;
+`--count` excludes stalled agents from its busy/idle denominator. Plate reads
+share one snapshot per roster on the br backend, including additional stores.
+
 ## Machine-readable output — five flags, not five commands
 
 An external status bar needs a handful of values out of shantytown. It gets them as **flags on the

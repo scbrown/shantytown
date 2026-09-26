@@ -359,12 +359,13 @@ def _default_bd_repo(a) -> str | None:
         return None
 
 
-def _plate(a, *, snapshot=False):
+def _plate(a, *, snapshot=False, require_complete=False):
     """The plate reader matching the selected tracker."""
     trk = _tracker(a)
     if _backend(a) in ("beads", "br"):
         from .br import plate as br_plate, plate_reader
-        return plate_reader(trk) if snapshot else lambda who: br_plate(trk, who)
+        return (plate_reader(trk, require_complete=require_complete) if snapshot
+                else lambda who: br_plate(trk, who))
     return lambda who: files_plate(trk, who)
 
 
@@ -5700,12 +5701,21 @@ def _cmd_crew(a) -> int:
     if local:
         agents = [ag for ag in agents if ag.host in (None, local)]
     runtime = _runtime(a, panes)
+    # One snapshot supplies availability and the assigned-item line. A failed
+    # read is unknown, never evidence that the agent has an empty plate.
+    def unavailable_plate(_who):
+        raise RuntimeError("assignment unavailable")
+
+    try:
+        plate = _plate(a, snapshot=True, require_complete=True)
+    except Exception:
+        plate = unavailable_plate
     if getattr(a, "json", False):
         launches = _launches(a)
         local_rows = []
         for ag, state, work, posture in _crew_states(
                 agents, panes, runtime, cycling=cycling, untracked_root=a.root,
-                cycle_blocked=cycle_blocked, budget_root=a.root):
+                cycle_blocked=cycle_blocked, budget_root=a.root, plate=plate):
             live = bool(ag.pane and panes.exists(ag.pane))
             actual = None
             reader = getattr(panes, "cmdline", None)
@@ -5733,14 +5743,15 @@ def _cmd_crew(a) -> int:
             print("unknown " + "; ".join(peer_errors))
             return CANNOT_TELL
         return _crew_count(agents, panes, runtime, untracked_root=a.root,
-                           peer_rows=fleet_mod.rows(peer_results))
+                           peer_rows=fleet_mod.rows(peer_results), plate=plate,
+                           cycling=cycling, cycle_blocked=cycle_blocked, budget_root=a.root)
     if not agents and not peer_results:
         print("  no agents. `st agent new <agent>`.")
         return OK
     launches = _launches(a)
     stops = _stops(a)
     runtime = _runtime(a, panes)
-    free, busy, queued, shelled = [], [], [], []
+    free, busy, queued, shelled, stalled = [], [], [], [], []
     work_unknown = []
     context_unknown = []
     deliberate = []
@@ -5765,17 +5776,13 @@ def _cmd_crew(a) -> int:
     import shutil
     title_width = None if getattr(a, "wide", False) else max(
         1, shutil.get_terminal_size().columns - 14)
-    try:
-        plate = _plate(a, snapshot=True)
-    except Exception:
-        plate = None
     print()
     if peer_results:
         print(f"  {'HOST':<22} {'AGENT':<11} {'ROLE':<14} {'STATE':<13} "
               f"{'SETTINGS':<8} {'TREE':<9} {'WORK':<16} {'POSTURE':<7} PANE")
     for ag, state, work, posture in _crew_states(
             agents, panes, runtime, cycling=cycling, untracked_root=a.root,
-            cycle_blocked=cycle_blocked, budget_root=a.root):
+            cycle_blocked=cycle_blocked, budget_root=a.root, plate=plate):
         if state == "cycling":
             cycling_agents.append(ag.name)
         if state == "cycle-blocked":
@@ -5785,6 +5792,8 @@ def _cmd_crew(a) -> int:
             shelled.append(f"{ag.name}({work.rsplit('+', 1)[1][:-2]})")
         if work.startswith(triage_mod.IDLE):
             free.append(ag.name)
+        elif work == "stalled":
+            stalled.append(ag.name)
         elif work.startswith(triage_mod.BUSY):
             busy.append(ag.name)
         elif work.startswith(triage_mod.QUEUED):
@@ -5948,15 +5957,19 @@ def _cmd_crew(a) -> int:
     # scan 14 rows; the question is "who can take this", so print the list.
     if free:
         print(f"  {len(free)} free: {', '.join(free)}")
-    elif busy and not work_unknown:
+    elif busy and not work_unknown and not stalled:
         print("  0 free — every live agent is mid-flight. Dispatching now "
               "interrupts work.")
+    if stalled:
+        print(f"  ⚠ {len(stalled)} stalled: {', '.join(stalled)}")
+        print("    Idle with an in_progress plate item. Resume the assigned work "
+              "before dispatching more.")
     if busy:
         print(f"  {len(busy)} busy: {', '.join(busy)}")
     if work_unknown:
         print(f"  ⚠ {len(work_unknown)} UNKNOWN work state: "
               f"{', '.join(work_unknown)}")
-        print("    Not counted as free or busy — pane content did not prove either. "
+        print("    Not counted as free or busy — pane or assignment evidence did not prove availability. "
               "Inspect with `st agent log <agent>` before dispatching.")
     # WHO CAN TAKE THIS is only half the dispatcher's question; the other half is
     # WHAT IS NOT QUEUED ANYWHERE. See _unassigned_open (aegis-jqcs3).
@@ -6345,7 +6358,7 @@ def _keeper_findings(agents, rule_path: Path, alert) -> list[str]:
 
 
 def _crew_states(agents, panes, runtime, cycling=(), untracked_root=None,
-                 cycle_blocked=(), budget_root=None):
+                 cycle_blocked=(), budget_root=None, plate=None):
     """(agent, pane state, work verdict, permission posture) per agent, by name.
     THE code path for the busy/idle judgment — the table renders it and `--count`
     counts it, so the number a status bar shows can never disagree with the roster
@@ -6522,6 +6535,15 @@ def _crew_states(agents, panes, runtime, cycling=(), untracked_root=None,
             posture = "—"
         if held := agent_hold.reason(untracked_root, ag.name):
             work = held
+        # This is a reporting refinement, not a new pane/dispatch verdict.
+        # Holds, shells, unknown observations and lifecycle states win.
+        if state == "up" and work == triage_mod.IDLE and plate is not None:
+            try:
+                item = plate(ag.name)
+                if item is not None and item.status == "in_progress":
+                    work = "stalled"
+            except Exception:
+                work = f"{triage_mod.UNSURE} (assignment unavailable)"
         yield ag, state, work, posture
 
 
@@ -7009,7 +7031,8 @@ def _utilization(harness, *, readings, policy, verdict, live, now, advisory,
     return seen
 
 
-def _crew_count(agents, panes, runtime, untracked_root=None, peer_rows=()) -> int:
+def _crew_count(agents, panes, runtime, untracked_root=None, peer_rows=(),
+                *, plate=None, cycling=(), cycle_blocked=(), budget_root=None) -> int:
     """`st crew --count` — print `busy/total`, nothing else.
 
     TOTAL IS NOT THE ROSTER SIZE. It is the number of agents we can actually
@@ -7022,7 +7045,8 @@ def _crew_count(agents, panes, runtime, untracked_root=None, peer_rows=()) -> in
     """
     busy = idle = 0
     for _ag, _state, work, _posture in _crew_states(
-            agents, panes, runtime, untracked_root=untracked_root):
+            agents, panes, runtime, untracked_root=untracked_root, plate=plate,
+            cycling=cycling, cycle_blocked=cycle_blocked, budget_root=budget_root):
         if work == triage_mod.BUSY:
             busy += 1
         elif work == triage_mod.IDLE:
