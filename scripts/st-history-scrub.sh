@@ -76,6 +76,39 @@ only_agent, full = sys.argv[3], sys.argv[4] == "1"
 policy = hashlib.sha256(pathlib.Path(sys.argv[5]).read_bytes()).hexdigest()
 RESULT_TYPES = {"tool_result", "function_call_output", "custom_tool_call_output"}
 OMITTED = {"type": "omitted_tool_result"}
+PRIVATE_KEY = re.compile(
+    r'-----BEGIN (?P<label>(?:[A-Z0-9]+ )*PRIVATE KEY)-----'
+    r'[\s\S]*?(?:-----END (?P=label)-----|$)'
+)
+
+
+def redact_private_keys(value):
+    """Redact envelopes inside decoded strings, including their body bytes.
+
+    Matching a serialized JSON header alone leaves the key behind. A missing
+    footer consumes the remainder of that string, never neighboring records.
+    """
+    if isinstance(value, str):
+        if "PRIVATE KEY" not in value:
+            return value, 0
+        return PRIVATE_KEY.subn(
+            lambda m: "[REDACTED:privkey:"
+            + hashlib.sha256(m.group().encode()).hexdigest()[:6] + "]", value
+        )
+    if isinstance(value, dict):
+        clean, count = {}, 0
+        for key, child in value.items():
+            clean[key], n = redact_private_keys(child)
+            count += n
+        return clean, count
+    if isinstance(value, list):
+        clean, count = [], 0
+        for child in value:
+            item, n = redact_private_keys(child)
+            clean.append(item)
+            count += n
+        return clean, count
+    return value, 0
 
 
 def omit_results(value):
@@ -104,7 +137,7 @@ def omit_results(value):
 
 
 def strip_results(data):
-    lines, omitted, malformed = [], 0, 0
+    lines, omitted, malformed, private_keys = [], 0, 0, 0
     for line in data.splitlines():
         if not line.strip():
             continue
@@ -117,9 +150,11 @@ def strip_results(data):
             malformed += 1
             continue
         value, n = omit_results(value)
+        value, keys = redact_private_keys(value)
+        private_keys += keys
         lines.append(json.dumps(value, ensure_ascii=True).encode())
         omitted += n
-    return b"\n".join(lines) + (b"\n" if lines else b""), omitted, malformed
+    return b"\n".join(lines) + (b"\n" if lines else b""), omitted, malformed, private_keys
 
 
 def atomic_write(path, data):
@@ -143,7 +178,6 @@ PATS = [
     ("sk",      re.compile(rb'sk-[A-Za-z0-9]{20,}')),
     ("aws",     re.compile(rb'AKIA[0-9A-Z]{16}')),
     ("bearer",  re.compile(rb'(?<=Bearer )[A-Za-z0-9._-]{24,}')),
-    ("privkey", re.compile(rb'-----BEGIN [A-Z ]*PRIVATE KEY-----')),
 ]
 # SCOPE. Unscoped is the whole archive; scoped is one agent's directory. The
 # scoped walk is the hook's cost model: it must be a function of the stopping
@@ -168,7 +202,7 @@ for f in srcs:
                 continue
         except OSError:
             pass
-    data, dropped, invalid = strip_results(f.read_bytes())
+    data, dropped, invalid, private_keys = strip_results(f.read_bytes())
     omitted += dropped
     malformed += invalid
     n = 0
@@ -184,7 +218,7 @@ for f in srcs:
     dst.parent.chmod(0o700)
     atomic_write(dst, data)
     atomic_write(marker, policy.encode())
-    files += 1; redacted += n
+    files += 1; redacted += n + private_keys
 scope = f" for {only_agent!r}" if only_agent else ""
 print(f"scrubbed {files} file(s){scope}, {redacted} credential-shaped "
       f"value(s) replaced, {skipped} already current; "
@@ -203,8 +237,8 @@ checked = out / only_agent if only_agent else out
 left = 0
 for f in checked.rglob("*.jsonl"):
     d = f.read_bytes()
-    _, results, invalid = strip_results(d)
-    left += results + invalid
+    _, results, invalid, private_keys = strip_results(d)
+    left += results + invalid + private_keys
     for _, p in PATS:
         left += len(p.findall(d))
 print(f"residual credential-shaped hits or tool/unparseable records in {checked}: {left}")
