@@ -32,6 +32,9 @@ st work                       the item and the board
   cost [bead] [--sync]        parser-owned cost reads and closed-bead/metric publication
   triage [item ...]             preview Jev board suggestions; --publish comments only
   dream [--run]               inspect or run one bounded spare-capacity reflection cycle
+  jobs [list|check|run|history]
+                              declared cron / interval / event jobs in <root>/jobs/*.toml,
+                              evaluated by `st fleet tend`; see docs/jobs.md
 st agent                      one agent
   new <agent>                 create an agent from a card
   stop <agent> [--reason]     stop it, and RECORD that it was deliberate
@@ -212,7 +215,7 @@ Codex input already includes its cached subset. This makes
 `cache_read / usage_in` a provider-independent prompt-cache hit rate. The fields
 are omitted—not zeroed—when every matching transcript is unknown.
 
-Thirty-six. Six verbs at the top level and thirty grouped commands under five groups
+Thirty-seven. Six verbs at the top level and thirty-one grouped commands under five groups
 (`work`, `agent`, `fleet`, `repo`, `ops`). A group is a namespace and runs nothing, so it earns no
 slot; the count is the leaves. The flat spellings from before the grouping (st cycle for
 st agent cycle, and so on) still parse into the same handler, print one line on stderr saying
@@ -273,6 +276,15 @@ full cache write to do it. It is a command and not a flag on `cycle` because it
 is the CALL-IN surface: whatever judges relatedness (Jev, the agent at its own
 checkpoint, a script) posts through it, so st names no model, needs no key, and
 with nothing posted decides nothing.
+
+The thirty-first is **jobs**: declared scheduled and event-driven work
+(docs/jobs.md). Every recurring job used to be a sweep hard-coded into tend or
+a host cron outside st, and the crons failed silently — a bare `st` a unit could
+not exec, sends with no `SHANTY_ROOT` that nothing journaled, no retry, and
+patrols on harness session crons that died with the session. A job file is
+evaluated by the tend pass, so it inherits the root, the journal and the crash
+isolation. It is a command and not a tend flag for dream's reason: "what runs,
+when, and did it work" has to be readable without running supervision.
 
 The binary is **`st`**, not `shanty`: `shanty` is Stiwi's own tmux command and ours would shadow it
 on PATH. This doc said `shanty` in all 29 of its examples long after the entry point was `st`, so
@@ -1052,6 +1064,40 @@ reason: it describes a stop that is current. One left behind would make the agen
 next real crash read as somebody's decision.
 
 ## `st ops doctor` — the out-of-box feature
+
+A full doctor run, or `st ops doctor quipu`, also checks write authorization
+against `QUIPU_SERVER`, including with `--no-latest` (that flag skips release
+lookups). It POSTs `{}` to `/episode`: authorization precedes JSON validation,
+so the expected validation refusal proves access without storing an episode.
+It reports `ok`, `no-token`, `bad-token`, `read-only`, `unreachable`, or
+`unknown`/`unconfigured`. This checks permission to attempt writes, not successful
+storage commits. Failures affect the doctor exit code (1 actionable, 2 unknown).
+
+### Quipu credentials
+
+Obtain a credential from the administrator of the target Quipu server over your
+approved secret distribution channel. The administrator must first activate
+its shared bearer or register the issued named credential on that server.
+Installing a random string locally does not grant access.
+
+The client convention is `~/.config/quipu/token`, read on every request, so
+already-running sessions see provisioning and rotation. `QUIPU_AUTH_TOKEN`
+(nonempty) overrides `QUIPU_AUTH_TOKEN_FILE`, which overrides the default path.
+An explicit file override does not fall back to another token if unreadable.
+Install an administrator-supplied file without putting its contents in shell
+history or command arguments:
+
+```sh
+install -d -m 700 "$HOME/.config/quipu" && install -m 400 /secure/issued-token "$HOME/.config/quipu/token"
+st ops doctor quipu --no-latest
+```
+
+For existing deployments using a different location, keep
+`QUIPU_AUTH_TOKEN_FILE` pointing to it until provisioning and rotation target
+the canonical path together. Do not copy credentials into a second independent
+file that rotation will miss. Never commit token files or paste their contents
+into logs, command arguments, issues or the knowledge graph.
+
 
 `st --root "/path/to/.shanty" ops doctor --relay` checks incoming SSH environment
 requirements together: `PATH` for `st` and `tmux`, `SHANTY_ROOT`, and
