@@ -88,6 +88,30 @@ st ops                        the installation
 st <launch cmd> --despite-hold  launch THROUGH a gaming hold, for that one command
 ```
 
+Cycling leaves the existing clone and worktrees on disk. Clean unpublished
+commits are reported without blocking when the push authority guard refuses
+publication, just as during a measured remote outage. The authority check is
+shared with `st repo push`; cycling never grants push permission. Preserve the
+branch and arrange publication to an authorized peer. Uncommitted work still
+blocks, and the durable checkpoint requirement still applies.
+
+For tracked files deliberately modified by each installation, commit a
+`.st-per-install` file at the repository root containing one exact relative path
+per line (blank lines and `#` comments are allowed). For example:
+
+```text
+# Generated host wiring; do not publish the local modification.
+scripts/hooks/pre-commit
+```
+
+Only unstaged modifications to existing regular files named by the committed
+manifest are exempt from the cycle loss gate. The verdict names them as
+`per-install, not loss`. Staged changes, deletions, renames, symlinks, and edits
+to undeclared paths still block. Invalid entries (absolute paths, traversal,
+globs, or the manifest itself) disable the exemption. Local edits to the manifest
+do not change the policy. No file or index flag is changed; refresh/staleness
+checks continue to see these modifications.
+
 Context occupancy hints are opt-in in `shantytown.toml`:
 
 ```toml

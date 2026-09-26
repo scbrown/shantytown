@@ -141,3 +141,28 @@ def test_stop_waits_for_cycle_mutation_then_wins(tmp_path, monkeypatch):
     assert stopped.is_set()
     assert not panes.exists('crew-worker')
     assert not cycle.Requests(tmp_path).pending()
+
+
+def test_refused_cycle_stop_new_does_not_report_old_context_blocked(
+        tmp_path, monkeypatch, capsys):
+    from shantytown.tmux import NullPanes
+    from tests.test_new import _world, _Args, READY
+    root = _world(tmp_path)
+    panes = NullPanes(screen=READY, live={'crew-ellie'}, owned={'crew-ellie'})
+    monkeypatch.setattr(cli, 'Tmux', lambda *_a, **_k: panes)
+    monkeypatch.setattr(cli, '_LIVE_ATTEMPTS', 1)
+    monkeypatch.setattr(cli, '_LIVE_DELAY', 0)
+    requests = cycle.Requests(root)
+    requests.request('ellie', 'old full context checkpoint')
+    requests.mark_refused('ellie', 'unpublished work')
+    requests.request('sibling', 'keep this request')
+    a = _Args(root=root, after_turn=False, reason='operator restart')
+    assert cli._cmd_stop(a) == cli.OK
+    assert cli._cmd_new(a) == cli.OK
+    assert panes.exists('crew-ellie')
+    assert set(requests.pending()) == {'sibling'}
+    capsys.readouterr()
+    assert cli._cmd_crew(_Args(root=root)) == cli.OK
+    output = capsys.readouterr().out
+    assert 'ellie' in output
+    assert 'cycle-blocked' not in output

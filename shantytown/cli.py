@@ -8099,6 +8099,7 @@ def _cmd_cycle(a) -> int:
             # is not what makes it slow.
             staleness=lambda t: tree_staleness(
                 t, fetch=True, untracked_all=True, tracked_only=True,
+                cycle_per_install=True,
                 fetch_timeout=cfg.keep_current_fetch_timeout_seconds),
             allow_loss=a.allow_loss)
     except subprocess.TimeoutExpired as e:
