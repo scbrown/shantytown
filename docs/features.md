@@ -1,6 +1,9 @@
 # ✨ Features
 
-- 🛖 **A town with no town hall.** No resident daemon, no broker, no message bus, no scheduler.
+- 🛖 **A town with no town hall.** No resident daemon, no broker, no message bus, no resident
+  scheduler: declared jobs are evaluated by the tend pass ([`docs/jobs.md`](jobs.md)). That pass
+  already runs every five minutes with the store, the journal and crash isolation, so a job gets
+  all three for free instead of living in a host cron that fails silently.
   `st` is a process that runs, does one thing, and exits — including `st fleet tend`, which a systemd user
   timer starts every five minutes and which exits when its pass is over.
 - 📮 **`st inbox` *is* `tmux send-keys`.** Nothing sits between you and the agent — which is exactly

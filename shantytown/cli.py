@@ -1,8 +1,9 @@
-"""st — the CLI. Six verbs, five groups, thirty grouped commands: thirty-six, and the count is load-bearing: each earns its slot.
+"""st — the CLI. Six verbs, five groups, thirty-one grouped commands: thirty-seven, and the count is load-bearing: each earns its slot.
 
     task · go · inbox [--count] · crew [--count|--governor]
     · anchor [--short|--events|--harness] · attach [-r|--no-start]
     work  → repool · defer · cost [--sync] · dream [--run] · triage
+            · jobs [list|check|run|history]
     agent → new · stop · harness · cycle [--self|--allow-loss] · advise [--related|--decision]
             · input [--show|--clear|--dismiss] · ask · answer · log · history <agent> · stats
     fleet → start [--mode] · tend [--install|--status|--reauth|--target]
@@ -121,6 +122,12 @@ grew well past the original ten, each slot on a specific ask — not drift:
   · dream   — schedule one bounded, reviewed reflection artifact on measured
               spare provider capacity. It is not a tend flag because operators
               need a read/preview surface for its due state and safety gates.
+  · jobs    — declared scheduled and event-driven work (<root>/jobs/*.toml),
+              EVALUATED by the tend pass and inspected here: list, check (would
+              it fire now, and why), run (fire once, now), history. A command
+              and not a tend flag for dream's reason: the recurring work that
+              used to live in host crons failed silently, and the fix is a
+              surface where "what runs, when, and did it work" is one read.
 The count is PINNED by a test (tests/test_command_count.py): the next command
 either updates SURFACE, this docstring and this number together, or fails CI. This docstring used to say "ten" while the
 code had eleven (context landed unannounced) — a count nobody enforces is a
@@ -887,7 +894,7 @@ def _default_root() -> Path:
 from .surface import SURFACE, GROUP_OF  # noqa: E402
 
 _GROUP_HELP = {
-    "work": "the item and the board: repool, defer, cost, dream, triage",
+    "work": "the item and the board: repool, defer, cost, dream, triage, jobs",
     "agent": "one agent: new, stop, harness, cycle, input, ask, answer, log, history, stats",
     "fleet": "the fleet: start, tend, roles, init, hold, window, dashboard",
     "repo": "a shared project repo: worktree, push, context",
@@ -1407,6 +1414,23 @@ def build_parser() -> argparse.ArgumentParser:
     bt.add_argument("--publish", action="store_true", help="append advisory comments; never assign")
     bt.add_argument("--benchmark", help="JSONL of at least 30 previously routed issues")
     bt.add_argument("-n", "--dry-run", action="store_true", help="read inputs only, no Jev or writes")
+
+    jb = leaf("jobs", help="declared scheduled/event jobs (<root>/jobs/*.toml): "
+                           "list | check [name] | run <name> | history [name]")
+    jb_sub = jb.add_subparsers(dest="jobs_sub", required=False)
+    jb_sub.add_parser("list", help="every job: trigger, next due, last result")
+    jb_check = jb_sub.add_parser(
+        "check", help="would it fire NOW, and why — reads events, writes nothing")
+    jb_check.add_argument("name", nargs="?")
+    jb_run = jb_sub.add_parser(
+        "run", help="fire once now, bypassing the trigger (foreground, recorded, "
+                    "never retried)")
+    jb_run.add_argument("name")
+    jb_run.add_argument("-n", "--dry-run", action="store_true",
+                        help="print the rendered action; run nothing")
+    jb_hist = jb_sub.add_parser("history", help="recent attempts from logs/jobs.jsonl")
+    jb_hist.add_argument("name", nargs="?")
+    jb_hist.add_argument("--limit", type=int, default=20)
 
     cx = leaf("context", help="what code should I be looking at?")
     cx.add_argument("query", nargs="+")
@@ -1998,6 +2022,8 @@ def _run_command(a) -> int:
             return CANNOT_TELL
     if a.cmd == "dream":
         return _cmd_dream(a)
+    if a.cmd == "jobs":
+        return _cmd_jobs(a)
     if a.cmd == "attach":
         return _cmd_attach(a)
     if a.cmd == "input":
@@ -9981,6 +10007,222 @@ def _cmd_dream(a) -> int:
     return OK
 
 
+# --- declared jobs (st work jobs, and the tend sweep) -----------------------
+
+def _job_st(a, argv: list[str]) -> tuple[int, str]:
+    """Run ONE st command in-process, through the same parser and the same
+    handler a person typing it would reach, with this invocation's store.
+
+    This is what "a job delivers exactly like `st inbox` / `st go`" means in
+    code: not a second delivery path that resembles them, but them. Triage, the
+    graph-context rule, the send read-back, the host relay and the attribution
+    all come along because nothing was reimplemented. Output is CAPTURED so a
+    pass prints one line per run instead of the handler's whole transcript; the
+    last lines ride into the run record, where `history` shows them.
+    """
+    import contextlib
+    import io
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+        # SystemExit is caught HERE, not left to the caller: argparse and a few
+        # handlers exit by raising it, and it is a BaseException — it would sail
+        # past every `except Exception` between here and the tend pass.
+        try:
+            sub = _parse_args(argv)
+            for key in ("root", "root_how", "backend", "repo", "registry"):
+                if hasattr(a, key):
+                    setattr(sub, key, getattr(a, key))
+            sub.invocation = "st " + " ".join(argv)
+            rc = _run_command(sub)
+        except SystemExit as e:
+            if isinstance(e.code, str):
+                print(e.code)
+            rc = e.code if isinstance(e.code, int) else REFUSED
+    lines = [ln.strip() for ln in out.getvalue().splitlines() if ln.strip()]
+    return rc, " | ".join(lines[-3:])
+
+
+def _job_inbox(a):
+    from .jobs import Outcome
+
+    def act(job, fire, r):
+        # The job's name leads the text, so a pane that receives it can tell a
+        # scheduled nudge from a person — and the text never starts with `-`,
+        # which argparse would read as a flag.
+        argv = ["inbox", r["to"]] + (["-d"] if r["durable"] else []) \
+            + [f"[job {job.name}] {r['message']}"]
+        rc, text = _job_st(a, argv)
+        return Outcome(rc == OK, text or f"exit {rc}")
+    return act
+
+
+def _job_dispatch(a):
+    from .jobs import Outcome
+
+    def act(job, fire, r):
+        memo = fire.setdefault("memo", {})
+        if not memo.get("item"):
+            fields = {"description": r["body"] or None,
+                      "labels": r["labels"] or None, "priority": r["priority"]}
+            item = _tracker(a).create(r["title"], **fields)
+            # REMEMBERED ON THE FIRING, which is persisted with the queue: a
+            # retry after a refused delivery hands over THIS item rather than
+            # creating a second copy of the same work every backoff.
+            memo["item"] = item.id
+        item_id = memo["item"]
+        to = r["to"]
+        if to.startswith("role:"):
+            # A role is handed to the first card holding it that ACCEPTS the
+            # dispatch, in name order. `st go` refuses a busy pane, so this is
+            # "the first free one", decided by triage and not by a guess here.
+            role = to[len("role:"):]
+            targets = sorted(c.name for c in _registry(a).all().exact()
+                             if c.role == role and not getattr(c, "retired", False))
+            if not targets:
+                return Outcome(False, f"{item_id}: no card holds role {role!r}")
+        else:
+            targets = [to]
+        graph = ([x for n in r["quipu_nodes"] for x in ("--quipu-node", n)]
+                 or ["--no-graph-context", r["no_graph_context"]])
+        last = ""
+        for target in targets:
+            rc, text = _job_st(a, ["go", item_id, target, *graph,
+                                   "--note", f"from job {job.name}: {fire.get('reason', '')}"])
+            if rc == OK:
+                return Outcome(True, f"{item_id} -> {target}")
+            last = f"{item_id} -> {target}: {text or f'exit {rc}'}"
+        return Outcome(False, last)
+    return act
+
+
+def _job_escalate(a):
+    def escalate(job, text):
+        from .tier import find_administrator
+        admin = find_administrator(_registry(a))
+        if not admin:
+            return False
+        # DURABLE: the administrator may be the agent that is down, and a give-up
+        # notice that vanishes with a missing pane is the silence this replaces.
+        rc, _ = _job_st(a, ["inbox", admin, "-d", text])
+        return rc == OK
+    return escalate
+
+
+def _job_bead_rows(a):
+    """Every bead INCLUDING closed ones — bead.closed has nothing to see
+    otherwise. Raises when the store cannot be read, so a job's cursor never
+    moves on an answer nobody got."""
+    def rows():
+        trk = _tracker(a)
+        from .br import BrTracker
+        if isinstance(trk, BrTracker):
+            r = trk._bd("list", "--json", "--limit", "0", "--all")
+            if r.returncode != 0:
+                raise RuntimeError(f"br list --all failed: {r.stderr.strip()[:160]}")
+            payload = json.loads(r.stdout) if r.stdout.strip() else {}
+            return payload.get("issues", []) if isinstance(payload, dict) else payload
+        if isinstance(trk, FilesTracker):
+            out = []
+            for p in sorted(Path(trk.root).glob("*.json")):
+                try:
+                    d = json.loads(p.read_text())
+                except (OSError, ValueError):
+                    continue
+                out.append(dict(d, id=p.stem))
+            return out
+        return beads_mod.rows(trk)
+    return rows
+
+
+def _jobs_runner(a, *, detach=True):
+    from . import jobs as jobs_mod
+    from .deployment import local_host
+    return jobs_mod.Runner(
+        a.root, host=local_host(a.root),
+        actions={"inbox": _job_inbox(a), "dispatch": _job_dispatch(a)},
+        escalate=_job_escalate(a),
+        sources=jobs_mod.Sources(a.root, bead_rows=_job_bead_rows(a)),
+        detach=detach)
+
+
+def _jobs_sweep(a) -> list[str]:
+    """The tend sweep: every due job, once. Inside tend's `_sweep` like every
+    other best-effort layer, and each JOB is isolated again inside Runner.sweep,
+    so neither a broken file nor a crashing job can reach respawn."""
+    return _jobs_runner(a).sweep()
+
+
+def _cmd_jobs(a) -> int:
+    """st work jobs [list] | check [name] | run <name> | history [name].
+
+    Exit: 0 fine; 1 a job file was REFUSED (or `run` failed / named no job); 2
+    `check` could not look at a job's event source. A broken job file is a
+    non-zero exit on the read surface too, because "the list looked fine" is how
+    a typo'd job goes unnoticed until the morning it was meant to run.
+    """
+    from . import jobs as jobs_mod
+    verb = getattr(a, "jobs_sub", None) or "list"
+    jobs, errors = jobs_mod.load(a.root)
+    by_name = {j.name: j for j in jobs}
+    for e in errors:
+        print(f"  ⚠ refused {e}", file=sys.stderr)
+    if verb == "history":
+        rows = jobs_mod.read_ledger(a.root, a.name, a.limit)
+        if not rows:
+            print(f"  no runs recorded{' for ' + a.name if a.name else ''} "
+                  f"({Path(a.root) / 'logs' / jobs_mod.LEDGER})")
+            return OK
+        for r in rows:
+            mark = "ok  " if r.get("ok") else ("GAVE" if r.get("final") else "FAIL")
+            what = r.get("detail") or r.get("error") or ""
+            esc = " · admin told" if r.get("escalated") else ""
+            print(f"  {jobs_mod._stamp(r.get('start'))}  {mark}  {r.get('job', '?'):<16} "
+                  f"#{r.get('attempt', 1)}  {r.get('reason', '')} — {what}{esc}")
+        return OK
+    runner = _jobs_runner(a, detach=False)
+    if verb == "run":
+        job = by_name.get(a.name)
+        if job is None:
+            print(f"  refused: no job {a.name!r} in {jobs_mod.jobs_dir(a.root)}",
+                  file=sys.stderr)
+            return REFUSED
+        ok, detail = runner.run_now(job, dry_run=a.dry_run)
+        print(f"  {'would run' if a.dry_run else ('ok' if ok else 'FAILED')}: "
+              f"{job.name} — {job.action.describe()}: {detail}")
+        return OK if ok else REFUSED
+    if verb == "check":
+        pick = [by_name[a.name]] if a.name in by_name else jobs
+        if a.name and a.name not in by_name:
+            print(f"  refused: no job {a.name!r}", file=sys.stderr)
+            return REFUSED
+        rc = REFUSED if errors else OK
+        for job in pick:
+            verdict, why = runner.check(job)
+            if verdict == "cannot tell":
+                rc = CANNOT_TELL
+            print(f"  {job.name:<18} {verdict:<11} {why}")
+        if not pick and not errors:
+            print(f"  no jobs in {jobs_mod.jobs_dir(a.root)}")
+        return rc
+    # list
+    if not jobs and not errors:
+        print(f"  no jobs in {jobs_mod.jobs_dir(a.root)}")
+        return OK
+    for job in jobs:
+        st = jobs_mod.read_state(a.root, job.name)
+        last = st.get("last_run") or {}
+        result = ("never ran" if not last else
+                  f"{'ok' if last.get('ok') else 'FAILED'} {jobs_mod._stamp(last.get('end'))}")
+        pending = len(st.get("pending") or [])
+        here, why = jobs_mod.runs_here(job, runner.host)
+        state = ("disabled" if not job.enabled else "elsewhere" if not here
+                 else f"{pending} pending" if pending else "")
+        print(f"  {job.name:<18} {job.trigger.describe():<28} "
+              f"next {runner.next_due(job):<16} last {result:<24} "
+              f"{job.action.describe()}{'  [' + state + ']' if state else ''}")
+    return REFUSED if errors else OK
+
+
 def _gaming_advisory(a, status, *, reg=None, panes=None):
     # Initial clear is not a lift event. Once any state has reached the
     # coordinator, changes (including recovery from UNKNOWN) must reach it too.
@@ -10678,6 +10920,14 @@ def _tend_once(a, quiet: bool = False) -> int:
             print(f"  ☾ DREAM queued {item_id} for {cycle.agent} on "
                   f"{cycle.harness}: {cycle.mode}/{cycle.domain} "
                   f"({cycle.headroom:.0f}% headroom)", file=sys.stderr)
+        # DECLARED JOBS (docs/jobs.md): <root>/jobs/*.toml, evaluated here
+        # because this pass already runs every five minutes with the root, the
+        # journal and the crash isolation a host cron never had. After dream and
+        # the idle-work pushes, so declared work never pre-empts supervision's
+        # own notifications; an exec job starts DETACHED, so a long one cannot
+        # hold this pass open (aegis-qwadc).
+        for line in _sweep("jobs", lambda: _jobs_sweep(a)):
+            print(f"  {line}", file=sys.stderr)
         # BLOCKED ON A HUMAN (internal-ref): the beads NOTHING else looks at.
         # The plate-reader fix took blocked beads off plates — correct, and it
         # also removed the last thing that touched them at all. They are off
