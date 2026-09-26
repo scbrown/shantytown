@@ -53,7 +53,10 @@ def classify(status: int, body: str, token_set: bool) -> WriteHealth:
 def check(server: str | None, *, timeout: float = 5) -> WriteHealth:
     if not server:
         return WriteHealth("unconfigured", "Set QUIPU_SERVER to check write authorization.", 2)
-    parsed = urllib.parse.urlsplit(server)
+    try:
+        parsed = urllib.parse.urlsplit(server)
+    except ValueError:
+        return WriteHealth("unconfigured", "QUIPU_SERVER is not a valid HTTP(S) base URL.", 2)
     if parsed.scheme not in ("http", "https") or not parsed.netloc or parsed.username or parsed.password or parsed.query or parsed.fragment:
         return WriteHealth("unconfigured", "QUIPU_SERVER must be an HTTP(S) base URL without credentials, query or fragment.", 2)
     try:
@@ -67,7 +70,11 @@ def check(server: str | None, *, timeout: float = 5) -> WriteHealth:
         with urllib.request.build_opener(_NoRedirect).open(request, timeout=timeout) as response:
             return classify(response.status, response.read(8192).decode("utf-8", "replace"), token_set)
     except urllib.error.HTTPError as error:
-        return classify(error.code, error.read(8192).decode("utf-8", "replace"), token_set)
+        try:
+            body = error.read(8192).decode("utf-8", "replace")
+        except OSError:
+            body = ""
+        return classify(error.code, body, token_set)
     except (OSError, ValueError, urllib.error.URLError):
         # No exception/body echo: remote errors may contain credentials.
         return WriteHealth("unreachable", "No usable HTTP response; check QUIPU_SERVER and connectivity.", 2)

@@ -70,6 +70,7 @@ def test_real_transport_reads_token_file_each_request_and_never_follows_redirect
 
 def test_missing_and_unsafe_url():
     assert health.check(None).state == 'unconfigured'
+    assert health.check('http://[').state == 'unconfigured'
     assert health.check('https://user:secret@example.com').state == 'unconfigured'
 
 
