@@ -326,6 +326,32 @@ new command, and the test that pins the number is what proves it:
 If it grows a `st convoy`, a `st rig`, or a `st formula`, we've rebuilt the thing we left —
 but the guard against that is now the test, not this sentence.
 
+### Transcript derivatives and credential boundaries
+
+The raw transcript archive stays local and unindexed. `st-history-scrub.sh`
+creates a separate derivative: it omits supported harness tool-result objects
+wholesale, including nested Claude results and their `toolUseResult` mirrors,
+Codex call outputs and tool-role
+messages. Unparseable records are omitted rather than copied without a known
+schema. The raw records remain available for investigation.
+
+Retained dialogue, reasoning and tool invocations receive credential-pattern
+redaction. The directory name `history-scrubbed` does **not** mean arbitrary
+credentials are absent: an unrecognized value pasted into dialogue can remain.
+A successful scrub proves only the named patterns and supported result types
+are absent. Off-host publication needs its own credential checks.
+
+Each derivative records the exact scrub policy that produced it. A policy
+change rebuilds older files despite their modification time; skipped files
+still undergo the residual check. Writes are private and atomic. The corpus
+projector independently excludes tool results as a security boundary, and its
+version invalidates cached projections when that boundary changes.
+
+Run `python3 -m pytest -q tests/test_history_archiver.py tests/test_history_corpus.py`
+to exercise both directions: unshaped canaries are removed from results while
+ordinary dialogue controls survive, and a contaminated current derivative
+makes the scrub fail.
+
 ## `st anchor` — the anchor
 
 The anchor answers **"who am I and what do I do next"** in one call, at session start, with no

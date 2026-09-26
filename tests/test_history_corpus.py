@@ -92,12 +92,12 @@ def test_old_projection_is_rebuilt_even_when_its_mtime_is_newer(tmp_path):
 
     corpus = _run(tmp_path, files)
     text = corpus["agent/session.md"]
-    assert "# projection: 3" in text
+    assert "# projection: 4" in text
     assert "current dialogue" in text
     assert "stale output" not in text
 
 
-def test_v3_replaces_the_legacy_txt_derivative(tmp_path):
+def test_v4_replaces_the_legacy_txt_derivative(tmp_path):
     output = tmp_path / "corpus" / "agent" / "session.txt"
     output.parent.mkdir(parents=True)
     output.write_text("[user/tool_result] legacy duplicated output\n")
@@ -132,3 +132,29 @@ def test_optional_sync_publishes_only_after_projection(tmp_path):
     args = calls.read_text()
     assert "--delete" in args
     assert "sync-target/" in args
+
+
+def test_unshaped_credential_canaries_in_both_harness_results_never_project(tmp_path):
+    """Security contract, independent of scrubber patterns and result omission."""
+    canary = "opaque credential canary without any token prefix"
+    rows = {
+        "tester/session.jsonl": [
+            {"type": "user", "message": {"content": [
+                {"type": "text", "text": "claude dialogue control"},
+                {"type": "tool_result", "content": [{"type": "text", "text": canary}]},
+            ]}},
+        ],
+        "tester/rollout-session.jsonl": [
+            {"type": "response_item", "payload": {"type": "message", "role": "user",
+                "content": [{"type": "input_text", "text": "codex dialogue control"}]}},
+            {"type": "response_item", "payload": {"type": "custom_tool_call_output", "output": canary}},
+            {"type": "response_item", "payload": {"type": "function_call_output", "output": canary}},
+            {"type": "response_item", "payload": {"type": "message", "role": "tool",
+                "content": [{"type": "output_text", "text": canary}]}},
+        ],
+    }
+    corpus = _run(tmp_path, rows)
+    assert len(corpus) == 2
+    assert "claude dialogue control" in corpus["tester/session.md"]
+    assert "codex dialogue control" in corpus["tester/rollout-session.md"]
+    assert all(canary not in text for text in corpus.values())
