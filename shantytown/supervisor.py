@@ -1,5 +1,5 @@
-"""supervisor — the systemd --user units `st fleet tend --install` writes, and the
-health signal it leaves behind.
+"""supervisor — the systemd --user units (and, on macOS, the launchd agent)
+`st fleet tend --install` writes, and the health signal it leaves behind.
 
 Split from tend.py on purpose: tend.py decides WHAT to do about agents and can
 be tested with no systemd at all. This module is the only place that knows a
@@ -28,6 +28,10 @@ MARKER = "# written-by: st fleet tend --install"
 # release is still OURS — `ours()` must keep answering yes for it, or the first
 # `--install`/`--uninstall` after the upgrade refuses its own file as foreign.
 _OLD_MARKER = "# written-by: st tend --install"
+# The launchd plist's spelling. XML forbids `--` inside a comment, so MARKER
+# itself would make the plist unparseable — by launchd too, which then refuses
+# to load it and says so only in the system log.
+PLIST_MARKER = "written-by: st fleet tend install"
 
 SERVICE = "st-tend.service"
 TIMER = "st-tend.timer"
@@ -185,7 +189,7 @@ def ours(path: Path) -> bool:
     """Did WE write this unit? Content, not filename."""
     try:
         text = path.read_text()
-        return MARKER in text or _OLD_MARKER in text
+        return MARKER in text or _OLD_MARKER in text or PLIST_MARKER in text
     except OSError:
         return False
 
@@ -305,6 +309,96 @@ def uninstall(*, run=None) -> tuple[bool, str]:
     if run is not None:
         run(["systemctl", "--user", "daemon-reload"])
     return True, f"removed {', '.join(p.name for p in present)}."
+
+
+# --- macOS: the same pass, from launchd --------------------------------------
+# The Mac ran no supervision at all: `--install` only knew systemd, so its crew
+# and every patrol it hosted lived on session crons that died with the session.
+# launchd is the Mac's systemd --user, and the plist carries the two lessons the
+# unit above paid for, for the same reasons — an ABSOLUTE st (a bare name in
+# ExecStart failed 203/EXEC 687 times while the timer looked healthy) and
+# SHANTY_ROOT in the environment (sends from a unit without it were never
+# journaled). launchd starts a job with PATH=/usr/bin:/bin:/usr/sbin:/sbin, so
+# the plist also carries the PATH of the shell that ran --install: tend shells
+# out to tmux, git, gh and br, and on a Mac none of them live in /usr/bin.
+LAUNCHD_LABEL = "shantytown.st-tend"
+
+
+def launch_agents_dir() -> Path:
+    return Path.home() / "Library" / "LaunchAgents"
+
+
+def _plist(st_bin: str, root: Path, interval_s: int, path_env: str) -> str:
+    import plistlib
+    body = plistlib.dumps({
+        "Label": LAUNCHD_LABEL,
+        "ProgramArguments": [st_bin, "--root", str(root), "fleet", "tend"],
+        "EnvironmentVariables": {"SHANTY_ROOT": str(root), "PATH": path_env},
+        "StartInterval": int(interval_s),
+        # RunAtLoad is the plist's Persistent=true: a Mac that was asleep or
+        # off gets a pass as soon as the agent loads, not five minutes later.
+        "RunAtLoad": True,
+        "ProcessType": "Background",
+        "StandardOutPath": str(root / "logs" / "tend.launchd.log"),
+        "StandardErrorPath": str(root / "logs" / "tend.launchd.log"),
+    }).decode()
+    # The ownership marker, as an XML comment: plistlib cannot write one, and a
+    # key launchd does not know would be a key launchd warns about.
+    return body.replace("<plist", f"<!-- {PLIST_MARKER} -->\n<plist", 1)
+
+
+def install_launchd(st_bin: str, root: Path, *, interval: str = "5min", run=None,
+                    dry_run: bool = False, agents_dir: Path | None = None,
+                    path_env: str | None = None, uid: int | None = None
+                    ) -> tuple[bool, str]:
+    """Write + load the LaunchAgent. Same contract as install(): idempotent,
+    refuses a bare st, refuses to overwrite a plist it did not write."""
+    if not st_bin or not os.path.isabs(st_bin):
+        return False, (
+            f"REFUSED: {st_bin!r} is not an absolute path. launchd does not "
+            f"search your shell's PATH, so this agent would fail on every fire "
+            f"while launchctl still listed it. Pass the absolute path to the st "
+            f"you are running.")
+    from .jobs import parse_duration
+    try:
+        interval_s = int(parse_duration(interval))
+    except ValueError as e:
+        return False, f"REFUSED: --interval {e}"
+    d = agents_dir or launch_agents_dir()
+    path = d / f"{LAUNCHD_LABEL}.plist"
+    if path.exists() and not ours(path):
+        return False, (f"REFUSED: {path} exists and was NOT written by st fleet "
+                       f"tend (no {PLIST_MARKER!r}). Refusing to overwrite it.")
+    root = Path(root).resolve()
+    text = _plist(st_bin, root, interval_s,
+                  path_env if path_env is not None else os.environ.get("PATH", ""))
+    if path.exists() and path.read_text() == text:
+        return False, "already installed and current — nothing to do."
+    if dry_run:
+        return False, f"would write {path}, then load it with launchctl."
+    d.mkdir(parents=True, exist_ok=True)
+    (root / "logs").mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+    if run is not None:
+        domain = f"gui/{os.getuid() if uid is None else uid}"
+        # bootout first: bootstrap refuses a label that is already loaded, and a
+        # changed plist is only re-read by a fresh bootstrap.
+        run(["launchctl", "bootout", domain, str(path)])
+        run(["launchctl", "bootstrap", domain, str(path)])
+    return True, f"installed {path} (every {interval_s}s)."
+
+
+def uninstall_launchd(*, run=None, agents_dir: Path | None = None,
+                      uid: int | None = None) -> tuple[bool, str]:
+    path = (agents_dir or launch_agents_dir()) / f"{LAUNCHD_LABEL}.plist"
+    if not path.exists():
+        return False, "not installed — nothing to remove."
+    if not ours(path):
+        return False, f"REFUSED: {path} was not written by st fleet tend. Leaving it alone."
+    if run is not None:
+        run(["launchctl", "bootout", f"gui/{os.getuid() if uid is None else uid}", str(path)])
+    path.unlink()
+    return True, f"removed {path.name}."
 
 
 class GovernorWake:

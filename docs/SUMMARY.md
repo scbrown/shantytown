@@ -19,6 +19,7 @@
 - [Roles](roles.md)
 - [Harnesses](harnesses.md)
 - [Sleep / dream](dream.md)
+- [Scheduled & event jobs](jobs.md)
 
 # The shape
 
