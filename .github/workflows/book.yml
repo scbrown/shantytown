@@ -12,9 +12,14 @@ permissions:
   pages: write
   id-token: write
 
+# The Pages deploy and the PR build checks must NOT share a group. A single
+# `pages` group with cancel-in-progress let any docs PR cancel main's publish,
+# and a main rerun cancel open PR checks (measured 2026-09-26, run 36216218263).
+# Main publishes in its own group and is never cancelled mid-deploy; a PR build
+# only supersedes older builds of the SAME PR.
 concurrency:
-  group: pages
-  cancel-in-progress: true
+  group: ${{ github.event_name == 'push' && 'pages' || format('book-{0}', github.ref) }}
+  cancel-in-progress: ${{ github.event_name != 'push' }}
 
 jobs:
   build:
