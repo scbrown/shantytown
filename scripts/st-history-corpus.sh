@@ -13,6 +13,10 @@
 #
 # SCOPE IS wu's CAPACITY/RELEVANCE RULING (aegis-oeswpq): dialogue,
 # reasoning when plaintext exists, and tool INVOCATIONS — never tool RESULTS.
+# This exclusion is also a security boundary: arbitrary credentials may appear
+# in tool results without matching a known token pattern. Keep it independently
+# tested even though the derivative scrubber also omits supported result records.
+# Retained dialogue/tool inputs still require credential checks before publication.
 # Tool output is largely source and command stdout already represented in the
 # code index; it was measured at 49.5% of the first projection's bytes.
 #
@@ -34,7 +38,7 @@ python3 - "$SRC" "$OUT" <<'PY'
 import datetime, json, pathlib, sys
 
 src, out = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
-PROJECTION_VERSION = 3  # v3 emits Bobbin archive Markdown with frontmatter
+PROJECTION_VERSION = 4  # v4 excludes tool-role messages as well as typed outputs
 
 def clip(s, n=4000):
     s = " ".join(str(s).split())
@@ -68,7 +72,7 @@ def codex_turns(fh):
             continue
         p = d.get("payload") or {}
         t = p.get("type")
-        if t == "message":
+        if t == "message" and p.get("role") in ("user", "assistant", "system", "developer"):
             c = p.get("content")
             if isinstance(c, list):
                 c = " ".join(x.get("text", "") for x in c if isinstance(x, dict))

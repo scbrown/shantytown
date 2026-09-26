@@ -21,6 +21,11 @@
 # that cannot answer the question it was built for. If the corpus ever leaves
 # this host that decision must be revisited; it is recorded here so the next
 # reader sees it was a decision, not an oversight.
+# Supported harness tool-result records are omitted wholesale from the derivative.
+# Raw transcripts retain the evidence. Pattern matching cannot recognize arbitrary
+# live secrets printed by tools, so matching more token prefixes is not this boundary.
+# Remaining dialogue/invocations receive pattern redaction only; this is not a
+# guarantee that arbitrary credentials are absent from all retained text.
 set -uo pipefail
 
 RAW="${ST_HISTORY_DIR:-$HOME/gt/shantytown/.shanty/history}"
@@ -62,10 +67,68 @@ if [ -n "$ONLY_AGENT" ] && [ ! -d "$RAW/$ONLY_AGENT" ]; then
 fi
 mkdir -p "$OUT"; chmod 700 "$OUT"
 
-python3 - "$RAW" "$OUT" "$ONLY_AGENT" "$FULL" <<'PY'
-import hashlib, pathlib, re, sys
+python3 - "$RAW" "$OUT" "$ONLY_AGENT" "$FULL" "$0" <<'PY'
+import hashlib, json, os, pathlib, re, sys, tempfile
 raw, out = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
 only_agent, full = sys.argv[3], sys.argv[4] == "1"
+# Each derivative records the exact policy that produced it. A new exclusion or
+# pattern must revisit old files even when the source mtime has not changed.
+policy = hashlib.sha256(pathlib.Path(sys.argv[5]).read_bytes()).hexdigest()
+RESULT_TYPES = {"tool_result", "function_call_output", "custom_tool_call_output"}
+OMITTED = {"type": "omitted_tool_result"}
+
+
+def omit_results(value):
+    if isinstance(value, dict):
+        if (isinstance(value.get("type"), str) and value["type"] in RESULT_TYPES
+                or value.get("role") == "tool"):
+            return OMITTED, 1
+        result, count = {}, 0
+        for key, child in value.items():
+            result[key], n = omit_results(child)
+            count += n
+        return result, count
+    if isinstance(value, list):
+        result, count = [], 0
+        for child in value:
+            clean, n = omit_results(child)
+            result.append(clean)
+            count += n
+        return result, count
+    return value, 0
+
+
+def strip_results(data):
+    lines, omitted, malformed = [], 0, 0
+    for line in data.splitlines():
+        if not line.strip():
+            continue
+        try:
+            value = json.loads(line)
+        except (ValueError, UnicodeDecodeError):
+            # A partial/invalid record has no trustworthy schema. Preserve it in
+            # the raw archive, never copy unknown bytes into the derivative.
+            lines.append(b'{"type":"omitted_unparseable_record"}')
+            malformed += 1
+            continue
+        value, n = omit_results(value)
+        lines.append(json.dumps(value, ensure_ascii=True).encode())
+        omitted += n
+    return b"\n".join(lines) + (b"\n" if lines else b""), omitted, malformed
+
+
+def atomic_write(path, data):
+    # A reader must never see a partially scrubbed file, nor a world-readable
+    # output between write and chmod. The raw archive is never opened for write.
+    fd, temporary = tempfile.mkstemp(prefix=".scrub-", dir=path.parent)
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+        os.replace(temporary, path)
+    finally:
+        pathlib.Path(temporary).unlink(missing_ok=True)
+
+
 # gitleaks-shaped credential classes. Add here, never weaken: a smaller number
 # from a looser pattern is not progress.
 PATS = [
@@ -83,9 +146,10 @@ PATS = [
 srcs = sorted((raw / only_agent).rglob("*.jsonl")) if only_agent \
     else sorted(raw.rglob("*.jsonl"))
 
-files = redacted = skipped = 0
+files = redacted = skipped = omitted = malformed = 0
 for f in srcs:
     dst_pre = out / f.relative_to(raw)
+    marker = dst_pre.with_suffix(".jsonl.scrub-policy")
     # INCREMENTAL. A capture is byte-append-only for a live session and
     # immutable once its session ends, so a derivative at least as new as its
     # source, and non-empty, is already current. mtime AND size: mtime alone
@@ -93,12 +157,15 @@ for f in srcs:
     if not full and dst_pre.exists():
         try:
             ss, ds = f.stat(), dst_pre.stat()
-            if ds.st_mtime >= ss.st_mtime and ds.st_size > 0:
+            if (ds.st_mtime >= ss.st_mtime and ds.st_size > 0
+                    and marker.read_text() == policy):
                 skipped += 1
                 continue
         except OSError:
             pass
-    data = f.read_bytes()
+    data, dropped, invalid = strip_results(f.read_bytes())
+    omitted += dropped
+    malformed += invalid
     n = 0
     for name, p in PATS:
         def sub(m, _n=name):
@@ -109,12 +176,14 @@ for f in srcs:
         data = p.sub(sub, data)
     dst = out / f.relative_to(raw)
     dst.parent.mkdir(parents=True, exist_ok=True)
-    dst.write_bytes(data)
-    dst.chmod(0o600); dst.parent.chmod(0o700)
+    dst.parent.chmod(0o700)
+    atomic_write(dst, data)
+    atomic_write(marker, policy.encode())
     files += 1; redacted += n
 scope = f" for {only_agent!r}" if only_agent else ""
 print(f"scrubbed {files} file(s){scope}, {redacted} credential-shaped "
-      f"value(s) replaced, {skipped} already current")
+      f"value(s) replaced, {skipped} already current; "
+      f"{omitted} tool result(s) omitted, {malformed} unparseable record(s) omitted")
 
 # THE FALSIFIABLE CHECK: no pattern may survive into the derivative.
 #
@@ -129,15 +198,17 @@ checked = out / only_agent if only_agent else out
 left = 0
 for f in checked.rglob("*.jsonl"):
     d = f.read_bytes()
+    _, results, invalid = strip_results(d)
+    left += results + invalid
     for _, p in PATS:
         left += len(p.findall(d))
-print(f"residual credential-shaped hits in {checked}: {left}")
+print(f"residual credential-shaped hits or tool/unparseable records in {checked}: {left}")
 sys.exit(0 if left == 0 else 2)
 PY
 rc=$?
 echo "derivative: $OUT${ONLY_AGENT:+/$ONLY_AGENT}"
 if [ $rc -eq 0 ]; then
-  echo "CLEAN — safe to index${ONLY_AGENT:+ (scope: $ONLY_AGENT only)}"
+  echo "CLEAN — supported tool results omitted; credential patterns absent (not a credential-free guarantee)${ONLY_AGENT:+ (scope: $ONLY_AGENT only)}"
 else
   echo "NOT CLEAN — do NOT index${ONLY_AGENT:+ $ONLY_AGENT} (rc=$rc)"
 fi
