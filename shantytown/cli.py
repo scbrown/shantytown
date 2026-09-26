@@ -178,7 +178,8 @@ from . import guard as guard_mod
 from . import attribution as attribution_mod
 from .attribution import attribute
 from .events import FilesEvents
-from .inbox import FilesInbox, MessageTooLong, TrackerInbox, is_message
+from .inbox import (FilesInbox, MarkReadIncomplete, MessageTooLong,
+                    TrackerInbox, is_message)
 from .triage import Action
 from . import supervisor as sup_mod
 from . import tend as tend_mod
@@ -4806,7 +4807,13 @@ def _inbox_read(a, me: str) -> int:
                       f"{me}: {', '.join(missing)}. Nothing marked read.",
                       file=sys.stderr)
                 return REFUSED
-        marked = box.mark_read(me, ids=read_ids or None)
+        failed: list[tuple[str, str]] = []
+        try:
+            marked = box.mark_read(me, ids=read_ids or None)
+        except MarkReadIncomplete as e:
+            # Print what WAS consumed before saying what was not (aegis-6sws17):
+            # those bodies are gone from the unread set either way.
+            marked, failed = e.marked, e.failed
         # PRINT WHAT IT CONSUMED (GitHub #14). --read is the ACK, and it is the
         # only thing that consumes a message. A count is not the message: the
         # bodies are gone from the unread set the instant this returns, so a
@@ -4818,6 +4825,15 @@ def _inbox_read(a, me: str) -> int:
             for line in (m.body or "").splitlines() or [""]:
                 print(f"    {line}")
         print(f"\n  marked {len(marked)} message(s) read for {me}.")
+        if failed:
+            # NOT "still unread": a close that timed out may have landed. Say
+            # which, and that a re-run acks only what is still open.
+            print(f"  ⚠ {len(failed)} close(s) NOT CONFIRMED (may or may not have "
+                  f"landed); re-run `st inbox --read` to ack whatever is still "
+                  f"unread:", file=sys.stderr)
+            for mid, err in failed:
+                print(f"    {mid}  {err}", file=sys.stderr)
+            return CANNOT_TELL
         return OK
 
     print()
