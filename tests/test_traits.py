@@ -27,7 +27,7 @@ from shantytown.protocols import Agent
 
 def test_the_builtin_three_are_described():
     c = traits.default_catalog()
-    assert c.known() == ["administrator", "lead", "worker"], \
+    assert c.known() == ["administrator", "executive", "lead", "worker"], \
         "only the three the built-in PROCESS is defined for — a catalog of ten " \
         "here would re-hardcode what the deployment is supposed to declare"
     assert c.of("administrator").attachment == "rooted"
@@ -226,7 +226,7 @@ def test_a_non_integer_rank_is_refused(tmp_path):
 
 def test_no_declaration_means_the_builtin_three(tmp_path):
     assert config.load(tmp_path).catalog().known() == \
-        ["administrator", "lead", "worker"]
+        ["administrator", "executive", "lead", "worker"]
 
 
 # --- the graph source (pure projection; live shape pinned) -------------------

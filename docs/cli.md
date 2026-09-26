@@ -13,6 +13,7 @@
 st anchor [--short|--events|--harness]
                               who am I, what's on my plate         <- the anchor
 st go <item> <agent>          dispatch. this is the one that matters. the agent is required.
+st sling <bead>                  hand a beaded design to the executive for scheduling.
 st inbox <agent> <message>    put a message in an agent's inbox (send-keys; -d persists)
 st inbox [--count|--read|--read-id ID]
                               read or acknowledge your own inbox
@@ -215,7 +216,7 @@ Codex input already includes its cached subset. This makes
 `cache_read / usage_in` a provider-independent prompt-cache hit rate. The fields
 are omitted—not zeroed—when every matching transcript is unknown.
 
-Thirty-seven. Six verbs at the top level and thirty-one grouped commands under five groups
+Thirty-eight. Seven verbs at the top level and thirty-one grouped commands under five groups
 (`work`, `agent`, `fleet`, `repo`, `ops`). A group is a namespace and runs nothing, so it earns no
 slot; the count is the leaves. The flat spellings from before the grouping (st cycle for
 st agent cycle, and so on) still parse into the same handler, print one line on stderr saying
@@ -348,6 +349,43 @@ Four things, and each one has to earn its line:
 Gas Town's primer has a `--hook` mode that fires at SessionStart and mutates state. That coupling is
 why "did I get primed?" became unanswerable when the hook silently didn't register. `st anchor` is
 a pure read, safe to run twice, and if you want it at session start you wire it there yourself.
+
+## `st sling` — design handoff
+
+Design → bead (epic and children) → `st sling <bead>`. The executive administrator
+owns scheduling and worker dispatch. This command does not claim or dispatch the design.
+
+```sh
+st sling design-42 --note-file handoff.md --dry-run
+st sling design-42 --note-file handoff.md
+```
+
+Mark exactly one administrator with the additive `executive` role in the role
+registry: `role = "administrator"`, `roles = ["administrator", "executive"]`.
+Keep its host placement current. This marker does not create a new tree position.
+An absent, ambiguous, retired, or non-administrator executive refuses delivery.
+For files registries with peers, the configured graph supplies fleet identity;
+without a graph, a complete peer census is required. An unavailable source refuses
+rather than choosing the first administrator.
+
+The bead must have a nonblank description or design body. The full note and direct
+parent-child references are recorded in a structured handoff comment. A bounded
+bead pointer goes to the durable inbox (br by default; explicit files is available
+for standalone deployments). Receipt read-back is required for success. A live
+pane nudge is best effort; the unread receipt remains for the executive's next stop.
+Long notes belong in `--note-file` or stdin (`--note-file -`), never shell interpolation.
+
+Cross-host handoffs use the same configured peer relay as `st go`; the destination
+rechecks executive and host placement and reads its configured shared board.
+An explicit local `--repo` cannot be reinterpreted on another host. Both deployments
+must have this command installed. `--dry-run` reads the design and previews target,
+pointer, children and note without writing a comment, receipt or event.
+
+Each handoff has an atomic event under `<root>/sling/*.json` containing sender,
+executive, bead, children, timestamp and verified receipt. The same content retries
+with the same marker, including when its inbox receipt has already been read.
+After an indeterminate write, inspect that marker before retrying; changed content
+is a new handoff. The structured comment provides the same provenance on the bead.
 
 ## `st go` — dispatch
 
