@@ -6699,7 +6699,7 @@ def _crew_governor(a) -> int:
                  f"{_pct(gov_mod.SEVEN_DAY)} {detail}").rstrip()
         advisory = creel_advisory_mod.controller_line(
             readings, running=running, cap=verdict.max_agents,
-            max_age=multi.policy.max_age_seconds,
+            max_age=multi.policy.max_age_seconds, paces=multi.policy.paces,
             probe=getattr(cfg, "env", {}).get(creel_advisory_mod.PROBE_ENV))
         # UTILIZATION ON ITS OWN LINE, EVERY PASS (aegis-967a9). Same argument
         # the fleet cap earns above: under-cap idleness is invisible exactly when
@@ -10252,7 +10252,7 @@ def _tend_once(a, quiet: bool = False) -> int:
         running = live_by_gov.get(name, 0)
         line = creel_advisory_mod.controller_line(
             readings, running=running, cap=verdicts[name].max_agents,
-            max_age=gov.policy.max_age_seconds,
+            max_age=gov.policy.max_age_seconds, paces=gov.policy.paces,
             probe=cfg.env.get(creel_advisory_mod.PROBE_ENV))
         setpoint_advisories[name] = line
         # Unavailability is pushed once through the deduped alerter below.  A
