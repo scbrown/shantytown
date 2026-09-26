@@ -10335,6 +10335,14 @@ def _cmd_tend(a) -> int:
         # a relative path, so an unresolvable st is a loud failure here rather
         # than a silent 203/EXEC on every timer fire (aegis-408qs).
         st_bin = sup_mod.resolve_st_bin() or "st"
+        if sys.platform == "darwin":
+            # The Mac's scheduler is launchd; the systemd path below is
+            # unchanged for every other host.
+            changed, msg = sup_mod.install_launchd(
+                st_bin, Path(a.root), interval=a.interval,
+                run=None if a.dry_run else _run_cmd, dry_run=a.dry_run)
+            print(f"  {msg}")
+            return OK if changed or "already installed" in msg or a.dry_run else REFUSED
         changed, msg = sup_mod.install(st_bin, Path(a.root), interval=a.interval,
                                        run=None if a.dry_run else _run_cmd,
                                        is_active=_systemctl_user_active,
@@ -10344,6 +10352,10 @@ def _cmd_tend(a) -> int:
         print(f"  {msg}")
         return OK if changed or "already installed" in msg or a.dry_run else REFUSED
     if a.uninstall:
+        if sys.platform == "darwin":
+            changed, msg = sup_mod.uninstall_launchd(run=None if a.dry_run else _run_cmd)
+            print(f"  {msg}")
+            return OK if changed or "not installed" in msg else REFUSED
         changed, msg = sup_mod.uninstall(run=None if a.dry_run else _run_cmd)
         print(f"  {msg}")
         return OK if changed or "not installed" in msg else REFUSED
@@ -11462,9 +11474,16 @@ def _tend_status(a) -> int:
     d = sup_mod.unit_dir()
     svc, tmr = d / sup_mod.SERVICE, d / sup_mod.TIMER
     print()
-    print(f"  units       {'installed' if tmr.exists() else 'NOT installed'}"
-          f"{'' if not tmr.exists() else (' (ours)' if sup_mod.ours(tmr) else ' (NOT ours)')}")
-    print(f"  timer       {'active' if _systemctl_user_active(sup_mod.TIMER) else 'inactive'}")
+    if sys.platform == "darwin":
+        # The Mac's installed thing is the LaunchAgent (install_launchd); the
+        # systemd lines below would report NOT installed on a host that is.
+        tmr = sup_mod.launch_agents_dir() / f"{sup_mod.LAUNCHD_LABEL}.plist"
+        print(f"  launchd     {'installed' if tmr.exists() else 'NOT installed'}"
+              f"{'' if not tmr.exists() else (' (ours)' if sup_mod.ours(tmr) else ' (NOT ours)')}")
+    else:
+        print(f"  units       {'installed' if tmr.exists() else 'NOT installed'}"
+              f"{'' if not tmr.exists() else (' (ours)' if sup_mod.ours(tmr) else ' (NOT ours)')}")
+        print(f"  timer       {'active' if _systemctl_user_active(sup_mod.TIMER) else 'inactive'}")
     # is_masked IS NOT OPTIONAL HERE (aegis-unbuw). It defaults to "nothing is
     # masked", and this call site omitted it while `--install` passed it — so
     # the masked-tombstone fix landed on the path that REFUSES and missed the

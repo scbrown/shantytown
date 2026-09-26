@@ -143,6 +143,16 @@ st work jobs run <name> -n   print the rendered action
 st work jobs history [name]  recent attempts from logs/jobs.jsonl
 ```
 
+## Running tend on a Mac
+
+`st fleet tend --install` writes a launchd agent on macOS
+(`~/Library/LaunchAgents/shantytown.st-tend.plist`, `StartInterval` 300,
+`RunAtLoad`) and loads it with `launchctl bootstrap`. The plist uses the
+**absolute** path of the `st` you ran, sets `SHANTY_ROOT`, and carries your
+shell's `PATH`, because launchd starts jobs with `/usr/bin:/bin` and tend calls
+tmux, git, gh and br. `--uninstall` removes it and refuses to touch a plist that
+st did not write. Linux keeps the systemd user timer, unchanged.
+
 ## Examples
 
 A daily patrol that wakes an agent. This replaces a session cron that died with

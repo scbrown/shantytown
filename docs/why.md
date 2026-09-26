@@ -13,8 +13,9 @@ try to replace any of that and never will.
 
 Shantytown's whole claim is *smallness*: stdlib-only Python, no resident daemon, no server, and a
 tracker you can swap in two functions. The one scheduled thing is `st fleet tend --install`, which asks
-your systemd user timer to run a one-shot `st fleet tend` pass every five minutes; nothing of
-shantytown's stays running between passes.
+your systemd user timer (a launchd agent on macOS) to run a one-shot `st fleet tend` pass every five
+minutes; nothing of shantytown's stays running between passes. Your own recurring work rides that
+same pass as declared jobs ([jobs.md](jobs.md)) rather than growing a scheduler of its own.
 
 |  | **raw tmux + shell scripts** | **[Gas Town](https://github.com/gastownhall/gastown)** | **shantytown** |
 |--|:---:|:---:|:---:|
