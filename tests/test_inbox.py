@@ -358,7 +358,9 @@ def test_one_slow_close_does_not_abandon_the_batch_ack(tmp_path: Path):
         box.mark_read("dearing")
     assert sorted(m.body for m in ei.value.marked) == ["note 0", "note 2"], (
         "the closes on either side of the slow one must both land and be returned")
-    assert [i for i, _ in ei.value.failed] == [slow]
+    assert [m.id for m, _ in ei.value.failed] == [slow]
+    # The whole message rides along, so its body can still be shown.
+    assert ei.value.failed[0][0].body == "note 1"
     assert "TimeoutExpired" in ei.value.failed[0][1]
     # The unconfirmed one is still unread here, so a re-run acks exactly it.
     trk.update = real_update

@@ -4807,7 +4807,7 @@ def _inbox_read(a, me: str) -> int:
                       f"{me}: {', '.join(missing)}. Nothing marked read.",
                       file=sys.stderr)
                 return REFUSED
-        failed: list[tuple[str, str]] = []
+        failed: list = []
         try:
             marked = box.mark_read(me, ids=read_ids or None)
         except MarkReadIncomplete as e:
@@ -4828,11 +4828,17 @@ def _inbox_read(a, me: str) -> int:
         if failed:
             # NOT "still unread": a close that timed out may have landed. Say
             # which, and that a re-run acks only what is still open.
-            print(f"  ⚠ {len(failed)} close(s) NOT CONFIRMED (may or may not have "
-                  f"landed); re-run `st inbox --read` to ack whatever is still "
-                  f"unread:", file=sys.stderr)
-            for mid, err in failed:
-                print(f"    {mid}  {err}", file=sys.stderr)
+            # Print the BODY too: a close that timed out but landed has left the
+            # unread set, so a re-run will never show it (sattler, #93 review).
+            print(f"\n  ⚠ UNCONFIRMED: {len(failed)} close(s) may or may not have "
+                  f"landed. Their bodies are below because a re-run shows only "
+                  f"what is still unread; re-run `st inbox --read` to ack the rest.",
+                  file=sys.stderr)
+            for m, err in failed:
+                frm = f" from {m.frm}" if getattr(m, "frm", None) else ""
+                print(f"\n  {m.id}{frm}  [{err}]", file=sys.stderr)
+                for line in (m.body or "").splitlines() or [""]:
+                    print(f"    {line}", file=sys.stderr)
             return CANNOT_TELL
         return OK
 

@@ -364,13 +364,18 @@ def test_inbox_read_prints_what_it_did_consume_when_a_close_is_unconfirmed(
     kept = box.deliver("sattler", "the body you must see")
 
     def partial(self, me, ids=None):
+        # The failed close raised but may have LANDED: its body must still be
+        # printed, because a re-run shows only what is still unread.
         raise MarkReadIncomplete(
             [Message(id=kept.id, to=me, body=kept.body, read=True)],
-            [("aegis-slow1", "TimeoutExpired: timed out after 30 seconds")])
+            [(Message(id="aegis-slow1", to=me, body="the landed-but-unconfirmed body",
+                      frm="wu"),
+              "TimeoutExpired: timed out after 30 seconds")])
 
     monkeypatch.setattr(FilesInbox, "mark_read", partial)
     assert _run(["inbox", "--read", "sattler"], tmp_path, monkeypatch,
                 NullPanes()) == cli.CANNOT_TELL
     out, err = capsys.readouterr()
     assert "the body you must see" in out and "marked 1" in out
-    assert "aegis-slow1" in err and "NOT CONFIRMED" in err
+    assert "aegis-slow1" in err and "UNCONFIRMED" in err
+    assert "the landed-but-unconfirmed body" in err and "from wu" in err

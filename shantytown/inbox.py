@@ -364,14 +364,16 @@ class MarkReadIncomplete(RuntimeError):
 
     `failed` is NOT "still unread". A close that timed out may have landed, so
     each entry is unconfirmed; the caller must say so rather than promise a
-    retry is safe."""
+    retry is safe. It carries the whole Message, not just the id: a close that
+    timed out but LANDED leaves the unread set, so a re-run will never show its
+    body, and this is the last chance to print it (sattler, #93 review)."""
 
-    def __init__(self, marked: list, failed: list[tuple[str, str]]):
+    def __init__(self, marked: list, failed: list[tuple["Message", str]]):
         self.marked = marked
         self.failed = failed
         super().__init__(
             f"{len(failed)} pointer close(s) not confirmed after marking "
-            f"{len(marked)}: " + ", ".join(i for i, _ in failed[:10]))
+            f"{len(marked)}: " + ", ".join(m.id for m, _ in failed[:10]))
 
 
 @runtime_checkable
@@ -573,7 +575,7 @@ class TrackerInbox:
             try:
                 self._tracker.update(msg.id, status="closed")
             except Exception as e:  # noqa: BLE001 -- one slow close must not abandon the batch
-                failed.append((msg.id, f"{type(e).__name__}: {str(e)[:120]}"))
+                failed.append((msg, f"{type(e).__name__}: {str(e)[:120]}"))
                 continue
             marked.append(Message(id=msg.id, to=msg.to, body=msg.body,
                                   frm=msg.frm, read=True))
