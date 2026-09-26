@@ -1244,7 +1244,7 @@ def test_the_two_commands_cannot_drift_apart_again(tmp_path):
     exactly how crew kept a sentence that stop had already had corrected."""
     import inspect
     from shantytown import cli
-    body = inspect.getsource(cli._cmd_crew) + inspect.getsource(cli._cmd_stop)
+    body = inspect.getsource(cli._cmd_crew) + inspect.getsource(cli._stop_locked)
     assert body.count("tend_fate(") == 2, "each command must call the shared helper"
     assert "Still respawned by" not in body, "the false promise is back"
     assert "does not respawn an unstamped agent" not in body, \

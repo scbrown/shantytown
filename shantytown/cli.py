@@ -3492,6 +3492,20 @@ def _foreign_session_refusal(a, agent_name: str, session: str, panes) -> str:
 
 
 def _cmd_stop(a) -> int:
+    # The cycle fallback already owns this lock and must retain its request if
+    # launch fails. This is an internal flag, never inferred from user prose.
+    if a.dry_run or getattr(a, "_cycle_internal_stop", False):
+        return _stop_locked(a)
+    with cycle_mod.lifecycle_lock(a.root, a.agent):
+        return _stop_locked(a)
+
+
+def _cancel_cycle_for_stop(a) -> None:
+    if not getattr(a, "_cycle_internal_stop", False):
+        cycle_mod.Requests(a.root).clear(a.agent)
+
+
+def _stop_locked(a) -> int:
     """stop <agent> — kill the agent's session (#5).
 
     kill_session is idempotent, so this is honest about the two states: an agent
@@ -3508,6 +3522,15 @@ def _cmd_stop(a) -> int:
         return REFUSED
     session = agent.pane      # the address; None/absent = not running
     if not session or not panes.exists(session):
+        if not a.dry_run:
+            # An already-down pane can still have a queued self-cycle.
+            if getattr(a, "after_turn", False):
+                agent_hold.hold(a.root, a.agent, _actor(), getattr(a, "reason", ""))
+            _launches(a).forget(a.agent)
+            _stops(a).record(a.agent, time.time(), by=_actor(),
+                             reason="stop requested while already down: "
+                             + (getattr(a, "reason", "") or ""))
+            _cancel_cycle_for_stop(a)
         if harness_mod.name_for(agent, root=a.root) == "codex" and not a.dry_run:
             from . import codex_daemon
             fixed = codex_daemon.repair(agent.name)
@@ -3526,6 +3549,7 @@ def _cmd_stop(a) -> int:
             return OK
         try:
             agent_hold.hold(a.root, a.agent, _actor(), getattr(a, "reason", ""))
+            _cancel_cycle_for_stop(a)
         except OSError as exc:
             print(f"  could not tell: {exc}", file=sys.stderr)
             return CANNOT_TELL
@@ -3565,6 +3589,7 @@ def _cmd_stop(a) -> int:
     _stops(a).record(a.agent, time.time(),
                      by=os.environ.get("SHANTY_AGENT", ""),
                      reason=getattr(a, "reason", "") or "")
+    _cancel_cycle_for_stop(a)
     # WHAT TEND WILL ACTUALLY DO, asked rather than assumed (aegis-k9068).
     #
     # This line used to promise "`st fleet tend` will still respawn it" unconditionally.
@@ -7861,6 +7886,18 @@ def _cmd_advise(a) -> int:
     return OK
 
 
+def _cycle_stop_refusal(a, agent_name) -> str:
+    if held := agent_hold.reason(a.root, agent_name):
+        return held
+    if getattr(a, "_automatic_cycle", False):
+        stop = _stops(a).get(agent_name)
+        if stop and not stop.reason.startswith(cycle_mod.CYCLE_REASON + ":"):
+            return "deliberately stopped; use `st agent new` to restart"
+        if agent_name not in cycle_mod.Requests(a.root).pending():
+            return "cycle request cancelled"
+    return ""
+
+
 def _cmd_cycle(a) -> int:
     """cycle <agent> — clear context WITHOUT destroying the runtime (aegis-3laza).
 
@@ -7887,6 +7924,10 @@ def _cmd_cycle(a) -> int:
     if not agent_name:
         print("  refused: no agent. `st agent cycle <agent>`, or `--self` with "
               "$SHANTY_AGENT set.", file=sys.stderr)
+        return REFUSED
+
+    if refusal := _cycle_stop_refusal(a, agent_name):
+        print(f"  refused: {agent_name}: {refusal}", file=sys.stderr)
         return REFUSED
 
     # --self is a REQUEST, and it cannot be anything else. The stop would kill the
@@ -8216,6 +8257,18 @@ def _write_resume_brief(a, card, agent_name: str, checkpoint: str) -> str:
 
 def _perform_cycle(a, card, agent_name: str, session: str, panes, runtime,
                    chosen, verdict) -> tuple:
+    # Stop can arrive during Git preflight or while tend waits on another
+    # cycle. Re-read intent under the same lock stop uses before any pane write.
+    with cycle_mod.lifecycle_lock(a.root, agent_name):
+        if refusal := _cycle_stop_refusal(a, agent_name):
+            print(f"  refused: {agent_name}: {refusal}", file=sys.stderr)
+            return REFUSED, chosen.mode
+        return _perform_cycle_locked(a, card, agent_name, session, panes,
+                                     runtime, chosen, verdict)
+
+
+def _perform_cycle_locked(a, card, agent_name, session, panes, runtime,
+                          chosen, verdict):
     """Do it, escalating DOWN the mechanisms and never back up.
 
     Returns (exit code, the mechanism that actually ran). The second half is not
@@ -8294,6 +8347,7 @@ def _restart_cycle(a, card, agent_name, session, panes, runtime, chosen, verdict
         return rc, cycle_mod.RELAUNCH
     stop_args = argparse.Namespace(**vars(a))
     stop_args.agent = agent_name
+    stop_args._cycle_internal_stop = True
     stop_args.reason = f"{cycle_mod.CYCLE_REASON}: {verdict.checkpoint}"
     if (rc := _cmd_stop(stop_args)) != OK:
         print(f"  refused: {agent_name} was not stopped — NOT relaunching. "
@@ -10551,6 +10605,7 @@ def _tend_once(a, quiet: bool = False) -> int:
                           n=req_nodes: _cmd_cycle(
                 argparse.Namespace(**{**vars(a), "cmd": "cycle", "agent": w,
                                       "reason": c, "self_": False,
+                                      "_automatic_cycle": True,
                                       "checkpoint_bead": b,
                                       "quipu_node": n,
                                       "no_graph_context": "" if n else
