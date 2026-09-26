@@ -1917,7 +1917,7 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_doctor(a)
     from .deployment import command_environment
     from .quipu import NamespaceUnconfigured
-    with command_environment(a.root):
+    with command_environment(a.root, a.root_how):
         try:
             return _run_command(a)
         except NamespaceUnconfigured as e:
