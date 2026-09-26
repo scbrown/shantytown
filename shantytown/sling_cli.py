@@ -51,6 +51,9 @@ def command(a):
             raise CouldNotLook(error)
         if cfg.host_peers and not recipient.host:
             raise sling.Refused('executive has no host placement; update the role registry')
+        from .deployment import local_host
+        if recipient.host and not local_host(a.root):
+            raise sling.Refused("deployment has no host identity; cannot route a placed executive")
         a.agent = recipient.name
         a.durable = True
         # The existing dispatch relay pins the receiving host, rejects --repo

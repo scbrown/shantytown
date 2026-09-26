@@ -141,3 +141,19 @@ def test_executive_cannot_replace_tree_position(tmp_path):
     registry.set(boss())
     with pytest.raises(ValueError, match='additive marker'):
         plan_role_set(registry, 'chief', 'executive')
+
+
+def test_placed_executive_requires_local_host_identity(tmp_path, monkeypatch):
+    from shantytown import cli
+    from shantytown.files import FilesRegistry
+    from shantytown.tmux import NullPanes
+    setup(tmp_path)
+    FilesRegistry(tmp_path / 'crew').set(boss(host='elsewhere', pane='%1'))
+    panes = NullPanes()
+    monkeypatch.setattr(cli, '_panes', lambda a: panes)
+    monkeypatch.setenv('SHANTY_AGENT', 'author')
+    assert cli.main(['--root', str(tmp_path), '--backend', 'files',
+                     'sling', 'design-1']) == 1
+    assert not panes.sent
+    assert not (tmp_path / 'sling').exists()
+    assert not (tmp_path / 'inbox').exists()
