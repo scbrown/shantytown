@@ -606,8 +606,41 @@ def _yupana_brief_cmd() -> dict:
     stdout is injected as context, so a partial write from a dying process would
     become part of the agent's briefing."""
     return {"type": "command",
-            "command": 'out=$(yupana hook session-start) || exit 0; printf %s "$out"',
-            "timeout": 10}
+            "command": _YUPANA_BRIEF,
+            "timeout": SESSION_START_PARENT_TIMEOUT_SECS}
+
+
+# THE SESSION-START LADDER (aegis-drywac), the same shape and the same reason as
+# the pre-edit one below: yupana cannot see the timeout that kills it, so the
+# emitter owns both and asserts the ordering once, at import.
+#
+# WHY THIS WAS NEEDED. This hook was emitted with a 10s parent and NO child
+# budget, so yupana opened its 30s default. Its briefing sources then ran a ~12s
+# `/context` past the kill, and because stdout is echoed only on exit 0, the
+# agent received NOTHING: a briefing that never once printed in a live session.
+# With a total below the parent, yupana stops starting calls when the budget is
+# spent and prints the sections that finished; `/context`, the slowest, runs
+# last so it is the one skipped.
+SESSION_START_PARENT_TIMEOUT_SECS = 10
+SESSION_START_TOTAL_BUDGET_SECS = 8
+SESSION_START_PER_CALL_SECS = 5
+
+assert (
+    SESSION_START_PER_CALL_SECS
+    < SESSION_START_TOTAL_BUDGET_SECS
+    < SESSION_START_PARENT_TIMEOUT_SECS
+), (
+    "session-start time ladder must be per-call < total < parent, got "
+    f"{SESSION_START_PER_CALL_SECS} < {SESSION_START_TOTAL_BUDGET_SECS} "
+    f"< {SESSION_START_PARENT_TIMEOUT_SECS}"
+)
+
+_YUPANA_BRIEF = (
+    "out=$("
+    f"YUPANA_PROJECTION_HTTP_TIMEOUT_SECS={SESSION_START_PER_CALL_SECS} "
+    f"YUPANA_PROJECTION_TOTAL_BUDGET_SECS={SESSION_START_TOTAL_BUDGET_SECS} "
+    'yupana hook session-start) || exit 0; printf %s "$out"'
+)
 
 
 def _yupana_trace_cmd() -> dict:
