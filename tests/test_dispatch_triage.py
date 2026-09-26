@@ -97,3 +97,45 @@ def test_dry_run_triages_without_touching_anything(world):
     assert decision.action.value == "refuse"
     assert trk.updates == 0
     assert panes.sent == []
+
+
+@pytest.mark.parametrize("reassign,screen,governor_refusal,expected,marker", [
+    (True, "", "", 0, "assignee=ellie"),
+    (False, "", "", 1, "--reassign"),
+    (True, "thinking… (esc to interrupt)", "", 0, "REFUSE"),
+    (True, "", "fixture governor refusal", 1, "fixture governor refusal"),
+])
+def test_cli_reassignment_preview_preserves_gates_and_state(
+        world, monkeypatch, capsys, reassign, screen, governor_refusal, expected, marker):
+    """A preview must triage the same ownership override as the dispatch plan."""
+    from shantytown import cli
+
+    crew, trk = world
+    trk.update("item-1", assignee="alan")
+    trk.updates = 0
+    panes = NullPanes(screen=screen)
+    dispatcher = Dispatcher(FilesRegistry(crew), trk, panes,
+                            governor=lambda item, agent: governor_refusal)
+    monkeypatch.setattr(cli, "_wire", lambda args: dispatcher)
+    root = crew.parent
+    before = {p.relative_to(root): p.read_bytes()
+              for directory in (crew, root / "items")
+              for p in directory.rglob("*") if p.is_file()}
+    args = ["--root", str(root), "--backend", "files", "--registry", "files",
+            "go", "item-1", "ellie", "--dry-run", "--no-graph-context", "fixture"]
+    if reassign:
+        args.append("--reassign")
+
+    assert cli.main(args) == expected
+    output = capsys.readouterr()
+    assert marker in output.out + output.err
+    assert trk.updates == 0
+    assert panes.sent == []
+    assert trk.get("item-1").assignee == "alan"
+    assert before == {p.relative_to(root): p.read_bytes()
+                      for directory in (crew, root / "items")
+                      for p in directory.rglob("*") if p.is_file()}
+    # Existing preview telemetry is allowed; it must not claim real delivery.
+    audit = root / "logs" / "graph-adoption.jsonl"
+    if audit.exists():
+        assert all(json.loads(line)["dry_run"] for line in audit.read_text().splitlines())
