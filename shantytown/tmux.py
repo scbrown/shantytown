@@ -336,7 +336,9 @@ class Tmux:
         # unlike lstart, which is a fixed-width 24-char date field. pid is here
         # so the environment can be read back for the process it belongs to.
         ps = subprocess.run(
-            ["ps", "-o", "etimes=,pid=,args=", "-p", root, "--ppid", root],
+            # Hook environments can set COLUMNS; truncated argv can hide the
+            # settings pointer and falsely classify a wired lead as hookless.
+            ["ps", "-ww", "-o", "etimes=,pid=,args=", "-p", root, "--ppid", root],
             capture_output=True, text=True,
         )
         if ps.returncode != 0:
