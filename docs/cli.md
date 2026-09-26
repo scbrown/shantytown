@@ -1053,6 +1053,40 @@ next real crash read as somebody's decision.
 
 ## `st ops doctor` — the out-of-box feature
 
+A full doctor run, or `st ops doctor quipu`, also checks write authorization
+against `QUIPU_SERVER`, including with `--no-latest` (that flag skips release
+lookups). It POSTs `{}` to `/episode`: authorization precedes JSON validation,
+so the expected validation refusal proves access without storing an episode.
+It reports `ok`, `no-token`, `bad-token`, `read-only`, `unreachable`, or
+`unknown`/`unconfigured`. This checks permission to attempt writes, not successful
+storage commits. Failures affect the doctor exit code (1 actionable, 2 unknown).
+
+### Quipu credentials
+
+Obtain a credential from the administrator of the target Quipu server over your
+approved secret distribution channel. The administrator must first activate
+its shared bearer or register the issued named credential on that server.
+Installing a random string locally does not grant access.
+
+The client convention is `~/.config/quipu/token`, read on every request, so
+already-running sessions see provisioning and rotation. `QUIPU_AUTH_TOKEN`
+(nonempty) overrides `QUIPU_AUTH_TOKEN_FILE`, which overrides the default path.
+An explicit file override does not fall back to another token if unreadable.
+Install an administrator-supplied file without putting its contents in shell
+history or command arguments:
+
+```sh
+install -d -m 700 "$HOME/.config/quipu" && install -m 400 /secure/issued-token "$HOME/.config/quipu/token"
+st ops doctor quipu --no-latest
+```
+
+For existing deployments using a different location, keep
+`QUIPU_AUTH_TOKEN_FILE` pointing to it until provisioning and rotation target
+the canonical path together. Do not copy credentials into a second independent
+file that rotation will miss. Never commit token files or paste their contents
+into logs, command arguments, issues or the knowledge graph.
+
+
 `st --root "/path/to/.shanty" ops doctor --relay` checks incoming SSH environment
 requirements together: `PATH` for `st` and `tmux`, `SHANTY_ROOT`, and
 `SHANTY_BACKEND`. It prints one quoted shell setup recipe without changing files

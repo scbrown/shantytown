@@ -3830,6 +3830,11 @@ def _cmd_doctor(a) -> int:
         print(doc.render_stashes(stash_found, stash_n))
         print(_render_socket(sock_v, sock_why))
         code = _fold_socket(_doctor_exit(doc, healths, self_h), sock_v, doc)
+        if any(spec.name == "quipu" for spec in specs):
+            from . import quipu_health
+            write_health = quipu_health.check(deployment_default(a.root, "QUIPU_SERVER"))
+            print(write_health.render())
+            code = _fold_generic(code, write_health.code)
         # The untracked-hook liveness leg (aegis-06ue4): out-of-band answer to
         # "has the fail-open governance nudge actually run?" Only on a full run —
         # `st ops doctor bobbin` asked about bobbin, not the fleet's hooks.
