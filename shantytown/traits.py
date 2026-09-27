@@ -193,6 +193,8 @@ class Traits:
 # The three the built-in process is defined for, and no more (see the docstring).
 # Values are the live catalog's, not invented here.
 BUILTIN: dict[str, dict[str, tuple[str, ...]]] = {
+    # Additive marker: stack alongside administrator, not a tree position.
+    "executive": {},
     "worker": {
         "attachment": ("reports-to",),
         "workIntake": ("dispatched", "self-directed"),
