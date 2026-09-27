@@ -25,15 +25,30 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - name: Install mdbook
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      # This job holds pages:write and id-token:write, so nothing it executes may
+      # be substituted. A pinned TAG is not a pinned ARTIFACT: a release asset can
+      # be replaced under an existing tag. The download is written to disk and
+      # checked against a pinned sha256 BEFORE anything is extracted or run.
+      # v0.4.40 predates GitHub's published asset digests, so this digest was
+      # recorded on first use (2026-09-26). Bumping the version means bumping the
+      # digest in the same change.
+      - name: Install mdbook (pinned asset, sha256-verified)
+        env:
+          MDBOOK_VERSION: "0.4.40"
+          MDBOOK_SHA256: 9ef07fd288ba58ff3b99d1c94e6d414d431c9a61fdb20348e5beb74b823d546b
         run: |
-          mkdir -p ~/.local/bin
-          curl -sSL https://github.com/rust-lang/mdBook/releases/download/v0.4.40/mdbook-v0.4.40-x86_64-unknown-linux-gnu.tar.gz | tar -xz -C ~/.local/bin
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          set -euo pipefail
+          asset="mdbook-v${MDBOOK_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/$asset" \
+            "https://github.com/rust-lang/mdBook/releases/download/v${MDBOOK_VERSION}/$asset"
+          echo "${MDBOOK_SHA256}  $RUNNER_TEMP/$asset" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/mdbook"
+          tar -xzf "$RUNNER_TEMP/$asset" -C "$RUNNER_TEMP/mdbook"
+          echo "$RUNNER_TEMP/mdbook" >> "$GITHUB_PATH"
       - name: Build the book
         run: mdbook build --dest-dir _book
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3.0.1
         with:
           path: _book
 
@@ -46,4 +61,4 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4.0.5

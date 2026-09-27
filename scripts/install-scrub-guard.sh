@@ -171,7 +171,7 @@ emit_metrics() {
   # concurrent scrape sees whole content in practice, and node_exporter's own
   # node_textfile_scrape_error reports it if it ever does not. Only when
   # NEITHER works is the note true.
-  local out="${SCRUB_GUARD_TEXTFILE:-/var/lib/node_exporter/textfile/scrub_guard.prom}"
+  local out="${SCRUB_GUARD_TEXTFILE:-$DEFAULT_TEXTFILE}"
   local dir tmp
   dir="$(dirname "$out")"
   tmp="$(mktemp)" || return 0
@@ -448,6 +448,41 @@ if [ "${1:-}" = "--selftest" ]; then
     echo "FAIL a genuinely unwritable target was reported as published"; fail=1
   fi
 
+  # ── A SCOPED RUN NEVER OVERWRITES THE FLEET GAUGE (aegis-27ka8g) ─────────
+  # Arming ONE new repo with --root published "1 repo" as the host's coverage and
+  # fired a false ScrubGuardCoverageShrinking. Stand a pre-seeded file in for the
+  # fleet gauge and prove a --root run leaves it byte-identical, while the
+  # default-roots sweep still publishes (the control) and an explicit
+  # SCRUB_GUARD_TEXTFILE is still honoured for a scoped run.
+  mkdir -p "$tmp/fleet"
+  printf 'scrub_guard_repos_total 80\n' > "$tmp/fleet/scrub_guard.prom"
+  before=$(sha256sum "$tmp/fleet/scrub_guard.prom")
+  out=$(env -u SCRUB_GUARD_TEXTFILE SCRUB_GUARD_DEFAULT_TEXTFILE="$tmp/fleet/scrub_guard.prom" \
+        "$SELF/install-scrub-guard.sh" --root "$tmp/emptyroot" 2>&1)
+  if [ "$(sha256sum "$tmp/fleet/scrub_guard.prom")" = "$before" ] \
+     && printf '%s' "$out" | grep -q 'fleet coverage NOT published'; then
+    echo "ok   a --root run leaves the fleet gauge byte-identical and says so"
+  else
+    echo "FAIL a scoped --root run overwrote (or silently skipped) the fleet gauge"; fail=1
+  fi
+  mkdir -p "$tmp/scopedhome"
+  env -u SCRUB_GUARD_TEXTFILE SCRUB_GUARD_DEFAULT_TEXTFILE="$tmp/fleet/scrub_guard.prom" \
+      HOME="$tmp/scopedhome" "$SELF/install-scrub-guard.sh" >/dev/null 2>&1
+  if [ "$(sha256sum "$tmp/fleet/scrub_guard.prom")" != "$before" ] \
+     && grep -q '^scrub_guard_last_run_timestamp_seconds' "$tmp/fleet/scrub_guard.prom"; then
+    echo "ok   CONTROL: a default-roots sweep still publishes the fleet gauge"
+  else
+    echo "FAIL the default-roots sweep no longer publishes (the fix went too far)"; fail=1
+  fi
+  rm -f "$tmp/metrics/explicit.prom"
+  SCRUB_GUARD_TEXTFILE="$tmp/metrics/explicit.prom" \
+      "$SELF/install-scrub-guard.sh" --root "$tmp/emptyroot" >/dev/null 2>&1
+  if [ -s "$tmp/metrics/explicit.prom" ]; then
+    echo "ok   an explicit SCRUB_GUARD_TEXTFILE is honoured for a scoped run"
+  else
+    echo "FAIL a scoped run with an explicit textfile published nothing"; fail=1
+  fi
+
   # ── NAMED EXCLUSIONS ARE COUNTED, NEVER SILENTLY DROPPED ──────────────────
   # An uncounted skip is the defect this whole file is about, one layer down.
   EXCLUDE_PREFIXES=("$tmp/vendorland/")
@@ -504,11 +539,15 @@ fi
 # the account. Measured: the full walk costs ~0.3s and finds ~300 checkouts.
 DEFAULT_ROOTS=("$HOME")
 FALLBACK_ROOT="$(dirname "$(dirname "$SELF")")"
+# The FLEET coverage gauge. SCRUB_GUARD_DEFAULT_TEXTFILE exists only so the
+# selftest can stand in for it; operators override with SCRUB_GUARD_TEXTFILE.
+DEFAULT_TEXTFILE="${SCRUB_GUARD_DEFAULT_TEXTFILE:-/var/lib/node_exporter/textfile/scrub_guard.prom}"
 ROOTS=()
 CHECK=0
+SCOPED=0
 while [ $# -gt 0 ]; do
   case "$1" in
-    --root)  ROOTS+=("$2"); shift 2 ;;
+    --root)  ROOTS+=("$2"); SCOPED=1; shift 2 ;;
     --check) CHECK=1; shift ;;
     *) echo "unknown arg: $1" >&2; exit 64 ;;
   esac
@@ -602,7 +641,17 @@ echo "  roots swept: ${ROOTS[*]} (any depth)"
 echo "  checkouts scanned: $checkouts   third-party excluded: $excluded (${EXCLUDE_PREFIXES[*]})"
 echo "  distinct repos: $((repos + skipped))   public: $repos   internal/none: $skipped"
 echo "  public armed: $armed   unarmed: $unarmed"
-emit_metrics
+# A --root run sees only its roots, so its counts are NOT the estate's coverage.
+# Publishing them to the fleet gauge reported "1 repo" for the whole host the
+# moment someone armed a single new repo (aegis-27ka8g, a false
+# ScrubGuardCoverageShrinking). A scoped run publishes only where it is TOLD
+# to. It also leaves last_run_timestamp alone, so a sweep that silently became
+# scoped ages out through ScrubGuardSweepStale instead of reading healthy forever.
+if [ "$SCOPED" -eq 1 ] && [ -z "${SCRUB_GUARD_TEXTFILE:-}" ]; then
+  echo "  scoped run (--root): fleet coverage NOT published"
+else
+  emit_metrics
+fi
 if [ "$CHECK" -eq 1 ] && { [ "$unarmed" -gt 0 ] || [ "$source_current" -eq 0 ]; }; then
   echo "  run without --check to arm them." >&2
   exit 1

@@ -408,7 +408,7 @@ def test_crew_title_default_marks_cut_and_wide_keeps_full_title(tmp_path, monkey
     monkeypatch.setattr(cli, 'Tmux', lambda *_a, **_k: _Panes({'p-ellie': BUSY_SCREEN}))
     title = 'START ' + 'important assigned work ' * 20 + 'FINISH'
     snapshots = []
-    def plate(args, *, snapshot=False):
+    def plate(args, *, snapshot=False, require_complete=False):
         snapshots.append(snapshot)
         return lambda who: WorkItem(id='st-1', title=title)
     monkeypatch.setattr(cli, '_plate', plate)

@@ -22,6 +22,7 @@ reading the scripts:
     both branches are asserted, never just the cheap one.
 """
 import os
+import json
 import subprocess
 from pathlib import Path
 
@@ -61,6 +62,44 @@ def _run(script, *args, env=None, agent=None):
         e["SHANTY_AGENT"] = agent
     return subprocess.run([str(script), *args], capture_output=True, text=True,
                           env=e, timeout=120)
+
+
+@pytest.mark.parametrize("encoding", ["multiline", "literal-escapes", "truncated"])
+def test_private_key_body_is_removed_from_invocations_and_mirrors(tmp_path, encoding):
+    keyfile = tmp_path / "disposable-key"
+    subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(keyfile)],
+                   check=True, capture_output=True)
+    key = keyfile.read_text()
+    body_lines = key.splitlines()[1:-1]
+    payload = key
+    if encoding == "literal-escapes":
+        payload = key.replace("\n", "\\n")
+    elif encoding == "truncated":
+        payload = key.split("-----END", 1)[0]
+    command = "before control\n" + payload + "\nafter control"
+    body = json.dumps({"type": "assistant", "message": {"content": [
+        {"type": "tool_use", "input": {"command": command}},
+    ]}, "mirror": {"command": command}, "control": "separate field control"}) + "\n"
+    raw, out, env = _archive(tmp_path, body=body)
+    original = raw / "tester/a.jsonl"
+    before = original.stat().st_mtime_ns
+    result = _run(SCRUB, env=env)
+    assert result.returncode == 0, result.stderr
+    text = (out / "tester/a.jsonl").read_text()
+    assert all(line not in text for line in body_lines)
+    assert "END OPENSSH PRIVATE KEY" not in text
+    assert text.count("[REDACTED:privkey:") == 2
+    assert "before control" in text and "separate field control" in text
+    assert ("after control" in text) == (encoding != "truncated")
+    assert original.read_text() == body and original.stat().st_mtime_ns == before
+
+
+def test_public_key_envelope_is_retained(tmp_path):
+    public = "-----BEGIN PUBLIC KEY-----\npublic control\n-----END PUBLIC KEY-----"
+    _, out, env = _archive(tmp_path, body=json.dumps({"text": public}) + "\n")
+    result = _run(SCRUB, env=env)
+    assert result.returncode == 0
+    assert json.loads((out / "tester/a.jsonl").read_text())["text"] == public
 
 
 @pytest.mark.parametrize("script", [CAPTURE, SCRUB], ids=["capture", "scrub"])
@@ -287,3 +326,105 @@ def test_the_gate_answers_when_invoked_THE_WAY_A_READER_WOULD():
     assert "not importable" not in out, (
         f"the gate cannot load shantytown when run as a program:\n{out}")
     assert r.returncode in (0, 1, 2) and out.strip(), out
+
+
+@pytest.mark.parametrize("record", [
+    {"type": "user", "message": {"content": [
+        {"type": "text", "text": "dialogue control"},
+        {"type": "tool_result", "content": "unrecognizable-live-value", "extra": "unrecognizable-live-value"},
+    ]}},
+    {"type": "user", "message": {"content": [
+        {"type": "text", "text": "dialogue control"},
+        {"type": "tool_result", "content": [{"type": "text", "text": "unrecognizable-live-value"}]},
+    ]}},
+    {"type": "response_item", "control": "dialogue control", "payload": {
+        "type": "custom_tool_call_output", "output": "unrecognizable-live-value"}},
+    {"type": "response_item", "control": "dialogue control", "payload": {
+        "type": "function_call_output", "output": "unrecognizable-live-value"}},
+    {"type": "response_item", "control": "dialogue control", "payload": {
+        "type": "message", "role": "tool", "content": "unrecognizable-live-value"}},
+])
+def test_arbitrary_tool_results_are_omitted_without_a_known_secret_pattern(tmp_path, record):
+    body = json.dumps(record) + "\n"
+    raw, out, env = _archive(tmp_path, body=body)
+    source = raw / "tester/a.jsonl"
+    before = source.stat().st_mtime_ns
+    result = _run(SCRUB, env=env)
+    assert result.returncode == 0, result.stderr
+    derived = out / "tester/a.jsonl"
+    text = derived.read_text()
+    assert "unrecognizable-live-value" not in text
+    assert "dialogue control" in text and "omitted_tool_result" in text
+    assert source.read_text() == body and source.stat().st_mtime_ns == before
+    assert derived.stat().st_mode & 0o777 == 0o600
+    assert "1 tool result(s) omitted" in result.stdout
+    assert "safe to index" not in result.stdout
+    assert "not a credential-free guarantee" in result.stdout
+
+
+def test_new_policy_revisits_a_newer_legacy_derivative(tmp_path):
+    body = json.dumps({"type": "custom_tool_call_output", "output": "unrecognizable-live-value"}) + "\n"
+    raw, out, env = _archive(tmp_path, body=body)
+    dst = out / "tester/a.jsonl"
+    dst.parent.mkdir()
+    dst.write_text(body)
+    future = (raw / "tester/a.jsonl").stat().st_mtime + 60
+    os.utime(dst, (future, future))
+    result = _run(SCRUB, env=env)
+    assert result.returncode == 0 and "scrubbed 1 file(s)" in result.stdout
+    assert "unrecognizable-live-value" not in dst.read_text()
+    again = _run(SCRUB, env=env)
+    assert again.returncode == 0 and "1 already current" in again.stdout
+    # Even a policy-current file is rechecked, not trusted by its marker.
+    dst.write_text(body)
+    dirty = _run(SCRUB, env=env)
+    assert dirty.returncode == 2 and "NOT CLEAN" in dirty.stdout
+
+
+def test_unparseable_records_are_not_a_path_around_result_omission(tmp_path):
+    raw, out, env = _archive(tmp_path, body='{"type":"tool_result","content":"unrecognizable-live-value')
+    result = _run(SCRUB, env=env)
+    assert result.returncode == 0, result.stderr
+    assert "omitted_unparseable_record" in (out / "tester/a.jsonl").read_text()
+    assert "unrecognizable-live-value" not in (out / "tester/a.jsonl").read_text()
+    assert "unrecognizable-live-value" in (raw / "tester/a.jsonl").read_text()
+    assert "1 unparseable record(s) omitted" in result.stdout
+
+
+def test_remaining_dialogue_is_only_pattern_scrubbed(tmp_path):
+    # A negative control: this unshaped value is NOT detected as a secret.
+    # It must be absent from tool results because of the structural exclusion,
+    # not because the fixture happens to match a credential prefix.
+    _, out, env = _archive(tmp_path, body=json.dumps({"type": "user", "message": {
+        "content": "unrecognizable-live-value"}}) + "\n")
+    result = _run(SCRUB, env=env)
+    assert result.returncode == 0
+    assert "unrecognizable-live-value" in (out / "tester/a.jsonl").read_text()
+
+
+def test_non_scalar_type_in_tool_arguments_does_not_crash_scrubbing(tmp_path):
+    _, out, env = _archive(tmp_path, body=json.dumps({"type": "tool_use", "input": {
+        "type": {"nested": "dialogue control"}}}) + "\n")
+    result = _run(SCRUB, env=env)
+    assert result.returncode == 0, result.stderr
+    assert "dialogue control" in (out / "tester/a.jsonl").read_text()
+
+
+@pytest.mark.parametrize("mirror", [
+    {"stdout": "unrecognizable-live-value", "stderr": "unrecognizable-live-value"},
+    "unrecognizable-live-value",
+    [{"text": "unrecognizable-live-value"}],
+])
+def test_claude_result_mirror_is_removed_alongside_the_content_block(tmp_path, mirror):
+    body = json.dumps({"type": "user", "message": {"content": [
+        {"type": "text", "text": "dialogue control"},
+        {"type": "tool_result", "content": "unrecognizable-live-value"},
+    ]}, "toolUseResult": mirror}) + "\n"
+    raw, out, env = _archive(tmp_path, body=body)
+    result = _run(SCRUB, env=env)
+    assert result.returncode == 0, result.stderr
+    text = (out / "tester/a.jsonl").read_text()
+    assert "unrecognizable-live-value" not in text and "toolUseResult" not in text
+    assert "dialogue control" in text
+    assert (raw / "tester/a.jsonl").read_text() == body
+    assert "2 tool result(s) omitted" in result.stdout

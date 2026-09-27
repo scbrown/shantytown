@@ -1,6 +1,6 @@
-"""st — the CLI. Six verbs, five groups, thirty-one grouped commands: thirty-seven, and the count is load-bearing: each earns its slot.
+"""st — the CLI. Seven verbs, five groups, thirty-one grouped commands: thirty-eight, and the count is load-bearing: each earns its slot.
 
-    task · go · inbox [--count] · crew [--count|--governor]
+    task · go · sling · inbox [--count] · crew [--count|--governor]
     · anchor [--short|--events|--harness] · attach [-r|--no-start]
     work  → repool · defer · cost [--sync] · dream [--run] · triage
             · jobs [list|check|run|history]
@@ -359,12 +359,13 @@ def _default_bd_repo(a) -> str | None:
         return None
 
 
-def _plate(a, *, snapshot=False):
+def _plate(a, *, snapshot=False, require_complete=False):
     """The plate reader matching the selected tracker."""
     trk = _tracker(a)
     if _backend(a) in ("beads", "br"):
         from .br import plate as br_plate, plate_reader
-        return plate_reader(trk) if snapshot else lambda who: br_plate(trk, who)
+        return (plate_reader(trk, require_complete=require_complete) if snapshot
+                else lambda who: br_plate(trk, who))
     return lambda who: files_plate(trk, who)
 
 
@@ -1039,6 +1040,15 @@ def build_parser() -> argparse.ArgumentParser:
                          "A READ: it never marks anything delivered (see events.py)")
     mr.add_argument("--harness", action="store_true",
                     help="print ONLY this agent's harness name (e.g. claude)")
+
+    sling = sub.add_parser("sling", help="hand a beaded design to the executive administrator")
+    sling.add_argument("item")
+    note = sling.add_mutually_exclusive_group()
+    note.add_argument("--note")
+    note.add_argument("--note-file", type=Path)
+    sling.add_argument("--dry-run", "-n", action="store_true")
+    sling.add_argument("--receiving-host", help=argparse.SUPPRESS)
+    sling.add_argument("--executive", help=argparse.SUPPRESS)
 
     go = sub.add_parser("go", help="dispatch an item to an agent")
     go.add_argument("item")
@@ -1916,7 +1926,7 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_doctor(a)
     from .deployment import command_environment
     from .quipu import NamespaceUnconfigured
-    with command_environment(a.root):
+    with command_environment(a.root, a.root_how):
         try:
             return _run_command(a)
         except NamespaceUnconfigured as e:
@@ -1935,6 +1945,9 @@ def _run_command(a) -> int:
         return _cmd_hold(a)
     if a.cmd == "anchor":
         return _cmd_anchor(a)
+    if a.cmd == "sling":
+        from .sling_cli import command
+        return command(a)
     if a.cmd == "go":
         return _cmd_go(a)
     if a.cmd == "repool":
@@ -5213,7 +5226,7 @@ def _graph_context(a):
     return ctx, None
 
 
-def _go_on_host(a, note: str | None) -> int | None:
+def _go_on_host(a, note: str | None, *, recipient=None) -> int | None:
     """Run dispatch where the card lives, never against a colliding local pane.
 
     The destination owns triage, workspace preparation, delivery verification
@@ -5236,7 +5249,7 @@ def _go_on_host(a, note: str | None) -> int | None:
     if not local:
         return None
     try:
-        agent = _message_recipient(a)
+        agent = recipient if recipient is not None else _message_recipient(a)
     except LookupError as exc:
         print(f"  refused: dispatch destination — {exc}", file=sys.stderr)
         return REFUSED
@@ -5266,15 +5279,19 @@ def _go_on_host(a, note: str | None) -> int | None:
     argv = ["st", "--root", peer.root, "--registry", "files"]
     if getattr(a, "backend", None):
         argv += ["--backend", a.backend]
-    argv += ["go", a.item, a.agent, "--receiving-host", agent.host, "--note-file", "-"]
-    for flag, value in (("--worktree", a.worktree),
-                        ("--no-graph-context", a.no_graph_context)):
-        if value:
-            argv += [flag, value]
-    for node in a.quipu_node:
-        argv += ["--quipu-node", node]
-    if a.reassign:
-        argv.append("--reassign")
+    if getattr(a, "cmd", "go") == "sling":
+        argv += ["sling", a.item, "--executive", a.agent,
+                 "--receiving-host", agent.host, "--note-file", "-"]
+    else:
+        argv += ["go", a.item, a.agent, "--receiving-host", agent.host, "--note-file", "-"]
+        for flag, value in (("--worktree", a.worktree),
+                            ("--no-graph-context", a.no_graph_context)):
+            if value:
+                argv += [flag, value]
+        for node in a.quipu_node:
+            argv += ["--quipu-node", node]
+        if a.reassign:
+            argv.append("--reassign")
     if a.dry_run:
         argv.append("--dry-run")
     command = ('PATH="$HOME/.local/bin:$PATH" '
@@ -5293,7 +5310,8 @@ def _go_on_host(a, note: str | None) -> int | None:
         print(f"  [{agent.host}] {line}",
               file=sys.stdout if result.returncode == OK else sys.stderr)
     if result.returncode == OK:
-        print(f"  -> {agent.name}    {'previewed' if a.dry_run else 'dispatched'} "
+        action = 'handed off' if getattr(a, 'cmd', 'go') == 'sling' else 'dispatched'
+        print(f"  -> {agent.name}    {'previewed' if a.dry_run else action} "
               f"on host {agent.host} via {peer.ssh}")
         return OK
     if result.returncode == REFUSED:
@@ -5700,12 +5718,21 @@ def _cmd_crew(a) -> int:
     if local:
         agents = [ag for ag in agents if ag.host in (None, local)]
     runtime = _runtime(a, panes)
+    # One snapshot supplies availability and the assigned-item line. A failed
+    # read is unknown, never evidence that the agent has an empty plate.
+    def unavailable_plate(_who):
+        raise RuntimeError("assignment unavailable")
+
+    try:
+        plate = _plate(a, snapshot=True, require_complete=True)
+    except Exception:
+        plate = unavailable_plate
     if getattr(a, "json", False):
         launches = _launches(a)
         local_rows = []
         for ag, state, work, posture in _crew_states(
                 agents, panes, runtime, cycling=cycling, untracked_root=a.root,
-                cycle_blocked=cycle_blocked, budget_root=a.root):
+                cycle_blocked=cycle_blocked, budget_root=a.root, plate=plate):
             live = bool(ag.pane and panes.exists(ag.pane))
             actual = None
             reader = getattr(panes, "cmdline", None)
@@ -5716,6 +5743,7 @@ def _cmd_crew(a) -> int:
                     pass
             local_rows.append(dict(
                 name=ag.name, host=local or "local", role=",".join(ag.effective_roles()),
+                tree_role=ag.role, retired=bool(ag.retired),
                 state=state, work=work, posture=posture, pane=ag.pane or "—",
                 live=live, harness=actual or harness_mod.name_for(ag, root=a.root),
                 settings=_settings_verdict(launches, ag.name, state == "up"),
@@ -5733,14 +5761,15 @@ def _cmd_crew(a) -> int:
             print("unknown " + "; ".join(peer_errors))
             return CANNOT_TELL
         return _crew_count(agents, panes, runtime, untracked_root=a.root,
-                           peer_rows=fleet_mod.rows(peer_results))
+                           peer_rows=fleet_mod.rows(peer_results), plate=plate,
+                           cycling=cycling, cycle_blocked=cycle_blocked, budget_root=a.root)
     if not agents and not peer_results:
         print("  no agents. `st agent new <agent>`.")
         return OK
     launches = _launches(a)
     stops = _stops(a)
     runtime = _runtime(a, panes)
-    free, busy, queued, shelled = [], [], [], []
+    free, busy, queued, shelled, stalled = [], [], [], [], []
     work_unknown = []
     context_unknown = []
     deliberate = []
@@ -5765,17 +5794,13 @@ def _cmd_crew(a) -> int:
     import shutil
     title_width = None if getattr(a, "wide", False) else max(
         1, shutil.get_terminal_size().columns - 14)
-    try:
-        plate = _plate(a, snapshot=True)
-    except Exception:
-        plate = None
     print()
     if peer_results:
         print(f"  {'HOST':<22} {'AGENT':<11} {'ROLE':<14} {'STATE':<13} "
               f"{'SETTINGS':<8} {'TREE':<9} {'WORK':<16} {'POSTURE':<7} PANE")
     for ag, state, work, posture in _crew_states(
             agents, panes, runtime, cycling=cycling, untracked_root=a.root,
-            cycle_blocked=cycle_blocked, budget_root=a.root):
+            cycle_blocked=cycle_blocked, budget_root=a.root, plate=plate):
         if state == "cycling":
             cycling_agents.append(ag.name)
         if state == "cycle-blocked":
@@ -5785,6 +5810,8 @@ def _cmd_crew(a) -> int:
             shelled.append(f"{ag.name}({work.rsplit('+', 1)[1][:-2]})")
         if work.startswith(triage_mod.IDLE):
             free.append(ag.name)
+        elif work == "stalled":
+            stalled.append(ag.name)
         elif work.startswith(triage_mod.BUSY):
             busy.append(ag.name)
         elif work.startswith(triage_mod.QUEUED):
@@ -5948,15 +5975,19 @@ def _cmd_crew(a) -> int:
     # scan 14 rows; the question is "who can take this", so print the list.
     if free:
         print(f"  {len(free)} free: {', '.join(free)}")
-    elif busy and not work_unknown:
+    elif busy and not work_unknown and not stalled:
         print("  0 free — every live agent is mid-flight. Dispatching now "
               "interrupts work.")
+    if stalled:
+        print(f"  ⚠ {len(stalled)} stalled: {', '.join(stalled)}")
+        print("    Idle with an in_progress plate item. Resume the assigned work "
+              "before dispatching more.")
     if busy:
         print(f"  {len(busy)} busy: {', '.join(busy)}")
     if work_unknown:
         print(f"  ⚠ {len(work_unknown)} UNKNOWN work state: "
               f"{', '.join(work_unknown)}")
-        print("    Not counted as free or busy — pane content did not prove either. "
+        print("    Not counted as free or busy — pane or assignment evidence did not prove availability. "
               "Inspect with `st agent log <agent>` before dispatching.")
     # WHO CAN TAKE THIS is only half the dispatcher's question; the other half is
     # WHAT IS NOT QUEUED ANYWHERE. See _unassigned_open (aegis-jqcs3).
@@ -6345,7 +6376,7 @@ def _keeper_findings(agents, rule_path: Path, alert) -> list[str]:
 
 
 def _crew_states(agents, panes, runtime, cycling=(), untracked_root=None,
-                 cycle_blocked=(), budget_root=None):
+                 cycle_blocked=(), budget_root=None, plate=None):
     """(agent, pane state, work verdict, permission posture) per agent, by name.
     THE code path for the busy/idle judgment — the table renders it and `--count`
     counts it, so the number a status bar shows can never disagree with the roster
@@ -6522,6 +6553,15 @@ def _crew_states(agents, panes, runtime, cycling=(), untracked_root=None,
             posture = "—"
         if held := agent_hold.reason(untracked_root, ag.name):
             work = held
+        # This is a reporting refinement, not a new pane/dispatch verdict.
+        # Holds, shells, unknown observations and lifecycle states win.
+        if state == "up" and work == triage_mod.IDLE and plate is not None:
+            try:
+                item = plate(ag.name)
+                if item is not None and item.status == "in_progress":
+                    work = "stalled"
+            except Exception:
+                work = f"{triage_mod.UNSURE} (assignment unavailable)"
         yield ag, state, work, posture
 
 
@@ -7009,7 +7049,8 @@ def _utilization(harness, *, readings, policy, verdict, live, now, advisory,
     return seen
 
 
-def _crew_count(agents, panes, runtime, untracked_root=None, peer_rows=()) -> int:
+def _crew_count(agents, panes, runtime, untracked_root=None, peer_rows=(),
+                *, plate=None, cycling=(), cycle_blocked=(), budget_root=None) -> int:
     """`st crew --count` — print `busy/total`, nothing else.
 
     TOTAL IS NOT THE ROSTER SIZE. It is the number of agents we can actually
@@ -7022,7 +7063,8 @@ def _crew_count(agents, panes, runtime, untracked_root=None, peer_rows=()) -> in
     """
     busy = idle = 0
     for _ag, _state, work, _posture in _crew_states(
-            agents, panes, runtime, untracked_root=untracked_root):
+            agents, panes, runtime, untracked_root=untracked_root, plate=plate,
+            cycling=cycling, cycle_blocked=cycle_blocked, budget_root=budget_root):
         if work == triage_mod.BUSY:
             busy += 1
         elif work == triage_mod.IDLE:

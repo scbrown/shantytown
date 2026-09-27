@@ -157,6 +157,8 @@ def plan_role_set(registry: Registry, agent_name: str, role: str,
     """
     from . import traits as traits_mod
     catalog = catalog if catalog is not None else traits_mod.default_catalog()
+    if role == "executive":
+        raise ValueError("executive is an additive marker; stack it on an administrator in the role registry")
     if not catalog.describes(role):
         raise ValueError(
             f"unknown role {role!r}; declared roles: "

@@ -13,6 +13,7 @@
 st anchor [--short|--events|--harness]
                               who am I, what's on my plate         <- the anchor
 st go <item> <agent>          dispatch. this is the one that matters. the agent is required.
+st sling <bead>                  hand a beaded design to the executive for scheduling.
 st inbox <agent> <message>    put a message in an agent's inbox (send-keys; -d persists)
 st inbox [--count|--read|--read-id ID]
                               read or acknowledge your own inbox
@@ -239,7 +240,7 @@ Codex input already includes its cached subset. This makes
 `cache_read / usage_in` a provider-independent prompt-cache hit rate. The fields
 are omitted—not zeroed—when every matching transcript is unknown.
 
-Thirty-seven. Six verbs at the top level and thirty-one grouped commands under five groups
+Thirty-eight. Seven verbs at the top level and thirty-one grouped commands under five groups
 (`work`, `agent`, `fleet`, `repo`, `ops`). A group is a namespace and runs nothing, so it earns no
 slot; the count is the leaves. The flat spellings from before the grouping (st cycle for
 st agent cycle, and so on) still parse into the same handler, print one line on stderr saying
@@ -326,6 +327,34 @@ new command, and the test that pins the number is what proves it:
 If it grows a `st convoy`, a `st rig`, or a `st formula`, we've rebuilt the thing we left —
 but the guard against that is now the test, not this sentence.
 
+### Transcript derivatives and credential boundaries
+
+The raw transcript archive stays local and unindexed. `st-history-scrub.sh`
+creates a separate derivative: it omits supported harness tool-result objects
+wholesale, including nested Claude results and their `toolUseResult` mirrors,
+Codex call outputs and tool-role
+messages. Unparseable records are omitted rather than copied without a known
+schema. The raw records remain available for investigation.
+
+Retained dialogue, reasoning and tool invocations receive credential-pattern
+redaction. Private-key PEM envelopes are redacted with their full body; an
+unfinished envelope removes the remaining text in that string. The directory
+name `history-scrubbed` does **not** mean arbitrary
+credentials are absent: an unrecognized value pasted into dialogue can remain.
+A successful scrub proves only the named patterns and supported result types
+are absent. Off-host publication needs its own credential checks.
+
+Each derivative records the exact scrub policy that produced it. A policy
+change rebuilds older files despite their modification time; skipped files
+still undergo the residual check. Writes are private and atomic. The corpus
+projector independently excludes tool results as a security boundary, and its
+version invalidates cached projections when that boundary changes.
+
+Run `python3 -m pytest -q tests/test_history_archiver.py tests/test_history_corpus.py`
+to exercise both directions: unshaped canaries are removed from results while
+ordinary dialogue controls survive, and a contaminated current derivative
+makes the scrub fail.
+
 ## `st anchor` — the anchor
 
 The anchor answers **"who am I and what do I do next"** in one call, at session start, with no
@@ -372,6 +401,43 @@ Four things, and each one has to earn its line:
 Gas Town's primer has a `--hook` mode that fires at SessionStart and mutates state. That coupling is
 why "did I get primed?" became unanswerable when the hook silently didn't register. `st anchor` is
 a pure read, safe to run twice, and if you want it at session start you wire it there yourself.
+
+## `st sling` — design handoff
+
+Design → bead (epic and children) → `st sling <bead>`. The executive administrator
+owns scheduling and worker dispatch. This command does not claim or dispatch the design.
+
+```sh
+st sling design-42 --note-file handoff.md --dry-run
+st sling design-42 --note-file handoff.md
+```
+
+Mark exactly one administrator with the additive `executive` role in the role
+registry: `role = "administrator"`, `roles = ["administrator", "executive"]`.
+Keep its host placement current. This marker does not create a new tree position.
+An absent, ambiguous, retired, or non-administrator executive refuses delivery.
+For files registries with peers, the configured graph supplies fleet identity;
+without a graph, a complete peer census is required. An unavailable source refuses
+rather than choosing the first administrator.
+
+The bead must have a nonblank description or design body. The full note and direct
+parent-child references are recorded in a structured handoff comment. A bounded
+bead pointer goes to the durable inbox (br by default; explicit files is available
+for standalone deployments). Receipt read-back is required for success. A live
+pane nudge is best effort; the unread receipt remains for the executive's next stop.
+Long notes belong in `--note-file` or stdin (`--note-file -`), never shell interpolation.
+
+Cross-host handoffs use the same configured peer relay as `st go`; the destination
+rechecks executive and host placement and reads its configured shared board.
+An explicit local `--repo` cannot be reinterpreted on another host. Both deployments
+must have this command installed. `--dry-run` reads the design and previews target,
+pointer, children and note without writing a comment, receipt or event.
+
+Each handoff has an atomic event under `<root>/sling/*.json` containing sender,
+executive, bead, children, timestamp and verified receipt. The same content retries
+with the same marker, including when its inbox receipt has already been read.
+After an indeterminate write, inspect that marker before retrying; changed content
+is a new handoff. The structured comment provides the same provenance on the bead.
 
 ## `st go` — dispatch
 
@@ -1328,6 +1394,15 @@ beside it (`shantytown/codex.py`), because a guess about another CLI's flags is 
 code that looks shipped and has never run. The Claude Code path is pinned byte-for-byte against the
 pre-split launch strings (`tests/test_harness.py`) and its emitted settings file is pinned against
 the pre-codex bytes (`tests/test_codex_harness.py`).
+
+`st crew` reports `stalled` in WORK when a live, otherwise idle agent has an
+`in_progress` item at the top of its plate. The summary names these agents so
+their assigned work can be resumed; they are neither free nor busy. Busy panes,
+unknown observations, running background shells, holds and planned cycles keep
+their existing verdicts. An unreadable assignment store makes an otherwise idle
+agent unknown, rather than free. The table and `--json` use the same verdict;
+`--count` excludes stalled agents from its busy/idle denominator. Plate reads
+share one snapshot per roster on the br backend, including additional stores.
 
 ## Machine-readable output — five flags, not five commands
 
