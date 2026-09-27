@@ -795,6 +795,8 @@ class Staleness:
     unverified: str | None = None
     # Empty means every cached remote; cycle may restrict to its refreshed remote.
     publication_remote: str = ""
+    # Cycle-only exemptions; other staleness consumers still see these as dirty.
+    per_install: tuple = ()
 
     def measurement_is_stale(self) -> bool:
         """Is this reading too old to be worth calling "ok"?
@@ -1218,11 +1220,51 @@ def publication_remotes(dest: Path | str, run: GitRunner = _git) -> list[str]:
     return selected
 
 
+def per_install_changes(dest: Path | str, paths: list[str],
+                        run: GitRunner = _git) -> tuple[str, ...]:
+    """Exact committed declarations exempt unstaged modifications from cycling only.
+
+    Read policy from HEAD: adding a local declaration must not turn arbitrary
+    unfinished work into install state. Staged edits, conflicts, renames and
+    deletions remain work to checkpoint. Never change the index or file bytes.
+    """
+    rc, body = run(dest, "show", "HEAD:.st-per-install")
+    if rc:
+        return ()
+    declared = set()
+    for line in body.splitlines():
+        path = line.strip()
+        if not path or path.startswith("#"):
+            continue
+        parts = path.split("/")
+        if (path == ".st-per-install" or any(p in ("", ".", "..") for p in parts)
+                or any(c in path for c in "*?[]\\") or Path(path).is_absolute()):
+            return ()
+        declared.add(path)
+    accepted = []
+    for path in paths:
+        if path not in declared:
+            continue
+        file = Path(dest) / path
+        if file.is_symlink() or not file.is_file():
+            continue
+        # A staged change is deliberately queued for publication, not install
+        # wiring. This also rejects unresolved index entries.
+        rc, _ = run(dest, "diff", "--cached", "--quiet", "--", path)
+        if rc:
+            continue
+        rc, names = run(dest, "diff", "--name-only", "--diff-filter=M", "--", path)
+        if rc == 0 and unquote_status_path(names) == path:
+            accepted.append(path)
+    return tuple(accepted)
+
+
 def tree_staleness(dest: Path | str, run: GitRunner = _git,
                    fetch: bool = False,
                    untracked_all: bool = False,
                    fetch_timeout: float = 60,
-                   tracked_only: bool = False) -> Staleness:
+                   tracked_only: bool = False,
+                   cycle_per_install: bool = False) -> Staleness:
     """Measure a tree against its resolved upstream. NEVER writes, never pulls.
 
     `fetch` is OFF by default and that is a design constraint, not laziness: this
@@ -1402,8 +1444,14 @@ def tree_staleness(dest: Path | str, run: GitRunner = _git,
     # only when the change is CONFINED to the block. An agent's own edit to
     # CLAUDE.md outside the block is real work and still gates.
     provisioned: tuple[str, ...] = ()
+    per_install: tuple[str, ...] = ()
     if tracked_dirty:
         paths = tracked_paths_from_porcelain(porcelain)
+        if cycle_per_install:
+            per_install = per_install_changes(dest, paths, run)
+            paths = [p for p in paths if p not in per_install]
+            if per_install and not paths:
+                tracked_dirty = False
         if paths and all(p in PROVISIONED_TRACKED_PATHS for p in paths):
             # At most one extra git call, and only in the case that would
             # otherwise refuse — this runs on the edit-time hook path too.
@@ -1420,6 +1468,7 @@ def tree_staleness(dest: Path | str, run: GitRunner = _git,
         publication_remote=remote or "",
         dirty=tracked_dirty,
         provisioned=provisioned,
+        per_install=per_install,
         untracked=tuple(untracked[:UNTRACKED_SAMPLE_CAP]),
         untracked_count=len(untracked),
         note=note,
@@ -1532,6 +1581,53 @@ def _explicit_push_peer(dest: Path | str, remote: str,
     return rc == 0 and value.strip().lower() == "true"
 
 
+def push_authority_refusal(dest: Path | str, run: GitRunner = _git,
+                           remotes: list[str] | None = None) -> str:
+    """Local-only authority decision shared by push and the cycle loss gate.
+
+    An empty result means no authority conflict was established, not proof that
+    a push can succeed. Unknown Git state must not waive the cycle loss gate.
+    """
+    if remotes is None:
+        rc, out = run(dest, "remote")
+        remotes = sorted(out.splitlines()) if rc == 0 else []
+    if not remotes:
+        return ""
+    # PRE-FLIGHT EVERY REMOTE BEFORE CONTACTING ANY OF THEM (aegis-ke5ri).
+    # `upstream` is a normal name for somebody else's repository.  Thinker's
+    # origin is scbrown/thinker while upstream is induktio/thinker; blindly
+    # preserving the every-remote invariant would attempt to publish to a third
+    # party.  A credential refusal is luck, not a guard.
+    #
+    # Same host+owner is the only relationship the URLs themselves establish.
+    # Heterogeneous peers remain supported (shantytown needs them), but EACH must
+    # be explicitly marked in the repo's common config.  Refusing the whole set
+    # before the loop prevents the safety check itself from creating a partial
+    # push.
+    urls: dict[str, str] = {}
+    for remote in remotes:
+        url_rc, url = run(dest, "remote", "get-url", "--push", remote)
+        urls[remote] = url.strip() if url_rc == 0 else ""
+    authorities = {_remote_authority(urls[r]) for r in remotes}
+    if len(authorities) > 1:
+        unapproved = [r for r in remotes
+                      if not _explicit_push_peer(dest, r, run)]
+        if unapproved:
+            listed = ", ".join(f"{r}={urls[r] or '<unreadable>'}" for r in remotes)
+            reason = (
+                "REFUSED BEFORE PUSH: configured remotes have different host/owner "
+                f"authorities ({listed}). Unapproved: {', '.join(unapproved)}. "
+                "One may be a third-party upstream; no remote was contacted. Only "
+                "after verifying ownership and authorization, mark every intended "
+                "peer with `git config remote.<name>.st-push-allowed true`."
+            )
+            # One PRE-FLIGHT outcome, not one copy per remote: the refusal is
+            # about the set and no member was contacted.
+            return reason
+
+    return ""
+
+
 def push_every_remote(dest: Path | str, src: str, dst: str = "main",
                       run: GitRunner = _git,
                       push_run: PushRunner = _git_push) -> "list[PushOutcome]":
@@ -1564,37 +1660,9 @@ def push_every_remote(dest: Path | str, src: str, dst: str = "main",
     if not remotes:
         return []
 
-    # PRE-FLIGHT EVERY REMOTE BEFORE CONTACTING ANY OF THEM (aegis-ke5ri).
-    # `upstream` is a normal name for somebody else's repository.  Thinker's
-    # origin is scbrown/thinker while upstream is induktio/thinker; blindly
-    # preserving the every-remote invariant would attempt to publish to a third
-    # party.  A credential refusal is luck, not a guard.
-    #
-    # Same host+owner is the only relationship the URLs themselves establish.
-    # Heterogeneous peers remain supported (shantytown needs them), but EACH must
-    # be explicitly marked in the repo's common config.  Refusing the whole set
-    # before the loop prevents the safety check itself from creating a partial
-    # push.
-    urls: dict[str, str] = {}
-    for remote in remotes:
-        url_rc, url = run(dest, "remote", "get-url", "--push", remote)
-        urls[remote] = url.strip() if url_rc == 0 else ""
-    authorities = {_remote_authority(urls[r]) for r in remotes}
-    if len(authorities) > 1:
-        unapproved = [r for r in remotes
-                      if not _explicit_push_peer(dest, r, run)]
-        if unapproved:
-            listed = ", ".join(f"{r}={urls[r] or '<unreadable>'}" for r in remotes)
-            reason = (
-                "REFUSED BEFORE PUSH: configured remotes have different host/owner "
-                f"authorities ({listed}). Unapproved: {', '.join(unapproved)}. "
-                "One may be a third-party upstream; no remote was contacted. Only "
-                "after verifying ownership and authorization, mark every intended "
-                "peer with `git config remote.<name>.st-push-allowed true`."
-            )
-            # One PRE-FLIGHT outcome, not one copy per remote: the refusal is
-            # about the set and no member was contacted.
-            return [PushOutcome(remote="preflight", ok=False, reason=reason)]
+    refusal = push_authority_refusal(dest, run=run, remotes=remotes)
+    if refusal:
+        return [PushOutcome(remote="preflight", ok=False, reason=refusal)]
 
     outcomes: list[PushOutcome] = []
     for remote in remotes:

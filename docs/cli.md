@@ -92,6 +92,30 @@ st ops                        the installation
 st <launch cmd> --despite-hold  launch THROUGH a gaming hold, for that one command
 ```
 
+Cycling leaves the existing clone and worktrees on disk. Clean unpublished
+commits are reported without blocking when the push authority guard refuses
+publication, just as during a measured remote outage. The authority check is
+shared with `st repo push`; cycling never grants push permission. Preserve the
+branch and arrange publication to an authorized peer. Uncommitted work still
+blocks, and the durable checkpoint requirement still applies.
+
+For tracked files deliberately modified by each installation, commit a
+`.st-per-install` file at the repository root containing one exact relative path
+per line (blank lines and `#` comments are allowed). For example:
+
+```text
+# Generated host wiring; do not publish the local modification.
+scripts/hooks/pre-commit
+```
+
+Only unstaged modifications to existing regular files named by the committed
+manifest are exempt from the cycle loss gate. The verdict names them as
+`per-install, not loss`. Staged changes, deletions, renames, symlinks, and edits
+to undeclared paths still block. Invalid entries (absolute paths, traversal,
+globs, or the manifest itself) disable the exemption. Local edits to the manifest
+do not change the policy. No file or index flag is changed; refresh/staleness
+checks continue to see these modifications.
+
 Context occupancy hints are opt-in in `shantytown.toml`:
 
 ```toml
@@ -302,6 +326,34 @@ new command, and the test that pins the number is what proves it:
 
 If it grows a `st convoy`, a `st rig`, or a `st formula`, we've rebuilt the thing we left —
 but the guard against that is now the test, not this sentence.
+
+### Transcript derivatives and credential boundaries
+
+The raw transcript archive stays local and unindexed. `st-history-scrub.sh`
+creates a separate derivative: it omits supported harness tool-result objects
+wholesale, including nested Claude results and their `toolUseResult` mirrors,
+Codex call outputs and tool-role
+messages. Unparseable records are omitted rather than copied without a known
+schema. The raw records remain available for investigation.
+
+Retained dialogue, reasoning and tool invocations receive credential-pattern
+redaction. Private-key PEM envelopes are redacted with their full body; an
+unfinished envelope removes the remaining text in that string. The directory
+name `history-scrubbed` does **not** mean arbitrary
+credentials are absent: an unrecognized value pasted into dialogue can remain.
+A successful scrub proves only the named patterns and supported result types
+are absent. Off-host publication needs its own credential checks.
+
+Each derivative records the exact scrub policy that produced it. A policy
+change rebuilds older files despite their modification time; skipped files
+still undergo the residual check. Writes are private and atomic. The corpus
+projector independently excludes tool results as a security boundary, and its
+version invalidates cached projections when that boundary changes.
+
+Run `python3 -m pytest -q tests/test_history_archiver.py tests/test_history_corpus.py`
+to exercise both directions: unshaped canaries are removed from results while
+ordinary dialogue controls survive, and a contaminated current derivative
+makes the scrub fail.
 
 ## `st anchor` — the anchor
 
@@ -1103,6 +1155,40 @@ next real crash read as somebody's decision.
 
 ## `st ops doctor` — the out-of-box feature
 
+A full doctor run, or `st ops doctor quipu`, also checks write authorization
+against `QUIPU_SERVER`, including with `--no-latest` (that flag skips release
+lookups). It POSTs `{}` to `/episode`: authorization precedes JSON validation,
+so the expected validation refusal proves access without storing an episode.
+It reports `ok`, `no-token`, `bad-token`, `read-only`, `unreachable`, or
+`unknown`/`unconfigured`. This checks permission to attempt writes, not successful
+storage commits. Failures affect the doctor exit code (1 actionable, 2 unknown).
+
+### Quipu credentials
+
+Obtain a credential from the administrator of the target Quipu server over your
+approved secret distribution channel. The administrator must first activate
+its shared bearer or register the issued named credential on that server.
+Installing a random string locally does not grant access.
+
+The client convention is `~/.config/quipu/token`, read on every request, so
+already-running sessions see provisioning and rotation. `QUIPU_AUTH_TOKEN`
+(nonempty) overrides `QUIPU_AUTH_TOKEN_FILE`, which overrides the default path.
+An explicit file override does not fall back to another token if unreadable.
+Install an administrator-supplied file without putting its contents in shell
+history or command arguments:
+
+```sh
+install -d -m 700 "$HOME/.config/quipu" && install -m 400 /secure/issued-token "$HOME/.config/quipu/token"
+st ops doctor quipu --no-latest
+```
+
+For existing deployments using a different location, keep
+`QUIPU_AUTH_TOKEN_FILE` pointing to it until provisioning and rotation target
+the canonical path together. Do not copy credentials into a second independent
+file that rotation will miss. Never commit token files or paste their contents
+into logs, command arguments, issues or the knowledge graph.
+
+
 `st --root "/path/to/.shanty" ops doctor --relay` checks incoming SSH environment
 requirements together: `PATH` for `st` and `tmux`, `SHANTY_ROOT`, and
 `SHANTY_BACKEND`. It prints one quoted shell setup recipe without changing files
@@ -1308,6 +1394,15 @@ beside it (`shantytown/codex.py`), because a guess about another CLI's flags is 
 code that looks shipped and has never run. The Claude Code path is pinned byte-for-byte against the
 pre-split launch strings (`tests/test_harness.py`) and its emitted settings file is pinned against
 the pre-codex bytes (`tests/test_codex_harness.py`).
+
+`st crew` reports `stalled` in WORK when a live, otherwise idle agent has an
+`in_progress` item at the top of its plate. The summary names these agents so
+their assigned work can be resumed; they are neither free nor busy. Busy panes,
+unknown observations, running background shells, holds and planned cycles keep
+their existing verdicts. An unreadable assignment store makes an otherwise idle
+agent unknown, rather than free. The table and `--json` use the same verdict;
+`--count` excludes stalled agents from its busy/idle denominator. Plate reads
+share one snapshot per roster on the br backend, including additional stores.
 
 ## Machine-readable output — five flags, not five commands
 

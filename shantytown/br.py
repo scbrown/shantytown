@@ -248,12 +248,13 @@ def plate(tracker: BrTracker, agent: str,
                          lambda: ready_ids_or_none(tracker), warn)
 
 
-def plate_reader(tracker: BrTracker):
+def plate_reader(tracker: BrTracker, *, require_complete: bool = False):
     """One lazy read snapshot for a roster; discard it after each render.
 
     A per-agent plate call rereads the entire store and readiness set. Keep the
     selection rules identical while bounding those reads independently of crew
     size. No cache survives this reader, so the next roster observes new work.
+    Reporting callers can require completeness before inferring availability.
     """
     from functools import cache
 
@@ -261,7 +262,10 @@ def plate_reader(tracker: BrTracker):
     ready = cache(lambda: ready_ids_or_none(tracker))
 
     def read(agent):
-        return _select_plate(tracker, agent, *snapshot(), ready, None)
+        seen, failures = snapshot()
+        if require_complete and failures:
+            raise RuntimeError("; ".join(failures))
+        return _select_plate(tracker, agent, seen, failures, ready, None)
 
     return read
 

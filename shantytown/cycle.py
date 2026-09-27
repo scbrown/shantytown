@@ -168,7 +168,7 @@ class TreeRisk:
 
 @dataclass
 class TreeStranded:
-    """Unpushed commits in a tree whose push remote is MEASURED unreachable.
+    """Unpushed commits whose push is blocked by an outage or authority policy.
 
     Reported, never blocking — and the reasoning is the asymmetry TreeRisk's own
     docstring already states: `dirty` dies with the session, `unpushed` SURVIVES
@@ -184,8 +184,9 @@ class TreeStranded:
     Refusing to cycle a saturated agent to protect commits that a cycle does not
     touch is the wrong way round (aegis-tig80i).
 
-    ONLY A MEASURED FAILURE REACHES HERE. `remote_reachable` is three-state and
-    its None means could-not-tell, which keeps gating. And `dirty` is never
+    Only a measured outage or the shared push authority refusal reaches here.
+    `remote_reachable` is three-state; None keeps gating when authority policy
+    has not established a refusal. And `dirty` is never
     downgraded: a tree that is both dirty and unpushed still refuses on the dirt.
     """
     path: str
@@ -196,12 +197,30 @@ class TreeStranded:
     def render(self) -> list:
         scope = (f"not verified on remote {self.publication_remote}"
                  if self.publication_remote else "on no remote ref")
+        if self.detail:
+            return [
+                f"{self.path}: {self.unpushed} commit(s) {scope} — push authority "
+                "guard refuses; NOT blocking this cycle. Commits remain in this clone.",
+                "    Preserve this branch and arrange publication to an authorized peer; "
+                "do not weaken the push guard or discard the work to cycle.",
+                f"    {self.detail}",
+            ]
         return [
             f"{self.path}: {self.unpushed} commit(s) {scope}, and the "
             f"push remote is UNREACHABLE — not blocking this cycle, because a "
             f"cycle relaunches this same clone and does not touch commits",
             f"    PUSH THESE when the remote returns: cd {self.path} && st repo push",
         ]
+
+
+@dataclass
+class TreePerInstall:
+    path: str
+    files: tuple = ()
+
+    def render(self) -> list:
+        return [f"{self.path}: per-install, not loss — " + ", ".join(self.files)
+                + "; declared in committed .st-per-install, left untouched"]
 
 
 @dataclass
@@ -251,6 +270,7 @@ class Verdict:
     #: Trees whose behind-count could not be measured (a dead remote). Reported,
     #: never a refusal — see TreeUnverified.
     unverified: list = field(default_factory=list)
+    per_install: list = field(default_factory=list)
 
     def notice_lines(self) -> list:
         """The non-blocking reports (untracked, stranded-by-outage, unverified
@@ -260,6 +280,8 @@ class Verdict:
             lines += u.render()
         for st_ in self.stranded:
             lines += st_.render()
+        for pi in self.per_install:
+            lines += pi.render()
         for uv in self.unverified:
             lines += uv.render()
         return lines
@@ -329,6 +351,7 @@ def assess(agent: str, trees, checkpoint: str, staleness,
     notices: list[TreeUntracked] = []
     stranded: list[TreeStranded] = []
     unverified: list[TreeUnverified] = []
+    per_install: list[TreePerInstall] = []
     # One cache across every tree: a fleet's worktrees mostly share one forge, so
     # the honest answer for the second tree is the answer measured for the first.
     reach_cache: dict = {}
@@ -361,6 +384,8 @@ def assess(agent: str, trees, checkpoint: str, staleness,
             notices.append(TreeUntracked(
                 str(tree), files=list(getattr(s, "untracked", ()) or ()),
                 total=count))
+        if getattr(s, "per_install", ()):
+            per_install.append(TreePerInstall(str(tree), s.per_install))
         publication_remote = getattr(s, "publication_remote", "")
         if s.dirty or s.unpushed:
             # UNPUSHED-ONLY, AND THE REMOTE MEASURED UNREACHABLE, IS NOT A
@@ -368,6 +393,13 @@ def assess(agent: str, trees, checkpoint: str, staleness,
             # trade and not a loosening. `dirty` is never downgraded, and a
             # could-not-tell (None) keeps gating.
             if s.unpushed and not s.dirty:
+                from .workspace import push_authority_refusal
+                refusal = push_authority_refusal(tree)
+                if refusal:
+                    stranded.append(TreeStranded(
+                        str(tree), unpushed=s.unpushed, detail=refusal,
+                        publication_remote=publication_remote))
+                    continue
                 try:
                     verdict = reachable(tree)
                 except Exception:
@@ -388,11 +420,11 @@ def assess(agent: str, trees, checkpoint: str, staleness,
             "NOT a general --force: this override is named on its own so that "
             "reaching past some other refusal cannot disarm it).",
             risks=risks, checkpoint=checkpoint, untracked=notices,
-            stranded=stranded, unverified=unverified)
+            stranded=stranded, unverified=unverified, per_install=per_install)
 
     return Verdict(agent, True, risks=risks, checkpoint=checkpoint,
                    untracked=notices, stranded=stranded,
-                   unverified=unverified)
+                   unverified=unverified, per_install=per_install)
 
 
 def _parse_ts(value):
