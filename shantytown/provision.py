@@ -870,7 +870,43 @@ def _workspace_capture(text: str, root, settings_path=None) -> str:
             if commands:
                 kept.append({**group, "hooks": commands})
         cfg["hooks"][event] = kept
+    _drop_hooks_the_role_file_owns(cfg, role_hooks)
     return json.dumps(cfg, indent=2) + "\n"
+
+
+def _drop_hooks_the_role_file_owns(cfg: dict, role_hooks: dict) -> None:
+    """ONE OWNER PER HOOK: remove from the workspace file every hook the agent's
+    role file already carries (same event, same matcher, same command once
+    $HOME forms are expanded). One owner per hook: identical text in both files
+    is de-duplicated by the harness (measured), but a different spelling of the
+    same command is not and would run twice, and either way `st ops hooks check`
+    wants a single owner.
+
+    This is what lets a registered hook bundle take over a hook provisioning
+    still injects here (aegis-68j0ys): once the bundle renders it into the role
+    file, the workspace copy is dropped on the next launch. Where no bundle
+    supplies it, the role file lacks it and the workspace keeps it, so nothing
+    is lost on a host that has not registered the bundle. Nothing here names a
+    tool; it compares hooks."""
+    from .hook_bundles import _commands_in
+    hooks = cfg.get("hooks")
+    if not isinstance(hooks, dict):
+        return
+    for event, groups in list(hooks.items()):
+        owned = _commands_in(role_hooks.get(event)) if isinstance(role_hooks.get(event), list) else set()
+        if not owned or not isinstance(groups, list):
+            continue
+        kept = []
+        for group in groups:
+            if not isinstance(group, dict):
+                kept.append(group)
+                continue
+            rest = [h for h in group.get("hooks", [])
+                    if not (isinstance(h, dict) and isinstance(h.get("command"), str)
+                            and _commands_in([{"matcher": group.get("matcher"), "hooks": [h]}]) <= owned)]
+            if rest:
+                kept.append({**group, "hooks": rest})
+        hooks[event] = kept
 
 
 def _provision_capture_without_kit(card: Agent, root, ws: Path, settings_path) -> None:

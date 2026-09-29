@@ -361,13 +361,15 @@ def _read_hooks(harness: str, path: Path) -> dict | None:
     return hooks if isinstance(hooks, dict) else {}
 
 
-def other_layer_commands(paths) -> dict[str, list[str]]:
-    """{command: [file, ...]} for every hook command in settings files st did NOT
-    emit (a global harness file, a workspace-local one). Unreadable files are
-    skipped: this answers "is there ALSO a copy elsewhere", and a file nobody can
-    read contributes no copy."""
-    found: dict[str, list[str]] = {}
-    for p in paths:
+def other_layer_commands(layers) -> dict[str, list[tuple[str, str | None, str]]]:
+    """{command key: [(file, role, raw text), ...]} for every hook command in settings files st
+    did NOT emit. Each layer is a path (applies to EVERY role: the user's global
+    file) or a (path, role) pair (a workspace's own file, which only the agent
+    working there loads, so it only duplicates that agent's role). Unreadable
+    files are skipped: a file nobody can read contributes no copy."""
+    found: dict[str, list[tuple[str, str | None]]] = {}
+    for layer in layers:
+        p, role = (layer if isinstance(layer, tuple) else (layer, None))
         p = Path(p)
         try:
             data = json.loads(p.read_text())
@@ -377,8 +379,14 @@ def other_layer_commands(paths) -> dict[str, list[str]]:
         if not isinstance(hooks, dict):
             continue
         for groups in hooks.values():
-            for _matcher, cmd in _commands_in(groups):
-                found.setdefault(cmd, []).append(str(p))
+            for g in groups if isinstance(groups, list) else []:
+                for h in (g.get("hooks") or []) if isinstance(g, dict) else []:
+                    raw = h.get("command") if isinstance(h, dict) else None
+                    if not isinstance(raw, str):
+                        continue
+                    entry = (str(p), role, raw)
+                    if entry not in found.get(same_command_key(raw), []):
+                        found.setdefault(same_command_key(raw), []).append(entry)
     return found
 
 
@@ -429,12 +437,26 @@ def check(root, agent_roles: dict[str, str] | None = None, other_layers=()) -> C
                     item["detail"] = "the emitted settings file could not be parsed"
                 elif (h.matcher, same_command_key(h.command)) in _commands_in(hooks.get(h.event)):
                     item["configured"] = "ok"
-                    if harness == "claude" and same_command_key(h.command) in elsewhere:
+                    copies = [(f, raw) for f, r, raw in elsewhere.get(same_command_key(h.command), [])
+                              if r is None or r == role]
+                    # IDENTICAL TEXT is harmless: Claude Code de-duplicates hooks with
+                    # the same command text across settings sources (measured
+                    # 2026-09-29: 22 actions, 22 records, not 44). A DIFFERENT
+                    # spelling of the same command ($HOME vs an absolute path) is
+                    # not identical text, so it is not de-duplicated and runs twice.
+                    same_text = sorted({f for f, raw in copies if raw == h.command})
+                    other_text = sorted({f for f, raw in copies if raw != h.command})
+                    if harness == "claude" and other_text:
                         item["configured"] = "duplicate"
-                        item["detail"] = ("ALSO installed in "
-                                          + ", ".join(elsewhere[same_command_key(h.command)])
-                                          + ": Claude Code merges every settings source, so "
-                                            "this hook fires twice. Remove the hand-installed copy.")
+                        item["detail"] = ("ALSO installed in " + ", ".join(other_text)
+                                          + " under a DIFFERENT spelling of the same command, which "
+                                            "the harness does not de-duplicate (by text), so it runs "
+                                            "twice. Remove that copy or make the text identical.")
+                    elif harness == "claude" and same_text:
+                        item["detail"] = ("also installed with identical text in "
+                                          + ", ".join(same_text)
+                                          + " (harmless: the harness de-duplicates identical hooks; "
+                                            "remove it for a single owner)")
                 else:
                     item["configured"] = "missing"
                     item["detail"] = ("not in the emitted file; run `st fleet roles set` to "

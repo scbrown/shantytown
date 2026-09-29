@@ -296,15 +296,32 @@ def test_a_per_agent_file_with_no_known_role_is_cannot_tell_not_skipped(root):
     assert res.exit_code == 2
 
 
-def test_a_bundle_command_also_in_a_non_st_layer_is_a_DUPLICATE(root, tmp_path):
-    """Claude Code merges every settings source: the same hook in the user's global
-    file AND the st-emitted file fires twice per tool call."""
+def test_identical_text_in_another_layer_is_NOT_a_failure_but_is_noted(root, tmp_path):
+    """Claude Code de-duplicates hooks with identical command text across settings
+    sources (measured 2026-09-29: 22 actions, 22 records). So identical text is not
+    a double-fire: ok, with a note saying where the extra copy lives."""
     register(root, bundle())
     emit(root, "claude", "worker")
-    emit(root, "codex", "worker")
     glob = tmp_path / "global-settings.json"
     glob.write_text(json.dumps({"hooks": {"UserPromptSubmit": [
         {"hooks": [{"type": "command", "command": EXAMPLE_CMD}]}]}}))
+    res = hb.check(root, other_layers=[glob])
+    item = [i for i in res.items if i["event"] == "UserPromptSubmit" and i["harness"] == "claude"][0]
+    assert item["configured"] == "ok" and str(glob) in item["detail"]
+    assert res.exit_code == 0
+
+
+def test_a_bundle_command_also_in_a_non_st_layer_is_a_DUPLICATE(root, tmp_path):
+    """A DIFFERENT spelling of the same command ($HOME vs absolute) is not identical
+    text, so the harness does not de-duplicate it: it runs twice."""
+    register(root, bundle())
+    emit(root, "claude", "worker")
+    emit(root, "codex", "worker")
+    register(root, bundle(hooks=[{"event": "UserPromptSubmit", "command": "$HOME/p.sh || true"}]))
+    emit(root, "claude", "worker")
+    glob = tmp_path / "global-settings.json"
+    glob.write_text(json.dumps({"hooks": {"UserPromptSubmit": [
+        {"hooks": [{"type": "command", "command": f"{Path.home()}/p.sh || true"}]}]}}))
     res = hb.check(root, other_layers=[glob, tmp_path / "absent.json"])
     dup = [i for i in res.items if i["configured"] == "duplicate"]
     assert [(i["harness"], i["event"]) for i in dup] == [("claude", "UserPromptSubmit")]
@@ -465,3 +482,58 @@ def test_home_normalisation_is_exact(cmd, same):
 def test_the_rendered_text_is_never_rewritten(root):
     register(root, bundle(hooks=[{"event": "UserPromptSubmit", "command": "$HOME/p.sh || true"}]))
     assert "$HOME/p.sh || true" in commands("claude", emit(root, "claude", "worker"), "UserPromptSubmit")
+
+
+def test_a_WORKSPACE_copy_duplicates_only_its_own_agents_role(root, tmp_path):
+    """A workspace's settings.local.json is loaded by the agent working there and
+    nobody else, so it double-fires for THAT role only; a global file does for all."""
+    register(root, bundle())
+    emit(root, "claude", "worker")
+    emit(root, "claude", "lead")
+    register(root, bundle(name="spelled", hooks=[{"event": "UserPromptSubmit", "command": "$HOME/p.sh || true"}]))
+    emit(root, "claude", "worker")
+    emit(root, "claude", "lead")
+    local = tmp_path / "ws-settings.local.json"
+    local.write_text(json.dumps({"hooks": {"UserPromptSubmit": [
+        {"hooks": [{"type": "command", "command": f"{Path.home()}/p.sh || true"}]}]}}))
+    res = hb.check(root, other_layers=[(local, "worker")])
+    dup = {(i["role"], i["event"]) for i in res.items if i["configured"] == "duplicate"}
+    assert dup == {("worker", "UserPromptSubmit")}
+    res_global = hb.check(root, other_layers=[local])            # no role: global
+    assert {i["role"] for i in res_global.items if i["configured"] == "duplicate"} == {"worker", "lead"}
+
+
+# --- provisioning must not re-duplicate what the role file now owns --------------
+
+def _workspace_commands(text: str, event: str) -> list[str]:
+    return [h["command"] for g in json.loads(text).get("hooks", {}).get(event, [])
+            for h in g.get("hooks", [])]
+
+
+def test_provision_drops_a_workspace_hook_the_role_file_owns_and_keeps_it_otherwise(tmp_path):
+    """The u1ybxo blocker: provisioning re-wrote hooks into every workspace's
+    settings.local.json at each launch, re-duplicating a registered bundle."""
+    from shantytown.provision import _workspace_capture
+    from shantytown.runtime import _yupana_post_tool_cmd, _yupana_action_outcome_cmd
+    post_edit = _yupana_post_tool_cmd()["command"]
+    outcome = _yupana_action_outcome_cmd()["command"]
+    root = tmp_path / ".shanty"
+    root.mkdir()
+    # Control: a role file WITHOUT those hooks -> the workspace keeps them.
+    bare = tmp_path / "bare.settings.json"
+    bare.write_text(json.dumps({"hooks": {}}))
+    kept = _workspace_capture("{}", root, bare)
+    assert post_edit in _workspace_commands(kept, "PostToolUse")
+    assert outcome in _workspace_commands(kept, "PostToolUseFailure")
+    # A role file that carries them (as a registered bundle renders them) -> dropped.
+    owning = tmp_path / "owning.settings.json"
+    owning.write_text(json.dumps({"hooks": {
+        "PostToolUse": [{"matcher": ".*", "hooks": [{"type": "command", "command": post_edit}]},
+                        {"matcher": "Bash", "hooks": [{"type": "command", "command": outcome}]}],
+        "PostToolUseFailure": [{"matcher": "Bash", "hooks": [{"type": "command", "command": outcome}]}]}}))
+    out = _workspace_capture("{}", root, owning)
+    assert post_edit not in _workspace_commands(out, "PostToolUse")
+    assert outcome not in _workspace_commands(out, "PostToolUse")
+    assert outcome not in _workspace_commands(out, "PostToolUseFailure")
+    assert any("shantytown.stats capture" in c for c in _workspace_commands(out, "PostToolUse")), \
+        "unrelated workspace hooks survive"

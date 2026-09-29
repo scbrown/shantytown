@@ -915,7 +915,7 @@ def _hooks_running(a, cards) -> list:
     return out
 
 
-def _hooks_check_context(a) -> tuple[dict[str, str], list[Path]]:
+def _hooks_check_context(a) -> tuple[dict[str, str], list]:
     """What `hooks check` needs from the cards, resolved the way launch resolves it.
 
     agent_roles: the settings PROFILE each local card launches on (a worker with
@@ -935,8 +935,11 @@ def _hooks_check_context(a) -> tuple[dict[str, str], list[Path]]:
     for c in cards:
         roles[c.name] = "lead" if c.role == "worker" and c.name in receivers else c.role
         if c.workspace:
+            # A workspace file is loaded only by the agent working there, so it
+            # can only duplicate THAT agent's role file.
             ws = Path(c.workspace) / ".claude"
-            layers += [ws / "settings.json", ws / "settings.local.json"]
+            layers += [(ws / "settings.json", roles[c.name]),
+                       (ws / "settings.local.json", roles[c.name])]
     return roles, layers
 
 
