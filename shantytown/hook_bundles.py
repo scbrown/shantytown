@@ -223,7 +223,10 @@ def apply(settings: dict, role: str, harness: str, root) -> dict:
     """
     try:
         reg = load(root)
-    except Exception:  # never let a bad drop-in stop settings being written
+    except Exception as e:  # never let a bad drop-in stop settings being written
+        import sys
+        print(f"st: hook bundles NOT rendered ({type(e).__name__}: {e}); settings written "
+              f"without them — `st ops hooks check` will report it", file=sys.stderr)
         return settings
     extra, _unsupported = groups_for(reg, role, harness)
     owner = notify_owner(reg, role)[0] if harness == "codex" else None
@@ -266,7 +269,8 @@ class CheckResult:
     def exit_code(self) -> int:
         if self.registry_errors:
             return 1
-        failing = {"configured": {"missing", "unsupported"}, "live": {"stale"}, "firing": {"silent"}}
+        failing = {"configured": {"missing", "unsupported", "duplicate"}, "live": {"stale"},
+                   "firing": {"silent"}}
         unknown = {"configured": {"unreadable"}, "live": {"unknown"}, "firing": {"unknown"}}
         if any(i[k] in v for i in self.items for k, v in failing.items()):
             return 1
@@ -280,6 +284,7 @@ class CheckResult:
         return {"items": len(self.items),
                 "configured_ok": n("configured", "ok"), "missing": n("configured", "missing"),
                 "unsupported": n("configured", "unsupported"),
+                "duplicate": n("configured", "duplicate"),
                 "live_ok": n("live", "ok"), "live_stale": n("live", "stale"),
                 "firing_ok": n("firing", "ok"), "firing_silent": n("firing", "silent")}
 
@@ -292,18 +297,36 @@ class CheckResult:
                 "registry_errors": self.registry_errors, "items": self.items}
 
 
-def emitted_role_files(root) -> list[tuple[str, str, Path]]:
-    """(harness, role, path) for every ROLE settings file st has emitted."""
+def emitted_role_files(root, agent_roles: dict[str, str] | None = None
+                       ) -> tuple[list[tuple[str, str, Path]], list[Path]]:
+    """(harness, role, path) for every settings file st has emitted, and the
+    PER-AGENT files whose role could not be resolved.
+
+    A per-agent file (agent-<name>) is rendered through the same seam as a role
+    file, so it carries bundles too, and it must be checked: an agent launched on
+    one would otherwise lose a bundle unseen. Its role comes from `agent_roles`
+    (the caller resolves the card); an agent with no known role is returned in
+    the second list and reported as cannot-tell, never skipped."""
+    agent_roles = agent_roles or {}
     out: list[tuple[str, str, Path]] = []
+    unresolved: list[Path] = []
     s = Path(root) / "settings"
+
+    def add(harness: str, name: str, p: Path) -> None:
+        if name.startswith("agent-"):
+            role = agent_roles.get(name[len("agent-"):])
+            if role is None:
+                unresolved.append(p)
+                return
+            out.append((harness, role, p))
+        else:
+            out.append((harness, name, p))
+
     for p in sorted(s.glob("*.settings.json")):
-        role = p.name[: -len(".settings.json")]
-        if role.startswith("agent-"):
-            continue
-        out.append(("claude", role, p))
+        add("claude", p.name[: -len(".settings.json")], p)
     for p in sorted(s.glob("codex/*/config.toml")):
-        out.append(("codex", p.parent.name, p))
-    return out
+        add("codex", p.parent.name, p)
+    return out, unresolved
 
 
 def _read_hooks(harness: str, path: Path) -> dict | None:
@@ -319,14 +342,48 @@ def _read_hooks(harness: str, path: Path) -> dict | None:
     return hooks if isinstance(hooks, dict) else {}
 
 
-def check(root) -> CheckResult:
-    """CONFIGURED level: is every registered hook present in every emitted role
-    file it targets? Compares (matcher, command) pairs, so an edited command reads
-    as missing rather than as present."""
+def other_layer_commands(paths) -> dict[str, list[str]]:
+    """{command: [file, ...]} for every hook command in settings files st did NOT
+    emit (a global harness file, a workspace-local one). Unreadable files are
+    skipped: this answers "is there ALSO a copy elsewhere", and a file nobody can
+    read contributes no copy."""
+    found: dict[str, list[str]] = {}
+    for p in paths:
+        p = Path(p)
+        try:
+            data = json.loads(p.read_text())
+        except (OSError, ValueError):
+            continue
+        hooks = data.get("hooks") if isinstance(data, dict) else None
+        if not isinstance(hooks, dict):
+            continue
+        for groups in hooks.values():
+            for _matcher, cmd in _commands_in(groups):
+                found.setdefault(cmd, []).append(str(p))
+    return found
+
+
+def check(root, agent_roles: dict[str, str] | None = None, other_layers=()) -> CheckResult:
+    """CONFIGURED level: is every registered hook present in every emitted file
+    it targets? Compares (matcher, command) pairs, so an edited command reads as
+    missing rather than as present.
+
+    `other_layers`: claude settings files st does NOT emit. Claude Code merges
+    every source, so a bundle command that ALSO sits in one of them fires TWICE
+    per tool call — reported as configured="duplicate" (exit 1)."""
     res = CheckResult()
     reg = load(root)
     res.registry_errors = [{"file": f, "reason": why} for f, why in reg.errors]
-    for harness, role, path in emitted_role_files(root):
+    elsewhere = other_layer_commands(other_layers)
+    files, unresolved = emitted_role_files(root, agent_roles)
+    for p in unresolved:
+        res.items.append({"bundle": "", "version": "", "harness": "", "role": "",
+                          "event": "", "matcher": None, "command": "", "file": str(p),
+                          "configured": "unreadable", "live": NOT_CHECKED,
+                          "firing": NOT_CHECKED,
+                          "detail": "per-agent settings file whose agent has no known role; "
+                                    "cannot tell which bundles it must carry"})
+    for harness, role, path in files:
         hooks = None
         loaded = False
         if harness == "codex":
@@ -353,6 +410,11 @@ def check(root) -> CheckResult:
                     item["detail"] = "the emitted settings file could not be parsed"
                 elif (h.matcher, h.command) in _commands_in(hooks.get(h.event)):
                     item["configured"] = "ok"
+                    if harness == "claude" and h.command in elsewhere:
+                        item["configured"] = "duplicate"
+                        item["detail"] = ("ALSO installed in " + ", ".join(elsewhere[h.command])
+                                          + ": Claude Code merges every settings source, so "
+                                            "this hook fires twice. Remove the hand-installed copy.")
                 else:
                     item["configured"] = "missing"
                     item["detail"] = ("not in the emitted file; run `st fleet roles set` to "

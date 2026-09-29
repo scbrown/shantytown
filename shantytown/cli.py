@@ -879,6 +879,31 @@ def _hostmem_verdict(cfg):
 #: squeeze on ordinary work; it is a ceiling on the pathological case.
 _TEND_SWEEP_BUDGET_S = float(os.environ.get("SHANTY_TEND_SWEEP_BUDGET_S", "120"))
 
+def _hooks_check_context(a) -> tuple[dict[str, str], list[Path]]:
+    """What `hooks check` needs from the cards, resolved the way launch resolves it.
+
+    agent_roles: the settings PROFILE each local card launches on (a worker with
+    direct reports gets the lead profile, exactly as the settings resolver does),
+    so a per-agent file is checked against the bundles its agent really carries.
+    layers: claude settings files st does NOT emit (the user's global file and
+    each workspace's own), where a bundle command would fire a second time.
+    Best effort: no crew or an unreadable registry still checks the role files."""
+    from .deployment import local_host
+    roles: dict[str, str] = {}
+    layers: list[Path] = [Path.home() / ".claude" / "settings.json"]
+    try:
+        cards = [c for c in _registry(a).all().exact() if c.host in (None, local_host(a.root))]
+    except Exception:
+        return roles, layers
+    receivers = {c.reports_to for c in cards if c.reports_to}
+    for c in cards:
+        roles[c.name] = "lead" if c.role == "worker" and c.name in receivers else c.role
+        if c.workspace:
+            ws = Path(c.workspace) / ".claude"
+            layers += [ws / "settings.json", ws / "settings.local.json"]
+    return roles, layers
+
+
 def _cmd_hooks(a) -> int:
     """`st ops hooks` (aegis-68j0ys). st keeps registered bundles rendered; it
     knows nothing about what is in them."""
@@ -922,7 +947,8 @@ def _cmd_hooks(a) -> int:
         for f, r in reg.errors:
             print(f"BROKEN {f}: {r}")
         return 1 if reg.errors else 0
-    res = hb.check(root)
+    agent_roles, layers = _hooks_check_context(a)
+    res = hb.check(root, agent_roles=agent_roles, other_layers=layers)
     if a.json:
         print(json.dumps(res.to_json(root=root, host=local_host(root)), indent=2))
         return res.exit_code
@@ -936,7 +962,8 @@ def _cmd_hooks(a) -> int:
             if i["detail"]:
                 print(f"            {i['detail']}")
     print(f"hook bundles: {s['items']} item(s), {s['configured_ok']} configured, "
-          f"{s['missing']} missing, {s['unsupported']} unsupported; live/firing not checked yet")
+          f"{s['missing']} missing, {s['unsupported']} unsupported, {s['duplicate']} duplicate; "
+          f"live/firing not checked yet")
     return res.exit_code
 
 

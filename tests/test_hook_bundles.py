@@ -256,3 +256,77 @@ def test_notify_changed_by_hand_is_missing(root):
     path = emit(root, "codex", "worker")
     path.write_text(path.read_text().replace("example-tool ingest", "something else"))
     assert hb.check(root).exit_code == 1
+
+
+# --- increment 2: per-agent files, cross-layer duplicates, a loud swallowed error ---
+
+def emit_agent(root: Path, harness: str, agent: str, role: str) -> Path:
+    h = harness_mod.get(harness)
+    path = root / "settings" / h.agent_settings_name(agent)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(h.render(h.settings(role, root=root), "", root=root))
+    return path
+
+
+@pytest.mark.parametrize("harness", ["claude", "codex"])
+def test_a_per_agent_file_carries_bundles_and_is_checked_against_its_agents_role(root, harness):
+    register(root, bundle(roles=["lead"]))
+    path = emit_agent(root, harness, "alice", "lead")
+    assert EXAMPLE_CMD in commands(harness, path, "UserPromptSubmit"), "same seam, same bundles"
+    res = hb.check(root, agent_roles={"alice": "lead"})
+    mine = [i for i in res.items if i["file"] == str(path)]
+    assert mine and all(i["configured"] == "ok" for i in mine)
+    assert res.exit_code == 0
+
+
+def test_a_per_agent_file_losing_a_bundle_is_missing(root):
+    register(root, bundle())
+    path = emit_agent(root, "claude", "alice", "worker")
+    path.write_text(path.read_text().replace(EXAMPLE_CMD, "something-else || true"))
+    res = hb.check(root, agent_roles={"alice": "worker"})
+    assert any(i["file"] == str(path) and i["configured"] == "missing" for i in res.items)
+    assert res.exit_code == 1
+
+
+def test_a_per_agent_file_with_no_known_role_is_cannot_tell_not_skipped(root):
+    register(root, bundle())
+    emit_agent(root, "claude", "ghost", "worker")
+    res = hb.check(root, agent_roles={})
+    assert [i["configured"] for i in res.items if "agent-ghost" in i["file"]] == ["unreadable"]
+    assert res.exit_code == 2
+
+
+def test_a_bundle_command_also_in_a_non_st_layer_is_a_DUPLICATE(root, tmp_path):
+    """Claude Code merges every settings source: the same hook in the user's global
+    file AND the st-emitted file fires twice per tool call."""
+    register(root, bundle())
+    emit(root, "claude", "worker")
+    emit(root, "codex", "worker")
+    glob = tmp_path / "global-settings.json"
+    glob.write_text(json.dumps({"hooks": {"UserPromptSubmit": [
+        {"hooks": [{"type": "command", "command": EXAMPLE_CMD}]}]}}))
+    res = hb.check(root, other_layers=[glob, tmp_path / "absent.json"])
+    dup = [i for i in res.items if i["configured"] == "duplicate"]
+    assert [(i["harness"], i["event"]) for i in dup] == [("claude", "UserPromptSubmit")]
+    assert str(glob) in dup[0]["detail"]
+    assert res.exit_code == 1
+    assert res.summary()["duplicate"] == 1
+
+
+def test_control_no_other_layer_no_duplicate(root, tmp_path):
+    register(root, bundle())
+    emit(root, "claude", "worker")
+    unrelated = tmp_path / "g.json"
+    unrelated.write_text(json.dumps({"hooks": {"UserPromptSubmit": [
+        {"hooks": [{"type": "command", "command": "unrelated || true"}]}]}}))
+    assert hb.check(root, other_layers=[unrelated]).exit_code == 0
+
+
+def test_a_registry_that_cannot_load_writes_settings_without_bundles_AND_says_so(root, monkeypatch, capsys):
+    register(root, bundle())
+    def boom(_root):
+        raise RuntimeError("disk on fire")
+    monkeypatch.setattr(hb, "load", boom)
+    out = hb.apply({"hooks": {"Stop": []}}, "worker", "claude", root)
+    assert out == {"hooks": {"Stop": []}}
+    assert "hook bundles NOT rendered" in capsys.readouterr().err
