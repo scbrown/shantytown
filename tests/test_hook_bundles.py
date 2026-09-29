@@ -330,3 +330,86 @@ def test_a_registry_that_cannot_load_writes_settings_without_bundles_AND_says_so
     out = hb.apply({"hooks": {"Stop": []}}, "worker", "claude", root)
     assert out == {"hooks": {"Stop": []}}
     assert "hook bundles NOT rendered" in capsys.readouterr().err
+
+
+# --- increment 2: the LIVE layer -------------------------------------------------
+
+import hashlib
+
+from shantytown.launched import FilesLaunches
+
+
+def live_items(res, event="UserPromptSubmit"):
+    return [i for i in res.items if i["event"] == event and i["harness"] == "claude"]
+
+
+def test_live_ok_when_the_running_process_launched_on_bytes_carrying_the_hook(root):
+    register(root, bundle())
+    path = emit(root, "claude", "worker")
+    res = hb.check(root)
+    hb.apply_live(res, [hb.Running("alice", str(path), launch_bytes=path.read_bytes())])
+    assert {i["live"] for i in live_items(res)} == {"ok"}
+    assert res.exit_code == 0
+
+
+def test_live_STALE_when_it_launched_before_the_bundle_was_rendered(root):
+    """The failure launched.py exists for, per hook: the file is right, the
+    process is not, and nothing is wrong until someone relaunches."""
+    before = emit(root, "claude", "worker").read_bytes()      # launched on this
+    register(root, bundle())
+    path = emit(root, "claude", "worker")                     # fixed afterwards
+    res = hb.check(root)
+    hb.apply_live(res, [hb.Running("alice", str(path), launch_bytes=before)])
+    items = live_items(res)
+    assert {i["live"] for i in items} == {"stale"}
+    assert "alice" in items[0]["detail"]
+    assert res.exit_code == 1
+
+
+def test_live_uses_the_hash_when_no_snapshot_and_the_file_is_unchanged(root):
+    register(root, bundle())
+    path = emit(root, "claude", "worker")
+    sha = hashlib.sha256(path.read_bytes()).hexdigest()
+    res = hb.check(root)
+    hb.apply_live(res, [hb.Running("alice", str(path), launch_sha256=sha)])
+    assert {i["live"] for i in live_items(res)} == {"ok"}
+
+
+def test_live_unknown_when_no_snapshot_and_the_file_changed(root):
+    register(root, bundle())
+    path = emit(root, "claude", "worker")
+    res = hb.check(root)
+    hb.apply_live(res, [hb.Running("alice", str(path), launch_sha256="0" * 64)])
+    assert {i["live"] for i in live_items(res)} == {"unknown"}
+    assert res.exit_code == 2
+
+
+def test_live_not_checked_when_nobody_runs_on_the_file(root):
+    register(root, bundle())
+    emit(root, "claude", "worker")
+    lead = emit(root, "claude", "lead")
+    res = hb.check(root)
+    hb.apply_live(res, [hb.Running("bob", str(lead), launch_bytes=lead.read_bytes())])
+    worker = [i for i in live_items(res) if i["role"] == "worker"]
+    assert {i["live"] for i in worker} == {hb.NOT_CHECKED}
+
+
+def test_launch_records_a_snapshot_that_matches_its_stamp_and_forget_clears_it(tmp_path):
+    settings = tmp_path / "worker.settings.json"
+    settings.write_text('{"hooks": {}}')
+    store = FilesLaunches(tmp_path / "launched")
+    store.record("alice", settings)
+    assert store.snapshot("alice") == settings.read_bytes()
+    settings.write_text('{"hooks": {"Stop": []}}')           # file changes after launch
+    assert store.snapshot("alice") == b'{"hooks": {}}', "the launch bytes, not today's"
+    store.forget("alice")
+    assert store.snapshot("alice") is None
+
+
+def test_a_snapshot_disagreeing_with_its_stamp_is_not_trusted(tmp_path):
+    settings = tmp_path / "s.json"
+    settings.write_text("{}")
+    store = FilesLaunches(tmp_path / "launched")
+    store.record("alice", settings)
+    (tmp_path / "launched" / "alice.snapshot").write_bytes(b'{"torn": true}')
+    assert store.snapshot("alice") is None

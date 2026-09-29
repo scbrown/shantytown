@@ -879,6 +879,42 @@ def _hostmem_verdict(cfg):
 #: squeeze on ordinary work; it is a ceiling on the pathological case.
 _TEND_SWEEP_BUDGET_S = float(os.environ.get("SHANTY_TEND_SWEEP_BUDGET_S", "120"))
 
+def _hooks_running(a, cards) -> list:
+    """The agents RUNNING now, each with the settings file its PROCESS was
+    launched on (read from the process, never the card) and, when the launch
+    stamp describes that same file, the bytes or hash it launched on.
+
+    An agent whose pane has no process is not running and is left out: live
+    verdicts are about processes, and a stale stamp for a stopped agent (they
+    outlive the process until `st agent stop`) must not produce one."""
+    from .hook_bundles import Running
+    from .runtime import settings_path_in_cmdline
+    try:
+        panes, launches = _panes(a), _launches(a)
+    except Exception:
+        return []
+    out = []
+    for c in cards:
+        if not getattr(c, "pane", None):
+            continue
+        try:
+            cmdline = panes.cmdline(c.pane)
+        except Exception:
+            continue
+        path = settings_path_in_cmdline(cmdline) if cmdline else None
+        if not path:
+            continue
+        p = Path(path)
+        if p.is_dir():                      # codex: CODEX_HOME names the directory
+            p = p / "config.toml"
+        stamp = launches.get(c.name)
+        same = stamp is not None and Path(stamp.settings).resolve() == p.resolve()
+        out.append(Running(agent=c.name, settings_file=str(p),
+                           launch_bytes=launches.snapshot(c.name) if same else None,
+                           launch_sha256=stamp.sha256 if same else None))
+    return out
+
+
 def _hooks_check_context(a) -> tuple[dict[str, str], list[Path]]:
     """What `hooks check` needs from the cards, resolved the way launch resolves it.
 
@@ -949,6 +985,12 @@ def _cmd_hooks(a) -> int:
         return 1 if reg.errors else 0
     agent_roles, layers = _hooks_check_context(a)
     res = hb.check(root, agent_roles=agent_roles, other_layers=layers)
+    try:
+        from .deployment import local_host as _lh
+        cards = [c for c in _registry(a).all().exact() if c.host in (None, _lh(a.root))]
+    except Exception:
+        cards = []
+    hb.apply_live(res, _hooks_running(a, cards))
     if a.json:
         print(json.dumps(res.to_json(root=root, host=local_host(root)), indent=2))
         return res.exit_code
@@ -956,6 +998,8 @@ def _cmd_hooks(a) -> int:
     for e in res.registry_errors:
         print(f"REGISTRY {e['file']}: {e['reason']}")
     for i in res.items:
+        if i["live"] == "stale":
+            print(f"LIVE-STALE  {i['harness']}/{i['role']} {i['bundle']} {i['event']}: {i['detail']}")
         if i["configured"] != "ok":
             print(f"{i['configured'].upper():11} {i['harness']}/{i['role']} {i['bundle']} "
                   f"{i['event']}: {i['command']}")
@@ -963,7 +1007,7 @@ def _cmd_hooks(a) -> int:
                 print(f"            {i['detail']}")
     print(f"hook bundles: {s['items']} item(s), {s['configured_ok']} configured, "
           f"{s['missing']} missing, {s['unsupported']} unsupported, {s['duplicate']} duplicate; "
-          f"live/firing not checked yet")
+          f"live: {s['live_ok']} ok, {s['live_stale']} stale; firing not checked yet")
     return res.exit_code
 
 

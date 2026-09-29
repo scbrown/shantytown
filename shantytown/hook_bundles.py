@@ -451,6 +451,88 @@ def _check_notify(res: CheckResult, reg: Registry, role: str, path: Path) -> Non
         res.items.append(item)
 
 
+@dataclass(frozen=True)
+class Running:
+    """One RUNNING agent, as the caller observed it: the settings file its process
+    was launched on (from the process itself, not the card), and the exact bytes
+    it launched on if they were recorded, else the hash it launched on."""
+    agent: str
+    settings_file: str
+    launch_bytes: bytes | None = None
+    launch_sha256: str | None = None
+
+
+def _hooks_from_bytes(harness: str, data: bytes) -> dict | None:
+    try:
+        if harness == "codex":
+            import tomllib
+            doc = tomllib.loads(data.decode())
+        else:
+            doc = json.loads(data.decode())
+    except (ValueError, UnicodeDecodeError):
+        return None
+    hooks = doc.get("hooks") if isinstance(doc, dict) else None
+    return hooks if isinstance(hooks, dict) else {}
+
+
+def _same_file(a: str, b: str) -> bool:
+    try:
+        return Path(a).resolve() == Path(b).resolve()
+    except OSError:
+        return a == b
+
+
+def apply_live(res: CheckResult, running: list[Running]) -> None:
+    """Fill each item's `live` verdict: does every RUNNING process launched on
+    this item's file actually carry the hook?
+
+    ok          every such process's launch bytes contain it
+    stale       at least one does not (named in detail): the file was fixed after
+                it launched, and only a relaunch delivers it
+    unknown     a process has no launch bytes and its file changed since launch,
+                so what it carries cannot be told
+    not-checked no running process was launched on this file (live does not apply)
+    """
+    import hashlib
+    for item in res.items:
+        if not item.get("file") or item["event"] in ("", "notify"):
+            continue
+        on_file = [r for r in running if _same_file(r.settings_file, item["file"])]
+        if not on_file:
+            item["live"] = NOT_CHECKED
+            continue
+        stale, unknown = [], []
+        for r in on_file:
+            data = r.launch_bytes
+            if data is None and r.launch_sha256 is not None:
+                try:
+                    now = Path(item["file"]).read_bytes()
+                except OSError:
+                    now = None
+                if now is not None and hashlib.sha256(now).hexdigest() == r.launch_sha256:
+                    data = now          # unchanged since launch: the file IS what it runs
+            if data is None:
+                unknown.append(r.agent)
+                continue
+            hooks = _hooks_from_bytes(item["harness"], data)
+            if hooks is None:
+                unknown.append(r.agent)
+            elif (item["matcher"], item["command"]) not in _commands_in(hooks.get(item["event"])):
+                stale.append(r.agent)
+        if stale:
+            item["live"] = "stale"
+            note = (f"running WITHOUT this hook: {', '.join(sorted(stale))} "
+                    f"(launched before it was rendered; a relaunch delivers it)")
+        elif unknown:
+            item["live"] = "unknown"
+            note = f"cannot tell what these running agents carry: {', '.join(sorted(unknown))}"
+        else:
+            item["live"] = "ok"
+            note = ""
+        if note:
+            item["detail"] = f"{item['detail']}; {note}" if item["detail"] else note
+
+
 def register(root, source_file: Path) -> tuple[str, str]:
     """Validate and install `source_file` into the registry.
     Returns (name, outcome) where outcome is 'installed', 'updated' or 'unchanged'.
