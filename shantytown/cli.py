@@ -994,6 +994,7 @@ def _cmd_hooks(a) -> int:
     except Exception:
         cards = []
     hb.apply_live(res, _hooks_running(a, cards))
+    hb.apply_firing(res, hb.load(root))
     if a.json:
         print(json.dumps(res.to_json(root=root, host=local_host(root)), indent=2))
         return res.exit_code
@@ -1001,6 +1002,8 @@ def _cmd_hooks(a) -> int:
     for e in res.registry_errors:
         print(f"REGISTRY {e['file']}: {e['reason']}")
     for i in res.items:
+        if i["firing"] == "silent":
+            print(f"SILENT      {i['harness']}/{i['role']} {i['bundle']} {i['event']}: {i['detail']}")
         if i["live"] == "stale":
             print(f"LIVE-STALE  {i['harness']}/{i['role']} {i['bundle']} {i['event']}: {i['detail']}")
         if i["configured"] != "ok":
@@ -1010,7 +1013,8 @@ def _cmd_hooks(a) -> int:
                 print(f"            {i['detail']}")
     print(f"hook bundles: {s['items']} item(s), {s['configured_ok']} configured, "
           f"{s['missing']} missing, {s['unsupported']} unsupported, {s['duplicate']} duplicate; "
-          f"live: {s['live_ok']} ok, {s['live_stale']} stale; firing not checked yet")
+          f"live: {s['live_ok']} ok, {s['live_stale']} stale; "
+          f"firing: {s['firing_ok']} ok, {s['firing_silent']} silent")
     return res.exit_code
 
 
