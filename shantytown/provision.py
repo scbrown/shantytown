@@ -877,8 +877,10 @@ def _workspace_capture(text: str, root, settings_path=None) -> str:
 def _drop_hooks_the_role_file_owns(cfg: dict, role_hooks: dict) -> None:
     """ONE OWNER PER HOOK: remove from the workspace file every hook the agent's
     role file already carries (same event, same matcher, same command once
-    $HOME forms are expanded). Claude Code merges both files, so a hook in both
-    fires twice per event.
+    $HOME forms are expanded). One owner per hook: identical text in both files
+    is de-duplicated by the harness (measured), but a different spelling of the
+    same command is not and would run twice, and either way `st ops hooks check`
+    wants a single owner.
 
     This is what lets a registered hook bundle take over a hook provisioning
     still injects here (aegis-68j0ys): once the bundle renders it into the role

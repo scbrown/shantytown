@@ -296,15 +296,32 @@ def test_a_per_agent_file_with_no_known_role_is_cannot_tell_not_skipped(root):
     assert res.exit_code == 2
 
 
-def test_a_bundle_command_also_in_a_non_st_layer_is_a_DUPLICATE(root, tmp_path):
-    """Claude Code merges every settings source: the same hook in the user's global
-    file AND the st-emitted file fires twice per tool call."""
+def test_identical_text_in_another_layer_is_NOT_a_failure_but_is_noted(root, tmp_path):
+    """Claude Code de-duplicates hooks with identical command text across settings
+    sources (measured 2026-09-29: 22 actions, 22 records). So identical text is not
+    a double-fire: ok, with a note saying where the extra copy lives."""
     register(root, bundle())
     emit(root, "claude", "worker")
-    emit(root, "codex", "worker")
     glob = tmp_path / "global-settings.json"
     glob.write_text(json.dumps({"hooks": {"UserPromptSubmit": [
         {"hooks": [{"type": "command", "command": EXAMPLE_CMD}]}]}}))
+    res = hb.check(root, other_layers=[glob])
+    item = [i for i in res.items if i["event"] == "UserPromptSubmit" and i["harness"] == "claude"][0]
+    assert item["configured"] == "ok" and str(glob) in item["detail"]
+    assert res.exit_code == 0
+
+
+def test_a_bundle_command_also_in_a_non_st_layer_is_a_DUPLICATE(root, tmp_path):
+    """A DIFFERENT spelling of the same command ($HOME vs absolute) is not identical
+    text, so the harness does not de-duplicate it: it runs twice."""
+    register(root, bundle())
+    emit(root, "claude", "worker")
+    emit(root, "codex", "worker")
+    register(root, bundle(hooks=[{"event": "UserPromptSubmit", "command": "$HOME/p.sh || true"}]))
+    emit(root, "claude", "worker")
+    glob = tmp_path / "global-settings.json"
+    glob.write_text(json.dumps({"hooks": {"UserPromptSubmit": [
+        {"hooks": [{"type": "command", "command": f"{Path.home()}/p.sh || true"}]}]}}))
     res = hb.check(root, other_layers=[glob, tmp_path / "absent.json"])
     dup = [i for i in res.items if i["configured"] == "duplicate"]
     assert [(i["harness"], i["event"]) for i in dup] == [("claude", "UserPromptSubmit")]
@@ -473,9 +490,12 @@ def test_a_WORKSPACE_copy_duplicates_only_its_own_agents_role(root, tmp_path):
     register(root, bundle())
     emit(root, "claude", "worker")
     emit(root, "claude", "lead")
+    register(root, bundle(name="spelled", hooks=[{"event": "UserPromptSubmit", "command": "$HOME/p.sh || true"}]))
+    emit(root, "claude", "worker")
+    emit(root, "claude", "lead")
     local = tmp_path / "ws-settings.local.json"
     local.write_text(json.dumps({"hooks": {"UserPromptSubmit": [
-        {"hooks": [{"type": "command", "command": EXAMPLE_CMD}]}]}}))
+        {"hooks": [{"type": "command", "command": f"{Path.home()}/p.sh || true"}]}]}}))
     res = hb.check(root, other_layers=[(local, "worker")])
     dup = {(i["role"], i["event"]) for i in res.items if i["configured"] == "duplicate"}
     assert dup == {("worker", "UserPromptSubmit")}
