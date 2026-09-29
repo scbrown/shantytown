@@ -442,3 +442,26 @@ def test_the_same_command_under_a_DIFFERENT_matcher_is_still_added(root):
     register(root, bundle(hooks=[{"event": "SessionStart", "matcher": "compact", "command": own}]))
     after = commands("claude", emit(root, "claude", "worker"), "SessionStart")
     assert after.count(own) == 2, "a different matcher is a different hook"
+
+
+def test_HOME_and_absolute_forms_of_one_command_are_one_hook(root):
+    """A portable bundle writes $HOME/...; st emits the absolute path. The shell
+    expands them identically, so rendering both would fire the hook twice."""
+    absolute = f"{Path.home()}/.tool/hooks/capture.sh"
+    st_settings = {"hooks": {"Stop": [{"hooks": [{"type": "command", "command": absolute}]}]}}
+    register(root, bundle(hooks=[{"event": "Stop", "command": "$HOME/.tool/hooks/capture.sh"}]))
+    out = hb.apply(st_settings, "worker", "claude", root)
+    assert [h["command"] for g in out["hooks"]["Stop"] for h in g["hooks"]] == [absolute]
+
+
+@pytest.mark.parametrize("cmd, same", [
+    ("$HOME/x.sh", True), ("${HOME}/x.sh", True), ("~/x.sh", True),
+    ("$HOMEY/x.sh", False), ("~other/x.sh", False), ("/elsewhere/x.sh", False),
+])
+def test_home_normalisation_is_exact(cmd, same):
+    assert (hb.same_command_key(cmd) == hb.same_command_key(f"{Path.home()}/x.sh")) is same
+
+
+def test_the_rendered_text_is_never_rewritten(root):
+    register(root, bundle(hooks=[{"event": "UserPromptSubmit", "command": "$HOME/p.sh || true"}]))
+    assert "$HOME/p.sh || true" in commands("claude", emit(root, "claude", "worker"), "UserPromptSubmit")
