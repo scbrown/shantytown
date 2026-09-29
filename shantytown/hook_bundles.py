@@ -237,7 +237,14 @@ def apply(settings: dict, role: str, harness: str, root) -> dict:
         out["notify"] = list(owner.codex_notify)
     hooks = {k: list(v) for k, v in (settings.get("hooks") or {}).items()}
     for event, groups in extra.items():
-        hooks[event] = hooks.get(event, []) + groups
+        # MIGRATION-SAFE (aegis-68j0ys): a bundle hook identical to one st already
+        # emits for this event (same matcher, same command) is not appended a
+        # second time. So a tool can register a hook st still hard-codes, and it
+        # fires ONCE; removing the hard-code afterwards changes nothing rendered.
+        have = _commands_in(hooks.get(event))
+        fresh = [g for g in groups if not (_commands_in([g]) <= have)]
+        if fresh:
+            hooks[event] = hooks.get(event, []) + fresh
     out["hooks"] = hooks
     return out
 
