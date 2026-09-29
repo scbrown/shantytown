@@ -1,4 +1,4 @@
-"""st — the CLI. Seven verbs, five groups, thirty-one grouped commands: thirty-eight, and the count is load-bearing: each earns its slot.
+"""st — the CLI. Seven verbs, five groups, thirty-two grouped commands: thirty-nine, and the count is load-bearing: each earns its slot.
 
     task · go · sling · inbox [--count] · crew [--count|--governor]
     · anchor [--short|--events|--harness] · attach [-r|--no-start]
@@ -10,7 +10,7 @@
             · roles [--check|set|band|sync] · init · hold gaming [--clear|--status|--probe]
             · window {plan|drain|clear|release|abort} · dashboard [admin]
     repo  → worktree [--gc] · push [--branch] · context
-    ops   → doctor [--install] · provision [agent] · subscribe · help <topic>
+    ops   → doctor [--install] · provision [agent] · subscribe · hooks <register|list|check> · help <topic>
 
 THE SURFACE WAS REGROUPED, and the count did not move (Stiwi, 2026-09-17). Six
 verbs stay top-level — the ones typed all day, and the ones an external status
@@ -879,6 +879,67 @@ def _hostmem_verdict(cfg):
 #: squeeze on ordinary work; it is a ceiling on the pathological case.
 _TEND_SWEEP_BUDGET_S = float(os.environ.get("SHANTY_TEND_SWEEP_BUDGET_S", "120"))
 
+def _cmd_hooks(a) -> int:
+    """`st ops hooks` (aegis-68j0ys). st keeps registered bundles rendered; it
+    knows nothing about what is in them."""
+    from . import hook_bundles as hb
+    from .deployment import local_host
+    root = a.root
+    if a.hooks_cmd == "register":
+        try:
+            name, outcome = hb.register(root, a.file)
+        except (OSError, ValueError) as e:
+            print(f"refused: {e}", file=sys.stderr)
+            return 1
+        print(f"{name}: {outcome}")
+        if outcome != "unchanged":
+            print("  takes effect in emitted settings on the next `st fleet roles set`, "
+                  "and in a running agent at its next launch")
+        return 0
+    if a.hooks_cmd == "unregister":
+        try:
+            gone = hb.unregister(root, a.name)
+        except ValueError as e:
+            print(f"refused: {e}", file=sys.stderr)
+            return 1
+        print(f"{a.name}: {'removed' if gone else 'not registered'}")
+        return 0 if gone else 1
+    if a.hooks_cmd == "list":
+        reg = hb.load(root)
+        if a.json:
+            print(json.dumps({"bundles": [
+                {"name": b.name, "version": b.version, "owner": b.owner, "roles": list(b.roles),
+                 "hooks": [{"event": h.event, "matcher": h.matcher, "command": h.command,
+                            "timeout": h.timeout, "harnesses": list(h.harnesses)} for h in b.hooks]}
+                for b in reg.bundles],
+                "errors": [{"file": f, "reason": r} for f, r in reg.errors]}, indent=2))
+            return 1 if reg.errors else 0
+        if not reg.bundles and not reg.errors:
+            print(f"no hook bundles registered in {hb.registry_dir(root)}")
+        for b in reg.bundles:
+            print(f"{b.name} {b.version}  owner={b.owner}  roles={','.join(b.roles)}  "
+                  f"hooks={len(b.hooks)}")
+        for f, r in reg.errors:
+            print(f"BROKEN {f}: {r}")
+        return 1 if reg.errors else 0
+    res = hb.check(root)
+    if a.json:
+        print(json.dumps(res.to_json(root=root, host=local_host(root)), indent=2))
+        return res.exit_code
+    s = res.summary()
+    for e in res.registry_errors:
+        print(f"REGISTRY {e['file']}: {e['reason']}")
+    for i in res.items:
+        if i["configured"] != "ok":
+            print(f"{i['configured'].upper():11} {i['harness']}/{i['role']} {i['bundle']} "
+                  f"{i['event']}: {i['command']}")
+            if i["detail"]:
+                print(f"            {i['detail']}")
+    print(f"hook bundles: {s['items']} item(s), {s['configured_ok']} configured, "
+          f"{s['missing']} missing, {s['unsupported']} unsupported; live/firing not checked yet")
+    return res.exit_code
+
+
 def _default_root() -> Path:
     """Where the store is when nobody said — the shared discovery chain.
 
@@ -900,7 +961,7 @@ _GROUP_HELP = {
     "agent": "one agent: new, stop, harness, cycle, input, ask, answer, log, history, stats",
     "fleet": "the fleet: start, tend, roles, init, hold, window, dashboard",
     "repo": "a shared project repo: worktree, push, context",
-    "ops": "the installation: doctor, provision, subscribe, help",
+    "ops": "the installation: doctor, provision, subscribe, hooks, help",
 }
 #: Set to silence the one-line notice an old spelling prints. For tests and
 #: hooks — an operator typing `st cycle` is exactly who the line is for.
@@ -1455,6 +1516,19 @@ def build_parser() -> argparse.ArgumentParser:
     pv.add_argument("agent", nargs="?", help="one local crew card; all local cards if omitted")
     pv.add_argument("--json", action="store_true", help="versioned registration receipt; no credentials")
 
+    hk = leaf("hooks", help="registered hook bundles: register, list, check, unregister")
+    hk_sub = hk.add_subparsers(dest="hooks_cmd", required=True)
+    hk_reg = hk_sub.add_parser("register", help="validate a bundle file and add it to the registry")
+    hk_reg.add_argument("file", type=Path)
+    hk_un = hk_sub.add_parser("unregister", help="remove a bundle by name")
+    hk_un.add_argument("name")
+    hk_ls = hk_sub.add_parser("list", help="registered bundles")
+    hk_ls.add_argument("--json", action="store_true")
+    hk_ck = hk_sub.add_parser("check", help="is every registered hook in every emitted role file? "
+                                            "exit 0 ok, 1 drift, 2 cannot tell")
+    hk_ck.add_argument("--json", action="store_true",
+                       help='schema "st.hook-check/1" (aegis-68j0ys)')
+
     dr = leaf("doctor", help="what tools are installed, what's stale, what's missing")
     dr.add_argument("tool", nargs="?", help="check one tool; all if omitted")
     dr.add_argument("--deploy", action="store_true",
@@ -1977,6 +2051,8 @@ def _run_command(a) -> int:
         return _cmd_provision(a)
     if a.cmd == "doctor":
         return _cmd_doctor(a)
+    if a.cmd == "hooks":
+        return _cmd_hooks(a)
     if a.cmd == "stop":
         return _cmd_stop(a)
     if a.cmd == "log":
