@@ -413,3 +413,55 @@ def test_a_snapshot_disagreeing_with_its_stamp_is_not_trusted(tmp_path):
     store.record("alice", settings)
     (tmp_path / "launched" / "alice.snapshot").write_bytes(b'{"torn": true}')
     assert store.snapshot("alice") is None
+
+
+# --- migration: a bundle may take over a hook st still hard-codes ------------------
+
+def _st_own_command(root, harness, event):
+    """A hook st itself emits today, read from a render with an EMPTY registry."""
+    path = emit(root, harness, "worker")
+    cmds = commands(harness, path, event)
+    assert cmds, f"control: st emits a {event} hook"
+    return cmds[0]
+
+
+@pytest.mark.parametrize("harness", ["claude", "codex"])
+def test_a_bundle_hook_identical_to_an_st_hook_renders_ONCE(root, harness):
+    own = _st_own_command(root, harness, "SessionStart")
+    before = commands(harness, emit(root, harness, "worker"), "SessionStart")
+    register(root, bundle(hooks=[{"event": "SessionStart", "command": own}]))
+    after = commands(harness, emit(root, harness, "worker"), "SessionStart")
+    assert after == before, "registering the same hook changes nothing rendered"
+    assert after.count(own) == 1
+    res = hb.check(root)
+    assert [i["configured"] for i in res.items if i["harness"] == harness] == ["ok"]
+
+
+def test_the_same_command_under_a_DIFFERENT_matcher_is_still_added(root):
+    own = _st_own_command(root, "claude", "SessionStart")
+    register(root, bundle(hooks=[{"event": "SessionStart", "matcher": "compact", "command": own}]))
+    after = commands("claude", emit(root, "claude", "worker"), "SessionStart")
+    assert after.count(own) == 2, "a different matcher is a different hook"
+
+
+def test_HOME_and_absolute_forms_of_one_command_are_one_hook(root):
+    """A portable bundle writes $HOME/...; st emits the absolute path. The shell
+    expands them identically, so rendering both would fire the hook twice."""
+    absolute = f"{Path.home()}/.tool/hooks/capture.sh"
+    st_settings = {"hooks": {"Stop": [{"hooks": [{"type": "command", "command": absolute}]}]}}
+    register(root, bundle(hooks=[{"event": "Stop", "command": "$HOME/.tool/hooks/capture.sh"}]))
+    out = hb.apply(st_settings, "worker", "claude", root)
+    assert [h["command"] for g in out["hooks"]["Stop"] for h in g["hooks"]] == [absolute]
+
+
+@pytest.mark.parametrize("cmd, same", [
+    ("$HOME/x.sh", True), ("${HOME}/x.sh", True), ("~/x.sh", True),
+    ("$HOMEY/x.sh", False), ("~other/x.sh", False), ("/elsewhere/x.sh", False),
+])
+def test_home_normalisation_is_exact(cmd, same):
+    assert (hb.same_command_key(cmd) == hb.same_command_key(f"{Path.home()}/x.sh")) is same
+
+
+def test_the_rendered_text_is_never_rewritten(root):
+    register(root, bundle(hooks=[{"event": "UserPromptSubmit", "command": "$HOME/p.sh || true"}]))
+    assert "$HOME/p.sh || true" in commands("claude", emit(root, "claude", "worker"), "UserPromptSubmit")

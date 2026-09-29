@@ -237,9 +237,28 @@ def apply(settings: dict, role: str, harness: str, root) -> dict:
         out["notify"] = list(owner.codex_notify)
     hooks = {k: list(v) for k, v in (settings.get("hooks") or {}).items()}
     for event, groups in extra.items():
-        hooks[event] = hooks.get(event, []) + groups
+        # MIGRATION-SAFE (aegis-68j0ys): a bundle hook identical to one st already
+        # emits for this event (same matcher, same command) is not appended a
+        # second time. So a tool can register a hook st still hard-codes, and it
+        # fires ONCE; removing the hard-code afterwards changes nothing rendered.
+        have = _commands_in(hooks.get(event))
+        fresh = [g for g in groups if not (_commands_in([g]) <= have)]
+        if fresh:
+            hooks[event] = hooks.get(event, []) + fresh
     out["hooks"] = hooks
     return out
+
+
+_HOME_RE = re.compile(r"(?:(?<=^)|(?<=[\s=:'\"]))(?:\$\{HOME\}|\$HOME|~)(?=/|$|\s)")
+
+
+def same_command_key(cmd: str) -> str:
+    """How two hook commands are compared: `$HOME`, `${HOME}` and a word-leading
+    `~` are expanded to THIS host's home, because the shell will expand them
+    identically. A portable bundle writes `$HOME/...`; st may emit the
+    absolute path. They are one hook, and treating them as two would render and
+    fire it twice. Comparison only: the rendered text is never rewritten."""
+    return _HOME_RE.sub(str(Path.home()), cmd)
 
 
 def _commands_in(groups: Any) -> set[tuple[str | None, str]]:
@@ -249,7 +268,7 @@ def _commands_in(groups: Any) -> set[tuple[str | None, str]]:
             continue
         for h in g.get("hooks") or []:
             if isinstance(h, dict) and isinstance(h.get("command"), str):
-                found.add((g.get("matcher"), h["command"]))
+                found.add((g.get("matcher"), same_command_key(h["command"])))
     return found
 
 
@@ -408,11 +427,12 @@ def check(root, agent_roles: dict[str, str] | None = None, other_layers=()) -> C
                 if hooks is None:
                     item["configured"] = "unreadable"
                     item["detail"] = "the emitted settings file could not be parsed"
-                elif (h.matcher, h.command) in _commands_in(hooks.get(h.event)):
+                elif (h.matcher, same_command_key(h.command)) in _commands_in(hooks.get(h.event)):
                     item["configured"] = "ok"
-                    if harness == "claude" and h.command in elsewhere:
+                    if harness == "claude" and same_command_key(h.command) in elsewhere:
                         item["configured"] = "duplicate"
-                        item["detail"] = ("ALSO installed in " + ", ".join(elsewhere[h.command])
+                        item["detail"] = ("ALSO installed in "
+                                          + ", ".join(elsewhere[same_command_key(h.command)])
                                           + ": Claude Code merges every settings source, so "
                                             "this hook fires twice. Remove the hand-installed copy.")
                 else:
@@ -517,7 +537,8 @@ def apply_live(res: CheckResult, running: list[Running]) -> None:
             hooks = _hooks_from_bytes(item["harness"], data)
             if hooks is None:
                 unknown.append(r.agent)
-            elif (item["matcher"], item["command"]) not in _commands_in(hooks.get(item["event"])):
+            elif ((item["matcher"], same_command_key(item["command"]))
+                  not in _commands_in(hooks.get(item["event"]))):
                 stale.append(r.agent)
         if stale:
             item["live"] = "stale"
