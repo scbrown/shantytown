@@ -256,3 +256,160 @@ def test_notify_changed_by_hand_is_missing(root):
     path = emit(root, "codex", "worker")
     path.write_text(path.read_text().replace("example-tool ingest", "something else"))
     assert hb.check(root).exit_code == 1
+
+
+# --- increment 2: per-agent files, cross-layer duplicates, a loud swallowed error ---
+
+def emit_agent(root: Path, harness: str, agent: str, role: str) -> Path:
+    h = harness_mod.get(harness)
+    path = root / "settings" / h.agent_settings_name(agent)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(h.render(h.settings(role, root=root), "", root=root))
+    return path
+
+
+@pytest.mark.parametrize("harness", ["claude", "codex"])
+def test_a_per_agent_file_carries_bundles_and_is_checked_against_its_agents_role(root, harness):
+    register(root, bundle(roles=["lead"]))
+    path = emit_agent(root, harness, "alice", "lead")
+    assert EXAMPLE_CMD in commands(harness, path, "UserPromptSubmit"), "same seam, same bundles"
+    res = hb.check(root, agent_roles={"alice": "lead"})
+    mine = [i for i in res.items if i["file"] == str(path)]
+    assert mine and all(i["configured"] == "ok" for i in mine)
+    assert res.exit_code == 0
+
+
+def test_a_per_agent_file_losing_a_bundle_is_missing(root):
+    register(root, bundle())
+    path = emit_agent(root, "claude", "alice", "worker")
+    path.write_text(path.read_text().replace(EXAMPLE_CMD, "something-else || true"))
+    res = hb.check(root, agent_roles={"alice": "worker"})
+    assert any(i["file"] == str(path) and i["configured"] == "missing" for i in res.items)
+    assert res.exit_code == 1
+
+
+def test_a_per_agent_file_with_no_known_role_is_cannot_tell_not_skipped(root):
+    register(root, bundle())
+    emit_agent(root, "claude", "ghost", "worker")
+    res = hb.check(root, agent_roles={})
+    assert [i["configured"] for i in res.items if "agent-ghost" in i["file"]] == ["unreadable"]
+    assert res.exit_code == 2
+
+
+def test_a_bundle_command_also_in_a_non_st_layer_is_a_DUPLICATE(root, tmp_path):
+    """Claude Code merges every settings source: the same hook in the user's global
+    file AND the st-emitted file fires twice per tool call."""
+    register(root, bundle())
+    emit(root, "claude", "worker")
+    emit(root, "codex", "worker")
+    glob = tmp_path / "global-settings.json"
+    glob.write_text(json.dumps({"hooks": {"UserPromptSubmit": [
+        {"hooks": [{"type": "command", "command": EXAMPLE_CMD}]}]}}))
+    res = hb.check(root, other_layers=[glob, tmp_path / "absent.json"])
+    dup = [i for i in res.items if i["configured"] == "duplicate"]
+    assert [(i["harness"], i["event"]) for i in dup] == [("claude", "UserPromptSubmit")]
+    assert str(glob) in dup[0]["detail"]
+    assert res.exit_code == 1
+    assert res.summary()["duplicate"] == 1
+
+
+def test_control_no_other_layer_no_duplicate(root, tmp_path):
+    register(root, bundle())
+    emit(root, "claude", "worker")
+    unrelated = tmp_path / "g.json"
+    unrelated.write_text(json.dumps({"hooks": {"UserPromptSubmit": [
+        {"hooks": [{"type": "command", "command": "unrelated || true"}]}]}}))
+    assert hb.check(root, other_layers=[unrelated]).exit_code == 0
+
+
+def test_a_registry_that_cannot_load_writes_settings_without_bundles_AND_says_so(root, monkeypatch, capsys):
+    register(root, bundle())
+    def boom(_root):
+        raise RuntimeError("disk on fire")
+    monkeypatch.setattr(hb, "load", boom)
+    out = hb.apply({"hooks": {"Stop": []}}, "worker", "claude", root)
+    assert out == {"hooks": {"Stop": []}}
+    assert "hook bundles NOT rendered" in capsys.readouterr().err
+
+
+# --- increment 2: the LIVE layer -------------------------------------------------
+
+import hashlib
+
+from shantytown.launched import FilesLaunches
+
+
+def live_items(res, event="UserPromptSubmit"):
+    return [i for i in res.items if i["event"] == event and i["harness"] == "claude"]
+
+
+def test_live_ok_when_the_running_process_launched_on_bytes_carrying_the_hook(root):
+    register(root, bundle())
+    path = emit(root, "claude", "worker")
+    res = hb.check(root)
+    hb.apply_live(res, [hb.Running("alice", str(path), launch_bytes=path.read_bytes())])
+    assert {i["live"] for i in live_items(res)} == {"ok"}
+    assert res.exit_code == 0
+
+
+def test_live_STALE_when_it_launched_before_the_bundle_was_rendered(root):
+    """The failure launched.py exists for, per hook: the file is right, the
+    process is not, and nothing is wrong until someone relaunches."""
+    before = emit(root, "claude", "worker").read_bytes()      # launched on this
+    register(root, bundle())
+    path = emit(root, "claude", "worker")                     # fixed afterwards
+    res = hb.check(root)
+    hb.apply_live(res, [hb.Running("alice", str(path), launch_bytes=before)])
+    items = live_items(res)
+    assert {i["live"] for i in items} == {"stale"}
+    assert "alice" in items[0]["detail"]
+    assert res.exit_code == 1
+
+
+def test_live_uses_the_hash_when_no_snapshot_and_the_file_is_unchanged(root):
+    register(root, bundle())
+    path = emit(root, "claude", "worker")
+    sha = hashlib.sha256(path.read_bytes()).hexdigest()
+    res = hb.check(root)
+    hb.apply_live(res, [hb.Running("alice", str(path), launch_sha256=sha)])
+    assert {i["live"] for i in live_items(res)} == {"ok"}
+
+
+def test_live_unknown_when_no_snapshot_and_the_file_changed(root):
+    register(root, bundle())
+    path = emit(root, "claude", "worker")
+    res = hb.check(root)
+    hb.apply_live(res, [hb.Running("alice", str(path), launch_sha256="0" * 64)])
+    assert {i["live"] for i in live_items(res)} == {"unknown"}
+    assert res.exit_code == 2
+
+
+def test_live_not_checked_when_nobody_runs_on_the_file(root):
+    register(root, bundle())
+    emit(root, "claude", "worker")
+    lead = emit(root, "claude", "lead")
+    res = hb.check(root)
+    hb.apply_live(res, [hb.Running("bob", str(lead), launch_bytes=lead.read_bytes())])
+    worker = [i for i in live_items(res) if i["role"] == "worker"]
+    assert {i["live"] for i in worker} == {hb.NOT_CHECKED}
+
+
+def test_launch_records_a_snapshot_that_matches_its_stamp_and_forget_clears_it(tmp_path):
+    settings = tmp_path / "worker.settings.json"
+    settings.write_text('{"hooks": {}}')
+    store = FilesLaunches(tmp_path / "launched")
+    store.record("alice", settings)
+    assert store.snapshot("alice") == settings.read_bytes()
+    settings.write_text('{"hooks": {"Stop": []}}')           # file changes after launch
+    assert store.snapshot("alice") == b'{"hooks": {}}', "the launch bytes, not today's"
+    store.forget("alice")
+    assert store.snapshot("alice") is None
+
+
+def test_a_snapshot_disagreeing_with_its_stamp_is_not_trusted(tmp_path):
+    settings = tmp_path / "s.json"
+    settings.write_text("{}")
+    store = FilesLaunches(tmp_path / "launched")
+    store.record("alice", settings)
+    (tmp_path / "launched" / "alice.snapshot").write_bytes(b'{"torn": true}')
+    assert store.snapshot("alice") is None
