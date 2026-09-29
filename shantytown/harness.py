@@ -499,7 +499,10 @@ class ClaudeHarness:
         # The Claude-Code-specific half, imported at call time to keep the import
         # graph one-directional (runtime imports harness, never the reverse).
         from .runtime import claude_settings_for_role
-        return claude_settings_for_role(role, root=root)
+        from .hook_bundles import apply as apply_bundles
+        # Registered hook bundles (aegis-68j0ys) are appended HERE, the one seam
+        # every emit passes through, so a regeneration cannot drop them.
+        return apply_bundles(claude_settings_for_role(role, root=root), role, "claude", root)
 
     def settings_name(self, role: str) -> str:
         return f"{role}.settings.json"
@@ -1152,7 +1155,9 @@ class CodexHarness:
         return launch
 
     def settings(self, role: str, root=None) -> dict:
-        return codex_mod().settings_for_role(role, root=root)
+        from .hook_bundles import apply as apply_bundles
+        # Same seam as ClaudeHarness.settings (aegis-68j0ys): parity by construction.
+        return apply_bundles(codex_mod().settings_for_role(role, root=root), role, "codex", root)
 
     def settings_name(self, role: str) -> str:
         # A DIRECTORY PER ROLE, because CODEX_HOME names a directory and codex

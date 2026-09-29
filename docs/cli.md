@@ -88,6 +88,7 @@ st ops                        the installation
   doctor [--install]          what's installed, stale, missing (out-of-box)
   provision [agent]           register Quipu tooling for local crew without launching
   subscribe                   watch quipu entity events; route governed workflows to the admin
+  hooks <register|list|check> keep tools' registered hook bundles rendered, and check they are
   help <topic>                rationale pages: handoff/cycle, haul, inbox
 st <launch cmd> --despite-hold  launch THROUGH a gaming hold, for that one command
 ```
@@ -240,7 +241,7 @@ Codex input already includes its cached subset. This makes
 `cache_read / usage_in` a provider-independent prompt-cache hit rate. The fields
 are omitted—not zeroed—when every matching transcript is unknown.
 
-Thirty-eight. Seven verbs at the top level and thirty-one grouped commands under five groups
+Thirty-nine. Seven verbs at the top level and thirty-two grouped commands under five groups
 (`work`, `agent`, `fleet`, `repo`, `ops`). A group is a namespace and runs nothing, so it earns no
 slot; the count is the leaves. The flat spellings from before the grouping (st cycle for
 st agent cycle, and so on) still parse into the same handler, print one line on stderr saying
@@ -252,7 +253,7 @@ pair, owner-directed), **context** (the bobbin Context protocol), **doctor**
 routing governed workflows to the admin), **repool** (the whole hand-back in one verified
 write — clearing an assignee alone leaves an item in_progress, which parks it outside `bd ready`,
 every haul, and every plate; a hand-back that drops work off the board was the measured defect),
-**defer** (the whole structured park: status, exactly one blocker-kind label, and a durable
+**hooks** (registered hook bundles: a tool declares its hooks once and st renders them into every role's claude and codex settings on every emit, so a regeneration can no longer silently drop them, and `check` reports drift — Stiwi's 2026-09-29 ask, aegis-68j0ys), **defer** (the whole structured park: status, exactly one blocker-kind label, and a durable
 reason in one verified action), and **history** (the durable transcript archive: codex writes its
 rollouts under a CODEX_HOME on tmpfs, so an agent's sessions — reasoning included — were RAM-resident
 and died with the machine; `history` lists what was captured and, per session, whether its source
