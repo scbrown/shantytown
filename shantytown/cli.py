@@ -1101,6 +1101,9 @@ def build_parser() -> argparse.ArgumentParser:
                          "A READ: it never marks anything delivered (see events.py)")
     mr.add_argument("--harness", action="store_true",
                     help="print ONLY this agent's harness name (e.g. claude)")
+    mr.add_argument("--json", action="store_true",
+                    help="the task context as JSON for hooks and tools: agent, harness, and "
+                         "the plate item (id, title, status, priority) or null")
 
     sling = sub.add_parser("sling", help="hand a beaded design to the executive administrator")
     sling.add_argument("item")
@@ -5133,6 +5136,19 @@ def _cmd_anchor(a) -> int:
     plate_publish.publish(
         Path(a.root), me, p.item, session=plate_publish.own_session()
     )
+    if getattr(a, "json", False):
+        # THE GENERIC TASK CONTEXT (aegis-68j0ys): what any hook needs to know
+        # about the agent's current task, without reading st internals. The same
+        # resolution as the human render, so the two cannot disagree. A tool
+        # that wants more (labels, links) asks its tracker with the id.
+        it = p.item
+        print(json.dumps({
+            "schema": "st.task-context/1", "agent": me, "harness": _hn or None,
+            "item": None if it is None else {
+                "id": it.id, "title": it.title or None, "status": it.status,
+                "priority": it.priority},
+        }))
+        return OK
     if getattr(a, "short", False):
         # The id, or nothing. An empty plate prints an empty line's worth of
         # NOTHING — not "nothing.", not a dash: the consumer renders the segment
