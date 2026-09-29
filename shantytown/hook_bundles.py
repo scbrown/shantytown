@@ -51,6 +51,12 @@ class BundleHook:
     matcher: str | None = None
     timeout: int | None = None
     harnesses: tuple[str, ...] = HARNESSES
+    #: How to tell this hook has actually RUN: a command printing one unix
+    #: timestamp (its last run), and how old that may be. Declared by the tool,
+    #: because only the tool knows what "ran" leaves behind. None = no firing
+    #: verdict (reported not-checked, never ok).
+    evidence_command: str | None = None
+    evidence_max_age: int | None = None
 
     def group(self) -> dict[str, Any]:
         """The matcher group this hook renders to, in the harness's own shape."""
@@ -131,6 +137,14 @@ def validate(obj: Any) -> list[str]:
         if "timeout" in h and (not isinstance(h["timeout"], int) or isinstance(h["timeout"], bool)
                                or h["timeout"] <= 0):
             errs.append(f"{where}.timeout must be a positive integer")
+        ev = h.get("evidence")
+        if ev is not None:
+            if (not isinstance(ev, dict) or not isinstance(ev.get("command"), str)
+                    or not ev.get("command", "").strip()):
+                errs.append(f"{where}.evidence.command must be a non-empty string")
+            ma = ev.get("max_age_seconds") if isinstance(ev, dict) else None
+            if not isinstance(ma, int) or isinstance(ma, bool) or ma <= 0:
+                errs.append(f"{where}.evidence.max_age_seconds must be a positive integer")
         hs = h.get("harnesses", list(HARNESSES))
         if (not isinstance(hs, list) or not hs
                 or any(x not in HARNESSES for x in hs)):
@@ -146,7 +160,9 @@ def parse(obj: dict, source: str = "") -> Bundle:
         codex_notify=tuple(obj["codex_notify"]) if obj.get("codex_notify") else None,
         hooks=tuple(BundleHook(event=h["event"], command=h["command"],
                                matcher=h.get("matcher"), timeout=h.get("timeout"),
-                               harnesses=tuple(h.get("harnesses", HARNESSES)))
+                               harnesses=tuple(h.get("harnesses", HARNESSES)),
+                               evidence_command=(h.get("evidence") or {}).get("command"),
+                               evidence_max_age=(h.get("evidence") or {}).get("max_age_seconds"))
                     for h in obj["hooks"]))
 
 
@@ -572,6 +588,65 @@ def apply_live(res: CheckResult, running: list[Running]) -> None:
         else:
             item["live"] = "ok"
             note = ""
+        if note:
+            item["detail"] = f"{item['detail']}; {note}" if item["detail"] else note
+
+
+EVIDENCE_TIMEOUT_S = 5
+
+
+def _run_evidence(command: str) -> tuple[float | None, str]:
+    """(last-run unix time, why) from a bundle's evidence command. Fail-closed:
+    a timeout, a nonzero exit, or output that is not one number is None."""
+    import subprocess
+    try:
+        r = subprocess.run(["sh", "-c", command], capture_output=True, text=True,
+                           timeout=EVIDENCE_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        return None, f"evidence command timed out after {EVIDENCE_TIMEOUT_S}s"
+    except OSError as e:
+        return None, f"evidence command could not start: {e}"
+    if r.returncode != 0:
+        return None, f"evidence command exited {r.returncode}"
+    out = r.stdout.strip()
+    try:
+        return float(out), ""
+    except ValueError:
+        return None, f"evidence command printed {out[:40]!r}, not one unix timestamp"
+
+
+def apply_firing(res: CheckResult, reg: Registry, now: float | None = None,
+                 runner=_run_evidence) -> None:
+    """Fill `firing`: has each hook actually RUN recently?
+
+    ok          the bundle's evidence shows a run within max_age, and the hook is
+                live in at least one running process
+    silent      it is live, and the evidence is older than max_age: configured,
+                launched, and not running (the decorative-hook shape)
+    unknown     the evidence command failed or printed nonsense
+    not-checked the bundle declares no evidence, or no running process carries
+                the hook (there is nothing that could have fired it)
+    Each evidence command runs once per check, whatever the item count."""
+    import time
+    now = time.time() if now is None else now
+    specs = {(b.name, h.event, h.matcher, h.command): h
+             for b in reg.bundles for h in b.hooks}
+    cache: dict[str, tuple[float | None, str]] = {}
+    for item in res.items:
+        h = specs.get((item["bundle"], item["event"], item["matcher"], item["command"]))
+        if h is None or not h.evidence_command or item["live"] != "ok":
+            continue
+        if h.evidence_command not in cache:
+            cache[h.evidence_command] = runner(h.evidence_command)
+        last, why = cache[h.evidence_command]
+        if last is None:
+            item["firing"], note = "unknown", why
+        elif now - last <= h.evidence_max_age:
+            item["firing"], note = "ok", ""
+        else:
+            item["firing"] = "silent"
+            note = (f"live, but last ran {int(now - last)}s ago "
+                    f"(allowed {h.evidence_max_age}s): configured and launched, not running")
         if note:
             item["detail"] = f"{item['detail']}; {note}" if item["detail"] else note
 

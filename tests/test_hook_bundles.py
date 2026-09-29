@@ -537,3 +537,70 @@ def test_provision_drops_a_workspace_hook_the_role_file_owns_and_keeps_it_otherw
     assert outcome not in _workspace_commands(out, "PostToolUseFailure")
     assert any("shantytown.stats capture" in c for c in _workspace_commands(out, "PostToolUse")), \
         "unrelated workspace hooks survive"
+
+
+# --- the FIRING layer ---------------------------------------------------------------
+
+def _firing_setup(root, max_age=3600):
+    b = bundle(hooks=[{"event": "UserPromptSubmit", "command": EXAMPLE_CMD,
+                       "evidence": {"command": "example-tool last-run", "max_age_seconds": max_age}}])
+    register(root, b)
+    path = emit(root, "claude", "worker")
+    res = hb.check(root)
+    hb.apply_live(res, [hb.Running("alice", str(path), launch_bytes=path.read_bytes())])
+    return res
+
+
+def _claude(res):
+    return [i for i in res.items if i["harness"] == "claude"][0]
+
+
+def test_firing_ok_when_evidence_is_fresh(root):
+    res = _firing_setup(root)
+    hb.apply_firing(res, hb.load(root), now=10_000, runner=lambda c: (9_500.0, ""))
+    assert _claude(res)["firing"] == "ok" and res.exit_code in (0, 2)
+
+
+def test_firing_SILENT_when_live_but_evidence_is_old(root):
+    """Configured, launched, and not running: the decorative-hook shape."""
+    res = _firing_setup(root, max_age=60)
+    hb.apply_firing(res, hb.load(root), now=10_000, runner=lambda c: (1_000.0, ""))
+    item = _claude(res)
+    assert item["firing"] == "silent" and "last ran 9000s ago" in item["detail"]
+    assert res.exit_code == 1
+
+
+def test_firing_unknown_when_evidence_fails(root):
+    res = _firing_setup(root)
+    hb.apply_firing(res, hb.load(root), now=10_000, runner=lambda c: (None, "exited 1"))
+    assert _claude(res)["firing"] == "unknown"
+
+
+def test_firing_not_checked_without_a_live_carrier(root):
+    register(root, bundle(hooks=[{"event": "UserPromptSubmit", "command": EXAMPLE_CMD,
+                                  "evidence": {"command": "x", "max_age_seconds": 60}}]))
+    emit(root, "claude", "worker")
+    res = hb.check(root)                               # no apply_live: nobody runs it
+    calls = []
+    hb.apply_firing(res, hb.load(root), now=1, runner=lambda c: calls.append(c) or (0.0, ""))
+    assert _claude(res)["firing"] == hb.NOT_CHECKED and calls == []
+
+
+def test_firing_evidence_runs_once_per_check(root):
+    res = _firing_setup(root)
+    emit(root, "claude", "lead")
+    calls = []
+    hb.apply_firing(res, hb.load(root), now=10, runner=lambda c: calls.append(c) or (9.0, ""))
+    assert calls == ["example-tool last-run"]
+
+
+def test_evidence_is_validated():
+    bad = bundle(hooks=[{"event": "Stop", "command": "x", "evidence": {"command": "", "max_age_seconds": 0}}])
+    errs = hb.validate(bad)
+    assert any("evidence.command" in e for e in errs) and any("max_age_seconds" in e for e in errs)
+
+
+def test_the_real_evidence_runner_is_fail_closed():
+    assert hb._run_evidence("echo 1790000000")[0] == 1790000000.0
+    assert hb._run_evidence("echo not-a-number")[0] is None
+    assert hb._run_evidence("exit 3")[0] is None
