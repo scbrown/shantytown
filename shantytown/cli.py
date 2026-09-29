@@ -1527,7 +1527,7 @@ def build_parser() -> argparse.ArgumentParser:
     hk_ck = hk_sub.add_parser("check", help="is every registered hook in every emitted role file? "
                                             "exit 0 ok, 1 drift, 2 cannot tell")
     hk_ck.add_argument("--json", action="store_true",
-                       help='schema "st.hook-check/1" (aegis-68j0ys)')
+                       help='machine-readable report, schema "st.hook-check/1"')
 
     dr = leaf("doctor", help="what tools are installed, what's stale, what's missing")
     dr.add_argument("tool", nargs="?", help="check one tool; all if omitted")
