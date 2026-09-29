@@ -222,3 +222,37 @@ def test_no_tool_names_in_the_bundle_code_path():
     from shantytown import cli
     handler = inspect.getsource(cli._cmd_hooks)
     assert not STACK_NAMES.findall(handler), STACK_NAMES.findall(handler)
+
+
+# --- codex notify: a single-slot harness key, one owner ---------------------------
+
+NOTIFY = ["bash", "-c", "printf '%s' \"$1\" | example-tool ingest", "--"]
+
+
+def test_codex_notify_renders_from_its_one_owner_and_survives_regeneration(root):
+    register(root, bundle(name="notifier", hooks=[], codex_notify=NOTIFY))
+    path = emit(root, "codex", "worker")
+    emit(root, "codex", "worker")
+    assert tomllib.loads(path.read_text())["notify"] == NOTIFY
+    assert "notify" not in json.loads(emit(root, "claude", "worker").read_text()), "codex only"
+    res = hb.check(root)
+    assert [(i["event"], i["configured"]) for i in res.items] == [("notify", "ok")]
+    assert res.exit_code == 0
+
+
+def test_two_notify_claimants_render_NEITHER_and_check_says_why(root):
+    register(root, bundle(name="one", hooks=[], codex_notify=NOTIFY))
+    register(root, bundle(name="two", hooks=[], codex_notify=["other"]))
+    path = emit(root, "codex", "worker")
+    assert "notify" not in tomllib.loads(path.read_text())
+    res = hb.check(root)
+    assert {i["configured"] for i in res.items} == {"unsupported"}
+    assert all("claimed by 2 bundles" in i["detail"] for i in res.items)
+    assert res.exit_code == 1
+
+
+def test_notify_changed_by_hand_is_missing(root):
+    register(root, bundle(name="notifier", hooks=[], codex_notify=NOTIFY))
+    path = emit(root, "codex", "worker")
+    path.write_text(path.read_text().replace("example-tool ingest", "something else"))
+    assert hb.check(root).exit_code == 1

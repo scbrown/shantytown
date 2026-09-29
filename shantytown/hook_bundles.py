@@ -71,6 +71,9 @@ class Bundle:
     roles: tuple[str, ...]
     hooks: tuple[BundleHook, ...]
     source: str = ""
+    #: codex's `notify` argv. A single-slot harness key, not a hook event, so at
+    #: most ONE registered bundle may own it (see notify_owner).
+    codex_notify: tuple[str, ...] | None = None
 
     def applies_to(self, role: str) -> bool:
         return "*" in self.roles or role in self.roles
@@ -106,9 +109,13 @@ def validate(obj: Any) -> list[str]:
     if (not isinstance(roles, list) or not roles
             or not all(isinstance(r, str) and r for r in roles)):
         errs.append('roles must be a non-empty list of role names or ["*"]')
+    cn = obj.get("codex_notify")
+    if cn is not None and (not isinstance(cn, list) or not cn
+                           or not all(isinstance(x, str) and x for x in cn)):
+        errs.append("codex_notify must be a non-empty list of strings (an argv)")
     hooks = obj.get("hooks")
-    if not isinstance(hooks, list) or not hooks:
-        errs.append("hooks must be a non-empty list")
+    if not isinstance(hooks, list) or (not hooks and cn is None):
+        errs.append("hooks must be a list, non-empty unless the bundle declares codex_notify")
         return errs
     for i, h in enumerate(hooks):
         where = f"hooks[{i}]"
@@ -136,6 +143,7 @@ def parse(obj: dict, source: str = "") -> Bundle:
     return Bundle(
         name=obj["name"], version=obj["version"], owner=obj["owner"],
         roles=tuple(obj["roles"]), source=source,
+        codex_notify=tuple(obj["codex_notify"]) if obj.get("codex_notify") else None,
         hooks=tuple(BundleHook(event=h["event"], command=h["command"],
                                matcher=h.get("matcher"), timeout=h.get("timeout"),
                                harnesses=tuple(h.get("harnesses", HARNESSES)))
@@ -197,6 +205,15 @@ def groups_for(reg: Registry, role: str, harness: str) -> tuple[dict[str, list[d
     return out, unsupported
 
 
+def notify_owner(reg: Registry, role: str) -> tuple[Bundle | None, list[str]]:
+    """The ONE bundle that owns codex `notify` for this role, and the names of
+    every claimant. More than one claimant means NOBODY owns it: st will not pick
+    a winner for a single slot, and check reports the conflict."""
+    claimants = [b for b in reg.bundles if b.codex_notify and b.applies_to(role)]
+    names = [b.name for b in claimants]
+    return (claimants[0] if len(claimants) == 1 else None), names
+
+
 def apply(settings: dict, role: str, harness: str, root) -> dict:
     """Return `settings` with every registered bundle hook for (role, harness)
     appended after st's own hooks. `settings` is not mutated.
@@ -209,9 +226,12 @@ def apply(settings: dict, role: str, harness: str, root) -> dict:
     except Exception:  # never let a bad drop-in stop settings being written
         return settings
     extra, _unsupported = groups_for(reg, role, harness)
-    if not extra:
+    owner = notify_owner(reg, role)[0] if harness == "codex" else None
+    if not extra and owner is None:
         return settings
     out = dict(settings)
+    if owner is not None:
+        out["notify"] = list(owner.codex_notify)
     hooks = {k: list(v) for k, v in (settings.get("hooks") or {}).items()}
     for event, groups in extra.items():
         hooks[event] = hooks.get(event, []) + groups
@@ -309,6 +329,8 @@ def check(root) -> CheckResult:
     for harness, role, path in emitted_role_files(root):
         hooks = None
         loaded = False
+        if harness == "codex":
+            _check_notify(res, reg, role, path)
         for b in reg.bundles:
             if not b.applies_to(role):
                 continue
@@ -337,6 +359,34 @@ def check(root) -> CheckResult:
                                       "re-emit, and check for a hand edit if it reappears missing")
                 res.items.append(item)
     return res
+
+
+def _check_notify(res: CheckResult, reg: Registry, role: str, path: Path) -> None:
+    owner, claimants = notify_owner(reg, role)
+    if not claimants:
+        return
+    for b in reg.bundles:
+        if b.name not in claimants:
+            continue
+        item = {"bundle": b.name, "version": b.version, "harness": "codex", "role": role,
+                "event": "notify", "matcher": None, "command": " ".join(b.codex_notify),
+                "file": str(path), "live": NOT_CHECKED, "firing": NOT_CHECKED, "detail": ""}
+        if owner is None:
+            item["configured"] = "unsupported"
+            item["detail"] = (f"codex notify is claimed by {len(claimants)} bundles "
+                              f"({', '.join(claimants)}); a single slot, so none is rendered")
+        else:
+            try:
+                import tomllib
+                have = tomllib.loads(path.read_text()).get("notify")
+            except (OSError, ValueError):
+                item["configured"], item["detail"] = "unreadable", "could not parse the codex config"
+                res.items.append(item)
+                continue
+            item["configured"] = "ok" if have == list(b.codex_notify) else "missing"
+            if item["configured"] == "missing":
+                item["detail"] = "codex notify differs from the registered argv"
+        res.items.append(item)
 
 
 def register(root, source_file: Path) -> tuple[str, str]:
