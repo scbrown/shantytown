@@ -361,13 +361,15 @@ def _read_hooks(harness: str, path: Path) -> dict | None:
     return hooks if isinstance(hooks, dict) else {}
 
 
-def other_layer_commands(paths) -> dict[str, list[str]]:
-    """{command: [file, ...]} for every hook command in settings files st did NOT
-    emit (a global harness file, a workspace-local one). Unreadable files are
-    skipped: this answers "is there ALSO a copy elsewhere", and a file nobody can
-    read contributes no copy."""
-    found: dict[str, list[str]] = {}
-    for p in paths:
+def other_layer_commands(layers) -> dict[str, list[tuple[str, str | None]]]:
+    """{command: [(file, role), ...]} for every hook command in settings files st
+    did NOT emit. Each layer is a path (applies to EVERY role: the user's global
+    file) or a (path, role) pair (a workspace's own file, which only the agent
+    working there loads, so it only duplicates that agent's role). Unreadable
+    files are skipped: a file nobody can read contributes no copy."""
+    found: dict[str, list[tuple[str, str | None]]] = {}
+    for layer in layers:
+        p, role = (layer if isinstance(layer, tuple) else (layer, None))
         p = Path(p)
         try:
             data = json.loads(p.read_text())
@@ -378,7 +380,8 @@ def other_layer_commands(paths) -> dict[str, list[str]]:
             continue
         for groups in hooks.values():
             for _matcher, cmd in _commands_in(groups):
-                found.setdefault(cmd, []).append(str(p))
+                if (str(p), role) not in found.get(cmd, []):
+                    found.setdefault(cmd, []).append((str(p), role))
     return found
 
 
@@ -429,10 +432,12 @@ def check(root, agent_roles: dict[str, str] | None = None, other_layers=()) -> C
                     item["detail"] = "the emitted settings file could not be parsed"
                 elif (h.matcher, same_command_key(h.command)) in _commands_in(hooks.get(h.event)):
                     item["configured"] = "ok"
-                    if harness == "claude" and same_command_key(h.command) in elsewhere:
+                    copies = [f for f, r in elsewhere.get(same_command_key(h.command), [])
+                              if r is None or r == role]
+                    if harness == "claude" and copies:
                         item["configured"] = "duplicate"
                         item["detail"] = ("ALSO installed in "
-                                          + ", ".join(elsewhere[same_command_key(h.command)])
+                                          + ", ".join(copies)
                                           + ": Claude Code merges every settings source, so "
                                             "this hook fires twice. Remove the hand-installed copy.")
                 else:
