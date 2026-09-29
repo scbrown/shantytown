@@ -379,3 +379,27 @@ def test_inbox_read_prints_what_it_did_consume_when_a_close_is_unconfirmed(
     assert "the body you must see" in out and "marked 1" in out
     assert "aegis-slow1" in err and "UNCONFIRMED" in err
     assert "the landed-but-unconfirmed body" in err and "from wu" in err
+
+
+# --- anchor --json: the generic task context for hooks (aegis-68j0ys) --------------
+
+def test_json_is_the_task_context_with_the_plate_item(tmp_path, monkeypatch, capsys):
+    _card(tmp_path, "ellie", role="worker")
+    from shantytown.files import FilesTracker
+    FilesTracker(tmp_path / "items").update(
+        "aegis-1o3g", title="Restore the den service",
+        status="in_progress", assignee="ellie")
+    assert _run(["anchor", "ellie", "--json"], tmp_path, monkeypatch, NullPanes()) == cli.OK
+    doc = json.loads(capsys.readouterr().out)
+    assert doc["schema"] == "st.task-context/1"
+    assert doc["agent"] == "ellie"
+    assert doc["item"]["id"] == "aegis-1o3g"
+    assert doc["item"]["title"] == "Restore the den service"
+    assert doc["item"]["status"] == "in_progress"
+
+
+def test_json_on_an_empty_plate_says_null_not_nothing(tmp_path, monkeypatch, capsys):
+    """A hook must be able to tell "no task" from "could not look": null, exit 0."""
+    _card(tmp_path, "ellie", role="worker")
+    assert _run(["anchor", "ellie", "--json"], tmp_path, monkeypatch, NullPanes()) == cli.OK
+    assert json.loads(capsys.readouterr().out)["item"] is None

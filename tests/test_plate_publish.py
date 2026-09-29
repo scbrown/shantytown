@@ -213,3 +213,15 @@ def test_dispatcher_plate_is_readable_by_any_session(tmp_path):
 def test_session_scoped_plate_readable_when_reader_has_no_session(tmp_path):
     publish_id(tmp_path, "kelly", "aegis-3", session="sess-abc")
     assert read(tmp_path, "kelly") == "aegis-3"
+
+
+def test_a_published_title_is_additive_and_readers_of_item_are_unaffected(tmp_path):
+    """aegis-68j0ys: the title rides next to "item" so a hook can name the task
+    without a tracker. Only when known — the shape without it is unchanged."""
+    class _Titled:
+        id = "aegis-2"
+        title = "Do the thing"
+    publish(tmp_path, "grant", _Titled(), session="s", _now=1.0)
+    data = json.loads(plate_path(tmp_path, "grant").read_text())
+    assert data == {"item": "aegis-2", "at": 1, "session": "s", "title": "Do the thing"}
+    assert read(tmp_path, "grant") == "aegis-2"

@@ -115,7 +115,8 @@ def publish(
     wants to log it; no caller is obliged to look.
     """
     item_id = getattr(item, "id", None) if item is not None else None
-    return publish_id(root, agent, item_id, session=session, _now=_now)
+    title = getattr(item, "title", None) if item is not None else None
+    return publish_id(root, agent, item_id, session=session, _now=_now, title=title or None)
 
 
 def publish_id(
@@ -124,6 +125,7 @@ def publish_id(
     item_id: str | None,
     session: str | None = None,
     _now: float | None = None,
+    title: str | None = None,
 ) -> bool:
     """[`publish`] for a caller that holds an ID rather than a WorkItem.
 
@@ -139,6 +141,11 @@ def publish_id(
             "at": int(_now if _now is not None else time.time()),
             "session": session,
         }
+        # ADDITIVE (aegis-68j0ys): the item's title, when the publisher had the
+        # row, so a hook can name the task without asking a tracker. Absent, not
+        # empty, when unknown: a reader keyed on "item" is unaffected.
+        if title:
+            payload["title"] = title
         path = plate_path(root, agent)
         path.parent.mkdir(parents=True, exist_ok=True)
         # Same directory as the target: os.replace is only atomic within a
