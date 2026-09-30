@@ -406,10 +406,16 @@ def other_layer_commands(layers) -> dict[str, list[tuple[str, str | None, str]]]
     return found
 
 
-def check(root, agent_roles: dict[str, str] | None = None, other_layers=()) -> CheckResult:
+def check(root, agent_roles: dict[str, str] | None = None, other_layers=(),
+          builtin=()) -> CheckResult:
     """CONFIGURED level: is every registered hook present in every emitted file
     it targets? Compares (matcher, command) pairs, so an edited command reads as
     missing rather than as present.
+
+    `builtin`: bundles the CALLER owns and emits itself, checked the same way but
+    never rendered from here (aegis-7edci3). Without it, a hook st emits from
+    code could vanish from a role file and this check would stay green — it
+    only knew about what other tools registered.
 
     `other_layers`: claude settings files st does NOT emit. Claude Code merges
     every source, so a bundle command that ALSO sits in one of them fires TWICE
@@ -431,7 +437,7 @@ def check(root, agent_roles: dict[str, str] | None = None, other_layers=()) -> C
         loaded = False
         if harness == "codex":
             _check_notify(res, reg, role, path)
-        for b in reg.bundles:
+        for b in [*reg.bundles, *builtin]:
             if not b.applies_to(role):
                 continue
             for h in b.hooks:
