@@ -45,6 +45,10 @@ REACTION = "reaction-workitem-unblocked"     # local name in the deployment onto
 # exception: that is exactly the condition the event resolves.
 HOLDING_LABEL = re.compile(r"^(blocked[:-]|decision|needs-|parked|waiting)")
 BEAD_BLOCK_LABEL = "blocked:bead"
+# Topic tags that merely NAME the blocked-by feature (every child of epic
+# aegis-c0awwp carries `blocked-by`); they say nothing about what holds a bead.
+# Observed on the first scheduled pass: aegis-sfpfwf reported as held on it.
+TOPIC_LABELS = frozenset({"blocked-by"})
 LEDGER_CAP = 2000   # firing IRIs remembered; far more than a week of events
 
 
@@ -97,7 +101,8 @@ def classify(detail: dict) -> tuple[str, str]:
     if still_open:
         return "mismatch", f"br still shows open blocker(s) {', '.join(still_open)}"
     held = sorted(l for l in _labels(detail)
-                  if l != BEAD_BLOCK_LABEL and HOLDING_LABEL.match(l))
+                  if l != BEAD_BLOCK_LABEL and l not in TOPIC_LABELS
+                  and HOLDING_LABEL.match(l))
     if status == "deferred" or detail.get("defer_until") or held:
         why = []
         if status == "deferred" or detail.get("defer_until"):
