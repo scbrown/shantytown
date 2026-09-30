@@ -2117,3 +2117,26 @@ Unconfigured windows retain Creel's declared trajectory. Admission caps and drai
 thresholds are unchanged. Both `st crew --governor` and `st fleet tend` use this
 same target. If the configured Creel probe predates this contract, the adapter
 reports the advisory unavailable rather than displaying an outdated target.
+
+### Spending envelope (`curve`)
+
+A `[[governor.pace]]` row may declare a `curve` instead of a `ratio`: points of
+`[elapsed_pct, max_used_pct]`, linearly interpolated, starting at elapsed 0 and
+ending at 100, with used never decreasing.
+
+```toml
+[[governor.pace]]
+window = "seven_day"
+curve  = [[0, 20], [14, 40], [43, 65], [71, 80], [86, 90], [100, 100]]
+```
+
+The window is on pace while its used percentage is at or under the envelope at
+the current elapsed. This expresses a front-loaded burst (20% allowed
+immediately, 40% by the end of day one) with a reserve kept for the final
+days (80% by day five, 90% by day six), which no single ratio can. The gate,
+the utilization line and `st_governor_pace_bound` read the envelope's ratio form
+`curve(e)/e`; the line names the envelope itself, e.g.
+`seven_day 86%used/66%elapsed =1.31x vs 77% envelope`. Creel receives the bound
+at the current elapsed, and its advisory is unavailable when that cannot be
+stated. A row declaring both `ratio` and `curve` is refused. Drains are
+unchanged.
