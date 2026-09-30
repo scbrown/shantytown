@@ -1291,6 +1291,15 @@ that message's pointer after confirming the input is not stranded. The closed be
 retains its content and history. If the recipient is down, the send fails, the input
 is stranded, or pointer closure fails, the pointer remains open for `st inbox`.
 
+An **off-host** durable recipient is nudged through the same declared peer the
+ephemeral relay (and `st go`) uses: the peer host's own `st inbox` over SSH. A
+relay that exits 0 counts as live delivery and closes the pointer. When no nudge
+is possible — no `[host.peers.<host>]`, SSH failure, timeout, or the peer
+refusing the live send — the report says `off-host: not nudged (<why>)` and the
+pointer stays open. It never says "recipient not live" for an agent on another
+host: that sentence claims a pane was looked at, and none was (aegis-az0a40).
+The exit code is 0 in every case once the durable persist succeeded, as before.
+
 For pointers that survive because delivery was offline or uncertain, acknowledgment
 can be selective: repeat `--read-id ID` for messages already absorbed while leaving
 an open question unread. The command preflights every ID and changes nothing if any

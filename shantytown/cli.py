@@ -4731,7 +4731,7 @@ def _cmd_inbox(a) -> int:
               "nothing was sent", file=sys.stderr)
         return CANNOT_TELL
     if getattr(a, "durable", False):
-        return _inbox_durable(a, agent, msg, panes, typed=typed)
+        return _inbox_durable(a, agent, msg, panes, typed=typed, sender=sender)
 
     # ROUTINE — unchanged. send-keys only, ephemeral.
     relayed = _relay_if_offhost(a, agent, typed, sender)
@@ -4847,6 +4847,62 @@ def _files_message_recipient(a):
     return Agent(name=a.agent, role=row["role"].split(",")[0], host=row["host"])
 
 
+def _peer_inbox_ssh(peer, name: str, typed: str, sender: str | None):
+    """Run the peer host's own EPHEMERAL `st inbox` over ssh — THE cross-host
+    live-send transport, shared by the ephemeral relay and the durable path's
+    live nudge (aegis-az0a40) so the two cannot drift. Raises OSError /
+    TimeoutExpired; returns the CompletedProcess otherwise. The remote
+    attributes the message from $SHANTY_AGENT, so the RAW text is sent."""
+    import shlex
+    import subprocess
+    q = shlex.quote
+    remote_cmd = (
+        (f"SHANTY_AGENT={q(sender)} " if sender else "")
+        + 'PATH="$HOME/.local/bin:$PATH" '
+        + f"st --registry files --root {q(peer.root)} inbox {q(name)} {q(typed)}")
+    return subprocess.run(
+        ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
+         peer.ssh, remote_cmd],
+        capture_output=True, text=True, timeout=45)
+
+
+def _offhost_nudge(a, agent, typed: str, sender: str | None) -> tuple[bool, str]:
+    """Best-effort LIVE nudge of an off-host recipient, after a durable persist.
+
+    (delivered, how). `how` is the TRUTH for the caller's one-line report:
+    either where it went, or why nothing was attempted/delivered. Never raises
+    — the durable message is already stored, and a nudge failure must not be
+    able to turn that into a non-zero exit (GitHub #26's rule).
+
+    THE DEFECT (aegis-az0a40): the durable path computed `live = not offhost
+    and ...`, so an off-host recipient was NEVER nudged and the report said
+    "recipient not live" — measured false against a peer administrator that
+    was up and busy, while `st go` reached the same pane through the peer path.
+    """
+    import subprocess
+    from .deployment import local_host
+    local = local_host(a.root)
+    if local is None:
+        return False, ("this deployment declares no [host] name, so the "
+                       f"recipient's host {agent.host} cannot be reached")
+    cfg, _err = config.load_or_default(a.root)
+    peer = cfg.host_peers.get(agent.host)
+    if peer is None:
+        return False, f"no [host.peers.{agent.host}] declared in shantytown.toml"
+    try:
+        res = _peer_inbox_ssh(peer, agent.name, typed, sender)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return False, f"host {agent.host} ({peer.ssh}) did not answer: {type(e).__name__}"
+    if res.returncode == OK:
+        return True, f"host {agent.host} via {peer.ssh}"
+    lines = [ln.strip() for ln in ((res.stderr or "") + "\n" + (res.stdout or "")).splitlines()
+             if ln.strip()]
+    last = lines[-1][:160] if lines else f"exit {res.returncode}"
+    if res.returncode == 255:
+        return False, f"ssh to host {agent.host} ({peer.ssh}) failed: {last}"
+    return False, f"host {agent.host} did not deliver live (exit {res.returncode}): {last}"
+
+
 def _relay_if_offhost(a, agent, typed: str, sender: str | None) -> int | None:
     """Route an EPHEMERAL send to the host the recipient's card names
     (aegis-5du1bz). None = the recipient is here (or nobody said where anyone
@@ -4872,12 +4928,6 @@ def _relay_if_offhost(a, agent, typed: str, sender: str | None) -> int | None:
               f"host-independent) or declare the peer (ssh + root).",
               file=sys.stderr)
         return REFUSED
-    import shlex
-    q = shlex.quote
-    remote_cmd = (
-        (f"SHANTY_AGENT={q(sender)} " if sender else "")
-        + 'PATH="$HOME/.local/bin:$PATH" '
-        + f"st --registry files --root {q(peer.root)} inbox {q(agent.name)} {q(typed)}")
     if a.dry_run:
         print(f"  would: relay via ssh {peer.ssh} -> host {agent.host} "
               f"(st --root {peer.root} inbox {agent.name} …)")
@@ -4886,10 +4936,7 @@ def _relay_if_offhost(a, agent, typed: str, sender: str | None) -> int | None:
         return OK
     import subprocess
     try:
-        res = subprocess.run(
-            ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
-             peer.ssh, remote_cmd],
-            capture_output=True, text=True, timeout=45)
+        res = _peer_inbox_ssh(peer, agent.name, typed, sender)
     except (OSError, subprocess.TimeoutExpired) as e:
         print(f"  could not tell: host {agent.host} ({peer.ssh}) did not answer "
               f"the relay ({type(e).__name__}); nothing is known to have been "
@@ -4928,7 +4975,8 @@ def _looks_stranded(panes, pane: str) -> bool:
         return False
 
 
-def _inbox_durable(a, agent, msg: str, panes, typed: str | None = None) -> int:
+def _inbox_durable(a, agent, msg: str, panes, typed: str | None = None,
+                   sender: str | None = None) -> int:
     """Persist, deliver live when possible, then retire that delivered pointer."""
     # BEADS BY DEFAULT for -d (dearing, qdal.2 follow-up). `-d` is the flag you
     # reach for when the message MUST survive your session dying. A local files
@@ -4947,6 +4995,15 @@ def _inbox_durable(a, agent, msg: str, panes, typed: str | None = None) -> int:
     live = not offhost and agent.pane is not None and panes.exists(agent.pane)
     if a.dry_run:
         print(f"  would: deliver a durable message to {agent.name}'s inbox via {backend}")
+        if offhost:
+            cfg, _err = config.load_or_default(a.root)
+            peer = cfg.host_peers.get(agent.host) if local else None
+            print("  would: " + (f"+ live relay via ssh {peer.ssh} -> host {agent.host}"
+                                 if peer else
+                                 f"off-host: not nudged (no reachable peer for host "
+                                 f"{agent.host}); survives in the inbox"))
+            print("\n  1 durable write." + (" 1 relay." if peer else " 0 send-keys."))
+            return OK
         print(f"  would: {'+ live send-keys -> ' + agent.pane if live else 'no live send (recipient down); survives in the inbox'}")
         print("\n  1 durable write." + (" 1 send-keys." if live else " 0 send-keys."))
         return OK
@@ -5027,6 +5084,26 @@ def _inbox_durable(a, agent, msg: str, panes, typed: str | None = None) -> int:
         except Exception as e:                    # noqa: BLE001 — delivery already succeeded
             print(f"  -> {agent.name}    delivered to inbox as {item.id} ({backend}) "
                   f"+ live to {agent.pane}; pointer close FAILED "
+                  f"({type(e).__name__}: {str(e)[:80]}) — it remains open for `st inbox`.")
+    elif offhost:
+        # OFF-HOST: nudge through the SAME peer transport the ephemeral relay
+        # and `st go` use, and report what is TRUE. "not live" was a claim
+        # about a pane nobody looked at (aegis-az0a40).
+        # The remote attributes from $SHANTY_AGENT, so send the RAW text with
+        # the verified sender; an already-attributed body goes unsigned.
+        sent, how = (_offhost_nudge(a, agent, typed, sender) if typed is not None
+                     else _offhost_nudge(a, agent, msg, None))
+        if not sent:
+            print(f"  -> {agent.name}    delivered to inbox as {item.id} ({backend}); "
+                  f"off-host: not nudged ({how}) — they read it with `st inbox`.")
+            return OK
+        try:
+            box.mark_read(agent.name, ids=[item.id])
+            print(f"  -> {agent.name}    delivered to inbox as {item.id} ({backend}) "
+                  f"+ live on {how}; pointer closed on live delivery")
+        except Exception as e:                    # noqa: BLE001 — delivery already succeeded
+            print(f"  -> {agent.name}    delivered to inbox as {item.id} ({backend}) "
+                  f"+ live on {how}; pointer close FAILED "
                   f"({type(e).__name__}: {str(e)[:80]}) — it remains open for `st inbox`.")
     else:
         print(f"  -> {agent.name}    delivered to inbox as {item.id} ({backend}); "
