@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .files import write_json_atomic
-from . import gaming_activity
+from . import gaming_activity, steam_appinfo
 
 MAX_AGE = 180
 LIFT_DELAY = 120
@@ -208,6 +208,15 @@ def probe(root: Path, *, proc: Path = Path("/proc"), now: float | None = None, s
                     opts.get('game_arguments', ['SteamLaunch', r'AppId=(?P<appid>[0-9]+)'])).items()
                          if re.fullmatch(r'[0-9]+', fields.get('appid') or '')}
                 shaders = tuple(sorted(processes(proc, opts.get('shader_executable', 'fossilize_replay'))))
+            # Steam launches tools and applications through the same reaper as games
+            # (aegis-syw2fv: Aseprite held the fleet 19 h). Drop an AppId only when
+            # Steam itself says it is not a game; an unreadable type keeps holding.
+            opts = spec.options if spec else {}
+            hold_types = tuple(t.lower() for t in opts.get('hold_app_types', steam_appinfo.HOLD_TYPES))
+            types = steam_appinfo.app_types(set(roots.values()),
+                                            opts.get('steam_appinfo', steam_appinfo.DEFAULT_PATH))
+            not_games = {a: t for a, t in types.items() if t is not None and t not in hold_types}
+            roots = {pid: a for pid, a in roots.items() if a not in not_games}
             appids = tuple(sorted(set(roots.values())))
             try:
                 previous = json.loads((folder / "state.json").read_text())
@@ -266,7 +275,8 @@ def probe(root: Path, *, proc: Path = Path("/proc"), now: float | None = None, s
             data = dict(state=state, appids=appids, since=since if state != "clear" else 0,
                         observed=now, absent_since=absent, shader_pids=shaders,
                         launch_until=launch_until, shader_since=shader_since,
-                        shader_absent_since=shader_absent_since)
+                        shader_absent_since=shader_absent_since,
+                        not_games=dict(sorted(not_games.items())))
             try:
                 data.update(gaming_activity.observe(proc, set(roots) | set(shaders), previous, now))
             except (OSError, ValueError, TypeError):

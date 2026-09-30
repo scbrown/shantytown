@@ -31,7 +31,8 @@ class Policy:
 
 COMMON = {'name', 'kind', 'enabled', 'enter_delay', 'grace', 'lift_delay', 'lift_rule'}
 OPTIONS = {
-    'steam': {'game_executable', 'game_arguments', 'shader_executable', 'shader_grace'},
+    'steam': {'game_executable', 'game_arguments', 'shader_executable', 'shader_grace',
+              'steam_appinfo', 'hold_app_types'},
     'process': {'executable', 'arguments', 'min_cpu_percent', 'min_gpu_percent', 'activity_rule'},
     'http_json': {'url', 'items_path', 'count_path', 'match', 'state_path', 'active_values',
                   'auth_header', 'token_file', 'token_ini_section', 'token_ini_key', 'timeout'},
@@ -91,6 +92,11 @@ def parse(raw: dict) -> Policy:
                 if not any('appid' in re.compile(p).groupindex for p in patterns):
                     raise ValueError('Steam argument patterns need a named appid capture')
                 number(options.get('shader_grace', 1200), name + '.shader_grace', 86400)
+                if not isinstance(options.get('steam_appinfo', 'x'), str) or not options.get('steam_appinfo', 'x'):
+                    raise ValueError(f'quiet_time.{name}.steam_appinfo must be a path')
+                types = options.get('hold_app_types', ['game'])
+                if not isinstance(types, list) or not types or not all(isinstance(t, str) and t for t in types):
+                    raise ValueError(f'quiet_time.{name}.hold_app_types must be a nonempty list of Steam app types')
             else:
                 for key in ('min_cpu_percent', 'min_gpu_percent'):
                     if key in options:

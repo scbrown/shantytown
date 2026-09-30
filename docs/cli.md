@@ -1736,6 +1736,11 @@ game_executable = "reaper"
 game_arguments = ['SteamLaunch', 'AppId=(?P<appid>[0-9]+)']
 shader_executable = "fossilize_replay"
 shader_grace = 1200
+# Steam launches tools and applications through the same reaper as games. An
+# AppId whose type in Steam's appinfo cache is outside hold_app_types is ignored;
+# an AppId whose type cannot be read still holds. Defaults shown.
+steam_appinfo = "~/.steam/steam/appcache/appinfo.vdf"
+hold_app_types = ["game", "demo"]
 grace = 300
 lift_delay = 120
 lift_rule = "absent"
