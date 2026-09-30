@@ -37,31 +37,32 @@ import time
 import urllib.request
 from pathlib import Path
 
-REACTION = "http://aegis.gastown.local/ontology/reaction-workitem-unblocked"
+REACTION = "reaction-workitem-unblocked"     # local name in the deployment ontology
 NON_BEAD_LABELS = frozenset(
     {"blocked:human", "blocked:access", "blocked:external", "parked:by-design"})
 LEDGER_CAP = 2000   # firing IRIs remembered; far more than a week of events
 
 
-def firings_query(since: str) -> str:
+def firings_query(since: str, onto: str = "") -> str:
     """Firings of the unblocked reaction at or after `since` (ISO-8601 Z).
 
     `>=`, not `>`: two firings can share a second. The ledger dedupes, so the
     boundary firing is re-read, never lost."""
     flt = (f'FILTER(STR(?t) >= "{since}")' if since else "")
-    return ("PREFIX a: <http://aegis.gastown.local/ontology/> "
+    return (f"PREFIX a: <{onto}> "
             f"SELECT ?f ?focus ?t WHERE {{ ?f a a:ReactionFiring ; "
-            f"a:firedBy <{REACTION}> ; a:focus ?focus ; a:startedAt ?t . {flt} }} "
+            f"a:firedBy a:{REACTION} ; a:focus ?focus ; a:startedAt ?t . {flt} }} "
             "ORDER BY ?t ?f LIMIT 500")
 
 
 def fetch_firings(root, since: str, timeout: float = 10.0) -> list[dict]:
     """[{firing, bead, at}] from quipu. Raises on any failure (fail open upstream)."""
-    from .quipu import request_headers, resolve_server
+    from .quipu import request_headers, resolve_onto, resolve_server
     server = resolve_server(None, root).rstrip("/")
+    onto = resolve_onto(None, root)
     req = urllib.request.Request(
         server + "/query",
-        data=json.dumps({"query": firings_query(since), "verbose": True}).encode(),
+        data=json.dumps({"query": firings_query(since, onto), "verbose": True}).encode(),
         headers={**request_headers(), "X-Quipu-Client": "st-tend"})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         body = json.loads(resp.read())
