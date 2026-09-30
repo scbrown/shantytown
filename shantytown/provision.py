@@ -918,6 +918,31 @@ def _provision_capture_without_kit(card: Agent, root, ws: Path, settings_path) -
     path.write_text(_workspace_capture(text, root, settings_path))
 
 
+def headerless_quipu(servers: dict) -> list[str]:
+    """Names of DIRECT quipu MCP entries that lack a headersHelper (aegis-g034ts).
+
+    Quipu requires a bearer for writes. The two safe shapes are the homelab proxy,
+    which holds the credential server-side, and a direct entry whose
+    headersHelper prints the header at connect time, so the secret is never
+    written into any config. A direct entry without one either 401s on its first
+    write (the aegis-nvw6ye Mac failure) or carries the token in the file.
+
+    Measured 2026-09-30: 0 such entries across 115 emitted kit files on vati.
+    This is a regression guard, so it keys on the one property that makes an
+    entry direct: its URL host is a quipu host. A stdio server has no URL and is
+    out of scope, and the proxy's host is not quipu.
+    """
+    from urllib.parse import urlparse
+    out = []
+    for name, cfg in (servers or {}).items():
+        if not isinstance(cfg, dict) or not isinstance(cfg.get("url"), str):
+            continue
+        host = (urlparse(cfg["url"]).hostname or "").lower()
+        if host.split(".")[0].startswith("quipu") and not cfg.get("headersHelper"):
+            out.append(name)
+    return sorted(out)
+
+
 def provision(card: Agent, root, *, secrets=None, settings_path=None,
               require_manifest=False) -> list[str]:
     """Equip the agent's workspace. Returns the server names it can now reach.
@@ -1070,6 +1095,13 @@ def provision(card: Agent, root, *, secrets=None, settings_path=None,
         rendered = json.dumps(mcp_limits.project(json.loads(rendered), root, card.name), indent=2)
     except (OSError, ValueError, TypeError) as exc:
         raise ProvisionError(f"invalid MCP containment policy: {exc}") from exc
+    if (bare := headerless_quipu(json.loads(rendered).get("mcpServers", {}))):
+        raise ProvisionError(
+            f"cannot provision {card.name}: the kit declares a DIRECT quipu MCP "
+            f"entry without headersHelper ({', '.join(bare)}). Quipu writes need a "
+            f"bearer, and this shape either 401s or carries the secret in the file. "
+            f"Route through the homelab proxy, or add a headersHelper that prints "
+            f"the header at connect time (aegis-g034ts, aegis-nvw6ye.1).")
     target = ws / ".mcp.json"
     # Create privately BEFORE writing secret bytes, then atomically publish.
     # chmod after write leaves a newly created file readable for that window.
