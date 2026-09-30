@@ -33,13 +33,18 @@ event consumer cannot see by itself (`seen_foci`).
 from __future__ import annotations
 
 import json
-import time
+import re
 import urllib.request
 from pathlib import Path
 
 REACTION = "reaction-workitem-unblocked"     # local name in the deployment ontology
-NON_BEAD_LABELS = frozenset(
-    {"blocked:human", "blocked:access", "blocked:external", "parked:by-design"})
+# A label that says something OTHER than a bead dependency holds the bead: a
+# human decision (decision-stiwi, needs-human), access, an external party, or a
+# deliberate park. Matched by PATTERN, not a closed list, so a new label of the
+# same family holds by default (dearing-rev-129). `blocked:bead` is the one
+# exception: that is exactly the condition the event resolves.
+HOLDING_LABEL = re.compile(r"^(blocked[:-]|decision|needs-|parked|waiting)")
+BEAD_BLOCK_LABEL = "blocked:bead"
 LEDGER_CAP = 2000   # firing IRIs remembered; far more than a week of events
 
 
@@ -91,7 +96,8 @@ def classify(detail: dict) -> tuple[str, str]:
     still_open = [d.get("id", "?") for d in deps if (d.get("status") or "") != "closed"]
     if still_open:
         return "mismatch", f"br still shows open blocker(s) {', '.join(still_open)}"
-    held = sorted(_labels(detail) & NON_BEAD_LABELS)
+    held = sorted(l for l in _labels(detail)
+                  if l != BEAD_BLOCK_LABEL and HOLDING_LABEL.match(l))
     if status == "deferred" or detail.get("defer_until") or held:
         why = []
         if status == "deferred" or detail.get("defer_until"):

@@ -140,3 +140,17 @@ def test_the_query_names_the_reaction_and_pages_from_the_cursor():
     q = firings_query("2026-09-30T02:00:00Z")
     assert "reaction-workitem-unblocked" in q and '>= "2026-09-30T02:00:00Z"' in q
     assert "FILTER" not in firings_query("")
+
+
+def test_a_bead_awaiting_a_HUMAN_decision_is_held_not_reopened(tmp_path):
+    """dearing-rev-129: decision-stiwi / needs-human / waiting-* and any blocked-*
+    variant hold the bead; only blocked:bead is what the event resolves."""
+    for label in ("decision-stiwi", "decision-needed", "needs-stiwi", "needs-human",
+                  "waiting-on-vendor", "blocked-external", "parked:by-design"):
+        verdict, reason = classify(_bead("blocked", _dep("x", "closed"), labels=[label]))
+        assert (verdict, label in reason) == ("held", True), label
+    assert classify(_bead("blocked", _dep("x", "closed"),
+                          labels=["blocked:bead", "ontology"]))[0] == "corrected"
+    w = _World({"h": _bead("blocked", _dep("x", "closed"), labels=["decision-stiwi"])},
+               [_firing(1, "h")])
+    assert w.consumer(tmp_path).sweep() == [("h", "held")] and w.reopened == []
