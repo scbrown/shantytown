@@ -404,6 +404,9 @@ def _window_rows(out: _Out, lane: str, utilization, readings, now: float) -> Non
         out.add("st_governor_utilization_ratio", use.ratio, **lb)
         out.add("st_governor_pace_bound", use.bound, **lb)
         out.add("st_governor_pace_bound_declared", use.bound_declared, **lb)
+        # The spending envelope's allowance at this elapsed (aegis-zowv5j);
+        # absent for a constant-ratio row, never a fabricated 100.
+        out.add("st_governor_pace_envelope_percent", use.envelope_pct, **lb)
         # THE BALANCE Stiwi asked for: points still spendable before this
         # window's own drain ceiling stops the fleet.  Read off `WindowUse`,
         # which derives the ceiling from the drain tier rather than from a second

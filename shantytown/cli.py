@@ -6953,7 +6953,7 @@ def _crew_governor(a) -> int:
         if verdict.pacing:
             pace = " ".join(
                 f"PACE[{p.window} {p.pct:.0f}%used/{p.elapsed_pct:.0f}%elapsed "
-                f"={p.ratio:.2f}x <={p.threshold:.2f}x]"
+                f"={p.ratio:.2f}x <={p.bound_text()}]"
                 for p in verdict.pacing)
         label = "; ".join(t.label() for t in verdict.restrictions)
         cap = ("" if verdict.max_agents is None

@@ -398,21 +398,72 @@ class Pace:
     require a positive reading.
     """
     window: str
-    ratio: float
+    ratio: float | None
     length: int | None = None
+    # THE SPENDING ENVELOPE (aegis-zowv5j): `(elapsed_pct, max_used_pct)` points,
+    # linearly interpolated. Empty means the constant `ratio` above, exactly as
+    # before. See `bound` for why a constant cannot express what Stiwi asked for.
+    curve: tuple[tuple[float, float], ...] = ()
 
     def window_length(self) -> int | None:
         """Seconds in this window, or None if nothing can supply it."""
         return self.length or WINDOW_LENGTH_S.get(self.window)
 
+    def envelope(self, elapsed: float | None) -> float | None:
+        """The most this window may have USED (percent) at `elapsed` (a 0..1
+        fraction), or None for a constant-ratio row or an unknown elapsed."""
+        if not self.curve or elapsed is None:
+            return None
+        e = 100.0 * min(1.0, max(0.0, elapsed))
+        points = self.curve
+        for (e0, u0), (e1, u1) in zip(points, points[1:]):
+            if e <= e1:
+                return u0 + (u1 - u0) * (e - e0) / (e1 - e0)
+        return points[-1][1]
 
-def pace_ratio(pct: float, reset_at: float | None, now: float,
-               length: int | None) -> tuple[float | None, str]:
-    """`consumed / elapsed` for one window, with WHY when it cannot be computed.
+    def bound(self, elapsed: float | None) -> float | None:
+        """The pace bound in force at `elapsed`: consumed/elapsed above this is
+        OVERSPENDING. A constant row returns `ratio` whatever the clock says.
 
-    Returns `(ratio, why_not)` — exactly one of the two is meaningful. Every
-    undefined case returns a reason rather than a number, because a gate that
-    cannot say why it stood aside is indistinguishable from one that is broken.
+        WHY A CURVE (Stiwi 2026-09-27: "the big up front burst ... but conserve
+        some budget for the final days"). One constant fails in BOTH directions:
+        early in the week a real burst — 20% used at 5% elapsed = 4x — reads as
+        overspend against 1.5x and is held; late in the week 1.5x at 66% elapsed
+        permits 99%, so nothing is left for the final days. `curve(e)/e` is high
+        early and falls below 1.0x late, which is both halves of the directive.
+
+        None when it cannot be stated: no elapsed, or a curve at exactly 0%
+        elapsed, where `curve(0)/0` is infinite. Callers compare with `admits`,
+        which answers that case from the envelope itself instead of a ratio.
+        """
+        if not self.curve:
+            return self.ratio
+        if elapsed is None or elapsed <= 0:
+            return None
+        return (self.envelope(elapsed) / 100.0) / min(1.0, elapsed)
+
+    def admits(self, pct: float, ratio: float, elapsed: float | None) -> bool:
+        """Is this reading AT OR UNDER the bound — i.e. not overspending?
+
+        The gate's comparison. The utilization recommender asks the same
+        question as `WindowUse.load` (used over envelope) because it also needs
+        HOW FAR over, to pick the worst window; the two differ only at exact
+        equality, where the gate admits and the recommender does not grow. A curve is compared in USED PERCENT against the envelope, which is the
+        same inequality as `ratio <= curve(e)/e` for e > 0 and is still defined
+        at e == 0, where the ratio form divides by zero.
+        """
+        if not self.curve:
+            return ratio <= self.ratio
+        env = self.envelope(elapsed)
+        return env is not None and pct <= env
+
+
+def window_elapsed(reset_at: float | None, now: float,
+                   length: int | None) -> tuple[float | None, str]:
+    """How far through its window a budget is, as a 0..1 fraction, with WHY
+    when it cannot be said. `pace_ratio`'s denominator, split out so the
+    envelope (aegis-zowv5j) reads the SAME elapsed the ratio was computed on
+    rather than re-deriving it with its own guards.
 
     The window START is not published; it is derived as `reset_at - length`, so
     every input error lands on the same expression and is caught in one place.
@@ -439,7 +490,20 @@ def pace_ratio(pct: float, reset_at: float | None, now: float,
                       f"is too short to be right, so pace is not computed on it")
     # Inside the allowance, the window has just rolled: pin elapsed at 0 rather
     # than letting it go negative and report a window running backwards.
-    elapsed = 1.0 - (min(left, float(length)) / length)
+    return 1.0 - (min(left, float(length)) / length), ""
+
+
+def pace_ratio(pct: float, reset_at: float | None, now: float,
+               length: int | None) -> tuple[float | None, str]:
+    """`consumed / elapsed` for one window, with WHY when it cannot be computed.
+
+    Returns `(ratio, why_not)` — exactly one of the two is meaningful. Every
+    undefined case returns a reason rather than a number, because a gate that
+    cannot say why it stood aside is indistinguishable from one that is broken.
+    """
+    elapsed, why = window_elapsed(reset_at, now, length)
+    if elapsed is None:
+        return None, why
     if elapsed <= 0:
         if pct <= 0:
             # A JUST-RESET WINDOW IS RATEABLE, AND IT IS WIDE OPEN (aegis-lvfm5).
@@ -1857,14 +1921,23 @@ class Pacing:
     pct: float
     elapsed_pct: float
     ratio: float
-    threshold: float
+    threshold: float | None        # None only for an envelope at 0% elapsed
     suspended: tuple = ()          # the tiers that would otherwise be in force
+    # The spending envelope's allowance at this elapsed (aegis-zowv5j), or None
+    # for a constant-ratio row. When set, it IS the bound and is stated as one.
+    envelope_pct: float | None = None
+
+    def bound_text(self) -> str:
+        """The bound this reading was held against, with its own numbers."""
+        if self.envelope_pct is None:
+            return f"{self.threshold:.2f}x"
+        return f"{self.envelope_pct:.0f}% envelope @{self.elapsed_pct:.0f}%elapsed"
 
     def render(self) -> str:
         what = "; ".join(t.label() for t in self.suspended) or "no tier was in force"
         return (f"governor PACE: {self.window} is {self.pct:.0f}% consumed at "
                 f"{self.elapsed_pct:.0f}% elapsed = {self.ratio:.2f}x pace, at or "
-                f"under the {self.threshold:.2f}x that would justify throttling — "
+                f"under the {self.bound_text()} that would justify throttling — "
                 f"so its tiers STAND DOWN ({what}). This is a normal burn reaching "
                 f"a fixed threshold late in the window, not overspend; the drain is "
                 f"NOT waived and re-engages the moment the reading reaches it.")
@@ -2684,9 +2757,11 @@ class Governor:
                 continue
             ratio, _why = pace_ratio(wpct, resets.get(w), now,
                                      pace.window_length())
-            if ratio is None or ratio > pace.ratio:
-                # Undefined -> gate inert. Above the ratio -> genuinely
-                # overspending, which is what the tiers are FOR: leave them.
+            elapsed, _ = window_elapsed(resets.get(w), now, pace.window_length())
+            if ratio is None or not pace.admits(wpct, ratio, elapsed):
+                # Undefined -> gate inert. Above the bound (or outside the
+                # envelope, aegis-zowv5j) -> genuinely overspending, which is
+                # what the tiers are FOR: leave them.
                 continue
             suspended = tuple(t for t in pol.engaged(wchosen) if not t.drains)
             if not suspended:
@@ -2694,12 +2769,10 @@ class Governor:
                 # would print an alarming line about an unrestricted fleet — the
                 # same trap burndown sidesteps immediately above.
                 continue
-            length = pace.window_length() or 0
-            left = (resets.get(w) or now) - now
             pacing.append(Pacing(
-                window=w, pct=wpct,
-                elapsed_pct=100.0 * (1.0 - left / length) if length else 0.0,
-                ratio=ratio, threshold=pace.ratio, suspended=suspended))
+                window=w, pct=wpct, elapsed_pct=100.0 * (elapsed or 0.0),
+                ratio=ratio, threshold=pace.bound(elapsed), suspended=suspended,
+                envelope_pct=pace.envelope(elapsed)))
         pacing_windows = {p.window for p in pacing}
 
         # THE UNION. Verdict derives drains/floor/trait_tiers from `engaged`, so
@@ -3069,7 +3142,7 @@ _GOV_KEYS = {"source", "window", "on_signal_lost", "relax_margin",
              "balance_band", "reading_needs_live_session"}
 _TIER_KEYS = {"at", "min_priority", "traits", "action", "window", "max_agents"}
 _BURN_KEYS = {"window", "within", "reserve"}
-_PACE_KEYS = {"window", "ratio", "length"}
+_PACE_KEYS = {"window", "ratio", "length", "curve"}
 
 
 def parse(tbl: dict) -> Policy:
@@ -3230,8 +3303,7 @@ def parse(tbl: dict) -> Policy:
         # A pace row whose window length is neither configured nor inferable can
         # never compute a ratio, so it would sit inert forever while LOOKING
         # configured. Refuse at parse time rather than at 3am.
-        if Pace(window=p.window, ratio=p.ratio,
-                length=p.length).window_length() is None:
+        if p.window_length() is None:
             raise GovernorError(
                 f"[[governor.pace]] window = {p.window!r} has no known length, "
                 f"so pace can never be computed for it. Known windows: "
@@ -3398,6 +3470,18 @@ def _pace(spec) -> Pace:
     if not isinstance(window, str) or not window.strip():
         raise GovernorError("[[governor.pace]] needs `window` — WHICH budget is "
                             "judged on burn rate instead of on the calendar")
+    if "curve" in spec:
+        if "ratio" in spec:
+            raise GovernorError(
+                f"[[governor.pace]] window = {window!r} declares both `ratio` and "
+                f"`curve`. They are two answers to one question (the bound at a "
+                f"given elapsed) and st will not pick one silently: keep the "
+                f"curve for a spending envelope, or the ratio for a constant pace.")
+        length = spec.get("length")
+        if length is not None:
+            length = _int(spec, "length", 0, minimum=1)
+        return Pace(window=window.strip(), ratio=None, length=length,
+                    curve=_curve(window, spec["curve"]))
     if "ratio" not in spec:
         raise GovernorError(
             f"[[governor.pace]] window = {window!r} needs `ratio` — how many "
@@ -3418,6 +3502,47 @@ def _pace(spec) -> Pace:
     if length is not None:
         length = _int(spec, "length", 0, minimum=1)
     return Pace(window=window.strip(), ratio=float(ratio), length=length)
+
+
+def _curve(window: str, raw) -> tuple[tuple[float, float], ...]:
+    """Validate a spending envelope (aegis-zowv5j). Every rule here closes a way
+    for a typo to become a silently different spend policy."""
+    where = f"[[governor.pace]] window = {window!r} curve"
+    if not isinstance(raw, list) or len(raw) < 2:
+        raise GovernorError(
+            f"{where} must be a list of at least two [elapsed_pct, max_used_pct] "
+            f"points, got {raw!r}")
+    points: list[tuple[float, float]] = []
+    for pt in raw:
+        if (not isinstance(pt, list) or len(pt) != 2
+                or any(isinstance(v, bool) or not isinstance(v, (int, float))
+                       for v in pt)):
+            raise GovernorError(
+                f"{where}: each point must be [elapsed_pct, max_used_pct] numbers, "
+                f"got {pt!r}")
+        e, u = float(pt[0]), float(pt[1])
+        if not (0.0 <= e <= 100.0 and 0.0 <= u <= 100.0):
+            raise GovernorError(f"{where}: point {pt!r} is outside 0..100")
+        points.append((e, u))
+    if points[0][0] != 0.0 or points[-1][0] != 100.0:
+        # An envelope with a gap at either end would have to INVENT the bound
+        # there — the one thing a declared policy exists to prevent.
+        raise GovernorError(
+            f"{where} must start at elapsed 0 and end at elapsed 100, so every "
+            f"moment of the window has a declared allowance; got "
+            f"{points[0][0]:g}..{points[-1][0]:g}")
+    for (e0, u0), (e1, u1) in zip(points, points[1:]):
+        if e1 <= e0:
+            raise GovernorError(
+                f"{where}: elapsed must strictly increase, got {e0:g} then {e1:g}")
+        if u1 < u0:
+            # A falling envelope would demand the fleet UN-spend budget: the
+            # gate would engage on a reading that was admitted an hour ago with
+            # no new spend at all.
+            raise GovernorError(
+                f"{where}: max_used_pct must never decrease, got {u0:g} at "
+                f"{e0:g}% then {u1:g} at {e1:g}%")
+    return tuple(points)
 
 
 def _burndown(spec) -> Burndown:
