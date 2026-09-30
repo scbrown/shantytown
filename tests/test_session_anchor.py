@@ -139,3 +139,43 @@ def test_root_flag_wins_over_env(monkeypatch):
                         lambda root, agent: (seen.setdefault("root", root), (0, PLATE))[1])
     sa.main(["--root", "/flag"])
     assert seen["root"] == "/flag"
+
+
+# --- every command we tell a session to run must exist ------------------------------
+
+def _st_verbs(text):
+    import re
+    return set(re.findall(r"`st (?:-[a-z] )?([a-z][a-z-]*)", text))
+
+
+def _injected_texts():
+    from types import SimpleNamespace as NS
+    from shantytown.anchor import Anchoring
+    me = NS(name="ana", role="lead", reports_to="boss")
+    blocked = NS(id="x-1", title="t", status="open", open_blockers=("x-0",))
+    texts = [Anchoring(me=me, item=blocked, lead=None, lead_up=None, context=[],
+                       knowledge=[]).render(),
+             Anchoring(me=me, item=None, lead=None, lead_up=None, context=[],
+                       knowledge=[]).render()]
+    for role in ("worker", "lead", "administrator", ""):
+        for empty in (True, False):
+            texts.append("\n".join(sa.startup_lines(role, empty)))
+    return texts
+
+
+def test_every_injected_st_verb_is_real():
+    """sattler's review of #134: the startup text told every empty-plate session
+    to run `st ready`, which is not a verb. Injected fleet-wide, a phantom verb
+    is an instruction every session fails the same way. So: every `st <verb>`
+    in anything this hook injects must parse."""
+    from shantytown import cli
+    verbs = set().union(*(_st_verbs(t) for t in _injected_texts()))
+    assert {"inbox", "go"} <= verbs          # CONTROL: the extractor sees verbs
+    bad = []
+    for v in sorted(verbs):
+        try:
+            cli._parse_args([v, "--help"])
+        except SystemExit as e:
+            if e.code != 0:
+                bad.append(v)
+    assert not bad, f"not st verbs: {bad}"

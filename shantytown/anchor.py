@@ -105,7 +105,7 @@ class Anchoring:
             if blockers:
                 L.append(f"      ⛔ BLOCKED by {', '.join(blockers)}"
                          " — nothing ready is on your plate. Chase the blocker,"
-                         " or `st ready` for unassigned work.")
+                         " or ask your lead for ready work.")
         else:
             # Say it plainly. An empty plate is an answer, not a blank section.
             L.append("    nothing. `st go <item> <you>` or ask your lead.")

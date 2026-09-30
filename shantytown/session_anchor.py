@@ -48,7 +48,9 @@ _ALL = (
     "    to your lead (`st inbox -d <lead> ...`), then take the next item.",
     "    Never block your pane on a question: record it on the item, recommend.",
 )
-_EMPTY = "    Plate empty: `st inbox <you>`, then `st ready` for unassigned work."
+# No `st ready`: st has no such verb, and the tracker's ready command is
+# deployment-specific. test_every_injected_st_verb_is_real pins this.
+_EMPTY = "    Plate empty: `st inbox <you>`, then ask your lead for work."
 _BY_ROLE = {
     "lead": ("    As a lead, sweep YOUR OWN plate before feeding reports from the pool.",),
     "administrator": ("    As the administrator, drain stop events and feed idle agents first.",),
