@@ -10698,8 +10698,10 @@ def _cmd_hold(a) -> int:
         try:
             panes = _panes(a)
             pids = [(card.name, pid) for card in _registry(a).all().exact()
-                    if (pid := panes.pane_pid(_session_for(card)))] if status.held else []
-            for line in gaming_scopes.reconcile(root, status.held, pids):
+                    if (pid := panes.pane_pid(_session_for(card)))] if status.throttled else []
+            # throttled, not held: a Steam shader compile with no game bounds the crew
+            # without holding dispatch (aegis-da2tfj).
+            for line in gaming_scopes.reconcile(root, status.throttled, pids):
                 print(line)
                 slowdown_unknown |= "UNKNOWN" in line
         except Exception as exc:
@@ -10727,7 +10729,12 @@ def _cmd_hold(a) -> int:
         if sent:
             print("quiet-time advisory delivered to coordinator: " + ", ".join(sent))
     if a.status:
-        return CANNOT_TELL if status.state == "unknown" else int(status.held)
+        # THROTTLED, not held (aegis-da2tfj review). This exit code is the admission gate
+        # for heavy work that runs OUTSIDE the throttled pane scopes: the CD cargo build,
+        # the cargo wrapper and the CVE scan all proceed on 0 and defer on 1. A shader
+        # compile holds no dispatch, but a build must still defer through it, or it starts
+        # during a real launch's pre-reaper shader phase.
+        return CANNOT_TELL if status.state == "unknown" else int(status.throttled)
     return CANNOT_TELL if status.state == "unknown" or slowdown_unknown else OK
 
 
@@ -11559,9 +11566,12 @@ def _drain_sweep(a, verdict, agents, panes, *, governor_name="base", episode=Non
     drain_root = Path(a.root) if governor_name == "base" else (
         Path(a.root) / "governor-harness" / governor_name)
     if verdict is None:
-        # No governor at all. Nothing can say whether a drain still applies,
-        # so nothing is retracted; the ledger is reset as it always was.
-        gov_mod.DrainLedger(drain_root).clear()
+        # No verdict: nothing can say whether a drain still applies, so nothing
+        # is retracted — AND THE LEDGER IS KEPT, exactly as a lost signal keeps
+        # it. Clearing it here discarded the only record of which drains were
+        # out, so a verdict that went None transiently (a misconfiguration, a
+        # load error) left their messages unretractable forever (sattler's
+        # review of aegis-l2m4t2).
         return []
     if not gov_mod.DrainLedger(drain_root).agents() and not verdict.tier:
         # Nothing outstanding and nothing to send: skip opening the inbox, which
