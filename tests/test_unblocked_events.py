@@ -154,3 +154,13 @@ def test_a_bead_awaiting_a_HUMAN_decision_is_held_not_reopened(tmp_path):
     w = _World({"h": _bead("blocked", _dep("x", "closed"), labels=["decision-stiwi"])},
                [_firing(1, "h")])
     assert w.consumer(tmp_path).sweep() == [("h", "held")] and w.reopened == []
+
+
+def test_the_blocked_by_TOPIC_tag_is_not_a_hold():
+    """First scheduled pass: every child of the blocked-by epic carries the
+    `blocked-by` topic tag, and it was read as a hold. It is not one."""
+    assert classify(_bead("in_progress", labels=["blocked-by", "directive"]))[0] == "noop"
+    assert classify(_bead("blocked", _dep("x", "closed"), labels=["blocked-by"]))[0] == "corrected"
+    # CONTROL: a real hold next to the tag still holds.
+    assert classify(_bead("blocked", _dep("x", "closed"),
+                          labels=["blocked-by", "blocked:external"]))[0] == "held"
