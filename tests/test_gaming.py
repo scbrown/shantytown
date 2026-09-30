@@ -232,7 +232,7 @@ def test_weak_idle_advisory_never_lifts_and_manual_wins(tmp_path, monkeypatch):
     assert 'your call' not in gaming.read(tmp_path).render()
 
 
-def test_recorded_shader_launch_holds_without_appid(tmp_path):
+def test_recorded_shader_launch_throttles_without_holding_dispatch(tmp_path):
     enabled(tmp_path)
     proc = tmp_path / 'proc'
     rows = json.loads((Path(__file__).parent / 'fixtures/shader-processes.json').read_text())
@@ -244,14 +244,18 @@ def test_recorded_shader_launch_holds_without_appid(tmp_path):
     assert gaming.probe(tmp_path, proc=proc, now=1000).state == 'manual'
     # Only the test clears its own sandbox manual marker.
     gaming.manual(tmp_path, clear=True)
+    # No game yet: the crew is throttled, dispatch is not held (aegis-da2tfj). The
+    # hold itself arrives with the reaper; see the appid tests below.
     for now in range(1060, 1901, 60):
-        assert gaming.probe(tmp_path, proc=proc, now=now).state == 'gaming'
+        status = gaming.probe(tmp_path, proc=proc, now=now)
+        assert status.state == 'shader' and status.throttled and not status.held
     data = json.loads((tmp_path / 'gaming/state.json').read_text())
     assert data['absent_since'] is None and data['shader_pids']
     for row in rows:
         (proc / str(row['pid']) / 'cmdline').unlink()
-    assert gaming.probe(tmp_path, proc=proc, now=1960).state == 'ending'
-    assert gaming.probe(tmp_path, proc=proc, now=2080).held
+    # A gap shorter than the lift delay keeps the throttle (batches must not flap it).
+    assert gaming.probe(tmp_path, proc=proc, now=1960).state == 'shader'
+    assert gaming.probe(tmp_path, proc=proc, now=2080).throttled
     assert gaming.probe(tmp_path, proc=proc, now=2081).state == 'clear'
 
 
@@ -266,13 +270,14 @@ def test_background_shader_maintenance_releases_the_crew(tmp_path):
     proc = tmp_path / 'proc'
     process(proc, 1, '/steam/fossilize_replay')
     assert gaming.game_appids(proc) == ()
-    # Inside the ceiling the hold stands: this may still be a launch precursor.
+    # Inside the ceiling the crew is throttled (it may be a launch precursor) but
+    # never held: nothing is running that dispatch could disturb (aegis-da2tfj).
     for now in range(1000, 2201, 60):
-        assert gaming.probe(tmp_path, proc=proc, now=now).state == 'gaming'
-    # Past it, the absence clock finally starts even with shaders still present.
-    assert gaming.probe(tmp_path, proc=proc, now=2260).state == 'ending'
-    assert gaming.probe(tmp_path, proc=proc, now=2380).held
-    assert gaming.probe(tmp_path, proc=proc, now=2381).state == 'clear'
+        status = gaming.probe(tmp_path, proc=proc, now=now)
+        assert status.state == 'shader' and not status.held
+    # Past it, even the throttle is released with shaders still present.
+    status = gaming.probe(tmp_path, proc=proc, now=2260)
+    assert status.state == 'clear' and not status.throttled
     # A game arriving after the ceiling re-arms the hold with no ceiling at all.
     process(proc, 2, '/steam/reaper', 'SteamLaunch', 'AppId=42')
     for now in range(2440, 4241, 60):
@@ -302,8 +307,10 @@ def test_intermittent_shader_batches_cannot_restart_the_ceiling(tmp_path):
         gaming.probe(tmp_path, proc=proc, now=now)
         now += 60
     process(proc, 99, '/steam/fossilize_replay')
-    # The phase has outlived the ceiling, so a returning batch must not re-hold.
-    assert gaming.probe(tmp_path, proc=proc, now=now).state != 'gaming'
+    # The phase has outlived the ceiling, so a returning batch must not re-hold
+    # or even re-throttle.
+    status = gaming.probe(tmp_path, proc=proc, now=now)
+    assert status.state != 'gaming' and not status.throttled
 
 
 def test_a_new_precompile_after_a_real_gap_earns_its_own_ceiling(tmp_path):
@@ -316,14 +323,14 @@ def test_a_new_precompile_after_a_real_gap_earns_its_own_ceiling(tmp_path):
     proc = tmp_path / 'proc'
     process(proc, 1, '/steam/fossilize_replay')
     for now in range(1000, 2201, 60):
-        assert gaming.probe(tmp_path, proc=proc, now=now).state == 'gaming'
+        assert gaming.probe(tmp_path, proc=proc, now=now).state == 'shader'
     (proc / '1' / 'cmdline').unlink()
     for now in range(2260, 2521, 60):
         gaming.probe(tmp_path, proc=proc, now=now)
     assert gaming.probe(tmp_path, proc=proc, now=2600).state == 'clear'
-    # Hours later Steam precompiles again; that phase is held on its own merits.
+    # Hours later Steam precompiles again; that phase is throttled on its own merits.
     process(proc, 2, '/steam/fossilize_replay')
-    assert gaming.probe(tmp_path, proc=proc, now=20000).state == 'gaming'
+    assert gaming.probe(tmp_path, proc=proc, now=20000).state == 'shader'
 
 
 def test_shader_ceiling_is_dropped_once_a_game_is_seen(tmp_path):
@@ -332,7 +339,7 @@ def test_shader_ceiling_is_dropped_once_a_game_is_seen(tmp_path):
     proc = tmp_path / 'proc'
     process(proc, 1, '/steam/fossilize_replay')
     for now in range(1000, 2001, 60):
-        assert gaming.probe(tmp_path, proc=proc, now=now).state == 'gaming'
+        assert gaming.probe(tmp_path, proc=proc, now=now).state == 'shader'
     process(proc, 2, '/steam/reaper', 'SteamLaunch', 'AppId=42')
     # The reaper lands before the ceiling; shaders keep running beside the game
     # for well past it, and the hold never blinks.
@@ -367,7 +374,8 @@ def test_first_appid_after_long_shader_phase_gets_launch_grace(tmp_path):
     proc = tmp_path / 'proc'
     process(proc, 1, '/steam/fossilize_replay')
     for now in range(1000, 1661, 60):
-        assert gaming.probe(tmp_path, proc=proc, now=now).held
+        status = gaming.probe(tmp_path, proc=proc, now=now)
+        assert status.throttled and not status.held
     process(proc, 2, '/steam/reaper', 'SteamLaunch', 'AppId=42')
     gaming.probe(tmp_path, proc=proc, now=1720)
     for pid in (1, 2):
@@ -375,3 +383,35 @@ def test_first_appid_after_long_shader_phase_gets_launch_grace(tmp_path):
     for now in (1780, 1900, 2019):
         assert gaming.probe(tmp_path, proc=proc, now=now).state == 'gaming'
     assert gaming.probe(tmp_path, proc=proc, now=2020).state == 'clear'
+
+
+def test_bare_shader_compile_never_holds_dispatch(tmp_path):
+    """aegis-da2tfj, measured 2026-09-27: a Steam shader compile with no AppId held
+    launches, dispatch and respawns, and kept the hold for the whole 300s launch grace
+    after a two-minute compile. It must throttle only, and release after the lift delay."""
+    enabled(tmp_path)
+    proc = tmp_path / 'proc'
+    process(proc, 1, '/steam/fossilize_replay')
+    seen = [gaming.probe(tmp_path, proc=proc, now=now) for now in (1000, 1060)]
+    (proc / '1' / 'cmdline').unlink()
+    seen += [gaming.probe(tmp_path, proc=proc, now=now) for now in range(1120, 1541, 60)]
+    assert not any(s.held for s in seen)
+    assert not any(s.refusal for s in seen)
+    assert all(s.throttled for s in seen[:4])            # compile + the lift-delay gap
+    assert seen[-1].state == 'clear' and not seen[-1].throttled
+    assert 'dispatch is NOT held' in seen[0].render()
+
+
+def test_aggregate_reads_shader_as_clear_but_throttled(tmp_path):
+    """Admission sees no hold, so no coordinator advisory fires for a background
+    precompile; the slowdown and its gauge still see the throttle."""
+    from shantytown import quiet_time
+    agg = quiet_time.Status((('gaming', gaming.Status('shader')),))
+    assert agg.state == 'clear' and not agg.held and not agg.refusal
+    assert agg.throttled
+    text = quiet_time.metrics(agg)
+    assert 'aegis_quiet_time_hold_active 0' in text
+    assert 'aegis_quiet_time_throttled 1' in text
+    assert 'aegis_gaming_session_active 0' in text       # the gaming alert stays quiet
+    held = quiet_time.Status((('gaming', gaming.Status('gaming', ('42',))),))
+    assert held.throttled and held.held
