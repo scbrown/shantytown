@@ -208,3 +208,19 @@ def test_TENDS_drain_sweep_takes_the_drain_back_through_the_inbox(tmp_path, monk
 
     cli._drain_sweep(a, _verdict(tmp_path, 6.0), [TIM], _Panes(), episode=1.0)
     assert inbox.unread("tim") == []
+
+
+def test_NO_verdict_keeps_the_ledger_so_the_drain_can_still_be_taken_back(tmp_path, monkeypatch):
+    """A verdict that goes None for a pass must not forget which drains are out:
+    that is the l2m4t2 defect in a narrower window (sattler's review nit)."""
+    import argparse
+    from shantytown import cli
+    monkeypatch.delenv("SHANTY_BACKEND", raising=False)
+    a = argparse.Namespace(root=str(tmp_path), backend="files", me="st fleet tend")
+    cli._drain_sweep(a, _verdict(tmp_path, 99.0), [TIM], _Panes(), episode=1.0)
+    cli._drain_sweep(a, None, [TIM], _Panes(), episode=1.0)
+    inbox = FilesInbox(tmp_path / "inbox")
+    assert len(inbox.unread("tim")) == 1, "no verdict must not retract either"
+    assert gov.DrainLedger(tmp_path).agents() == ["tim"]
+    cli._drain_sweep(a, _verdict(tmp_path, 6.0), [TIM], _Panes(), episode=1.0)
+    assert inbox.unread("tim") == []
