@@ -11321,9 +11321,12 @@ def _drain_sweep(a, verdict, agents, panes, *, governor_name="base", episode=Non
     drain_root = Path(a.root) if governor_name == "base" else (
         Path(a.root) / "governor-harness" / governor_name)
     if verdict is None:
-        # No governor at all. Nothing can say whether a drain still applies,
-        # so nothing is retracted; the ledger is reset as it always was.
-        gov_mod.DrainLedger(drain_root).clear()
+        # No verdict: nothing can say whether a drain still applies, so nothing
+        # is retracted — AND THE LEDGER IS KEPT, exactly as a lost signal keeps
+        # it. Clearing it here discarded the only record of which drains were
+        # out, so a verdict that went None transiently (a misconfiguration, a
+        # load error) left their messages unretractable forever (sattler's
+        # review of aegis-l2m4t2).
         return []
     if not gov_mod.DrainLedger(drain_root).agents() and not verdict.tier:
         # Nothing outstanding and nothing to send: skip opening the inbox, which
