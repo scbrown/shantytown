@@ -531,6 +531,29 @@ def durable_gate(agent: str, bead: str, since, comments, error: str = "") -> Dur
     return DurableGate(agent, bead, str(since), ok, "")
 
 
+STUCK_AFTER_DEFAULT = 30 * 60
+STUCK_AFTER_ENV = "SHANTY_CYCLE_STUCK_AFTER"
+
+
+def stuck_after() -> float:
+    """How long a pending, un-refused cycle request may read as `cycling`
+    (aegis-az0a40.1). After it, `st crew` stops calling the agent `cycling`,
+    judges it by its pane (up/down), and marks the request stale in its JSON.
+
+    A request is consumed by `st fleet tend`. On a host where nothing consumes
+    it (measured: the MacBook, 00:33Z to past 02:55Z on 2026-09-30) it used to
+    read as a cycle in flight FOREVER, and `st fleet watch` treats a cycle in
+    flight as cannot-tell, so the peer administrator became unwatchable.
+    Seconds, from $SHANTY_CYCLE_STUCK_AFTER; a bad value falls back to 30 min."""
+    import os
+    raw = os.environ.get(STUCK_AFTER_ENV, "")
+    try:
+        v = float(raw)
+        return v if v > 0 else STUCK_AFTER_DEFAULT
+    except ValueError:
+        return STUCK_AFTER_DEFAULT
+
+
 class Requests:
     """Durable cycle REQUESTS — the `--self` half, and the important one.
 
@@ -576,6 +599,9 @@ class Requests:
                        # context it just shed. Always a list, never absent, so the
                        # resume path never has to branch on presence.
                        "quipu_nodes": list(quipu_nodes or []),
+                       # aegis-az0a40.1: WHEN it was asked, so a request nobody
+                       # consumes can age out of reading as a cycle in flight.
+                       "requested_at": time.time(),
                        # aegis-7xptd5: a NEW request re-arms. The old refusal
                        # described a tree state the agent has since had a chance to
                        # fix, and carrying it forward would report a stall that may
@@ -614,6 +640,23 @@ class Requests:
         data[agent] = record
         self._save(data)
         return True
+
+    def age(self, record: dict, now: float | None = None) -> float | None:
+        """Seconds since this request was made; None when that cannot be told.
+
+        Records written before `requested_at` existed fall back to the ledger
+        file's mtime. That is an UPPER bound on the time since the latest write,
+        and the ledger is rewritten on every request, so a legacy record can only
+        look YOUNGER than it is. The error is towards "still cycling", never
+        towards calling a fresh request stale (aegis-az0a40.1)."""
+        now = time.time() if now is None else now
+        at = record.get("requested_at") if isinstance(record, dict) else None
+        if isinstance(at, (int, float)) and not isinstance(at, bool):
+            return max(0.0, now - float(at))
+        try:
+            return max(0.0, now - self.path.stat().st_mtime)
+        except OSError:
+            return None
 
     def pending(self) -> dict:
         # Old string entries remain readable after the record upgrade.
