@@ -561,13 +561,54 @@ def test_firing_ok_when_evidence_is_fresh(root):
     assert _claude(res)["firing"] == "ok" and res.exit_code in (0, 2)
 
 
+def _carrier(root):
+    return [hb.Running("alice", str(emit(root, "claude", "worker")))]
+
+
 def test_firing_SILENT_when_live_but_evidence_is_old(root):
-    """Configured, launched, and not running: the decorative-hook shape."""
+    """Configured, launched, WORKING, and the hook not running: the decorative-hook shape."""
     res = _firing_setup(root, max_age=60)
-    hb.apply_firing(res, hb.load(root), now=10_000, runner=lambda c: (1_000.0, ""))
+    hb.apply_firing(res, hb.load(root), now=10_000, runner=lambda c: (1_000.0, ""),
+                    running=_carrier(root), last_active={"alice": 9_990.0})
     item = _claude(res)
     assert item["firing"] == "silent" and "last ran 9000s ago" in item["detail"]
+    assert "alice" in item["detail"]
     assert res.exit_code == 1
+
+
+def test_firing_IDLE_is_not_silent(root):
+    """sattler #117 review: a fleet idle overnight must not turn every hook silent and page."""
+    res = _firing_setup(root, max_age=60)
+    hb.apply_firing(res, hb.load(root), now=10_000, runner=lambda c: (1_000.0, ""),
+                    running=_carrier(root), last_active={"alice": 1_500.0})
+    item = _claude(res)
+    assert item["firing"] == hb.NOT_CHECKED and "idle is not silent" in item["detail"]
+    assert res.exit_code != 1
+
+
+def test_firing_agent_with_no_activity_row_is_idle(root):
+    res = _firing_setup(root, max_age=60)
+    hb.apply_firing(res, hb.load(root), now=10_000, runner=lambda c: (1_000.0, ""),
+                    running=_carrier(root), last_active={"someone-else": 9_999.0})
+    assert _claude(res)["firing"] == hb.NOT_CHECKED
+
+
+def test_firing_old_evidence_with_UNREADABLE_activity_is_unknown(root):
+    """Cannot tell idle from silent: never silent (a false page), never ok."""
+    res = _firing_setup(root, max_age=60)
+    hb.apply_firing(res, hb.load(root), now=10_000, runner=lambda c: (1_000.0, ""),
+                    running=_carrier(root), last_active=None)
+    assert _claude(res)["firing"] == "unknown" and res.exit_code == 2
+
+
+def test_last_activity_reads_newest_per_agent_and_None_without_a_store(tmp_path):
+    from shantytown import stats
+    assert stats.last_activity(tmp_path) is None
+    conn = stats._db(tmp_path)
+    conn.executemany("INSERT INTO events(ts, agent, kind) VALUES (?,?,?)",
+                     [(5.0, "a", "tool"), (9.0, "a", "stop"), (7.0, "b", "tool")])
+    conn.commit(); conn.close()
+    assert stats.last_activity(tmp_path) == {"a": 9.0, "b": 7.0}
 
 
 def test_firing_unknown_when_evidence_fails(root):

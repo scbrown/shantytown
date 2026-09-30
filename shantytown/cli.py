@@ -993,8 +993,11 @@ def _cmd_hooks(a) -> int:
         cards = [c for c in _registry(a).all().exact() if c.host in (None, _lh(a.root))]
     except Exception:
         cards = []
-    hb.apply_live(res, _hooks_running(a, cards))
-    hb.apply_firing(res, hb.load(root))
+    running = _hooks_running(a, cards)
+    hb.apply_live(res, running)
+    from . import stats as _stats
+    hb.apply_firing(res, hb.load(root), running=running,
+                    last_active=_stats.last_activity(Path(root)))
     if a.json:
         print(json.dumps(res.to_json(root=root, host=local_host(root)), indent=2))
         return res.exit_code
