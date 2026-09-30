@@ -80,6 +80,7 @@ st fleet                      the whole crew
   window plan|drain|clear|release|abort <id>
                               transactional fleet-maintenance ledger + relaunch lease
   dashboard [admin]           live, tier-scoped view: roster/state/work, self-refreshing
+  watch [--peer|--metrics]    one liveness pass on the PEER host's administrator
 st repo                       a shared project repo
   worktree <repo> [agent]     provision an agent's isolated worktree off a SHARED project repo
   push <repo> [agent]         push wt/<agent> to EVERY remote; refuses if invoked from another branch
@@ -241,7 +242,7 @@ Codex input already includes its cached subset. This makes
 `cache_read / usage_in` a provider-independent prompt-cache hit rate. The fields
 are omitted—not zeroed—when every matching transcript is unknown.
 
-Thirty-nine. Seven verbs at the top level and thirty-two grouped commands under five groups
+Forty. Seven verbs at the top level and thirty-three grouped commands under five groups
 (`work`, `agent`, `fleet`, `repo`, `ops`). A group is a namespace and runs nothing, so it earns no
 slot; the count is the leaves. The flat spellings from before the grouping (st cycle for
 st agent cycle, and so on) still parse into the same handler, print one line on stderr saying
@@ -983,6 +984,44 @@ linked, stop hooks verified on the live process — so an agent booted this way 
 Exit codes: **0** every selected agent is up · **1** refused, nothing launched · **2** the pass ran
 and somebody is not known to be up.
 
+## `st fleet watch` — each administrator watches the other (aegis-az0a40)
+
+A two-host deployment has two administrators, and until this nothing noticed when
+either could not be reached. `st fleet watch` runs ONE pass from this host's
+administrator against the declared peer host's:
+
+```
+st fleet watch                         probe, alert, repair, escalate; exit 0 ok · 1 down · 2 unknown
+st fleet watch -n                      probe (read-only), print what it would do, write nothing
+st fleet watch --metrics <textfile>    also write the Prometheus textfile (atomic)
+```
+
+Probes run cheapest first: the peer host answers ssh; the peer's own
+`st crew --json --local` answers; the administrator's pane exists; its foreground
+process is not a shell (and it is not wedged or auth-dead). The age of its last stop
+event is reported and exported but is never a verdict: an administrator idle at its
+prompt overnight is contactable.
+
+**Unknown is not down.** A host that is asleep or off the network, or a peer st that
+does not answer, proves nothing about the administrator. It never alerts, repairs or
+escalates, and it is exported as `admin_peer_unknown`, never as `admin_peer_up`.
+
+On **down**: the local administrator is told through `st inbox -d` (again at most every
+`--alert-every`, 60 min); ONE relaunch per `--repair-cooldown` (30 min) runs the peer
+host's own `st agent new <peer>` over the same ssh transport, and counts only if a
+second probe sees the peer up; every non-ok pass is appended to
+`<root>/peer-watch/log.jsonl`, and the rate-limit state lives beside it. A human is
+paged through `SHANTY_ESCALATE_COMMAND` only when the repair failed or the outage has
+lasted `--escalate-after` (15 min) — once per outage. A pane whose runtime exited is
+down but not repairable from here (`agent new` refuses an existing session), so it
+waits the threshold.
+
+Metrics: `admin_peer_up{watcher,peer}` (1/0, absent when unknown),
+`admin_peer_unknown{watcher,peer}`, `admin_peer_down_seconds{watcher,peer}`,
+`admin_peer_last_activity_age_seconds{watcher,peer}` and
+`admin_peer_watch_last_run_timestamp_seconds{watcher}` — the last one is what makes a
+watcher that itself died visible. Arming (a timer on each host) is the deployment's step.
+
 ## `st attach` — and it starts what is down
 
 ```bash
@@ -1290,6 +1329,15 @@ When a durable message is successfully submitted to a live pane, `st` closes onl
 that message's pointer after confirming the input is not stranded. The closed bead
 retains its content and history. If the recipient is down, the send fails, the input
 is stranded, or pointer closure fails, the pointer remains open for `st inbox`.
+
+An **off-host** durable recipient is nudged through the same declared peer the
+ephemeral relay (and `st go`) uses: the peer host's own `st inbox` over SSH. A
+relay that exits 0 counts as live delivery and closes the pointer. When no nudge
+is possible — no `[host.peers.<host>]`, SSH failure, timeout, or the peer
+refusing the live send — the report says `off-host: not nudged (<why>)` and the
+pointer stays open. It never says "recipient not live" for an agent on another
+host: that sentence claims a pane was looked at, and none was (aegis-az0a40).
+The exit code is 0 in every case once the durable persist succeeded, as before.
 
 For pointers that survive because delivery was offline or uncertain, acknowledgment
 can be selective: repeat `--read-id ID` for messages already absorbed while leaving

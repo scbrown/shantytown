@@ -1,4 +1,4 @@
-"""st — the CLI. Seven verbs, five groups, thirty-two grouped commands: thirty-nine, and the count is load-bearing: each earns its slot.
+"""st — the CLI. Seven verbs, five groups, thirty-three grouped commands: forty, and the count is load-bearing: each earns its slot.
 
     task · go · sling · inbox [--count] · crew [--count|--governor]
     · anchor [--short|--events|--harness] · attach [-r|--no-start]
@@ -9,6 +9,7 @@
     fleet → start [--mode] · tend [--install|--status|--reauth|--target]
             · roles [--check|set|band|sync] · init · hold gaming [--clear|--status|--probe]
             · window {plan|drain|clear|release|abort} · dashboard [admin]
+            · watch [--peer|--metrics|--dry-run]
     repo  → worktree [--gc] · push [--branch] · context
     ops   → doctor [--install] · provision [agent] · subscribe · hooks <register|list|check> · help <topic>
 
@@ -34,6 +35,14 @@ The count is thirty-three LEAVES: the six verbs plus the twenty-seven grouped
 commands, i.e. everything that runs a handler. A group runs nothing and earns
 no slot; it is a namespace, and the discipline this file argues is about what
 gets a handler.
+
+`fleet watch` earned the fortieth slot (aegis-az0a40, Stiwi 2026-09-29: "You should
+have an alert for this. And she should have an alert for if you can't be contacted.
+And each of you should try to fix that."). Each host's administrator watches the
+OTHER host's: probe, alert the local admin, relaunch via the peer's own `st agent
+new`, escalate only when that fails. It is a command and not a flag on `tend`
+because tend supervises THIS host's cards and this reaches across a host boundary
+with its own state, rate limits and exit contract (0 ok, 1 down, 2 unknown).
 
 `harness <agent> [claude|codex]` earned the thirty-first slot (aegis-6glmer, Stiwi
 2026-09-04: "it should be easy for you to convert crew to claude"). It is a command
@@ -1084,7 +1093,7 @@ from .surface import SURFACE, GROUP_OF  # noqa: E402
 _GROUP_HELP = {
     "work": "the item and the board: repool, defer, cost, dream, triage, jobs",
     "agent": "one agent: new, stop, harness, cycle, input, ask, answer, log, history, stats",
-    "fleet": "the fleet: start, tend, roles, init, hold, window, dashboard",
+    "fleet": "the fleet: start, tend, roles, init, hold, window, dashboard, watch",
     "repo": "a shared project repo: worktree, push, context",
     "ops": "the installation: doctor, provision, subscribe, hooks, help",
 }
@@ -1776,6 +1785,39 @@ def build_parser() -> argparse.ArgumentParser:
     db.add_argument("--once", action="store_true",
                     help="render one snapshot and exit (no refresh loop)")
 
+    # aegis-az0a40: each host's administrator watches the other's. ONE pass;
+    # arming it (cron/systemd/launchd) is the deployment's separate step.
+    pw = leaf("watch", help="one liveness pass on the PEER host's administrator: "
+                            "probe, alert the local admin, repair, escalate. "
+                            "exit 0 ok, 1 down, 2 unknown")
+    pw.add_argument("--peer", metavar="AGENT",
+                    help="the peer administrator (default: the one administrator "
+                         "the peer host's own census lists)")
+    pw.add_argument("--peer-host", metavar="HOST",
+                    help="which declared [host.peers.<HOST>] to watch "
+                         "(default: the only one)")
+    pw.add_argument("--watcher", metavar="AGENT",
+                    help="the LOCAL administrator to alert (default: this host's "
+                         "one administrator)")
+    pw.add_argument("--metrics", type=Path, metavar="PATH",
+                    help="atomic Prometheus textfile: admin_peer_up{watcher,peer} "
+                         "and admin_peer_watch_last_run_timestamp_seconds")
+    pw.add_argument("--escalate-after", type=float, default=15, metavar="MIN",
+                    help="page a human once the peer has been down this long "
+                         "(default 15); a FAILED repair pages sooner")
+    pw.add_argument("--repair-cooldown", type=float, default=30, metavar="MIN",
+                    help="at most one relaunch attempt per MIN (default 30)")
+    pw.add_argument("--alert-every", type=float, default=60, metavar="MIN",
+                    help="re-alert the local admin during an outage every MIN "
+                         "(default 60)")
+    pw.add_argument("--severity", default="high",
+                    help="severity passed to the escalation command (default high)")
+    pw.add_argument("--no-repair", action="store_true",
+                    help="alert and escalate, but never relaunch the peer")
+    pw.add_argument("-n", "--dry-run", action="store_true",
+                    help="probe (read-only), then print what would be done; "
+                         "no alert, repair, escalation, state or metrics write")
+
     sb = leaf("subscribe",
                         help="watch quipu entity events; route assigned workflows to the admin")
     sb.add_argument("--once", action="store_true",
@@ -2259,6 +2301,8 @@ def _run_command(a) -> int:
         return _cmd_answer(a)
     if a.cmd == "dashboard":
         return _cmd_dashboard(a)
+    if a.cmd == "watch":
+        return _cmd_watch(a)
     if a.cmd == "subscribe":
         return _cmd_subscribe(a)
     if a.cmd == "help":
@@ -4747,7 +4791,7 @@ def _cmd_inbox(a) -> int:
               "nothing was sent", file=sys.stderr)
         return CANNOT_TELL
     if getattr(a, "durable", False):
-        return _inbox_durable(a, agent, msg, panes, typed=typed)
+        return _inbox_durable(a, agent, msg, panes, typed=typed, sender=sender)
 
     # ROUTINE — unchanged. send-keys only, ephemeral.
     relayed = _relay_if_offhost(a, agent, typed, sender)
@@ -4863,6 +4907,62 @@ def _files_message_recipient(a):
     return Agent(name=a.agent, role=row["role"].split(",")[0], host=row["host"])
 
 
+def _peer_inbox_ssh(peer, name: str, typed: str, sender: str | None):
+    """Run the peer host's own EPHEMERAL `st inbox` over ssh — THE cross-host
+    live-send transport, shared by the ephemeral relay and the durable path's
+    live nudge (aegis-az0a40) so the two cannot drift. Raises OSError /
+    TimeoutExpired; returns the CompletedProcess otherwise. The remote
+    attributes the message from $SHANTY_AGENT, so the RAW text is sent."""
+    import shlex
+    import subprocess
+    q = shlex.quote
+    remote_cmd = (
+        (f"SHANTY_AGENT={q(sender)} " if sender else "")
+        + 'PATH="$HOME/.local/bin:$PATH" '
+        + f"st --registry files --root {q(peer.root)} inbox {q(name)} {q(typed)}")
+    return subprocess.run(
+        ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
+         peer.ssh, remote_cmd],
+        capture_output=True, text=True, timeout=45)
+
+
+def _offhost_nudge(a, agent, typed: str, sender: str | None) -> tuple[bool, str]:
+    """Best-effort LIVE nudge of an off-host recipient, after a durable persist.
+
+    (delivered, how). `how` is the TRUTH for the caller's one-line report:
+    either where it went, or why nothing was attempted/delivered. Never raises
+    — the durable message is already stored, and a nudge failure must not be
+    able to turn that into a non-zero exit (GitHub #26's rule).
+
+    THE DEFECT (aegis-az0a40): the durable path computed `live = not offhost
+    and ...`, so an off-host recipient was NEVER nudged and the report said
+    "recipient not live" — measured false against a peer administrator that
+    was up and busy, while `st go` reached the same pane through the peer path.
+    """
+    import subprocess
+    from .deployment import local_host
+    local = local_host(a.root)
+    if local is None:
+        return False, ("this deployment declares no [host] name, so the "
+                       f"recipient's host {agent.host} cannot be reached")
+    cfg, _err = config.load_or_default(a.root)
+    peer = cfg.host_peers.get(agent.host)
+    if peer is None:
+        return False, f"no [host.peers.{agent.host}] declared in shantytown.toml"
+    try:
+        res = _peer_inbox_ssh(peer, agent.name, typed, sender)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return False, f"host {agent.host} ({peer.ssh}) did not answer: {type(e).__name__}"
+    if res.returncode == OK:
+        return True, f"host {agent.host} via {peer.ssh}"
+    lines = [ln.strip() for ln in ((res.stderr or "") + "\n" + (res.stdout or "")).splitlines()
+             if ln.strip()]
+    last = lines[-1][:160] if lines else f"exit {res.returncode}"
+    if res.returncode == 255:
+        return False, f"ssh to host {agent.host} ({peer.ssh}) failed: {last}"
+    return False, f"host {agent.host} did not deliver live (exit {res.returncode}): {last}"
+
+
 def _relay_if_offhost(a, agent, typed: str, sender: str | None) -> int | None:
     """Route an EPHEMERAL send to the host the recipient's card names
     (aegis-5du1bz). None = the recipient is here (or nobody said where anyone
@@ -4888,12 +4988,6 @@ def _relay_if_offhost(a, agent, typed: str, sender: str | None) -> int | None:
               f"host-independent) or declare the peer (ssh + root).",
               file=sys.stderr)
         return REFUSED
-    import shlex
-    q = shlex.quote
-    remote_cmd = (
-        (f"SHANTY_AGENT={q(sender)} " if sender else "")
-        + 'PATH="$HOME/.local/bin:$PATH" '
-        + f"st --registry files --root {q(peer.root)} inbox {q(agent.name)} {q(typed)}")
     if a.dry_run:
         print(f"  would: relay via ssh {peer.ssh} -> host {agent.host} "
               f"(st --root {peer.root} inbox {agent.name} …)")
@@ -4902,10 +4996,7 @@ def _relay_if_offhost(a, agent, typed: str, sender: str | None) -> int | None:
         return OK
     import subprocess
     try:
-        res = subprocess.run(
-            ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
-             peer.ssh, remote_cmd],
-            capture_output=True, text=True, timeout=45)
+        res = _peer_inbox_ssh(peer, agent.name, typed, sender)
     except (OSError, subprocess.TimeoutExpired) as e:
         print(f"  could not tell: host {agent.host} ({peer.ssh}) did not answer "
               f"the relay ({type(e).__name__}); nothing is known to have been "
@@ -4944,7 +5035,8 @@ def _looks_stranded(panes, pane: str) -> bool:
         return False
 
 
-def _inbox_durable(a, agent, msg: str, panes, typed: str | None = None) -> int:
+def _inbox_durable(a, agent, msg: str, panes, typed: str | None = None,
+                   sender: str | None = None) -> int:
     """Persist, deliver live when possible, then retire that delivered pointer."""
     # BEADS BY DEFAULT for -d (dearing, qdal.2 follow-up). `-d` is the flag you
     # reach for when the message MUST survive your session dying. A local files
@@ -4963,6 +5055,15 @@ def _inbox_durable(a, agent, msg: str, panes, typed: str | None = None) -> int:
     live = not offhost and agent.pane is not None and panes.exists(agent.pane)
     if a.dry_run:
         print(f"  would: deliver a durable message to {agent.name}'s inbox via {backend}")
+        if offhost:
+            cfg, _err = config.load_or_default(a.root)
+            peer = cfg.host_peers.get(agent.host) if local else None
+            print("  would: " + (f"+ live relay via ssh {peer.ssh} -> host {agent.host}"
+                                 if peer else
+                                 f"off-host: not nudged (no reachable peer for host "
+                                 f"{agent.host}); survives in the inbox"))
+            print("\n  1 durable write." + (" 1 relay." if peer else " 0 send-keys."))
+            return OK
         print(f"  would: {'+ live send-keys -> ' + agent.pane if live else 'no live send (recipient down); survives in the inbox'}")
         print("\n  1 durable write." + (" 1 send-keys." if live else " 0 send-keys."))
         return OK
@@ -5043,6 +5144,26 @@ def _inbox_durable(a, agent, msg: str, panes, typed: str | None = None) -> int:
         except Exception as e:                    # noqa: BLE001 — delivery already succeeded
             print(f"  -> {agent.name}    delivered to inbox as {item.id} ({backend}) "
                   f"+ live to {agent.pane}; pointer close FAILED "
+                  f"({type(e).__name__}: {str(e)[:80]}) — it remains open for `st inbox`.")
+    elif offhost:
+        # OFF-HOST: nudge through the SAME peer transport the ephemeral relay
+        # and `st go` use, and report what is TRUE. "not live" was a claim
+        # about a pane nobody looked at (aegis-az0a40).
+        # The remote attributes from $SHANTY_AGENT, so send the RAW text with
+        # the verified sender; an already-attributed body goes unsigned.
+        sent, how = (_offhost_nudge(a, agent, typed, sender) if typed is not None
+                     else _offhost_nudge(a, agent, msg, None))
+        if not sent:
+            print(f"  -> {agent.name}    delivered to inbox as {item.id} ({backend}); "
+                  f"off-host: not nudged ({how}) — they read it with `st inbox`.")
+            return OK
+        try:
+            box.mark_read(agent.name, ids=[item.id])
+            print(f"  -> {agent.name}    delivered to inbox as {item.id} ({backend}) "
+                  f"+ live on {how}; pointer closed on live delivery")
+        except Exception as e:                    # noqa: BLE001 — delivery already succeeded
+            print(f"  -> {agent.name}    delivered to inbox as {item.id} ({backend}) "
+                  f"+ live on {how}; pointer close FAILED "
                   f"({type(e).__name__}: {str(e)[:80]}) — it remains open for `st inbox`.")
     else:
         print(f"  -> {agent.name}    delivered to inbox as {item.id} ({backend}); "
@@ -5955,6 +6076,8 @@ def _cmd_crew(a) -> int:
         plate = unavailable_plate
     if getattr(a, "json", False):
         launches = _launches(a)
+        from . import stats as _stats_mod
+        last_active = _stats_mod.last_activity(Path(a.root))
         local_rows = []
         for ag, state, work, posture in _crew_states(
                 agents, panes, runtime, cycling=cycling, untracked_root=a.root,
@@ -5967,7 +6090,16 @@ def _cmd_crew(a) -> int:
                     actual = harness_mod.running_name(reader(ag.pane))
                 except Exception:
                     pass
+            fg = None
+            if live and callable(getattr(panes, "foreground", None)):
+                try:
+                    fg = panes.foreground(ag.pane)
+                except Exception:
+                    pass
             local_rows.append(dict(
+                # foreground/last_active: OPTIONAL, read by `st fleet watch`
+                # on a peer host (aegis-az0a40); None = not measured.
+                foreground=fg, last_active=(last_active or {}).get(ag.name),
                 name=ag.name, host=local or "local", role=",".join(ag.effective_roles()),
                 tree_role=ag.role, retired=bool(ag.retired),
                 state=state, work=work, posture=posture, pane=ag.pane or "—",
@@ -10620,6 +10752,75 @@ def _cmd_hold(a) -> int:
         # during a real launch's pre-reaper shader phase.
         return CANNOT_TELL if status.state == "unknown" else int(status.throttled)
     return CANNOT_TELL if status.state == "unknown" or slowdown_unknown else OK
+
+
+def _cmd_watch(a) -> int:
+    """`st fleet watch` — one liveness pass on the peer host's administrator
+    (aegis-az0a40). The decision table lives in peer_watch.py; this resolves
+    WHO and WHERE from the deployment and wires the real side effects."""
+    from . import peer_watch as pw
+    from .deployment import local_host, deployment_default
+    cfg, err = config.load_or_default(Path(a.root))
+    if err:
+        print(f"  could not tell: {err}", file=sys.stderr)
+        return CANNOT_TELL
+    local = local_host(a.root)
+    if not local:
+        print("  refused: this deployment declares no [host] name, so it has no "
+              "peer host to watch", file=sys.stderr)
+        return REFUSED
+    if a.peer_host:
+        peer = cfg.host_peers.get(a.peer_host)
+        if peer is None:
+            print(f"  refused: no [host.peers.{a.peer_host}] declared", file=sys.stderr)
+            return REFUSED
+    elif len(cfg.host_peers) == 1:
+        peer = next(iter(cfg.host_peers.values()))
+    else:
+        print(f"  refused: {len(cfg.host_peers)} peer hosts declared; name one "
+              "with --peer-host", file=sys.stderr)
+        return REFUSED
+    watcher = a.watcher
+    if not watcher:
+        try:
+            cards = [ag for ag in _registry(a).all().exact()
+                     if ag.host in (None, local) and not ag.retired
+                     and "administrator" in ag.effective_roles()]
+        except Exception as e:  # noqa: BLE001 — a registry we cannot read
+            print(f"  could not tell: local registry ({type(e).__name__}: {e})",
+                  file=sys.stderr)
+            return CANNOT_TELL
+        if len(cards) != 1:
+            print(f"  refused: {len(cards)} local administrators; name one with "
+                  "--watcher", file=sys.stderr)
+            return REFUSED
+        watcher = cards[0].name
+    root = Path(a.root)
+    state_dir = root / "peer-watch"
+    escalate_cmd = deployment_default(root, pw.ESCALATE_ENV)
+    print(f"st fleet watch: {watcher}@{local} watching "
+          f"{a.peer or 'the administrator'}@{peer.name}"
+          + (" (dry run)" if a.dry_run else ""))
+    outcome = pw.run_pass(
+        watcher=watcher, peer_host=peer.name, peer_name=a.peer,
+        probe_fn=lambda name: pw.probe(peer, name),
+        alert_fn=lambda text: pw.alert_via_inbox(root, watcher, text),
+        repair_fn=None if a.no_repair else (lambda name: pw.repair(peer, name)),
+        escalate_fn=lambda desc: pw.escalate_via_command(escalate_cmd, a.severity, desc),
+        state=pw.State(state_dir / f"{peer.name}.json"),
+        log_path=state_dir / "log.jsonl", dry_run=a.dry_run,
+        escalate_after=a.escalate_after * 60, repair_cooldown=a.repair_cooldown * 60,
+        alert_every=a.alert_every * 60)
+    if a.metrics:
+        if a.dry_run:
+            print(f"  would: write metrics to {a.metrics}")
+        else:
+            try:
+                pw.write_metrics(a.metrics, pw.metrics(watcher, outcome, time.time()))
+            except OSError as e:
+                print(f"  ⚠ metrics not written ({type(e).__name__}): {a.metrics}",
+                      file=sys.stderr)
+    return outcome.exit_code
 
 
 def _cmd_tend(a) -> int:

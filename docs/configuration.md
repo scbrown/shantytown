@@ -108,6 +108,7 @@ What `st` puts INTO an agent's session at launch — read by the agent, not by `
 | `SHANTY_ONTO_TRAIT_PREFIX` | the shared prefix of the trait-axis predicates (`traitAttachment`, `traitScope`, …). One knob for the convention, not six for the axes. | `trait` |
 | `SHANTY_ONTO_TRAIT_VALUE_CLASS` | the class local-name of the rows that RANK trait values, so a stacked role set with a conflicting single-valued axis resolves from declared data instead of a tie-break in code. | `TraitValue` |
 | `BOBBIN_SERVER` | bobbin, for `st repo context` | `http://localhost:8080` |
+| `SHANTY_ESCALATE_COMMAND` | the human-escalation command `st fleet watch` runs when a peer administrator stays down past `--escalate-after` or a repair fails (aegis-az0a40). Invoked as `<command> -s <severity> "<description>"`; its exit code is the verdict (0 paged, 1 fallback attempted, 2 nobody paged). Usually set in `[env]`. Unset = the watch alerts and repairs but says `escalation NOT CONFIGURED` and pages nobody. | — |
 | `SHANTY_RANKER` | `policy` to weight the admin workflow by Hank blast radius; else rule-based | — |
 | `SHANTY_FORGEJO_URL` | a self-hosted forge: `st ops doctor`'s release checks, and the base URL for `--backend forgejo` (issues as work items; pair with `SHANTY_FORGEJO_TOKEN` and `--repo owner/name`) | `http://localhost:3000` |
 | `SHANTY_FORGEJO_TOKEN` | API token for `--backend forgejo` (issue read/write on the repo) | — |
