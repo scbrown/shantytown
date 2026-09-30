@@ -710,3 +710,62 @@ def test_unregister_drops_an_orphaned_codex_notify(root):
     _hooks_cmd(root, "unregister", name="notifier", no_apply=False)
     doc = tomllib.loads((root / "settings" / "codex" / "lead" / "config.toml").read_text())
     assert doc.get("notify") != NOTIFY
+
+
+# --- emitted role settings are written ATOMICALLY (aegis-yb8ifi) -----------------------
+
+def _break_render(monkeypatch, harness):
+    """A render whose output cannot be ENCODED: the write fails part-way, after the
+    target was opened. A lone surrogate is a real mid-write failure, and it does not
+    depend on which write call the implementation uses."""
+    h = harness_mod.get(harness)
+    monkeypatch.setattr(type(h), "render", lambda self, s, e="", root=None: '{"torn": "\ud800"}')
+
+
+@pytest.mark.parametrize("harness", ["claude", "codex"])
+def test_a_failed_emit_leaves_the_previous_role_file_intact(root, monkeypatch, harness):
+    from shantytown import cli
+    path = emit(root, harness, "worker")
+    before = path.read_bytes()
+    assert before
+    _break_render(monkeypatch, harness)
+    with pytest.raises(Exception):
+        cli._emit_role_settings(root, {"worker"}, harness_name=harness)
+    assert path.read_bytes() == before, "a failed write must not truncate the file agents launch on"
+    assert not [p for p in path.parent.iterdir() if p.name.startswith(path.name + ".")], \
+        "no temp file left beside it"
+
+
+def test_atomic_emit_keeps_each_files_mode(root):
+    """Live vati, 2026-09-30: codex lead/worker config.toml are 0600, the rest 0664.
+    A rewrite must neither widen a private file nor narrow a shared one."""
+    import os
+    import stat
+    from shantytown import cli
+    for harness, mode in (("codex", 0o600), ("claude", 0o664)):
+        path = emit(root, harness, "worker")
+        os.chmod(path, mode)
+        cli._emit_role_settings(root, {"worker"}, harness_name=harness)
+        assert stat.S_IMODE(path.stat().st_mode) == mode, (harness, oct(path.stat().st_mode))
+
+
+def test_register_whose_render_fails_says_to_run_apply(root, monkeypatch, capsys):
+    """The registry changed but some file did not: say so, and exit nonzero."""
+    _emit_all(root)
+    _break_render(monkeypatch, "codex")
+    src = root / "src-example.json"
+    src.write_text(json.dumps(bundle()))
+    rc = _hooks_cmd(root, "register", file=src, no_apply=False)
+    err = capsys.readouterr().err
+    assert rc != 0 and "st ops hooks apply" in err, (rc, err)
+
+
+def test_atomic_write_goes_through_a_symlink_and_keeps_the_link(tmp_path):
+    from shantytown.files import write_text_atomic
+    real = tmp_path / "real.json"
+    real.write_text("old")
+    link = tmp_path / "link.json"
+    link.symlink_to(real)
+    write_text_atomic(link, "new")
+    assert link.is_symlink() and real.read_text() == "new"
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["link.json", "real.json"]
