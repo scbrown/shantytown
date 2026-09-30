@@ -263,6 +263,9 @@ class Outcome:
         return EXIT[self.verdict]
 
 
+UNRESOLVED = "unresolved"
+
+
 def run_pass(*, watcher: str, peer_host: str, peer_name: str | None,
              probe_fn: Callable[[str | None], Observation],
              alert_fn: Callable[[str], tuple[bool, str]],
@@ -276,14 +279,24 @@ def run_pass(*, watcher: str, peer_host: str, peer_name: str | None,
              say: Callable[[str], None] = print) -> Outcome:
     """One watch pass: probe, then alert/repair/escalate by the rules above."""
     st = state.read()
-    obs = probe_fn(peer_name or st.get("peer"))
+    # "unresolved" is a DISPLAY label, never a name (aegis-emretk). It used to be
+    # persisted as the peer after any pass that could not resolve one, and every
+    # later pass then asked the census for a card literally named "unresolved",
+    # reporting "no administrator card" forever: one transient failure (the Mac's
+    # launchd LAN block) became permanent. Only a real name is remembered, and a
+    # state file poisoned by the old code is read as "not yet resolved".
+    stored = st.get("peer")
+    if stored == UNRESOLVED:
+        stored = None
+    obs = probe_fn(peer_name or stored)
     t = now()
-    peer = obs.peer or peer_name or st.get("peer") or "unresolved"
+    resolved = obs.peer or peer_name or stored
+    peer = resolved or UNRESOLVED
     actions: list[str] = []
     for name, result in obs.probes:
         say(f"  probe {name:<9} {result}")
     say(f"  {peer}@{peer_host}: {obs.verdict.upper()} — {obs.reason}")
-    new = dict(st, peer=peer, last_run=t, last_verdict=obs.verdict)
+    new = dict(st, peer=resolved, last_run=t, last_verdict=obs.verdict)
     verdict = obs.verdict
     down_since = st.get("down_since")
 
