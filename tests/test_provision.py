@@ -459,13 +459,20 @@ def test_CONTROL_the_proxy_and_other_servers_are_untouched(root, ws):
     assert set(json.loads((ws / ".mcp.json").read_text())["mcpServers"]) == {"bobbin", "homelab"}
 
 
-@pytest.mark.parametrize("cfg,expected", [
-    ({"type": "http", "url": "http://quipu.invalid/mcp"}, ["x"]),
-    ({"type": "http", "url": "http://quipu-staging.invalid:8080/mcp"}, ["x"]),
-    ({"type": "http", "url": "http://homelab-mcp.invalid/mcp"}, []),
-    ({"type": "http", "url": "http://notquipu.invalid/mcp"}, []),
-    ({"type": "stdio", "command": "quipu", "args": ["mcp"]}, []),
-    ({"type": "http", "url": "http://quipu.invalid/mcp", "headersHelper": "/h"}, []),
+@pytest.mark.parametrize("name,cfg,expected", [
+    ("x", {"type": "http", "url": "http://quipu.invalid/mcp"}, ["x"]),
+    ("x", {"type": "http", "url": "http://quipu-staging.invalid:8080/mcp"}, ["x"]),
+    ("x", {"type": "http", "url": "http://homelab-mcp.invalid/mcp"}, []),
+    ("x", {"type": "http", "url": "http://notquipu.invalid/mcp"}, []),
+    ("x", {"type": "stdio", "command": "quipu", "args": ["mcp"]}, []),
+    ("x", {"type": "http", "url": "http://quipu.invalid/mcp", "headersHelper": "/h"}, []),
+    # aegis-w35nwd: a quipu-NAMED entry at an IP or localhost is direct too.
+    ("quipu", {"type": "http", "url": "http://127.0.0.1:3030/mcp"}, ["quipu"]),
+    ("quipu", {"type": "http", "url": "http://203.0.113.5/mcp"}, ["quipu"]),
+    ("Quipu-local", {"type": "http", "url": "http://localhost:3030/mcp"}, ["Quipu-local"]),
+    ("quipu", {"type": "http", "url": "http://127.0.0.1:3030/mcp", "headersHelper": "/h"}, []),
+    ("quipu", {"type": "stdio", "command": "quipu", "args": ["mcp"]}, []),
+    ("homelab", {"type": "http", "url": "http://127.0.0.1:8080/mcp"}, []),
 ])
-def test_headerless_quipu_classification(cfg, expected):
-    assert P.headerless_quipu({"x": cfg}) == expected
+def test_headerless_quipu_classification(name, cfg, expected):
+    assert P.headerless_quipu({name: cfg}) == expected
