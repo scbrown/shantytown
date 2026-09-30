@@ -616,7 +616,8 @@ def _run_evidence(command: str) -> tuple[float | None, str]:
 
 
 def apply_firing(res: CheckResult, reg: Registry, now: float | None = None,
-                 runner=_run_evidence) -> None:
+                 runner=_run_evidence, running: list[Running] | None = None,
+                 last_active: dict[str, float] | None = None) -> None:
     """Fill `firing`: has each hook actually RUN recently?
 
     ok          the bundle's evidence shows a run within max_age, and the hook is
@@ -625,7 +626,14 @@ def apply_firing(res: CheckResult, reg: Registry, now: float | None = None,
                 launched, and not running (the decorative-hook shape)
     unknown     the evidence command failed or printed nonsense
     not-checked the bundle declares no evidence, or no running process carries
-                the hook (there is nothing that could have fired it)
+                the hook (there is nothing that could have fired it), or every
+                process carrying it has been IDLE for max_age
+    IDLE IS NOT SILENT (sattler, #117 review). Old evidence only means "the hook
+    did not run" when something that carries it was doing work: a fleet idle
+    overnight or under a gaming hold would otherwise turn every hook silent at
+    once and page. So silent needs a carrier with activity (any st stats event)
+    within max_age. When activity cannot be read at all, old evidence is unknown,
+    never silent and never ok.
     Each evidence command runs once per check, whatever the item count."""
     import time
     now = time.time() if now is None else now
@@ -644,9 +652,24 @@ def apply_firing(res: CheckResult, reg: Registry, now: float | None = None,
         elif now - last <= h.evidence_max_age:
             item["firing"], note = "ok", ""
         else:
-            item["firing"] = "silent"
-            note = (f"live, but last ran {int(now - last)}s ago "
-                    f"(allowed {h.evidence_max_age}s): configured and launched, not running")
+            carriers = sorted({r.agent for r in (running or [])
+                               if _same_file(r.settings_file, item["file"])})
+            if last_active is None:
+                item["firing"] = "unknown"
+                note = (f"last ran {int(now - last)}s ago (allowed {h.evidence_max_age}s), "
+                        f"and agent activity cannot be read, so idle and silent look alike")
+            else:
+                busy = [a for a in carriers
+                        if now - last_active.get(a, float("-inf")) <= h.evidence_max_age]
+                if busy:
+                    item["firing"] = "silent"
+                    note = (f"live, but last ran {int(now - last)}s ago "
+                            f"(allowed {h.evidence_max_age}s) while {', '.join(busy)} "
+                            f"worked: configured and launched, not running")
+                else:
+                    item["firing"] = NOT_CHECKED
+                    note = (f"last ran {int(now - last)}s ago, but no agent carrying it was "
+                            f"active in the last {h.evidence_max_age}s: idle is not silent")
         if note:
             item["detail"] = f"{item['detail']}; {note}" if item["detail"] else note
 
