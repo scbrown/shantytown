@@ -10597,7 +10597,12 @@ def _cmd_hold(a) -> int:
         if sent:
             print("quiet-time advisory delivered to coordinator: " + ", ".join(sent))
     if a.status:
-        return CANNOT_TELL if status.state == "unknown" else int(status.held)
+        # THROTTLED, not held (aegis-da2tfj review). This exit code is the admission gate
+        # for heavy work that runs OUTSIDE the throttled pane scopes: the CD cargo build,
+        # the cargo wrapper and the CVE scan all proceed on 0 and defer on 1. A shader
+        # compile holds no dispatch, but a build must still defer through it, or it starts
+        # during a real launch's pre-reaper shader phase.
+        return CANNOT_TELL if status.state == "unknown" else int(status.throttled)
     return CANNOT_TELL if status.state == "unknown" or slowdown_unknown else OK
 
 
