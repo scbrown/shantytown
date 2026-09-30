@@ -141,6 +141,13 @@ def probe(peer, peer_name: str | None, *, run=subprocess.run,
     if row.get("state") == "cycling":
         probes.append(("pane", "unknown: cycle in flight"))
         return obs(UNKNOWN, f"{name} is cycling (a planned relaunch is in flight)")
+    if row.get("cycle_request_stale"):
+        # aegis-az0a40.1: the peer's st says a cycle request sits unconsumed. Its
+        # state is already the pane's (up/down), so this is a note, not a verdict.
+        req_age = row.get("cycle_request_age")
+        probes.append(("cycle", "stale request, not in flight"
+                       + (f" ({int(req_age // 60)}m old)"
+                          if isinstance(req_age, (int, float)) else "")))
     if not row.get("live"):
         probes.append(("pane", f"down: {row.get('pane')} is not there"))
         return obs(DOWN, f"{name}'s pane {row.get('pane')} is not there on "

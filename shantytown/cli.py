@@ -6056,6 +6056,16 @@ def _cmd_crew(a) -> int:
         if _why:
             cycle_blocked[_who] = (_path, _why)
     cycling = set(_pending) - set(cycle_blocked)
+    # aegis-az0a40.1: a request nobody consumed within the bound is not a cycle
+    # in flight, so it stops reading as one and the agent is judged by its pane
+    # (up/down), like any other. NO new state (sattler's ruling): three
+    # consumers enumerate st crew states and reject or reroute on an unknown one.
+    # What it IS rides as additive fields (cycle_request_age/_stale) + a summary line.
+    _requests = cycle_mod.Requests(a.root)
+    _request_age = {who: _requests.age(rec) for who, rec in _pending.items()}
+    cycle_stale = {who for who in cycling
+                   if (_request_age.get(who) or 0) > cycle_mod.stuck_after()}
+    cycling -= cycle_stale
     panes = _panes(a)
     try:
         agents = _registry(a).all().exact()
@@ -6100,6 +6110,11 @@ def _cmd_crew(a) -> int:
                 # foreground/last_active: OPTIONAL, read by `st fleet watch`
                 # on a peer host (aegis-az0a40); None = not measured.
                 foreground=fg, last_active=(last_active or {}).get(ag.name),
+                # OPTIONAL (aegis-az0a40.1): seconds since this agent's pending
+                # cycle request was made; None = no request.
+                cycle_request_age=(_request_age.get(ag.name)
+                                   if ag.name in _pending else None),
+                cycle_request_stale=ag.name in cycle_stale,
                 name=ag.name, host=local or "local", role=",".join(ag.effective_roles()),
                 tree_role=ag.role, retired=bool(ag.retired),
                 state=state, work=work, posture=posture, pane=ag.pane or "—",
@@ -6324,6 +6339,13 @@ def _cmd_crew(a) -> int:
         print("    Each of these agents keeps working on a context already judged "
               "full. Commit + `st repo push` that tree, and the next `st fleet tend` serves "
               "the cycle.")
+    if cycle_stale:
+        print(f"  ⚠ {len(cycle_stale)} cycle request(s) NOT consumed within "
+              f"{int(cycle_mod.stuck_after() // 60)}m, so read by pane, not as cycling: "
+              + ", ".join(f"{w} ({int((_request_age.get(w) or 0) // 60)}m)"
+                          for w in sorted(cycle_stale)))
+        print("    Nothing on this host acted on them. Run `st fleet tend`, or clear "
+              "a request that is no longer wanted.")
     if cycling_agents:
         print(f"  {len(cycling_agents)} planned context cycle(s): "
               f"{', '.join(cycling_agents)}")
