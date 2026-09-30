@@ -163,3 +163,22 @@ def test_remote_agents_visible_with_empty_local_roster(tmp_path, monkeypatch, ca
     out = capsys.readouterr().out
     assert 'laptop' in out and 'remote' in out
     assert 'no agents.' not in out
+
+
+def test_local_json_carries_the_peer_watch_fields(tmp_path, monkeypatch, capsys):
+    """`st fleet watch` on the OTHER host reads these (aegis-az0a40): the pane's
+    foreground process (a shell = its runtime exited) and the last stop-event
+    time. Optional — None is 'not measured', never a verdict."""
+    args = setup(tmp_path, monkeypatch)
+    args.local = args.json = True
+    monkeypatch.setattr(fleet, 'collect', lambda _: pytest.fail('recursive polling'))
+
+    class Fg(_Panes):
+        def foreground(self, pane):
+            return 'bash'
+    monkeypatch.setattr(cli, 'Tmux', lambda *a, **k: Fg({'local-pane': IDLE_SCREEN}))
+    from shantytown import stats
+    monkeypatch.setattr(stats, 'last_activity', lambda root: {'local': 1234.0})
+    assert cli._cmd_crew(args) == 0
+    agent = json.loads(capsys.readouterr().out)['agents'][0]
+    assert agent['foreground'] == 'bash' and agent['last_active'] == 1234.0
