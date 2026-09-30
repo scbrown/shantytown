@@ -201,7 +201,7 @@ from . import supervisor as sup_mod
 from . import tend as tend_mod
 from . import provision as prov_mod
 from . import notify as notify_mod
-from .files import (FilesRegistry, FilesTracker, plate as files_plate,
+from .files import (FilesRegistry, FilesTracker, plate as files_plate, write_text_atomic,
                     items as files_items)
 from .launched import FilesLaunches, CURRENT, STALE, UNKNOWN
 from .stopped import FilesStops
@@ -976,6 +976,21 @@ def _hooks_reassert(root) -> list[Path]:
     return written
 
 
+def _hooks_reassert_or_say(root) -> bool:
+    """_hooks_reassert, and if a render fails: the REGISTRY has already changed
+    while some role files have not, so say exactly that and how to finish it
+    (aegis-yb8ifi). Each file is written atomically, so none is left torn."""
+    try:
+        _hooks_reassert(root)
+        return True
+    except Exception as e:  # noqa: BLE001 - reported, and the exit code says so
+        print(f"st: the registry changed, but re-rendering the role files FAILED "
+              f"({type(e).__name__}: {e}). Files already rendered are current; the rest "
+              f"still hold their previous content. Fix the cause, then run "
+              f"`st ops hooks apply`.", file=sys.stderr)
+        return False
+
+
 def _cmd_hooks(a) -> int:
     """`st ops hooks` (aegis-68j0ys). st keeps registered bundles rendered; it
     knows nothing about what is in them."""
@@ -989,8 +1004,8 @@ def _cmd_hooks(a) -> int:
             print(f"refused: {e}", file=sys.stderr)
             return 1
         print(f"{name}: {outcome}")
-        if outcome != "unchanged" and not a.no_apply:
-            _hooks_reassert(root)
+        if outcome != "unchanged" and not a.no_apply and not _hooks_reassert_or_say(root):
+            return 1
         if outcome != "unchanged":
             print("  a running agent picks it up at its next launch")
         return 0
@@ -1001,12 +1016,11 @@ def _cmd_hooks(a) -> int:
             print(f"refused: {e}", file=sys.stderr)
             return 1
         print(f"{a.name}: {'removed' if gone else 'not registered'}")
-        if gone and not a.no_apply:
-            _hooks_reassert(root)
+        if gone and not a.no_apply and not _hooks_reassert_or_say(root):
+            return 1
         return 0 if gone else 1
     if a.hooks_cmd == "apply":
-        _hooks_reassert(root)
-        return 0
+        return 0 if _hooks_reassert_or_say(root) else 1
     if a.hooks_cmd == "list":
         reg = hb.load(root)
         if a.json:
@@ -4571,7 +4585,9 @@ def _emit_role_settings(root: Path, roles: set[str],
         # merge AND the serialization are the harness's render() — one call,
         # because they are one decision and this emitter must not learn a second
         # file format to keep the rule.
-        p.write_text(program.render(emitted, _read_text(p), root=root))
+        # ATOMIC (aegis-yb8ifi): every agent on this role launches on this file,
+        # and write_text truncates first, so a failure mid-write left it 0 bytes.
+        write_text_atomic(p, program.render(emitted, _read_text(p), root=root))
         written.append(p)
     return written
 
