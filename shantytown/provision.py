@@ -928,9 +928,11 @@ def headerless_quipu(servers: dict) -> list[str]:
     write (the aegis-nvw6ye Mac failure) or carries the token in the file.
 
     Measured 2026-09-30: 0 such entries across 115 emitted kit files on vati.
-    This is a regression guard, so it keys on the one property that makes an
-    entry direct: its URL host is a quipu host. A stdio server has no URL and is
-    out of scope, and the proxy's host is not quipu.
+    This is a regression guard. An entry is direct when its URL host is a quipu
+    host OR its server NAME is quipu* (aegis-w35nwd): a quipu at an IP or at
+    localhost:3030, which is where a Mac's local quipu serves, has no quipu in
+    its hostname and was emitted. A stdio server has no URL and is out of
+    scope, and the proxy is named homelab, not quipu.
     """
     from urllib.parse import urlparse
     out = []
@@ -938,7 +940,8 @@ def headerless_quipu(servers: dict) -> list[str]:
         if not isinstance(cfg, dict) or not isinstance(cfg.get("url"), str):
             continue
         host = (urlparse(cfg["url"]).hostname or "").lower()
-        if host.split(".")[0].startswith("quipu") and not cfg.get("headersHelper"):
+        direct = host.split(".")[0].startswith("quipu") or str(name).lower().startswith("quipu")
+        if direct and not cfg.get("headersHelper"):
             out.append(name)
     return sorted(out)
 
