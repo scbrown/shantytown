@@ -129,6 +129,20 @@ def _no_real_pointer(tmp_path_factory, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_real_steam_appinfo(tmp_path_factory, monkeypatch):
+    """No gaming test may classify an AppId from the DEVELOPER'S Steam cache.
+
+    The gaming probe reads ~/.steam/steam/appcache/appinfo.vdf to drop Steam
+    tools (aegis-syw2fv). On a box with Steam installed, a fixture AppId that
+    happens to be a real tool there would silently stop holding. A missing file
+    answers "unknown" for every AppId, which is the pre-syw2fv behaviour; tests
+    that exercise classification pass their own recorded file.
+    """
+    monkeypatch.setattr("shantytown.steam_appinfo.DEFAULT_PATH",
+                        str(tmp_path_factory.mktemp("steam-isolated") / "appinfo.vdf"))
+
+
+@pytest.fixture(autouse=True)
 def _no_ambient_store_root(monkeypatch):
     """No test may see the operator's $SHANTY_ROOT — the OTHER leg of the same
     resolver, and the one that was still open.

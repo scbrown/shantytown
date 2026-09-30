@@ -1736,6 +1736,14 @@ game_executable = "reaper"
 game_arguments = ['SteamLaunch', 'AppId=(?P<appid>[0-9]+)']
 shader_executable = "fossilize_replay"
 shader_grace = 1200
+# Steam launches tools and applications through the same reaper as games. An
+# AppId lifts only when its type in Steam's appinfo cache is in lift_app_types or
+# the AppId is in lift_appids. Every other type holds, including "application"
+# and "beta" (multiplayer clients and playtests use them), as does an unreadable
+# one. Defaults shown; setting a key replaces its default list.
+steam_appinfo = "~/.steam/steam/appcache/appinfo.vdf"
+lift_app_types = ["tool", "config", "music", "video"]
+lift_appids = ["431730"]   # Aseprite, a pixel editor typed "Application"
 grace = 300
 lift_delay = 120
 lift_rule = "absent"
