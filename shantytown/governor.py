@@ -92,7 +92,7 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 # The series this governor consumes, named once, and VERIFIED AGAINST THE LIVE
@@ -2952,12 +2952,34 @@ class DrainLedger:
         except (OSError, ValueError, KeyError, TypeError):
             return None
 
-    def tell(self, agent: str, episode: float, at: float, tier: int) -> None:
+    def tell(self, agent: str, episode: float, at: float, tier: int,
+             msg: str | None = None) -> None:
         try:
             self.root.mkdir(parents=True, exist_ok=True)
             from .files import write_json_atomic
             write_json_atomic(self._path(agent), {"episode": episode, "at": at,
-                                                  "tier": tier})
+                                                  "tier": tier, "msg": msg})
+        except OSError:
+            pass
+
+    def message(self, agent: str) -> str | None:
+        """The id of the drain message this agent was sent, if it was recorded.
+
+        KEPT SO THE DRAIN CAN BE TAKEN BACK (aegis-l2m4t2). A durable drain is
+        built to outlive the recipient's session, which is also why it outlived
+        its WINDOW: the tier relaxed, the ledger forgot, and the message sat open
+        until a fresh session read it and stopped itself against a budget that
+        had already refilled. Without the id nothing on the host remembers
+        which message to retract."""
+        try:
+            msg = json.loads(self._path(agent).read_text()).get("msg")
+            return str(msg) if msg else None
+        except (OSError, ValueError, AttributeError):
+            return None
+
+    def forget(self, agent: str) -> None:
+        try:
+            self._path(agent).unlink()
         except OSError:
             pass
 
@@ -2980,21 +3002,36 @@ class DrainLedger:
 # channel caps a body at 493 chars — inbox.py maps it to a tracker item titled
 # `inbox: <body>` under bd's 500-char title limit), so it is a pointer, not a
 # document: the exact commands, in order, and nothing else. Tested for length.
-def drain_message(agent: str, tier: int, pct: float | None) -> str:
+def drain_message(agent: str, tier: int, pct: float | None,
+                  window: str | None = None, reset_at: float | None = None) -> str:
+    """`pct` MUST be the reading of `window` — the window the tier belongs to.
+    Passing the policy's default-window scalar printed "95% tier, at 6%" on a
+    drain issued at seven_day 99% (aegis-l2m4t2; the aegis-cjjdx trap again)."""
     seen = f"{pct:.0f}%" if pct is not None else "signal high"
+    which = f"{window} " if window else ""
+    # THE EXPIRY, IN THE MESSAGE. Retraction closes a stale drain, but a close
+    # can fail; a reader holding a copy must be able to see it is void on its
+    # own. Minute precision, UTC, so it compares against `date -u` at a glance.
+    void = ""
+    if reset_at is not None:
+        stamp = datetime.fromtimestamp(reset_at, tz=timezone.utc)
+        void = f"; VOID after {stamp:%m-%d %H:%M}Z reset"
+    # ASCII ONLY, and measured in BYTES by its test: the durable channel's cap is
+    # 493 bytes (br's 500-byte title minus `inbox: `), and the em dashes this
+    # used to carry cost 3 bytes each — the long-name case was already 494.
     return (
-        f"DRAIN ({tier}% usage tier, at {seen}): stop taking new work. "
-        f"1) commit WIP in your OWN worktree/branch; "
+        f"DRAIN ({which}{tier}% tier, at {seen}{void}): take NO new work. "
+        f"1) commit WIP on your OWN branch; "
         # `st repo push` and not `git push`: a repo can have two live remotes, and
         # `git push <one>` forks it — measured twice in one day (aegis-96few).
         # A drain is the worst moment for that: the work goes to one remote and
         # the agent stops, so nobody is left to notice the half that is dark.
-        f"2) st repo push <repo> {agent} — pushes EVERY remote (rejected? fetch, "
+        f"2) st repo push <repo> {agent} - pushes EVERY remote (rejected? fetch, "
         f"merge, retry; NEVER force); "
-        f"3) st agent stop {agent} --reason '{DRAIN_OK} <repo>@<sha> ...' — that reason "
-        f"IS the report, and unreported counts as NOT drained. "
-        f"Cannot push? st agent stop {agent} --reason '{DRAIN_FAIL} <why>' and escalate "
-        f"— never die silently on unpushed work."
+        f"3) st agent stop {agent} --reason '{DRAIN_OK} <repo>@<sha>' - that "
+        f"reason IS the report; unreported = NOT drained. "
+        f"Cannot push? st agent stop {agent} --reason '{DRAIN_FAIL} <why>' and "
+        f"escalate; never die silently on unpushed work."
     )
 
 
@@ -3007,12 +3044,43 @@ class Drainer:
     `stops` is the FilesStops the agents write when they stop themselves.
     """
 
-    def __init__(self, root, deliver, stops, *, log=None, now=time.time):
+    def __init__(self, root, deliver, stops, *, log=None, now=time.time,
+                 retract=None):
         self.ledger = DrainLedger(root)
-        self._deliver = deliver              # (agent_name, body) -> str (msg id)
+        self._deliver = deliver              # (agent_name, body) -> msg or id
         self._stops = stops
         self._log = log or (lambda msg: None)
         self._now = now
+        # (agent_name, msg_id) -> None: close a drain that no longer applies
+        # (aegis-l2m4t2). Optional so a report-only Drainer needs no inbox.
+        self._retract = retract
+
+    def _take_back(self, name: str, why: str) -> bool:
+        """Retract one agent's outstanding drain. True when nothing is left open.
+
+        A FAILED retraction keeps the ledger entry, so the next pass retries it.
+        Forgetting it would recreate the defect this exists to fix: an open drain
+        and no record anywhere of which message it was."""
+        msg = self.ledger.message(name)
+        if msg is not None and self._retract is not None:
+            try:
+                self._retract(name, msg)
+            except Exception as e:           # noqa: BLE001 — retried next pass
+                self._log(f"⚠ drain: could NOT retract {name}'s stale drain {msg} "
+                          f"({type(e).__name__}: {str(e)[:80]}) — retrying next pass")
+                return False
+            self._log(f"drain RETRACTED for {name} ({msg}): {why}")
+        self.ledger.forget(name)
+        return True
+
+    def relax(self, why: str) -> None:
+        """The drain no longer applies: take back every message it sent.
+
+        Only ever called on a POSITIVE reading that the tier is gone. Never on a
+        lost signal — a blind governor retracts nothing, for the same reason it
+        drains nothing: a probe fault must not move the fleet in either direction."""
+        for name in self.ledger.agents():
+            self._take_back(name, why)
 
     def sweep(self, agents, verdict: Verdict, episode: float,
               *, live=None, catalog=None) -> list[Drained]:
@@ -3023,10 +3091,29 @@ class Drainer:
         on some future relaunch would instruct it to stop the moment it comes
         back — a self-perpetuating shutdown nobody asked for.
         """
-        if not verdict.tier or verdict.signal_lost:
-            self.ledger.clear()
+        if verdict.signal_lost:
+            # BLIND: tell nobody, take back nothing, and KEEP the ledger. Clearing
+            # it here used to discard the only record of which messages were out,
+            # so a drain whose window reset during an outage could never be
+            # retracted afterwards (aegis-l2m4t2).
+            return []
+        if not verdict.tier:
+            self.relax("the tier relaxed — the budget it guarded is no longer "
+                       "at the drain threshold")
             return []
         excluded = [a for a in agents if verdict.excludes(a, catalog)]
+        excluded_names = {a.name for a in excluded}
+        # A drain from an EARLIER episode, or to an agent this tier no longer
+        # excludes, is void now even though a tier is engaged: withdraw it
+        # before anything new is sent.
+        for name in self.ledger.agents():
+            prior = self.ledger.told(name)
+            if prior is None:
+                continue
+            if prior[0] != episode:
+                self._take_back(name, "superseded by a new governor episode")
+            elif name not in excluded_names:
+                self._take_back(name, "the engaged tier no longer excludes it")
         if not excluded:
             return []
         # DRAIN FROM THE TAIL — lowest survival rank first, so the last agents
@@ -3043,9 +3130,14 @@ class Drainer:
             prior = self.ledger.told(a.name)
             if prior is not None and prior[0] == episode:
                 continue                     # already told, this episode
-            body = drain_message(a.name, verdict.tier.at, verdict.pct)
+            window = verdict.tier.window
+            body = drain_message(
+                a.name, verdict.tier.at,
+                verdict.by_window.get(window, verdict.pct) if window else verdict.pct,
+                window=window,
+                reset_at=verdict.resets.get(window) if window else None)
             try:
-                self._deliver(a.name, body)
+                sent = self._deliver(a.name, body)
             except Exception as e:           # noqa: BLE001 — one failure is not the sweep
                 # LOUD, and NOT recorded as told: an undelivered drain must be
                 # retried next pass, and recording it would make the report say
@@ -3053,7 +3145,9 @@ class Drainer:
                 self._log(f"⚠ drain: could NOT reach {a.name} "
                           f"({type(e).__name__}: {str(e)[:80]}) — retrying next pass")
                 continue
-            self.ledger.tell(a.name, episode, self._now(), verdict.tier.at)
+            msg_id = getattr(sent, "id", sent)
+            self.ledger.tell(a.name, episode, self._now(), verdict.tier.at,
+                             msg=str(msg_id) if msg_id else None)
             self._log(f"DRAIN {a.name}: told to push and stop "
                       f"({verdict.tier.at}% tier)")
         return self.report(episode)
