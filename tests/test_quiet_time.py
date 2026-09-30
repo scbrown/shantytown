@@ -271,3 +271,20 @@ def test_no_healthy_observation_still_reports_aggregate_unknown():
     status = quiet.Status((('gaming', gaming.Status('unknown')), ('media', quiet.Observation('unknown'))))
     assert status.state == 'unknown' and not status.held
     assert quiet.Status((('gaming', gaming.Status()), ('media', quiet.Observation('unknown')))).state == 'unknown'
+
+
+@pytest.mark.parametrize('state, rc', [('shader', 1), ('gaming', 1), ('clear', 0)])
+def test_status_exit_defers_heavy_work_while_throttled(tmp_path, monkeypatch, state, rc):
+    """aegis-da2tfj review (sattler): `hold gaming --status` is the admission gate for work that
+    runs OUTSIDE the throttled pane scopes - the CD cargo build (deploy-service.sh), the cargo
+    wrapper (cargo-project-target.sh) and the Trivy/CVE scan (cve-review/run.sh). Each proceeds
+    on 0 and defers on 1. A shader compile is not a dispatch hold, but it IS a throttle, so a
+    heavy build or scan must defer through it; otherwise it starts during a real launch's
+    pre-reaper shader phase."""
+    configure(tmp_path)
+    appids = ('42',) if state == 'gaming' else ()
+    monkeypatch.setattr(gaming, 'read', lambda *a, **k: gaming.Status(state, appids, observed=1000))
+    monkeypatch.setattr(quiet, '_read', lambda *a, **k: quiet.Observation('clear'))
+    monkeypatch.setattr(cli, '_warn_if_no_store', lambda a: None)
+    assert cli.main(['--root', str(tmp_path), 'hold', 'gaming', '--status']) == rc
+    assert cli.main(['--root', str(tmp_path), 'hold', 'all', '--status']) == rc

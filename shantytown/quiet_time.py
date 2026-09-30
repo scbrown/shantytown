@@ -42,13 +42,24 @@ class Status:
         return bool(self.reasons)
 
     @property
+    def throttled(self):
+        """Crew CPU slowdown applies. A superset of held: gaming's `shader` state
+        (a Steam precompile with no game) throttles without holding dispatch
+        (aegis-da2tfj)."""
+        return any(getattr(s, 'throttled', s.held) for _, s in self.entries)
+
+    @property
     def state(self):
         if self.held:
             return 'manual' if all(s.state == 'manual' for _, s in self.entries if s.held) else 'active'
         # A healthy negative is a usable admission decision. An unavailable
         # peer remains visible in its own metrics/rendering, not an outage of
         # every consumer (notably while a new detector awaits its first probe).
-        return ('clear' if any(s.state == 'clear' for _, s in self.entries) else
+        # A shader-only phase is CLEAR for admission: dispatch is not held, and it is
+        # reported as throttled instead. Surfacing it as its own aggregate state would
+        # send the coordinator a SHADER message and then a false "HOLD LIFTED" for
+        # every background Steam precompile.
+        return ('clear' if any(s.state in {'clear', 'shader'} for _, s in self.entries) else
                 'unknown' if any(s.state == 'unknown' for _, s in self.entries) else 'off')
 
     @property
@@ -66,6 +77,8 @@ class Status:
                 'quiet-time observation UNKNOWN — automatic hold not applied' if self.state == 'unknown' else
                 'QUIET-TIME HOLD LIFTED — resume per the budget governor, not automatically to cap.'
                 if self.state == 'clear' else 'quiet-time detection off')
+        if self.throttled and not self.held:
+            text += ' Steam shader compile with no game: crew CPU throttled, dispatch NOT held.'
         if self.game_present_idle:
             text += ' game_present_idle — weak activity evidence never lifts gaming.'
         return text + (f' UNKNOWN detectors: {failures}.' if failures else '')
@@ -200,6 +213,9 @@ def metrics(status):
     text = gaming.metrics(dict(entries).get('gaming', gaming.Status()))
     text += '# TYPE aegis_quiet_time_hold_active gauge\n'
     text += f'aegis_quiet_time_hold_active {int(status.held)}\n'
+    text += '# HELP aegis_quiet_time_throttled Crew CPU slowdown applies (a hold, or a shader compile).\n'
+    text += '# TYPE aegis_quiet_time_throttled gauge\n'
+    text += f'aegis_quiet_time_throttled {int(getattr(status, "throttled", status.held))}\n'
     for name, value in entries:
         text += f'aegis_quiet_time_detector_active{{reason="{name}"}} {int(value.held)}\n'
         text += f'aegis_quiet_time_probe_ok{{reason="{name}"}} {int(value.state not in {"unknown", "off"})}\n'

@@ -10643,8 +10643,10 @@ def _cmd_hold(a) -> int:
         try:
             panes = _panes(a)
             pids = [(card.name, pid) for card in _registry(a).all().exact()
-                    if (pid := panes.pane_pid(_session_for(card)))] if status.held else []
-            for line in gaming_scopes.reconcile(root, status.held, pids):
+                    if (pid := panes.pane_pid(_session_for(card)))] if status.throttled else []
+            # throttled, not held: a Steam shader compile with no game bounds the crew
+            # without holding dispatch (aegis-da2tfj).
+            for line in gaming_scopes.reconcile(root, status.throttled, pids):
                 print(line)
                 slowdown_unknown |= "UNKNOWN" in line
         except Exception as exc:
@@ -10672,7 +10674,12 @@ def _cmd_hold(a) -> int:
         if sent:
             print("quiet-time advisory delivered to coordinator: " + ", ".join(sent))
     if a.status:
-        return CANNOT_TELL if status.state == "unknown" else int(status.held)
+        # THROTTLED, not held (aegis-da2tfj review). This exit code is the admission gate
+        # for heavy work that runs OUTSIDE the throttled pane scopes: the CD cargo build,
+        # the cargo wrapper and the CVE scan all proceed on 0 and defer on 1. A shader
+        # compile holds no dispatch, but a build must still defer through it, or it starts
+        # during a real launch's pre-reaper shader phase.
+        return CANNOT_TELL if status.state == "unknown" else int(status.throttled)
     return CANNOT_TELL if status.state == "unknown" or slowdown_unknown else OK
 
 

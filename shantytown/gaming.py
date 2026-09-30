@@ -53,6 +53,18 @@ class Status:
         return self.state in {"gaming", "manual", "ending"}
 
     @property
+    def throttled(self) -> bool:
+        """CPU slowdown applies: every hold, plus a shader compile with no game.
+
+        `shader` is the SPLIT (aegis-da2tfj). Steam's fossilize_replay competes for
+        CPU, so the crew is bounded, but with no game running there is nothing to
+        protect by holding dispatch. A bare precompile used to raise the full hold
+        and keep it for the whole launch grace after the shaders were gone: 300s of
+        held dispatch for a two-minute compile.
+        """
+        return self.held or self.state == "shader"
+
+    @property
     def refusal(self) -> str:
         return ("GOVERNOR HOLD — gaming; launches, dispatch and respawns held. "
                 "Wait for the session to end or clear the manual hold.") if self.held else ""
@@ -89,6 +101,9 @@ class Status:
                     "GAMING HOLD remains active; activity telemetry never auto-lifts it.")
         if self.held:
             return self.refusal + " Recommend leads only; defer heavy local work."
+        if self.state == "shader":
+            return ("SHADER COMPILE — Steam is precompiling with no game running; crew CPU is "
+                    "throttled, dispatch is NOT held. A game appearing raises the full hold.")
         if self.state == "clear":
             return "GAMING HOLD LIFTED — resume per the budget governor, not automatically to cap."
         if self.state == "unknown":
@@ -149,7 +164,7 @@ def read(root: Path, *, now: float | None = None, spec=None) -> Status:
         observed = float(data["observed"])
         if not 0 <= now - observed <= MAX_AGE:
             raise ValueError("scheduled probe is stale or future-dated")
-        if data["state"] not in {"gaming", "ending", "clear", "unknown"}:
+        if data["state"] not in {"gaming", "ending", "shader", "clear", "unknown"}:
             raise ValueError("invalid probe state")
         return Status(data["state"], tuple(data["appids"]), float(data["since"]),
                       observed, data.get("error", ""), data.get("gpu_busy"),
@@ -228,9 +243,18 @@ def probe(root: Path, *, proc: Path = Path("/proc"), now: float | None = None, s
                     shader_since = None
             fresh_shaders = bool(shaders) and (
                 shader_since is None or now - float(shader_since) <= shader_grace)
-            if appids or fresh_shaders:
+            in_session = automatic in {"gaming", "ending"}
+            if appids or (fresh_shaders and in_session):
+                # A game, or shaders inside a game session (the aegis-yyyez0 launch
+                # fix: a brief reaper gap during a precompile must not release).
                 state, absent = "gaming", None
-            elif automatic in {"gaming", "ending"}:
+            elif fresh_shaders or (automatic == "shader" and not shaders
+                                   and shader_since is not None):
+                # No game: throttle only. The second arm keeps the state across a
+                # gap between precompile batches until the lift delay has passed, so
+                # the slowdown does not flap on and off with each batch.
+                state, absent = "shader", None
+            elif in_session:
                 absent = now if absent is None else float(absent)
                 # Brief reaper disappearance during launch must not release workers.
                 if now < launch_until:
