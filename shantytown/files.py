@@ -77,6 +77,16 @@ def write_text_atomic(path: Path, text: str) -> None:
         except OSError:
             pass
         raise
+    # The rename is durable only once the DIRECTORY entry is on disk. Best-effort:
+    # the file is already correct for every reader, and some filesystems refuse it.
+    try:
+        dfd = os.open(target.parent, os.O_RDONLY)
+        try:
+            os.fsync(dfd)
+        finally:
+            os.close(dfd)
+    except OSError:
+        pass
 
 
 class FilesRegistry:
