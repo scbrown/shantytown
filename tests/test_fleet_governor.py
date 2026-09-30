@@ -584,3 +584,40 @@ def test_cycle_holds_admission_lock_from_preflight_through_relaunch(tmp_path, mo
     assert rc == cli.OK and mode == cycle.RELAUNCH
     assert actions == ['preflight', 'stop', 'launch']
     assert not held
+
+
+def test_governor_json_carries_what_the_status_bar_needs(tmp_path, monkeypatch, capsys):
+    """aegis-apfuey: the shanty bar parsed the PROSE and went blind ("usage ?")
+    when the prose changed shape. The bar pins the versioned JSON instead, so it
+    must carry what the bar draws: per window pct / next tier / published, and
+    the lane's effect (the tier sentence). Built from the SAME computation as the
+    prose, so the two cannot disagree -- asserted here, not assumed."""
+    from shantytown import config
+    import time
+    root = _roster(tmp_path, {'local': 'local-pane'})
+    (root / 'shantytown.toml').write_text('[host]\nname="desktop"\n')
+    cfg = config.load(root)
+    policy = gov.Policy(tiers=(gov.Tier(at=50, min_priority=1),), max_agents=3)
+    local = gov.Governor(policy, FreshestReader({
+        'desktop': {'five_hour': Reading(pct=10, at=time.time())}}))
+    monkeypatch.setattr(cli, '_local_governors', lambda a: (cfg, {'base': local}))
+    monkeypatch.setattr(cli, 'Tmux', lambda *a, **k: _Panes({'local-pane': IDLE_SCREEN}))
+    args = _Args(root)
+    args.governor = args.json = True
+    assert cli._cmd_crew(args) == cli.OK
+    out = json.loads(capsys.readouterr().out)
+    assert out['version'] == 1
+    base = out['governors']['base']
+    assert base['windows']['five_hour'] == dict(published=True, pct=10, next=50,
+                                                reset_seconds=base['windows']['five_hour']['reset_seconds'])
+    # CONTROL: an unpublished window is published=false with NULL numbers, never 0.
+    assert base['windows']['seven_day'] == dict(published=False, pct=None, next=None,
+                                                reset_seconds=None)
+    assert base['effect'] == 'no restriction declared'
+    args.json = False
+    assert cli._cmd_crew(args) == cli.OK
+    # The prose on this path is the single-lane form (`ok 10/50/- ?/?/? CAP[..]`).
+    # Three prose shapes exist, which is exactly why the bar pins the JSON; here
+    # only the numbers are cross-checked against it.
+    first = capsys.readouterr().out.splitlines()[0].split()
+    assert first[0] == 'ok' and first[1].split('/')[:2] == ['10', '50'] and first[2] == '?/?/?'

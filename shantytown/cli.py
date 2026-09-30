@@ -578,6 +578,43 @@ def _account_launch_refusal(a, card, *, replacing=False):
         return f'account governor cannot establish admission ({type(exc).__name__})'
 
 
+
+def _governor_windows(g) -> dict:
+    """Per window: (pct, next_at, reset_seconds), or None when not published.
+
+    ONE computation for both `st crew --governor` forms (aegis-apfuey). The prose
+    line and the JSON used to be built separately, and the status bar parsed the
+    prose; when the prose changed shape, the bar went blind while st exited 0."""
+    out = {}
+    now = time.time()
+    for window in (gov_mod.FIVE_HOUR, gov_mod.SEVEN_DAY):
+        r = g.reader.read_all().get(window)
+        if r is None or r.lost(now, g.policy.max_age_seconds):
+            out[window] = None
+            continue
+        pct = int(round(r.pct))
+        thresholds = sorted(t.at for t in g.policy.tiers_for(window) if t.at > pct)
+        left = r.resets_in(now)
+        out[window] = (pct, thresholds[0] if thresholds else None,
+                       None if left is None else max(0, int(left)))
+    return out
+
+
+def _window_prose(b) -> str:
+    if b is None:
+        return '?/?/?'
+    pct, nxt, reset = b
+    return f"{pct}/{'-' if nxt is None else nxt}/{'-' if reset is None else reset}"
+
+
+def _window_wire(b) -> dict:
+    """`published: false` with null numbers, never a zero: an unpublished window
+    must not be able to read as a low one."""
+    if b is None:
+        return dict(published=False, pct=None, next=None, reset_seconds=None)
+    pct, nxt, reset = b
+    return dict(published=True, pct=pct, next=nxt, reset_seconds=reset)
+
 def _crew_account_governor(a):
     from . import fleet_governor as fg
     from .deployment import local_host
@@ -591,8 +628,15 @@ def _crew_account_governor(a):
     cfg, governors = _governors(a)
     fleet = getattr(a, '_account_governor', None)
     if fleet is None:
-        print(json.dumps(fg.snapshot(local_host(a.root) or 'local', governors,
-                                     _governor_agents(a))))
+        snap = fg.snapshot(local_host(a.root) or 'local', governors, _governor_agents(a))
+        # The status bar reads THIS on a host with no account fleet, so it carries
+        # the same bar fields as the fleet form (aegis-apfuey). Added here, not in
+        # fg.snapshot: that is the host-to-host wire format and --local stays it.
+        for name, g in governors.items():
+            snap['governors'][name].update(
+                windows={w: _window_wire(b) for w, b in _governor_windows(g).items()},
+                effect=g.evaluate(persist=False).effect())
+        print(json.dumps(snap))
         return OK
     counts = fleet.counts()
     verdicts = {name: g.evaluate(persist=False) for name, g in governors.items()}
@@ -605,7 +649,14 @@ def _crew_account_governor(a):
                                   signal_lost=v.signal_lost, frozen=v.frozen,
                                   why=v.why, policy_host=fleet.policy_hosts[name],
                                   provenance=governors[name].reader.provenance,
-                                  readings=fg.observations(governors[name]))
+                                  readings=fg.observations(governors[name]),
+                                  # aegis-apfuey: what the status bar needs, from the
+                                  # SAME computation as the prose line, so a bar that
+                                  # pins this JSON cannot disagree with `st crew
+                                  # --governor`. Additive: version stays 1.
+                                  windows={w: _window_wire(b) for w, b in
+                                           _governor_windows(governors[name]).items()},
+                                  effect=v.effect())
                                   for name, v in verdicts.items()},
                               balance=_balance_wire(fleet))))
     else:
@@ -613,18 +664,7 @@ def _crew_account_governor(a):
             print('off' if not fleet.errors else 'lost ' + fleet.fallback())
         for name, v in verdicts.items():
             g = governors[name]
-            parts = []
-            for window in (gov_mod.FIVE_HOUR, gov_mod.SEVEN_DAY):
-                r = g.reader.read_all().get(window)
-                if r is None or r.lost(time.time(), g.policy.max_age_seconds):
-                    parts.append('?/?/?')
-                    continue
-                pct = int(round(r.pct))
-                thresholds = sorted(t.at for t in g.policy.tiers_for(window) if t.at > pct)
-                next_at = thresholds[0] if thresholds else '-'
-                left = r.resets_in(time.time())
-                reset = '-' if left is None else str(max(0, int(left)))
-                parts.append(f'{pct}/{next_at}/{reset}')
+            parts = [_window_prose(b) for b in _governor_windows(g).values()]
             sources = ','.join(f'{w}@{h}' for w, h in g.reader.provenance.items())
             print(f'{name} {"lost" if v.signal_lost else "ok"} '
                   + ('' if v.signal_lost else ' '.join(parts))
