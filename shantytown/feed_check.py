@@ -714,8 +714,9 @@ class TrackerAdapter:
             from .br import in_progress
             value = in_progress(self.tracker)
         else:
-            value = self._legacy("bd", "list", "--status", "in_progress",
-                                 "--json", "--limit", "0")
+            from .inbox import drop_parked
+            value = drop_parked(self._legacy("bd", "list", "--status", "in_progress",
+                                             "--json", "--limit", "0") or [])
         return Answer.complete_read(value, how=f"{self.kind} list in_progress --limit 0")
 
     def blocked(self) -> Answer[list[dict]]:
@@ -940,7 +941,8 @@ def bd_in_progress(cwd: str | None, root=None, reg=None) -> list[dict]:
                        capture_output=True, text=True, timeout=20, cwd=cwd)
     if r.returncode != 0:
         raise RuntimeError(f"bd list failed: {r.stderr.strip()}")
-    return json.loads(r.stdout)
+    from .inbox import drop_parked      # parked is not active (aegis-1d3fze)
+    return drop_parked(json.loads(r.stdout))
 
 
 def bd_blocked(cwd: str | None, root=None, reg=None) -> list[dict]:

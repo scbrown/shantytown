@@ -10,7 +10,7 @@ import tempfile
 from .beads import (BeadsTracker, _PLATE_RANK, _priority, plate_key,
                     ready_ids_or_none, name_the_blocker)
 from .protocols import is_blocked
-from .inbox import is_message, is_unworkable
+from .inbox import drop_parked, is_message, is_unworkable
 from .protocols import BLOCKER_KIND_LABELS, WorkItem
 
 
@@ -207,12 +207,14 @@ def ready(tracker: BrTracker) -> list[dict]:
 
 
 def in_progress(tracker: BrTracker) -> list[dict]:
-    """The complete active-anchor set from br."""
+    """The complete active-anchor set from br: in_progress, minus rows parked
+    by a future defer_until (aegis-1d3fze; see inbox.drop_parked)."""
     r = tracker._bd("list", "--status", "in_progress", "--json", "--limit", "0")
     if r.returncode != 0:
         raise RuntimeError(f"br list failed: {r.stderr.strip()[:120]}")
     payload = json.loads(r.stdout) if r.stdout.strip() else {}
-    return payload.get("issues", []) if isinstance(payload, dict) else payload
+    rows = payload.get("issues", []) if isinstance(payload, dict) else payload
+    return drop_parked(rows)
 
 
 def _warn_stderr(note: str) -> None:
