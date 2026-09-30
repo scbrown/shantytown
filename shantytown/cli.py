@@ -10566,8 +10566,10 @@ def _cmd_hold(a) -> int:
         try:
             panes = _panes(a)
             pids = [(card.name, pid) for card in _registry(a).all().exact()
-                    if (pid := panes.pane_pid(_session_for(card)))] if status.held else []
-            for line in gaming_scopes.reconcile(root, status.held, pids):
+                    if (pid := panes.pane_pid(_session_for(card)))] if status.throttled else []
+            # throttled, not held: a Steam shader compile with no game bounds the crew
+            # without holding dispatch (aegis-da2tfj).
+            for line in gaming_scopes.reconcile(root, status.throttled, pids):
                 print(line)
                 slowdown_unknown |= "UNKNOWN" in line
         except Exception as exc:
