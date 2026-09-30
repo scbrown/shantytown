@@ -402,7 +402,14 @@ Four things, and each one has to earn its line:
 
 Gas Town's primer has a `--hook` mode that fires at SessionStart and mutates state. That coupling is
 why "did I get primed?" became unanswerable when the hook silently didn't register. `st anchor` is
-a pure read, safe to run twice, and if you want it at session start you wire it there yourself.
+a pure read, safe to run twice.
+
+st wires it into SessionStart for every role (`shantytown.session_anchor`, aegis-7edci3). That
+hook runs the same render in-process and adds role startup instructions. It fires on startup,
+clear and compact, and a plate it could not read is stated in one line, never rendered as
+silence. "Did I get anchored?" is answerable: `st ops hooks check` verifies st's own
+emitted hooks (`st-session-anchor`) alongside registered bundles, and reports MISSING, or names
+the running agents that were launched without it.
 
 ## `st sling` — design handoff
 

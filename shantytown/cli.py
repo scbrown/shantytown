@@ -1040,7 +1040,9 @@ def _cmd_hooks(a) -> int:
             print(f"BROKEN {f}: {r}")
         return 1 if reg.errors else 0
     agent_roles, layers = _hooks_check_context(a)
-    res = hb.check(root, agent_roles=agent_roles, other_layers=layers)
+    from .runtime import builtin_hook_bundles
+    res = hb.check(root, agent_roles=agent_roles, other_layers=layers,
+                   builtin=builtin_hook_bundles(root))
     try:
         from .deployment import local_host as _lh
         cards = [c for c in _registry(a).all().exact() if c.host in (None, _lh(a.root))]
