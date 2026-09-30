@@ -11497,8 +11497,22 @@ def _tend_once(a, quiet: bool = False) -> int:
         # A DIFFERENT condition and a DIFFERENT action from age: these beads do
         # not need their blocker chased; every issue blocker is already closed
         # and the stale status itself is what hides them (aegis-mwc5j).
+        # EVENT-FIRST (aegis-sfpfwf): chaski emits `workitem-unblocked` when a
+        # WorkItem's last blocker resolves. The consumer re-checks br and CORRECTS a
+        # stale `blocked` status; deferrals and non-bead blocker labels are reported,
+        # never lifted. It runs BEFORE the scanner, so a corrected bead is no longer
+        # blocked when the scanner looks, and the scanner becomes the backstop: a
+        # mis-statused bead with NO firing means the emitter missed it.
+        from . import unblocked_events as unblocked_mod
+        consumer = unblocked_mod.UnblockedEventConsumer(
+            Path(a.root), _registry(a), panes, log=_log)
+        unblocked = _sweep("unblocked-events", consumer.sweep)
+        if unblocked:
+            print(f"  ✓ acted on {len(unblocked)} unblocked event(s): "
+                  f"{', '.join(f'{b} {v}' for b, v in unblocked)}", file=sys.stderr)
         misstatused = _sweep("blocked-misstatus", lambda: notify_mod.BlockedMisstatusAlerter(
-            Path(a.root), _registry(a), panes, log=_log).sweep())
+            Path(a.root), _registry(a), panes, log=_log,
+            seen=consumer.seen_foci).sweep())
         if misstatused:
             print(f"  ⚠ found {len(misstatused)} MIS-STATUSED blocked bead(s) "
                   f"whose dependencies are ALL CLOSED: {', '.join(misstatused)}",
