@@ -645,3 +645,68 @@ def test_the_real_evidence_runner_is_fail_closed():
     assert hb._run_evidence("echo 1790000000")[0] == 1790000000.0
     assert hb._run_evidence("echo not-a-number")[0] is None
     assert hb._run_evidence("exit 3")[0] is None
+
+
+# --- register re-renders EVERY emitted role file (the set check inspects) --------------
+
+def _hooks_cmd(root, cmd, **kw):
+    from types import SimpleNamespace
+    from shantytown import cli
+    return cli._cmd_hooks(SimpleNamespace(root=root, hooks_cmd=cmd, json=False, **kw))
+
+
+def _emit_all(root):
+    return [emit(root, h, r) for h, r in (("claude", "worker"), ("codex", "worker"),
+                                          ("codex", "lead"), ("codex", "administrator"))]
+
+
+def test_register_renders_into_role_files_no_card_uses(root):
+    """Measured 2026-09-30: a codex notify bundle landed in codex/worker (a card
+    re-emitted it) and was `missing` in codex/lead and codex/administrator, which
+    no card named, so nothing re-rendered them while check still inspected them."""
+    _emit_all(root)
+    src = root / "src-notifier.json"
+    src.write_text(json.dumps(bundle(name="notifier", codex_notify=NOTIFY)))
+    assert _hooks_cmd(root, "register", file=src, no_apply=False) == 0
+    res = hb.check(root)
+    assert res.items and {i["configured"] for i in res.items} == {"ok"}, \
+        [(i["harness"], i["role"], i["event"], i["configured"]) for i in res.items]
+    for r in ("worker", "lead", "administrator"):
+        doc = tomllib.loads((root / "settings" / "codex" / r / "config.toml").read_text())
+        assert doc["notify"] == NOTIFY
+
+
+def test_register_no_apply_leaves_files_until_apply(root):
+    """The control: without the re-render the same files ARE missing, so the test
+    above measures the re-render and not a check that always says ok."""
+    _emit_all(root)
+    src = root / "src-notifier.json"
+    src.write_text(json.dumps(bundle(name="notifier", codex_notify=NOTIFY)))
+    assert _hooks_cmd(root, "register", file=src, no_apply=True) == 0
+    assert "missing" in {i["configured"] for i in hb.check(root).items}
+    assert _hooks_cmd(root, "apply") == 0
+    assert {i["configured"] for i in hb.check(root).items} == {"ok"}
+
+
+def test_unregister_re_renders_so_the_bundle_hooks_leave_every_file(root):
+    _emit_all(root)
+    src = root / "src-example.json"
+    src.write_text(json.dumps(bundle()))
+    _hooks_cmd(root, "register", file=src, no_apply=False)
+    assert EXAMPLE_CMD in (root / "settings" / "codex" / "lead" / "config.toml").read_text()
+    assert _hooks_cmd(root, "unregister", name="example", no_apply=False) == 0
+    for f in ("worker.settings.json", "codex/worker/config.toml", "codex/lead/config.toml",
+              "codex/administrator/config.toml"):
+        assert EXAMPLE_CMD not in (root / "settings" / f).read_text(), f
+
+
+@pytest.mark.xfail(strict=True, reason="aegis-ipjh44: render preserves a top-level key st "
+                   "no longer owns, so a removed notify owner's argv is orphaned")
+def test_unregister_drops_an_orphaned_codex_notify(root):
+    _emit_all(root)
+    src = root / "src-notifier.json"
+    src.write_text(json.dumps(bundle(name="notifier", codex_notify=NOTIFY)))
+    _hooks_cmd(root, "register", file=src, no_apply=False)
+    _hooks_cmd(root, "unregister", name="notifier", no_apply=False)
+    doc = tomllib.loads((root / "settings" / "codex" / "lead" / "config.toml").read_text())
+    assert doc.get("notify") != NOTIFY

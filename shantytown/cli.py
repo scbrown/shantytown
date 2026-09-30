@@ -943,6 +943,30 @@ def _hooks_check_context(a) -> tuple[dict[str, str], list]:
     return roles, layers
 
 
+def _hooks_reassert(root) -> list[Path]:
+    """Re-render EVERY role settings file st has emitted, so a registry change
+    reaches the same set of files `st ops hooks check` inspects (aegis-68j0ys).
+
+    `st fleet roles set` renders only the (harness, role) pairs some card names,
+    so a role file no card currently uses (a codex lead file, with no codex lead
+    today) kept its old hooks and check reported the new bundle `missing` there,
+    measured 2026-09-30. Per-agent files are named, not rewritten: they are
+    rendered at that agent's launch, through the same seam."""
+    from . import hook_bundles as hb
+    files, unresolved = hb.emitted_role_files(root)
+    written: list[Path] = []
+    for harness, role, path in files:
+        if path.name.startswith("agent-") or path.parent.name.startswith("agent-"):
+            print(f"  not re-rendered (per-agent, rendered at launch): {path}")
+            continue
+        written += _emit_role_settings(Path(root), {role}, harness_name=harness)
+    for p in unresolved:
+        print(f"  not re-rendered (per-agent, rendered at launch): {p}")
+    for p in written:
+        print(f"  rendered {p}")
+    return written
+
+
 def _cmd_hooks(a) -> int:
     """`st ops hooks` (aegis-68j0ys). st keeps registered bundles rendered; it
     knows nothing about what is in them."""
@@ -956,9 +980,10 @@ def _cmd_hooks(a) -> int:
             print(f"refused: {e}", file=sys.stderr)
             return 1
         print(f"{name}: {outcome}")
+        if outcome != "unchanged" and not a.no_apply:
+            _hooks_reassert(root)
         if outcome != "unchanged":
-            print("  takes effect in emitted settings on the next `st fleet roles set`, "
-                  "and in a running agent at its next launch")
+            print("  a running agent picks it up at its next launch")
         return 0
     if a.hooks_cmd == "unregister":
         try:
@@ -967,7 +992,12 @@ def _cmd_hooks(a) -> int:
             print(f"refused: {e}", file=sys.stderr)
             return 1
         print(f"{a.name}: {'removed' if gone else 'not registered'}")
+        if gone and not a.no_apply:
+            _hooks_reassert(root)
         return 0 if gone else 1
+    if a.hooks_cmd == "apply":
+        _hooks_reassert(root)
+        return 0
     if a.hooks_cmd == "list":
         reg = hb.load(root)
         if a.json:
@@ -1602,10 +1632,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     hk = leaf("hooks", help="registered hook bundles: register, list, check, unregister")
     hk_sub = hk.add_subparsers(dest="hooks_cmd", required=True)
-    hk_reg = hk_sub.add_parser("register", help="validate a bundle file and add it to the registry")
+    hk_reg = hk_sub.add_parser("register", help="validate a bundle file, add it to the registry, "
+                                                  "and re-render every emitted role file")
     hk_reg.add_argument("file", type=Path)
-    hk_un = hk_sub.add_parser("unregister", help="remove a bundle by name")
+    hk_reg.add_argument("--no-apply", action="store_true",
+                        help="only install into the registry; render later with `st ops hooks apply`")
+    hk_un = hk_sub.add_parser("unregister", help="remove a bundle by name, and re-render")
     hk_un.add_argument("name")
+    hk_un.add_argument("--no-apply", action="store_true",
+                       help="only remove from the registry; render later with `st ops hooks apply`")
+    hk_sub.add_parser("apply", help="re-render every emitted role settings file from the registry "
+                                    "(idempotent): the files `check` inspects")
     hk_ls = hk_sub.add_parser("list", help="registered bundles")
     hk_ls.add_argument("--json", action="store_true")
     hk_ck = hk_sub.add_parser("check", help="is every registered hook in every emitted role file? "
