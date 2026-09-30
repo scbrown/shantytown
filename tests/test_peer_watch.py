@@ -392,3 +392,40 @@ def test_cli_refuses_without_a_declared_host(tmp_path, wired, capsys):
     (root / "shantytown.toml").write_text("")
     assert main(["--root", str(root), "fleet", "watch"]) == 1
     assert "no [host] name" in capsys.readouterr().err
+
+
+# ------------------------------------------------ aegis-emretk: sticky sentinel --
+
+def test_a_failed_first_pass_does_not_poison_the_peer_for_every_later_pass(tmp_path):
+    """Mac launchd, 2026-09-30 (hammond). The LAN was blocked, the first pass
+    could not resolve a peer, and the pass PERSISTED the display sentinel
+    "unresolved" as the peer. Every later pass then asked the census for a card
+    literally named "unresolved" and reported "no administrator card" forever,
+    even after the LAN came back. Only an explicit --peer escaped it."""
+    asked = []
+    h = Harness(tmp_path,
+                pw.Observation(pw.UNKNOWN, "host did not answer ssh", peer=None),
+                up())
+    h.probe = lambda name: (asked.append(name), h.script.pop(0))[1]
+    h.run()
+    assert h.state.read().get("peer") in (None, "")   # the sentinel is not stored
+    out = h.run(advance=300)
+    assert asked == [None, None]                       # auto-resolve is retried
+    assert out.verdict == pw.OK
+
+
+def test_a_state_file_already_poisoned_by_the_old_code_heals(tmp_path):
+    asked = []
+    h = Harness(tmp_path, up())
+    h.state.write({"peer": "unresolved"})
+    h.probe = lambda name: (asked.append(name), h.script.pop(0))[1]
+    assert h.run().verdict == pw.OK
+    assert asked == [None]
+
+
+def test_a_resolved_peer_is_still_remembered(tmp_path):
+    asked = []
+    h = Harness(tmp_path, up(), up())
+    h.probe = lambda name: (asked.append(name), h.script.pop(0))[1]
+    h.run(); h.run(advance=300)
+    assert asked == [None, "bea"]                      # CONTROL: real names persist
