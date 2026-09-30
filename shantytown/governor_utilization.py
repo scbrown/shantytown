@@ -73,27 +73,49 @@ class WindowUse:
     pct: float
     elapsed_pct: float | None
     ratio: float | None
-    bound: float
+    bound: float | None
     bound_declared: bool
     why_no_ratio: str
     points: float
     ceiling: float
     resets_in: float | None
+    # The spending envelope's allowance at this elapsed (aegis-zowv5j), in used
+    # percent, or None for a constant-ratio (or undeclared) bound. When set it
+    # is what `under` compares against; `bound` is then only its ratio form.
+    envelope_pct: float | None = None
+
+    @property
+    def load(self) -> float | None:
+        """How close to the bound, as a fraction of it: 1.0 is AT the bound.
+        The one comparable number across a constant bound and an envelope, so
+        "which window is most over" never mixes a ratio with a percentage."""
+        if self.ratio is None:
+            return None
+        if self.envelope_pct is not None:
+            return (self.pct / self.envelope_pct if self.envelope_pct > 0
+                    else (0.0 if self.pct <= 0 else float("inf")))
+        return self.ratio / self.bound
 
     @property
     def under(self) -> bool | None:
         """Under its bound, over it, or unknowable. Never collapse the third."""
-        return None if self.ratio is None else self.ratio < self.bound
+        return None if self.load is None else self.load < 1.0
+
+    def bound_text(self) -> str:
+        if self.envelope_pct is not None:
+            # A ratio is always shown with the numbers it came from: here the
+            # allowance itself, and the elapsed it was read at.
+            return f"vs {self.envelope_pct:.0f}% envelope"
+        return (f"<{self.bound:.2f}x" if self.bound_declared
+                else f"<{self.bound:.2f}x linear")
 
     def render(self) -> str:
-        bound = (f"<{self.bound:.2f}x" if self.bound_declared
-                 else f"<{self.bound:.2f}x linear")
         if self.ratio is None:
             # No number at all, and the reason in its place. A window that cannot
             # be rated must not render as one that was rated and found fine.
             return f"{self.window} unrated ({self.why_no_ratio})"
         return (f"{self.window} {self.pct:.0f}%used/{self.elapsed_pct:.0f}%elapsed "
-                f"={self.ratio:.2f}x {bound} "
+                f"={self.ratio:.2f}x {self.bound_text()} "
                 f"{self.points:.0f}pts/{gov_mod.fmt_eta(self.resets_in)}")
 
 
@@ -190,9 +212,11 @@ def _window_use(policy, window: str, reading, now: float) -> WindowUse | None:
     if reading is None or reading.lost(now, policy.max_age_seconds):
         return None
     pace = policy.pace_for(window) if hasattr(policy, "pace_for") else None
-    bound = pace.ratio if pace is not None else LINEAR
     length = (pace.window_length() if pace is not None
               else gov_mod.WINDOW_LENGTH_S.get(window))
+    frac, _ = gov_mod.window_elapsed(reading.reset_at, now, length)
+    bound = pace.bound(frac) if pace is not None else LINEAR
+    envelope = pace.envelope(frac) if pace is not None else None
     # THE ONE ARITHMETIC CALL, and it is the governor's own. `pace_ratio` already
     # refuses every undefined case with a reason attached — a missing reset, a
     # past reset, a window shorter than its own remaining time. Re-deriving it
@@ -208,9 +232,10 @@ def _window_use(policy, window: str, reading, now: float) -> WindowUse | None:
     ceiling = _ceiling(policy, window)
     return WindowUse(
         window=window, pct=float(reading.pct), elapsed_pct=elapsed,
-        ratio=ratio, bound=float(bound), bound_declared=pace is not None,
+        ratio=ratio, bound=None if bound is None else float(bound),
+        bound_declared=pace is not None,
         why_no_ratio=why, points=max(0.0, ceiling - float(reading.pct)),
-        ceiling=ceiling, resets_in=left)
+        ceiling=ceiling, resets_in=left, envelope_pct=envelope)
 
 
 def assess(harness: str, *, readings, policy, cap: int | None, live: int,
@@ -249,9 +274,13 @@ def assess(harness: str, *, readings, policy, cap: int | None, live: int,
     # a tight five-hour budget can never be outvoted by a comfortable weekly one.
     over = [w for w in rated if not w.under]
     if over:
-        w = max(over, key=lambda x: x.ratio / x.bound)
-        return out(0, f"{w.window} is at {w.ratio:.2f}x against its "
-                      f"{w.bound:.2f}x bound — not under-utilized", "over-pace")
+        w = max(over, key=lambda x: x.load)
+        against = (f"{w.pct:.0f}% used {w.bound_text()} @"
+                   f"{w.elapsed_pct:.0f}%elapsed"
+                   if w.envelope_pct is not None
+                   else f"{w.ratio:.2f}x against its {w.bound:.2f}x bound")
+        return out(0, f"{w.window} is at {against} — not under-utilized",
+                   "over-pace")
 
     # WHICH WINDOW JUSTIFIES THE RECOMMENDATION — the one with the most time
     # left, NOT the most under-spent. Measured on the live fleet 2026-08-29: base
@@ -286,7 +315,10 @@ def assess(harness: str, *, readings, policy, cap: int | None, live: int,
         return out(0, f"{lead.window} is under pace at {lead.ratio:.2f}x with "
                       f"{ready} ready, but the budget controller recommends "
                       f"{creel_delta:+d} — deferring to it", "budget-shrinking")
-    return out(slack, f"{lead.window} at {lead.ratio:.2f}x is under its "
-                      f"{lead.bound:.2f}x bound, {ready} ready, "
+    under = (f"{lead.pct:.0f}% used is under its "
+             f"{lead.envelope_pct:.0f}% envelope @{lead.elapsed_pct:.0f}%elapsed"
+             if lead.envelope_pct is not None
+             else f"{lead.ratio:.2f}x is under its {lead.bound:.2f}x bound")
+    return out(slack, f"{lead.window} at {under}, {ready} ready, "
                       f"{lead.points:.0f} points expire in "
                       f"{gov_mod.fmt_eta(lead.resets_in)}", "fill")
