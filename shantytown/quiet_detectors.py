@@ -32,7 +32,7 @@ class Policy:
 COMMON = {'name', 'kind', 'enabled', 'enter_delay', 'grace', 'lift_delay', 'lift_rule'}
 OPTIONS = {
     'steam': {'game_executable', 'game_arguments', 'shader_executable', 'shader_grace',
-              'steam_appinfo', 'hold_app_types'},
+              'steam_appinfo', 'lift_app_types', 'lift_appids'},
     'process': {'executable', 'arguments', 'min_cpu_percent', 'min_gpu_percent', 'activity_rule'},
     'http_json': {'url', 'items_path', 'count_path', 'match', 'state_path', 'active_values',
                   'auth_header', 'token_file', 'token_ini_section', 'token_ini_key', 'timeout'},
@@ -94,9 +94,12 @@ def parse(raw: dict) -> Policy:
                 number(options.get('shader_grace', 1200), name + '.shader_grace', 86400)
                 if not isinstance(options.get('steam_appinfo', 'x'), str) or not options.get('steam_appinfo', 'x'):
                     raise ValueError(f'quiet_time.{name}.steam_appinfo must be a path')
-                types = options.get('hold_app_types', ['game'])
-                if not isinstance(types, list) or not types or not all(isinstance(t, str) and t for t in types):
-                    raise ValueError(f'quiet_time.{name}.hold_app_types must be a nonempty list of Steam app types')
+                for key in ('lift_app_types', 'lift_appids'):
+                    values = options.get(key, [])
+                    if not isinstance(values, list) or not all(isinstance(v, str) and v for v in values):
+                        raise ValueError(f'quiet_time.{name}.{key} must be a list of nonempty strings')
+                if not all(re.fullmatch(r'[0-9]+', v) for v in options.get('lift_appids', [])):
+                    raise ValueError(f'quiet_time.{name}.lift_appids must be numeric Steam AppIds')
             else:
                 for key in ('min_cpu_percent', 'min_gpu_percent'):
                     if key in options:

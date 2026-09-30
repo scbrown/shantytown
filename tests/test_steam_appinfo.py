@@ -2,8 +2,10 @@
 
 The fixture values are RECORDED from a real appinfo.vdf (v29) on 2026-09-30:
 431730 Aseprite is "Application", 2767030 Marvel Rivals is "Game", 228980 Steamworks
-Common Redistributables is "Tool". The file layout is re-encoded here so the test
-never reads anybody's Steam install.
+Common Redistributables is "Tool", and — the reason the rule is a LIFT-list —
+2708610 TRIBES 3: Rivals Playtest is "Beta" and 2676230 FiveM is "Application"
+(sattler-rev-127). The file layout is re-encoded here so the test never reads
+anybody's Steam install.
 """
 import struct
 
@@ -15,6 +17,8 @@ RECORDED = {
     431730: {"type": "Application", "name": "Aseprite"},
     2767030: {"type": "Game", "name": "Marvel Rivals"},
     228980: {"type": "Tool", "name": "Steamworks Common Redistributables"},
+    2708610: {"type": "Beta", "name": "TRIBES 3: Rivals Playtest"},
+    2676230: {"type": "Application", "name": "FiveM"},
 }
 
 
@@ -119,20 +123,57 @@ def test_the_ignored_app_is_recorded_so_a_clear_is_explainable(tmp_path, appinfo
 
 
 def test_unknown_type_keeps_holding(tmp_path):
-    """No appinfo at all is exactly the behaviour before this change."""
+    """No appinfo at all is the behaviour before this change, for any unnamed AppId."""
     (tmp_path / "gaming").mkdir()
     proc = tmp_path / "proc"
-    reaper(proc, 10, 431730)
+    reaper(proc, 10, 2767030)
     spec = deployed_spec(tmp_path / "no-steam-here.vdf")
     assert gaming.probe(tmp_path, proc=proc, now=1000, spec=spec).held
 
 
-def test_hold_types_are_configurable(tmp_path, appinfo):
+@pytest.mark.parametrize("appid,held", [
+    (2767030, True),    # Game
+    (2708610, True),    # Beta: a playtest is a game (sattler-rev-127)
+    (2676230, True),    # Application NOT named in lift_appids: FiveM is a game client
+    (5, True),          # absent from the cache: unknown holds
+    (431730, False),    # Application named in lift_appids: Aseprite
+    (228980, False),    # Tool
+])
+def test_only_a_positive_answer_lifts(tmp_path, appinfo, appid, held):
+    (tmp_path / "gaming").mkdir()
+    proc = tmp_path / "proc"
+    reaper(proc, 10, appid)
+    assert gaming.probe(tmp_path, proc=proc, now=1000, spec=deployed_spec(appinfo)).held is held
+
+
+def test_the_same_rule_applies_with_no_config_at_all(tmp_path, appinfo, monkeypatch):
+    """spec=None (legacy path) must use the same defaults as the parsed config."""
+    monkeypatch.setattr("shantytown.steam_appinfo.DEFAULT_PATH", str(appinfo))
+    for appid, held in ((2708610, True), (431730, False)):
+        root = tmp_path / str(appid)
+        (root / "gaming").mkdir(parents=True)
+        (root / "gaming/enabled").touch()
+        reaper(root / "proc", 10, appid)
+        assert gaming.probe(root, proc=root / "proc", now=1000).held is held
+
+
+def test_lift_lists_are_configurable_and_replace_the_defaults(tmp_path, appinfo):
+    for name, lift, appids, held in (("empty", [], [431730], True),
+                                     ("extended", ["431730", "2676230"], [431730, 2676230], False)):
+        root = tmp_path / name
+        (root / "gaming").mkdir(parents=True)
+        for pid, appid in enumerate(appids, 10):
+            reaper(root / "proc", pid, appid)
+        spec = deployed_spec(appinfo, lift_appids=lift)
+        assert gaming.probe(root, proc=root / "proc", now=1000, spec=spec).held is held
+
+
+def test_a_named_appid_lifts_even_when_its_type_is_unreadable(tmp_path):
     (tmp_path / "gaming").mkdir()
     proc = tmp_path / "proc"
     reaper(proc, 10, 431730)
-    spec = deployed_spec(appinfo, hold_app_types=["Game", "Application"])
-    assert gaming.probe(tmp_path, proc=proc, now=1000, spec=spec).held
+    spec = deployed_spec(tmp_path / "no-steam-here.vdf")
+    assert not gaming.probe(tmp_path, proc=proc, now=1000, spec=spec).held
 
 
 def test_a_running_tool_does_not_mask_a_game_session_ending(tmp_path, appinfo):
@@ -152,7 +193,8 @@ def test_a_running_tool_does_not_mask_a_game_session_ending(tmp_path, appinfo):
 
 
 @pytest.mark.parametrize("bad", [
-    {"hold_app_types": []}, {"hold_app_types": "game"}, {"hold_app_types": [""]},
+    {"lift_app_types": "tool"}, {"lift_app_types": [""]}, {"lift_appids": ["abc"]},
+    {"lift_appids": [431730]}, {"lift_appids": "431730"},
     {"steam_appinfo": ""}, {"steam_appinfo": 3}])
 def test_config_rejects_malformed_classification_keys(appinfo, bad):
     with pytest.raises(ValueError):

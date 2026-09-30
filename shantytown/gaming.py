@@ -209,13 +209,16 @@ def probe(root: Path, *, proc: Path = Path("/proc"), now: float | None = None, s
                          if re.fullmatch(r'[0-9]+', fields.get('appid') or '')}
                 shaders = tuple(sorted(processes(proc, opts.get('shader_executable', 'fossilize_replay'))))
             # Steam launches tools and applications through the same reaper as games
-            # (aegis-syw2fv: Aseprite held the fleet 19 h). Drop an AppId only when
-            # Steam itself says it is not a game; an unreadable type keeps holding.
+            # (aegis-syw2fv: Aseprite held the fleet 19 h). Drop an AppId only on a
+            # positive answer — a named lift type or a named AppId. Any other type,
+            # and an unreadable one, keeps holding (sattler-rev-127).
             opts = spec.options if spec else {}
-            hold_types = tuple(t.lower() for t in opts.get('hold_app_types', steam_appinfo.HOLD_TYPES))
+            lift_types = {t.lower() for t in opts.get('lift_app_types', steam_appinfo.LIFT_TYPES)}
+            lift_appids = {str(a) for a in opts.get('lift_appids', steam_appinfo.LIFT_APPIDS)}
             types = steam_appinfo.app_types(set(roots.values()),
                                             opts.get('steam_appinfo', steam_appinfo.DEFAULT_PATH))
-            not_games = {a: t for a, t in types.items() if t is not None and t not in hold_types}
+            not_games = {a: (t or 'unknown') for a, t in types.items()
+                         if a in lift_appids or (t is not None and t in lift_types)}
             roots = {pid: a for pid, a in roots.items() if a not in not_games}
             appids = tuple(sorted(set(roots.values())))
             try:

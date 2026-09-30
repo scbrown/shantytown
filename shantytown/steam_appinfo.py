@@ -5,10 +5,13 @@ Aseprite (AppId 431730, type "Application") held the whole fleet as "gaming" for
 19 hours (aegis-syw2fv). Steam records each app's type in `appcache/appinfo.vdf`,
 so the detector can ask Steam instead of keeping a hand-maintained exclusion list.
 
-Only the answer "this app is known and is NOT a game" may lift anything. Every
-failure — no file, an unknown format, an app absent from the cache, a parse error —
-returns None, and the caller keeps holding. A reader bug can therefore only cost a
-false hold, never a desynced game.
+The caller lifts only on a POSITIVE answer: a type named in LIFT_TYPES, or an
+AppId named in LIFT_APPIDS. Everything else holds — including every type not
+named, because Steam's types are not a clean game/non-game split: playtests are
+"Beta" and multiplayer clients such as FiveM and RedM are "Application"
+(sattler-rev-127). Every failure — no file, an unknown format, an app absent
+from the cache, a parse error — returns None, which also holds. A false hold is
+the cheaper failure; a false lift runs the fleet during a game.
 """
 from __future__ import annotations
 
@@ -16,8 +19,12 @@ import struct
 from pathlib import Path
 
 DEFAULT_PATH = "~/.steam/steam/appcache/appinfo.vdf"
-#: Steam app types that are a player in front of a game. Lower-case, as compared.
-HOLD_TYPES = ("game", "demo")
+#: Steam app types that are never a game. Lower-case, as compared. Deliberately
+#: NOT "application" or "beta": both contain games on a real library.
+LIFT_TYPES = ("tool", "config", "music", "video")
+#: Individual apps whose type does not settle it. 431730 is Aseprite, a pixel
+#: editor typed "Application", which held the fleet for 19 h (aegis-syw2fv).
+LIFT_APPIDS = ("431730",)
 
 # magic -> bytes of per-app header after (appid, size) and before the KV body
 _HEADER = {0x07564427: 40, 0x07564428: 60, 0x07564429: 60}
