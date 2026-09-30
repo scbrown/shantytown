@@ -11315,24 +11315,31 @@ def _drain_sweep(a, verdict, agents, panes, *, governor_name="base", episode=Non
     up — a self-perpetuating shutdown nobody asked for, arriving long after the
     tier relaxed.
     """
-    if verdict is None or not verdict.tier:
-        # Not draining (or no governor). The sweep still runs so the LEDGER gets
-        # cleared when a tier relaxes — otherwise the next episode would be
-        # deduped against a stale one and half the fleet would never be told.
-        gov_mod.DrainLedger(Path(a.root)).clear()
-        return []
-    inbox = _inbox(a, default="beads")
-    me = _me(a) or "st fleet tend"
     # Each provider has its own drain episode and ledger.  Reusing the legacy
     # ledger would let a relaxing sibling clear another provider's outstanding
     # drain, precisely when its workers still need to report their pushed WIP.
     drain_root = Path(a.root) if governor_name == "base" else (
         Path(a.root) / "governor-harness" / governor_name)
+    if verdict is None:
+        # No governor at all. Nothing can say whether a drain still applies,
+        # so nothing is retracted; the ledger is reset as it always was.
+        gov_mod.DrainLedger(drain_root).clear()
+        return []
+    if not gov_mod.DrainLedger(drain_root).agents() and not verdict.tier:
+        # Nothing outstanding and nothing to send: skip opening the inbox, which
+        # on a tracker backend lists the store — every pass, forever.
+        return []
+    inbox = _inbox(a, default="beads")
+    me = _me(a) or "st fleet tend"
     drainer = gov_mod.Drainer(
         drain_root,
         deliver=lambda who, body: inbox.deliver(who, body, frm=me),
         stops=_stops(a),
-        log=lambda msg: print(f"  {msg}", file=sys.stderr))
+        log=lambda msg: print(f"  {msg}", file=sys.stderr),
+        # THE TAKE-BACK (aegis-l2m4t2). Reading a message is finishing it, so
+        # closing the drain is exactly "this is no longer for you" — and a
+        # fresh session's `st inbox` never lists it again.
+        retract=lambda who, msg_id: inbox.mark_read(who, [msg_id]))
     rows = drainer.sweep(agents, verdict,
                          _governor_episode(a) if episode is None else episode,
                          live=lambda ag: bool(ag.pane) and panes.exists(ag.pane),
