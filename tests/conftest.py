@@ -68,6 +68,18 @@ def _no_ambient_operator_env(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_live_entity_linker(_no_ambient_operator_env, monkeypatch, tmp_path_factory):
+    """No test may call the real entity linker (aegis-4hhqoe.12). It exists on
+    the fleet host, so without this every `go` test would make a live Jev call
+    and, with a token in reach, WRITE an inferred link to the production graph.
+    The strip above removes SHANTY_*, which leaves the linker at its default
+    (write), so it is switched off here and pointed at nothing. Tests of the
+    linker opt back in with an injected runner."""
+    monkeypatch.setenv("SHANTY_ENTITY_LINK", "off")
+    monkeypatch.setenv("CAMAYOC_SOURCE", str(tmp_path_factory.mktemp("no-camayoc")))
+
+
+@pytest.fixture(autouse=True)
 def _quiet_aliases(monkeypatch, _no_ambient_operator_env):
     """The suite drives many commands by their OLD top-level spelling (`main(
     ["cycle", ...])`), which is the aliased path and prints one notice line to

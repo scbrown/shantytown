@@ -207,6 +207,7 @@ from .launched import FilesLaunches, CURRENT, STALE, UNKNOWN
 from .stopped import FilesStops
 from . import agent_hold
 from .quipu import QuipuRegistry, QuipuQueryRejected, QuipuWriteRejected
+from . import entity_suggest
 from . import graph_adoption
 from . import window as window_mod
 from . import selfcheck
@@ -3996,6 +3997,7 @@ def _cmd_graph_adoption(a) -> int:
     window = f" in the last {hours:g}h" if hours else ""
     rows = graph_adoption.read_rows(a.root, cutoff)
     s = graph_adoption.summarize(rows, include_dry_run=a.include_dry_run)
+    o = graph_adoption.suggestion_outcomes(rows)
     if a.json:
         print(json.dumps({
             "window_hours": hours,
@@ -4006,6 +4008,9 @@ def _cmd_graph_adoption(a) -> int:
             "by_agent": s.by_agent,
             "reasons": dict(s.reasons), "nodes": dict(s.nodes.most_common(20)),
             "zero_node_agents": s.zero_node_agents,
+            "suggestions": {"suggested": o.suggested, "accepted": o.accepted,
+                            "rejected": o.rejected, "pending": o.pending,
+                            "precision": o.precision},
             "scope": graph_adoption.SCOPE_NOTE,
         }, indent=2, sort_keys=True))
         return OK
@@ -4045,6 +4050,13 @@ def _cmd_graph_adoption(a) -> int:
         print("  most-cited nodes:")
         for node, n in s.nodes.most_common(5):
             print(f"    {n:>3}  {node}")
+    if o.suggested:
+        # aegis-4hhqoe.12: the live precision read. Accepted = a later row for
+        # the same item cited the suggested node; rejected = it cited something
+        # else or stated no-context. Pending ones decide nothing yet.
+        print(f"  linker suggestions:   {o.suggested:>4}  accepted {o.accepted}, "
+              f"rejected {o.rejected}, pending {o.pending}"
+              f"   precision {pct(o.precision)}")
     print("  server-side denominator: quipu_http_client_requests_total{client=...} "
           "in prometheus — this ledger counts DISPATCHES, not reads.")
     return OK
@@ -5935,10 +5947,16 @@ def _cmd_go(a) -> int:
     # put the denominator out of step with the fleet's actual work. Fail-silent
     # by construction: a measurement must never be able to break the thing it
     # measures.
-    graph_adoption.record(a.root, "go", a.agent, a.item, gctx, session=p.pane)
+    # aegis-4hhqoe.12: no node named, so suggest one. AFTER the send, so the
+    # hint never delays the dispatch; never raises, so it cannot undo it.
+    suggestion = None if gctx.nodes else entity_suggest.suggest(a.root, a.item)
+    graph_adoption.record(a.root, "go", a.agent, a.item, gctx, session=p.pane,
+                          suggestion=suggestion)
     print(f"  {p.item_id} -> {p.agent}          in progress")
     print(f"  sent to pane {p.pane}")
     print(f"  {gctx.render()}")
+    if suggestion is not None:
+        print(f"  {suggestion.render()}")
     if p.track_attempts > 1:
         # THE LINE THAT MAKES AN INTERMITTENT FAULT COUNTABLE (aegis-8xc5w).
         # go() now reads its tracker write back and re-writes on a verified loss,
@@ -8774,12 +8792,26 @@ def _write_resume_brief(a, card, agent_name: str, checkpoint: str) -> str:
     if card.workspace:
         docs.append(f"{card.workspace}/CLAUDE.md — your charter, re-read it")
     docs.append("`st ops help handoff` — why cycles work the way they do")
+    nodes = list(getattr(a, "quipu_node", None) or [])
+    suggested = ""
+    if not nodes and item:
+        # aegis-4hhqoe.12: the resuming session's query-first step gets a real
+        # node to start from. Logged as a suggest-only row, so the next cycle
+        # that cites (or does not cite) it is the live precision read.
+        try:
+            sug = entity_suggest.suggest(a.root, item)
+            if sug is not None and sug.node:
+                suggested = sug.node
+                graph_adoption.record(a.root, graph_adoption.SUGGEST, agent_name,
+                                      item, graph_adoption.unstated(),
+                                      suggestion=sug)
+        except Exception:  # noqa: BLE001 — a hint must never cost the brief
+            suggested = ""
     try:
         text = resume_brief_mod.compose(
             agent_name, checkpoint=checkpoint,
             checkpoint_bead=getattr(a, "checkpoint_bead", "") or "",
-            quipu_nodes=list(getattr(a, "quipu_node", None) or []),
-            item=item, docs=docs)
+            quipu_nodes=nodes, item=item, docs=docs, suggested=suggested)
         return str(resume_brief_mod.Briefs(a.root).put(
             agent_name, text, checkpoint=checkpoint, item=item))
     except Exception as e:  # noqa: BLE001
