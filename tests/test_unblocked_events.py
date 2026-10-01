@@ -2,7 +2,12 @@
 
 Every arm re-checks br: the event is a claim about the graph, br is the truth."""
 from shantytown.notify import BlockedMisstatusAlerter
-from shantytown.unblocked_events import UnblockedEventConsumer, classify, firings_query
+from shantytown.unblocked_events import (
+    UnblockedEventConsumer,
+    classify,
+    firings_queries,
+    join_firings,
+)
 
 
 def _dep(bid, status):
@@ -136,10 +141,28 @@ def test_a_bead_the_consumer_saw_is_not_called_missed(tmp_path):
     assert "EVENT MISSED" not in msgs[0]
 
 
-def test_the_query_names_the_reaction_and_pages_from_the_cursor():
-    q = firings_query("2026-09-30T02:00:00Z")
-    assert "reaction-workitem-unblocked" in q and '>= "2026-09-30T02:00:00Z"' in q
-    assert "FILTER" not in firings_query("")
+def test_the_queries_are_single_pattern_and_name_the_reaction():
+    """aegis-mrv3tt: quipu's join path cost 7.5 s per tend tick; each query is one
+    triple pattern and the join happens here."""
+    qs = firings_queries("http://o/")
+    assert "reaction-workitem-unblocked" in qs["fired"]
+    for q in qs.values():
+        body = q.split("WHERE", 1)[1]
+        assert ";" not in body and " . " not in body and "FILTER" not in body, q
+
+
+def test_the_client_join_pages_from_the_cursor_and_keeps_only_the_reaction():
+    fired = ["a:f1", "a:f2", "a:f3"]
+    focus = [("a:f1", "a:aegis-x1"), ("a:f2", "a:aegis-x2"), ("a:f3", "a:aegis-x3"),
+             ("a:other", "a:aegis-zz")]          # another reaction's firing: dropped
+    at = [("a:f1", "2026-09-30T01:00:00Z"), ("a:f2", "2026-09-30T02:00:00Z"),
+          ("a:f3", "2026-09-30T02:00:00Z"), ("a:other", "2026-09-30T05:00:00Z")]
+    rows = join_firings(fired, focus, at, "2026-09-30T02:00:00Z")
+    assert [r["firing"] for r in rows] == ["a:f2", "a:f3"]       # >= keeps the boundary
+    assert [r["bead"] for r in rows] == ["aegis-x2", "aegis-x3"]
+    assert len(join_firings(fired, focus, at, "")) == 3          # no cursor: all of them
+    assert join_firings(["a:f9"], focus, at, "") == []           # no focus/time: skipped
+    assert len(join_firings(fired, focus, at, "", limit=2)) == 2
 
 
 def test_a_bead_awaiting_a_HUMAN_decision_is_held_not_reopened(tmp_path):
