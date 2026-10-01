@@ -187,3 +187,30 @@ def test_the_blocked_by_TOPIC_tag_is_not_a_hold():
     # CONTROL: a real hold next to the tag still holds.
     assert classify(_bead("blocked", _dep("x", "closed"),
                           labels=["blocked-by", "blocked:external"]))[0] == "held"
+
+
+def test_fetch_firings_warns_at_half_the_row_cap(monkeypatch, capsys):
+    # aegis-1pmo5r: the store-wide firings queries stop the reaction at quipu's row
+    # cap. Warn at half of it, and stay quiet below.
+    import io
+    import json as _json
+    from shantytown import quipu as q
+    from shantytown import unblocked_events as ue
+
+    def run(n):
+        rows = [{"f": f"f{i}", "focus": "aegis-x", "t": "2026-10-01T00:00:00Z"} for i in range(n)]
+        body = _json.dumps({"rows": rows}).encode()
+
+        class Resp(io.BytesIO):
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+        monkeypatch.setattr(ue.urllib.request, "urlopen", lambda req, timeout=0: Resp(body))
+        monkeypatch.setattr(q, "resolve_server", lambda *a: "http://quipu.test")
+        monkeypatch.setattr(q, "resolve_onto", lambda *a: "")
+        monkeypatch.setattr(q, "request_headers", lambda: {})
+        ue.fetch_firings(".", since="2026-01-01T00:00:00Z")
+        return capsys.readouterr().err
+
+    assert "row cap" not in run(ue.FIRINGS_WARN_ROWS - 1)
+    err = run(ue.FIRINGS_WARN_ROWS)
+    assert "row cap" in err and str(ue.FIRINGS_WARN_ROWS) in err
