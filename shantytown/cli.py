@@ -2520,6 +2520,20 @@ def _record_launch_unretirement(a, card) -> bool:
     return True
 
 
+# Sweeps that read the SHARED board and push to the local admin. They run on the
+# fleet owner host only (aegis-1g55ji); everything else in a tend pass is host-local.
+FLEET_SWEEPS = ("idle-fleet", "governor-setpoint", "governor-utilization",
+                "blocked-stale", "deferral-sweep", "unblocked-events",
+                "blocked-misstatus")
+
+
+def runs_fleet_sweeps(cfg) -> bool:
+    """True on the host that owns fleet-wide sweeps: the declared
+    [host] admission_owner, or any host when none is declared (single host)."""
+    owner = getattr(cfg, "host_admission_owner", None)
+    return owner is None or owner == getattr(cfg, "host_name", None)
+
+
 def tend_fate(launches, agent: str) -> str:
     """WHAT `st fleet tend` WILL ACTUALLY DO to an agent whose launch stamp is gone.
 
@@ -11378,6 +11392,21 @@ def _tend_once(a, quiet: bool = False) -> int:
                       f"supervision continues without it this pass", file=sys.stderr)
                 return []
 
+        # FLEET-WIDE sweeps run on the fleet owner host ONLY (aegis-1g55ji). They
+        # read the shared board and push to the LOCAL admin, so a second host's
+        # tend (the Mac) duplicated every one of them to its own admin, with no
+        # dedup across hosts. Host-local supervision (respawn, blocked worker,
+        # cycles, stalled) still runs everywhere. No declared owner means a
+        # single-host fleet, which is its own owner.
+        fleet_owner = runs_fleet_sweeps(cfg)
+        skipped_fleet: list[str] = []
+
+        def _fleet_sweep(label, fn):
+            if not fleet_owner:
+                skipped_fleet.append(label)
+                return []
+            return _sweep(label, fn)
+
         woke = _sweep("blocked-worker", lambda: notify_mod.Notifier(
             Path(a.root), _registry(a), panes, log=_log).sweep(agents, runtime))
         if woke:
@@ -11465,14 +11494,14 @@ def _tend_once(a, quiet: bool = False) -> int:
         # a coordinator forgetting to dispatch is the same invisible failure w0kk
         # fixed for blocked workers. Deduped per idle episode, fail-open, and it
         # reuses the SAME free/dispatchable computation as hfta's hard gate.
-        idle = _sweep("idle-fleet", lambda: notify_mod.IdleFleetAlerter(
+        idle = _fleet_sweep("idle-fleet", lambda: notify_mod.IdleFleetAlerter(
             Path(a.root), _registry(a), panes, runtime, log=_log,
             balance=lambda: _fleet_balance(a),
             verdict_for=_card_verdict).sweep(agents))
         if idle:
             print(f"  ⚠ alerted the coordinator — {len(idle)} newly-idle feedable "
                   f"worker(s) with work ready: {', '.join(idle)}", file=sys.stderr)
-        advised = _sweep("governor-setpoint", lambda: creel_advisory_mod.Alerter(
+        advised = _fleet_sweep("governor-setpoint", lambda: creel_advisory_mod.Alerter(
             Path(a.root), _registry(a), panes).sweep(setpoint_advisories))
         if advised:
             print(f"  ⚠ pushed changed governor setpoint advisory to the "
@@ -11483,7 +11512,7 @@ def _tend_once(a, quiet: bool = False) -> int:
         # other's push. Same recommendation-keyed dedup either way (1641346): a
         # standing "fill toward cap" keeps asking until it is acted on, a hold is
         # read once and goes quiet.
-        utilized = _sweep("governor-utilization", lambda: creel_advisory_mod.Alerter(
+        utilized = _fleet_sweep("governor-utilization", lambda: creel_advisory_mod.Alerter(
             Path(a.root), _registry(a), panes,
             filename="governor_utilization.json",
             label="governor utilization").sweep(utilization_advisories))
@@ -11515,7 +11544,7 @@ def _tend_once(a, quiet: bool = False) -> int:
         # a bead blocked on a person is operationally identical to abandoned
         # while its status makes it look handled. Seventeen days on a P1
         # security bead is the specimen. This is the only thing that re-asks.
-        stale_blocked = _sweep("blocked-stale", lambda: notify_mod.BlockedStaleAlerter(
+        stale_blocked = _fleet_sweep("blocked-stale", lambda: notify_mod.BlockedStaleAlerter(
             Path(a.root), _registry(a), panes, log=_log).sweep())
         if stale_blocked:
             print(f"  ⚠ re-surfaced {len(stale_blocked)} bead(s) blocked "
@@ -11530,7 +11559,7 @@ def _tend_once(a, quiet: bool = False) -> int:
         # author's memory: that one landed the same day and the bead sat nine
         # days. Reports only; it never un-defers, and it reports each bead once
         # per state (wu: transitions, not state).
-        deferred_due = _sweep("deferral-sweep", lambda: notify_mod.DeferralAlerter(
+        deferred_due = _fleet_sweep("deferral-sweep", lambda: notify_mod.DeferralAlerter(
             Path(a.root), _registry(a), panes, log=_log).sweep())
         if deferred_due:
             print(f"  ⚠ surfaced {len(deferred_due)} deferral(s) whose date has "
@@ -11548,16 +11577,20 @@ def _tend_once(a, quiet: bool = False) -> int:
         from . import unblocked_events as unblocked_mod
         consumer = unblocked_mod.UnblockedEventConsumer(
             Path(a.root), _registry(a), panes, log=_log)
-        unblocked = _sweep("unblocked-events", consumer.sweep)
+        unblocked = _fleet_sweep("unblocked-events", consumer.sweep)
         if unblocked:
             print(f"  ✓ acted on {len(unblocked)} unblocked event(s): "
                   f"{', '.join(f'{b} {v}' for b, v in unblocked)}", file=sys.stderr)
-        misstatused = _sweep("blocked-misstatus", lambda: notify_mod.BlockedMisstatusAlerter(
+        misstatused = _fleet_sweep("blocked-misstatus", lambda: notify_mod.BlockedMisstatusAlerter(
             Path(a.root), _registry(a), panes, log=_log,
             seen=consumer.seen_foci).sweep())
         if misstatused:
             print(f"  ⚠ found {len(misstatused)} MIS-STATUSED blocked bead(s) "
                   f"whose dependencies are ALL CLOSED: {', '.join(misstatused)}",
+                  file=sys.stderr)
+        if skipped_fleet:
+            print(f"  · fleet-wide sweeps belong to {cfg.host_admission_owner}; "
+                  f"not run on {cfg.host_name}: {', '.join(skipped_fleet)}",
                   file=sys.stderr)
         # STALLED (aegis-e01l): the PROGRESS-over-time twin of the point-in-time
         # push above — an agent parked idle HOLDING an in_progress item with no
