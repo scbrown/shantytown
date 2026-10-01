@@ -197,23 +197,46 @@ def rows(tracker: BrTracker) -> list[dict]:
     return out
 
 
-def ready(tracker: BrTracker) -> list[dict]:
-    """The complete br ready set, preserving dependency filtering."""
-    r = tracker._bd("ready", "--json", "--limit", "0")
-    if r.returncode != 0:
-        raise RuntimeError(f"br ready failed: {r.stderr.strip()[:120]}")
+def _union_listing(tracker: BrTracker, *args: str, what: str) -> list[dict]:
+    """One br listing across the PRIMARY and every EXTRA store.
+
+    The primary failing RAISES, exactly as the single-store reader did: it holds
+    nearly every agent's work, so a short answer there is a wrong answer. An EXTRA
+    store failing DEGRADES LOUDLY instead (the plate() rule, aegis-r2isg): its rows
+    are skipped and the store is NAMED on stderr. Without this the haul feed read
+    only the primary, so work living in a repo store was on a plate but never fed.
+    """
+    first = tracker._bd(*args)
+    if first.returncode != 0:
+        raise RuntimeError(f"{what} failed: {first.stderr.strip()[:120]}")
+    out = _issues(first)
+    for repo in getattr(tracker, "extra_repos", None) or []:
+        if repo == tracker.repo:
+            continue
+        r = tracker._bd_in(repo, *args)
+        if r.returncode != 0:
+            print(f"st: {what} SKIPPED extra store {repo}: {_failure_reason(r)}; "
+                  "its work is missing from this answer", file=sys.stderr)
+            continue
+        out.extend(_issues(r))
+    return out
+
+
+def _issues(r) -> list[dict]:
     payload = json.loads(r.stdout) if r.stdout.strip() else []
     return payload.get("issues", []) if isinstance(payload, dict) else payload
+
+
+def ready(tracker: BrTracker) -> list[dict]:
+    """The complete br ready set, preserving dependency filtering, across stores."""
+    return _union_listing(tracker, "ready", "--json", "--limit", "0", what="br ready")
 
 
 def in_progress(tracker: BrTracker) -> list[dict]:
     """The complete active-anchor set from br: in_progress, minus rows parked
     by a future defer_until (aegis-1d3fze; see inbox.drop_parked)."""
-    r = tracker._bd("list", "--status", "in_progress", "--json", "--limit", "0")
-    if r.returncode != 0:
-        raise RuntimeError(f"br list failed: {r.stderr.strip()[:120]}")
-    payload = json.loads(r.stdout) if r.stdout.strip() else {}
-    rows = payload.get("issues", []) if isinstance(payload, dict) else payload
+    rows = _union_listing(tracker, "list", "--status", "in_progress", "--json",
+                          "--limit", "0", what="br list")
     return drop_parked(rows)
 
 
@@ -364,13 +387,38 @@ def show(tracker: BrTracker, bead_id: str) -> dict:
     from a closed one — the detail read is what stops a count being used as a
     status classifier.
     """
-    r = tracker._bd("show", bead_id, "--json")
+    found = _owning_store(tracker, bead_id)
+    if found is None:
+        r = tracker._bd("show", bead_id, "--json")
+        raise RuntimeError(f"br show {bead_id} failed: {r.stderr.strip()[:120] or 'no exact match in any store'}")
+    return found[1]
+
+
+def _show_in(tracker: BrTracker, repo, bead_id: str):
+    run = tracker._bd if repo == tracker.repo else (lambda *a: tracker._bd_in(repo, *a))
+    r = run("show", bead_id, "--json")
     if r.returncode != 0:
-        raise RuntimeError(f"br show {bead_id} failed: {r.stderr.strip()[:120]}")
+        return None
     value = json.loads(r.stdout) if r.stdout.strip() else {}
     if isinstance(value, dict) and "issues" in value:
         value = value["issues"]
-    return value[0] if isinstance(value, list) and value else value
+    value = value[0] if isinstance(value, list) and value else value
+    return value if isinstance(value, dict) else None
+
+
+def _owning_store(tracker: BrTracker, bead_id: str):
+    """(repo, row) of the store holding EXACTLY `bead_id`, primary first, or None.
+
+    EXACT, not "first success": br can fuzzy-resolve a missing id to a DIFFERENT
+    bead and exit 0 (aegis-m6t0oi). With more than one store, the primary would
+    answer a question about an extra store's bead with someone else's row, and a
+    claim routed by that answer would write to the wrong bead.
+    """
+    for repo in (tracker.repos or [tracker.repo]):
+        row = _show_in(tracker, repo, bead_id)
+        if row is not None and row.get("id") == bead_id:
+            return repo, row
+    return None
 
 
 def claim(tracker: BrTracker, bead_id: str) -> None:
@@ -381,7 +429,18 @@ def claim(tracker: BrTracker, bead_id: str) -> None:
     into the town store (aegis-qx43o) rather than failing usefully, so the
     tracker would disagree with the board about who holds what.
     """
-    r = tracker._bd("update", bead_id, "--status", "in_progress")
+    # The claim lands in the store that HOLDS the id, exactly. The haul feed now
+    # reads extra stores, so a fed extra-store bead claimed on the primary would
+    # fail (or fuzzy-hit another bead) and be re-fed forever (sattler, #140).
+    found = _owning_store(tracker, bead_id)
+    if found is None:
+        # NEVER fall back to the primary: br prefix-resolves a missing id to a
+        # different bead with rc 0 (sattler measured `show aegis-krkdd` -> krkddi),
+        # so a blind update could claim someone else's work.
+        raise RuntimeError(f"br update {bead_id} refused: no store holds exactly {bead_id}")
+    repo = found[0]
+    run = tracker._bd if repo == tracker.repo else (lambda *a: tracker._bd_in(repo, *a))
+    r = run("update", bead_id, "--status", "in_progress")
     if r.returncode != 0:
         raise RuntimeError(f"br update {bead_id} failed: {r.stderr.strip()[:120]}")
 
