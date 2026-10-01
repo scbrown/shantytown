@@ -387,13 +387,38 @@ def show(tracker: BrTracker, bead_id: str) -> dict:
     from a closed one — the detail read is what stops a count being used as a
     status classifier.
     """
-    r = tracker._bd("show", bead_id, "--json")
+    found = _owning_store(tracker, bead_id)
+    if found is None:
+        r = tracker._bd("show", bead_id, "--json")
+        raise RuntimeError(f"br show {bead_id} failed: {r.stderr.strip()[:120] or 'no exact match in any store'}")
+    return found[1]
+
+
+def _show_in(tracker: BrTracker, repo, bead_id: str):
+    run = tracker._bd if repo == tracker.repo else (lambda *a: tracker._bd_in(repo, *a))
+    r = run("show", bead_id, "--json")
     if r.returncode != 0:
-        raise RuntimeError(f"br show {bead_id} failed: {r.stderr.strip()[:120]}")
+        return None
     value = json.loads(r.stdout) if r.stdout.strip() else {}
     if isinstance(value, dict) and "issues" in value:
         value = value["issues"]
-    return value[0] if isinstance(value, list) and value else value
+    value = value[0] if isinstance(value, list) and value else value
+    return value if isinstance(value, dict) else None
+
+
+def _owning_store(tracker: BrTracker, bead_id: str):
+    """(repo, row) of the store holding EXACTLY `bead_id`, primary first, or None.
+
+    EXACT, not "first success": br can fuzzy-resolve a missing id to a DIFFERENT
+    bead and exit 0 (aegis-m6t0oi). With more than one store, the primary would
+    answer a question about an extra store's bead with someone else's row, and a
+    claim routed by that answer would write to the wrong bead.
+    """
+    for repo in (tracker.repos or [tracker.repo]):
+        row = _show_in(tracker, repo, bead_id)
+        if row is not None and row.get("id") == bead_id:
+            return repo, row
+    return None
 
 
 def claim(tracker: BrTracker, bead_id: str) -> None:
@@ -404,7 +429,13 @@ def claim(tracker: BrTracker, bead_id: str) -> None:
     into the town store (aegis-qx43o) rather than failing usefully, so the
     tracker would disagree with the board about who holds what.
     """
-    r = tracker._bd("update", bead_id, "--status", "in_progress")
+    # The claim lands in the store that HOLDS the id, exactly. The haul feed now
+    # reads extra stores, so a fed extra-store bead claimed on the primary would
+    # fail (or fuzzy-hit another bead) and be re-fed forever (sattler, #140).
+    found = _owning_store(tracker, bead_id)
+    repo = found[0] if found else tracker.repo
+    run = tracker._bd if repo == tracker.repo else (lambda *a: tracker._bd_in(repo, *a))
+    r = run("update", bead_id, "--status", "in_progress")
     if r.returncode != 0:
         raise RuntimeError(f"br update {bead_id} failed: {r.stderr.strip()[:120]}")
 

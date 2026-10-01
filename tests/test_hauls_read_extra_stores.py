@@ -88,3 +88,41 @@ def test_feed_check_tracker_carries_the_deployment_extras(monkeypatch, tmp_path)
     t = feed_check._br_tracker(tmp_path, None)
     assert t.extra_repos == [str((tmp_path / "na").resolve()),
                              str((tmp_path / "gold").resolve())]
+
+
+def _show_update_stores(monkeypatch, by_repo, fuzzy_primary=None):
+    """show/update fakes; `fuzzy_primary` makes the primary answer ANY show with that
+    row (br's fuzzy resolution, aegis-m6t0oi) and accept any update."""
+    writes = []
+
+    def fake(self, repo, *args):
+        if args[:1] == ("show",):
+            want = args[1]
+            if repo == self.repo and fuzzy_primary is not None:
+                return _cp(stdout=json.dumps([fuzzy_primary]))
+            rows = [r for r in by_repo.get(repo, []) if r["id"] == want]
+            return _cp(stdout=json.dumps(rows)) if rows else _cp(rc=3, stderr="not found")
+        if args[:1] == ("update",):
+            writes.append((repo, args[1]))
+            return _cp()
+        return _cp(stdout=json.dumps({"issues": []}))
+    monkeypatch.setattr(BrTracker, "_bd_in", fake, raising=True)
+    monkeypatch.setattr(BrTracker, "_bd", lambda self, *a: fake(self, self.repo, *a),
+                        raising=True)
+    return writes
+
+
+def test_a_claim_lands_in_the_extra_store_that_holds_the_bead(monkeypatch, tmp_path):
+    t = _tracker(tmp_path)
+    writes = _show_update_stores(monkeypatch, {t.extra_repos[0]: [_row("goldblum-1")]})
+    br_mod.claim(t, "goldblum-1")
+    assert writes == [(t.extra_repos[0], "goldblum-1")]
+    assert br_mod.show(t, "goldblum-1")["id"] == "goldblum-1"
+
+
+def test_a_fuzzy_primary_answer_never_routes_the_claim(monkeypatch, tmp_path):
+    t = _tracker(tmp_path)
+    writes = _show_update_stores(monkeypatch, {t.extra_repos[0]: [_row("goldblum-1")]},
+                                 fuzzy_primary=_row("aegis-2gold1"))
+    br_mod.claim(t, "goldblum-1")
+    assert writes == [(t.extra_repos[0], "goldblum-1")], writes
