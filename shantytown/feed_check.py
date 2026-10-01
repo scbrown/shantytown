@@ -675,10 +675,16 @@ def _br_tracker(root, reg):
     from .deployment import deployment_default
     if deployment_default(root, "SHANTY_BACKEND") not in ("beads", "br"):
         return None
+    from .beads import EXTRA_REPOS_KEY, parse_extra_repos
     from .br import BrTracker
+    # The SAME store set the plate readers use (cli._tracker, stop_event): without
+    # extra_repos the haul feed saw only the primary, so work in a repo store was on
+    # a plate but never self-fed.
     return BrTracker(repo=(deployment_default(root, "SHANTY_BR_REPO")
                            or deployment_default(root, "SHANTY_BEADS_REPO")
-                           or bd_cwd(reg)))
+                           or bd_cwd(reg)),
+                     extra_repos=parse_extra_repos(
+                         deployment_default(root, EXTRA_REPOS_KEY)))
 
 
 class TrackerAdapter:

@@ -197,23 +197,46 @@ def rows(tracker: BrTracker) -> list[dict]:
     return out
 
 
-def ready(tracker: BrTracker) -> list[dict]:
-    """The complete br ready set, preserving dependency filtering."""
-    r = tracker._bd("ready", "--json", "--limit", "0")
-    if r.returncode != 0:
-        raise RuntimeError(f"br ready failed: {r.stderr.strip()[:120]}")
+def _union_listing(tracker: BrTracker, *args: str, what: str) -> list[dict]:
+    """One br listing across the PRIMARY and every EXTRA store.
+
+    The primary failing RAISES, exactly as the single-store reader did: it holds
+    nearly every agent's work, so a short answer there is a wrong answer. An EXTRA
+    store failing DEGRADES LOUDLY instead (the plate() rule, aegis-r2isg): its rows
+    are skipped and the store is NAMED on stderr. Without this the haul feed read
+    only the primary, so work living in a repo store was on a plate but never fed.
+    """
+    first = tracker._bd(*args)
+    if first.returncode != 0:
+        raise RuntimeError(f"{what} failed: {first.stderr.strip()[:120]}")
+    out = _issues(first)
+    for repo in getattr(tracker, "extra_repos", None) or []:
+        if repo == tracker.repo:
+            continue
+        r = tracker._bd_in(repo, *args)
+        if r.returncode != 0:
+            print(f"st: {what} SKIPPED extra store {repo}: {_failure_reason(r)}; "
+                  "its work is missing from this answer", file=sys.stderr)
+            continue
+        out.extend(_issues(r))
+    return out
+
+
+def _issues(r) -> list[dict]:
     payload = json.loads(r.stdout) if r.stdout.strip() else []
     return payload.get("issues", []) if isinstance(payload, dict) else payload
+
+
+def ready(tracker: BrTracker) -> list[dict]:
+    """The complete br ready set, preserving dependency filtering, across stores."""
+    return _union_listing(tracker, "ready", "--json", "--limit", "0", what="br ready")
 
 
 def in_progress(tracker: BrTracker) -> list[dict]:
     """The complete active-anchor set from br: in_progress, minus rows parked
     by a future defer_until (aegis-1d3fze; see inbox.drop_parked)."""
-    r = tracker._bd("list", "--status", "in_progress", "--json", "--limit", "0")
-    if r.returncode != 0:
-        raise RuntimeError(f"br list failed: {r.stderr.strip()[:120]}")
-    payload = json.loads(r.stdout) if r.stdout.strip() else {}
-    rows = payload.get("issues", []) if isinstance(payload, dict) else payload
+    rows = _union_listing(tracker, "list", "--status", "in_progress", "--json",
+                          "--limit", "0", what="br list")
     return drop_parked(rows)
 
 
