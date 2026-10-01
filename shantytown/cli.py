@@ -8563,12 +8563,14 @@ def _cmd_cycle(a) -> int:
                   f"graph context and nothing is lost.", file=sys.stderr)
             return REFUSED
         quipu_nodes = list(gctx.nodes)
+        no_in_place = bool(getattr(a, "no_in_place", False))
         cycle_mod.Requests(a.root).request(agent_name, a.reason.strip(),
                                            checkpoint_bead or posted_to,
-                                           quipu_nodes)
+                                           quipu_nodes, no_in_place=no_in_place)
         graph_adoption.record(a.root, "cycle", agent_name,
                               checkpoint_bead or posted_to or "-", gctx)
-        print(f"  {agent_name}: cycle REQUESTED — checkpoint recorded.")
+        print(f"  {agent_name}: cycle REQUESTED — checkpoint recorded"
+              f"{'; the process will be REPLACED (--no-in-place)' if no_in_place else ''}.")
         if posted_to:
             print(f"  checkpoint file posted to {posted_to}.")
         if quipu_nodes:
@@ -11452,8 +11454,12 @@ def _tend_once(a, quiet: bool = False) -> int:
             # an explicit machine exemption: re-asking here would put the
             # question to a sweep loop, which cannot answer it.
             req_nodes = list(request.get("quipu_nodes") or [])
+            # THE REQUEST decides in-place vs replace (aegis-2fxldr), never tend's
+            # own namespace: tend has no --no-in-place, so reading it there made
+            # every self-requested relaunch an in-place clear.
+            req_no_in_place = bool(request.get("no_in_place", False))
             rc_c = _sweep(f"cycle:{who}", lambda w=who, c=checkpoint, b=checkpoint_bead,
-                          n=req_nodes: _cmd_cycle(
+                          n=req_nodes, nip=req_no_in_place: _cmd_cycle(
                 argparse.Namespace(**{**vars(a), "cmd": "cycle", "agent": w,
                                       "reason": c, "self_": False,
                                       "_automatic_cycle": True,
@@ -11462,6 +11468,7 @@ def _tend_once(a, quiet: bool = False) -> int:
                                       "no_graph_context": "" if n else
                                       "mechanical: tend serving a cycle the agent "
                                       "already requested and gated",
+                                      "no_in_place": nip,
                                       "allow_loss": False, "dry_run": False})))
             # The request is cleared by _cmd_cycle ONLY on a completed cycle, so a
             # refusal (dirty tree, no checkpoint) leaves it pending and the agent

@@ -590,7 +590,8 @@ class Requests:
         write_json_atomic(self.path, data)
 
     def request(self, agent: str, checkpoint: str, checkpoint_bead: str = "",
-                quipu_nodes: list | None = None) -> None:
+                quipu_nodes: list | None = None,
+                no_in_place: bool = False) -> None:
         data = self._load()
         data[agent] = {"checkpoint": checkpoint,
                        "checkpoint_bead": checkpoint_bead,
@@ -602,6 +603,11 @@ class Requests:
                        # aegis-az0a40.1: WHEN it was asked, so a request nobody
                        # consumes can age out of reading as a cycle in flight.
                        "requested_at": time.time(),
+                       # aegis-2fxldr: a self-requested RELAUNCH. tend serves the
+                       # request from its own namespace, which has no --no-in-place,
+                       # so a flag not stored here never reaches the plan and every
+                       # self-cycle ran as an in-place clear.
+                       "no_in_place": bool(no_in_place),
                        # aegis-7xptd5: a NEW request re-arms. The old refusal
                        # described a tree state the agent has since had a chance to
                        # fix, and carrying it forward would report a stall that may
@@ -669,6 +675,8 @@ class Requests:
                  else {"checkpoint": str(value), "checkpoint_bead": ""})
             d.setdefault("checkpoint_bead", "")
             d.setdefault("quipu_nodes", [])
+            # False, never absent: a record from before the field meant in-place.
+            d.setdefault("no_in_place", False)
             # None, never absent — so every reader tests one thing (is there a
             # refusal?) and none of them has to branch on the record's vintage.
             d.setdefault("refused", None)
