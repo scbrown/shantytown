@@ -116,10 +116,13 @@ PRUNE_NAMES=(node_modules target .venv venv __pycache__ .cargo .rustup .terrafor
 # Third-party upstreams this host never pushes to: a plugin manager's clones and
 # pre-commit's hook cache. These are EXCLUDED BY NAME, COUNTED, and reported —
 # never silently dropped. An uncounted skip is the exact defect this file is
-# about, so the exclusion is two literal path prefixes rather than a wildcard
+# about, so the exclusion is literal path prefixes rather than a wildcard
 # over ~/.local/share (which would also swallow ~/.local/share/creel-src, a repo
 # that does need arming).
-EXCLUDE_PREFIXES=("$HOME/.local/share/nvim/lazy/" "$HOME/.cache/pre-commit/")
+# The bobbin calibration work dir holds a transient SNAPSHOT of a public repo that
+# is never pushed from; it appears and disappears every calibration cycle, so
+# counting it made the coverage total drop on every cleanup and page as shrinking.
+EXCLUDE_PREFIXES=("$HOME/.local/share/nvim/lazy/" "$HOME/.cache/pre-commit/" "$HOME/.local/state/bobbin-calibration/")
 
 find_checkouts() {
   # Every .git under $1, at ANY depth, dir or file (a linked worktree's .git is a
