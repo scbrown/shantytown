@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 import urllib.request
 from pathlib import Path
 
@@ -50,6 +51,10 @@ BEAD_BLOCK_LABEL = "blocked:bead"
 # Observed on the first scheduled pass: aegis-sfpfwf reported as held on it.
 TOPIC_LABELS = frozenset({"blocked-by"})
 LEDGER_CAP = 2000   # firing IRIs remembered; far more than a week of events
+
+
+QUIPU_DEFAULT_ROW_CAP = 10_000  # quipu src/config.rs max_sparql_rows default
+FIRINGS_WARN_ROWS = QUIPU_DEFAULT_ROW_CAP // 2
 
 
 def firings_queries(onto: str = "") -> dict[str, str]:
@@ -104,6 +109,14 @@ def fetch_firings(root, since: str, timeout: float = 10.0) -> list[dict]:
         if body.get("truncated"):
             raise RuntimeError(f"firings {name} query truncated; refusing a partial page")
         rows = body.get("rows") or []
+        # The focus/at queries are store-wide and uncursored (aegis-1pmo5r). At quipu's
+        # row cap the page comes back truncated and the refusal above STOPS the
+        # unblocked reaction. Warn at half the default cap, years before that at
+        # today's rate, so a jump in the firing rate is seen while there is time.
+        if len(rows) >= FIRINGS_WARN_ROWS:
+            print(f"st tend: firings {name} query returned {len(rows)} rows, "
+                  f">= {FIRINGS_WARN_ROWS} (half quipu's default {QUIPU_DEFAULT_ROW_CAP} "
+                  f"row cap); the unblocked reaction stops at the cap", file=sys.stderr)
         value = lambda row, k: ((row.get(k) or {}).get("value")
                                 if isinstance(row.get(k), dict) else row.get(k))
         if name == "fired":
