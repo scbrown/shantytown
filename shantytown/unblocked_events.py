@@ -52,16 +52,40 @@ TOPIC_LABELS = frozenset({"blocked-by"})
 LEDGER_CAP = 2000   # firing IRIs remembered; far more than a week of events
 
 
-def firings_query(since: str, onto: str = "") -> str:
-    """Firings of the unblocked reaction at or after `since` (ISO-8601 Z).
+def firings_queries(onto: str = "") -> dict[str, str]:
+    """Three SINGLE-pattern queries; fetch_firings joins them client-side.
+
+    NOT one joined query (aegis-mrv3tt, measured on quipu bc40aa3a 2026-10-01). The
+    joined form (type + firedBy + focus + startedAt, with a STR() filter on the
+    cursor) took 7.5-8.1 s for 22 rows, held on every tend tick, and was quipu's
+    worst /query stall; a two-pattern join alone costs 3.6 s. Each single pattern
+    answers in <=0.2 s over the same ~23 triples. The cost is quipu's join path,
+    not data volume, so st does the join and the cursor filter itself."""
+    pre = f"PREFIX a: <{onto}> "
+    return {
+        "fired": pre + f"SELECT ?f WHERE {{ ?f a:firedBy a:{REACTION} }}",
+        "focus": pre + "SELECT ?f ?focus WHERE { ?f a:focus ?focus }",
+        "at": pre + "SELECT ?f ?t WHERE { ?f a:startedAt ?t }",
+    }
+
+
+def join_firings(fired: list, focus: list, at: list, since: str, limit: int = 500) -> list[dict]:
+    """[{firing, bead, at}] for firings of the reaction at or after `since`.
 
     `>=`, not `>`: two firings can share a second. The ledger dedupes, so the
-    boundary firing is re-read, never lost."""
-    flt = (f'FILTER(STR(?t) >= "{since}")' if since else "")
-    return (f"PREFIX a: <{onto}> "
-            f"SELECT ?f ?focus ?t WHERE {{ ?f a a:ReactionFiring ; "
-            f"a:firedBy a:{REACTION} ; a:focus ?focus ; a:startedAt ?t . {flt} }} "
-            "ORDER BY ?t ?f LIMIT 500")
+    boundary firing is re-read, never lost. Ordered by (at, firing) and capped at
+    `limit`, the paging the joined query used to do server-side."""
+    want = {str(f) for f in fired if f}
+    foci = {str(f): str(x) for f, x in focus if f and x}
+    times = {str(f): str(t) for f, t in at if f and t}
+    out = []
+    for f in want:
+        x, t = foci.get(f), times.get(f)
+        if not (x and t) or (since and t < since):
+            continue
+        out.append({"firing": f, "bead": x.rsplit("/", 1)[-1].split(":")[-1], "at": t})
+    out.sort(key=lambda r: (r["at"], r["firing"]))
+    return out[:limit]
 
 
 def fetch_firings(root, since: str, timeout: float = 10.0) -> list[dict]:
@@ -69,22 +93,26 @@ def fetch_firings(root, since: str, timeout: float = 10.0) -> list[dict]:
     from .quipu import request_headers, resolve_onto, resolve_server
     server = resolve_server(None, root).rstrip("/")
     onto = resolve_onto(None, root)
-    req = urllib.request.Request(
-        server + "/query",
-        data=json.dumps({"query": firings_query(since, onto), "verbose": True}).encode(),
-        headers={**request_headers(), "X-Quipu-Client": "st-tend"})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        body = json.loads(resp.read())
-    if body.get("truncated"):
-        raise RuntimeError("firings query truncated; refusing a partial page")
-    out = []
-    for row in body.get("rows") or []:
-        value = lambda k: (row.get(k) or {}).get("value") if isinstance(row.get(k), dict) else row.get(k)
-        firing, focus, at = value("f"), value("focus"), value("t")
-        if firing and focus and at:
-            out.append({"firing": str(firing), "bead": str(focus).rsplit("/", 1)[-1].split(":")[-1],
-                        "at": str(at)})
-    return out
+    cols = {}
+    for name, sparql in firings_queries(onto).items():
+        req = urllib.request.Request(
+            server + "/query",
+            data=json.dumps({"query": sparql, "verbose": True}).encode(),
+            headers={**request_headers(), "X-Quipu-Client": "st-tend"})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            body = json.loads(resp.read())
+        if body.get("truncated"):
+            raise RuntimeError(f"firings {name} query truncated; refusing a partial page")
+        rows = body.get("rows") or []
+        value = lambda row, k: ((row.get(k) or {}).get("value")
+                                if isinstance(row.get(k), dict) else row.get(k))
+        if name == "fired":
+            cols[name] = [value(r, "f") for r in rows]
+        elif name == "focus":
+            cols[name] = [(value(r, "f"), value(r, "focus")) for r in rows]
+        else:
+            cols[name] = [(value(r, "f"), value(r, "t")) for r in rows]
+    return join_firings(cols["fired"], cols["focus"], cols["at"], since)
 
 
 def _labels(detail: dict) -> set[str]:
