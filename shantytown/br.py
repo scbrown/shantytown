@@ -433,7 +433,12 @@ def claim(tracker: BrTracker, bead_id: str) -> None:
     # reads extra stores, so a fed extra-store bead claimed on the primary would
     # fail (or fuzzy-hit another bead) and be re-fed forever (sattler, #140).
     found = _owning_store(tracker, bead_id)
-    repo = found[0] if found else tracker.repo
+    if found is None:
+        # NEVER fall back to the primary: br prefix-resolves a missing id to a
+        # different bead with rc 0 (sattler measured `show aegis-krkdd` -> krkddi),
+        # so a blind update could claim someone else's work.
+        raise RuntimeError(f"br update {bead_id} refused: no store holds exactly {bead_id}")
+    repo = found[0]
     run = tracker._bd if repo == tracker.repo else (lambda *a: tracker._bd_in(repo, *a))
     r = run("update", bead_id, "--status", "in_progress")
     if r.returncode != 0:

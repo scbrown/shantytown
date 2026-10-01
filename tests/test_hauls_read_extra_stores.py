@@ -126,3 +126,12 @@ def test_a_fuzzy_primary_answer_never_routes_the_claim(monkeypatch, tmp_path):
                                  fuzzy_primary=_row("aegis-2gold1"))
     br_mod.claim(t, "goldblum-1")
     assert writes == [(t.extra_repos[0], "goldblum-1")], writes
+
+
+def test_a_claim_held_by_no_store_raises_and_writes_nothing(monkeypatch, tmp_path):
+    t = _tracker(tmp_path)
+    # the primary prefix-resolves a missing id to a DIFFERENT bead with rc 0
+    writes = _show_update_stores(monkeypatch, {}, fuzzy_primary=_row("aegis-krkddi"))
+    with pytest.raises(RuntimeError, match="no store holds exactly"):
+        br_mod.claim(t, "aegis-krkdd")
+    assert writes == []
