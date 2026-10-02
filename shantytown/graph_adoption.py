@@ -231,8 +231,14 @@ def _present(registry, names) -> set:
     return found
 
 
+#: A row that only carries a suggestion (the resume brief's), not a dispatch.
+#: Kept out of every dispatch count: a hint is not a dispatch, and counting it
+#: would move the coverage denominator by an act nobody performed.
+SUGGEST = "suggest"
+
+
 def record(root, event: str, agent: str, item: str, ctx: GraphContext,
-           dry_run: bool = False, session: str = "") -> str | None:
+           dry_run: bool = False, session: str = "", suggestion=None) -> str | None:
     """Append one adoption row. Returns the ledger path, or None if unwritable.
 
     A ledger write must never take a dispatch down with it: the work reaching
@@ -261,6 +267,14 @@ def record(root, event: str, agent: str, item: str, ctx: GraphContext,
         "verification": ctx.verification,
         "dry_run": bool(dry_run),
     }
+    # aegis-4hhqoe.12: what the entity linker suggested for a row that named no
+    # node. Kept beside `nodes`, never inside it: `nodes` is what was ASSERTED,
+    # and the later row that does (or does not) assert the suggestion is the
+    # accept/reject read in suggestion_outcomes().
+    if suggestion is not None and getattr(suggestion, "node", ""):
+        row["suggested"] = suggestion.node
+        row["suggested_confidence"] = suggestion.confidence
+        row["suggested_written"] = bool(suggestion.written)
     try:
         logdir = Path(root) / "logs"
         logdir.mkdir(parents=True, exist_ok=True)
@@ -342,6 +356,8 @@ def summarize(rows, include_dry_run: bool = False) -> Summary:
     for row in rows:
         if row.get("dry_run") and not include_dry_run:
             continue
+        if row.get("event") == SUGGEST:
+            continue
         s.eligible += 1
         agent = str(row.get("agent") or "-")
         bucket = s.by_agent.setdefault(
@@ -364,3 +380,67 @@ def summarize(rows, include_dry_run: bool = False) -> Summary:
         elif row.get("verification") == UNVERIFIABLE:
             s.unverifiable += 1
     return s
+
+
+@dataclass
+class Outcomes:
+    suggested: int = 0
+    accepted: int = 0
+    rejected: int = 0
+    pending: int = 0
+
+    @property
+    def precision(self) -> float | None:
+        """Accepted over DECIDED. None until something was decided: a precision
+        over zero decisions is the flattering answer."""
+        decided = self.accepted + self.rejected
+        return self.accepted / decided if decided else None
+
+
+def suggestion_outcomes(rows) -> Outcomes:
+    """The live precision read on the entity linker (aegis-4hhqoe.12).
+
+    For each suggestion, the NEXT row for the same item that states graph
+    context decides it. If that row names the suggested node, it was accepted;
+    if it names other nodes or gives a no-graph-context reason, it was
+    rejected. With no such later row it is pending. A later suggestion-only row
+    decides nothing. Acceptance is an agent's act, not the linker's opinion of
+    itself, which is the point of reading it here rather than re-rating.
+    """
+    o = Outcomes()
+    ordered = sorted((r for r in rows if not r.get("dry_run")),
+                     key=lambda r: float(r.get("epoch") or 0))
+    for i, row in enumerate(ordered):
+        node = row.get("suggested")
+        if not node:
+            continue
+        o.suggested += 1
+        verdict, superseded = None, False
+        for later in ordered[i + 1:]:
+            if later.get("item") != row.get("item"):
+                continue
+            if later.get("suggested"):
+                # A newer suggestion for the same item before any decision:
+                # that one is read instead, so one decision is never counted
+                # against two suggestions.
+                superseded = True
+                break
+            if later.get("event") == SUGGEST:
+                continue
+            names = [n for n in (later.get("nodes") or []) if n]
+            if names:
+                verdict = node in names
+                break
+            if later.get("exemption"):
+                verdict = False
+                break
+        if superseded:
+            o.suggested -= 1
+            continue
+        if verdict is None:
+            o.pending += 1
+        elif verdict:
+            o.accepted += 1
+        else:
+            o.rejected += 1
+    return o
