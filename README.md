@@ -10,8 +10,8 @@
 *Create a work item. Tell an agent to go get it. That's the whole idea.*
 
 [![dispatch 3.4s](https://img.shields.io/badge/dispatch-3.4s-brightgreen)](docs/why.md#measured-against-gas-town)
-[![33 commands](https://img.shields.io/badge/commands-37-blue)](#-the-whole-surface)
-[![tests](https://img.shields.io/badge/tests-3489%20passing-blue)](docs/principles.md)
+[![40 commands](https://img.shields.io/badge/commands-40-blue)](#-the-whole-surface)
+[![tests](https://img.shields.io/badge/tests-4366%20passing-blue)](docs/principles.md)
 [![python](https://img.shields.io/badge/python-3.11%2B-blue)](#-install)
 [![dependencies none](https://img.shields.io/badge/dependencies-none-blue)](#-install)
 [![license MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
@@ -61,6 +61,7 @@ could not tell. The longer walk-through, including boot modes and the anchor, is
 ```
 st task <title>                   create work, get an id back
 st go <item> <agent>              dispatch. the one that matters. the agent is named, never guessed.
+st sling <bead>                  hand a beaded design to the executive for scheduling.
 st inbox <agent> <message>        a message into a pane. send-keys, nothing more.
 st crew                           who exists, what state, what role
 st anchor                         who am I, what's on my plate      ← the anchor
@@ -99,6 +100,7 @@ st fleet                          the whole crew
   window drain|clear|release|abort <id>
                                   drain and restore exactly that snapshot
   dashboard [admin]               live, tier-scoped view: roster/state/work, self-refreshing
+  watch [--peer|--metrics]        one liveness pass on the PEER host's administrator
 st repo                           a shared project repo
   worktree <repo> [agent]         provision an agent's isolated worktree off a SHARED project repo
   push <repo> [agent]             push wt/<agent> to EVERY remote; refuses if invoked from another branch
@@ -107,10 +109,11 @@ st ops                            the installation
   doctor [--install]              what's installed, what's stale, what's missing
   provision [agent]           register Quipu tooling for local crew without launching
   subscribe                       watch quipu entity events; route governed workflows to the admin
+  hooks <register|list|check>     keep tools' registered hook bundles rendered, and check they are
   help <topic>                    rationale pages: handoff/cycle, haul, inbox
 ```
 
-Thirty-seven, and the count is load-bearing: six verbs and thirty-one grouped commands under five
+Forty, and the count is load-bearing: seven verbs and thirty-three grouped commands under five
 groups, and a test pins this block AND this sentence to the parser, so the next command either updates
 both or fails CI. A group is a namespace, not a command; it earns no slot. The flat spellings from
 before the grouping (st cycle for st agent cycle, and so on) still work for two releases and say so on

@@ -1812,9 +1812,12 @@ class BlockedMisstatusAlerter:
     """
 
     def __init__(self, root, reg, panes, *, push=push_to_admin,
-                 bd_blocked=None, bd_show=None, now=None, log=None):
+                 bd_blocked=None, bd_show=None, now=None, log=None, seen=None):
         self._root = root          # aegis-mxgzh: the sweeps need it to resolve the br backend
         self.path = Path(root) / "notify" / "blocked_misstatus.json"
+        # aegis-sfpfwf: beads the unblocked-event consumer has a firing for. A
+        # mis-statused bead NOT in it means chaski never emitted: say so.
+        self._seen = seen
         self._reg = reg
         self._panes = panes
         self._push = push
@@ -1878,6 +1881,14 @@ class BlockedMisstatusAlerter:
                    f"in fact but blocked on paper, so br ready and every feed "
                    f"path hide it. Clear/correct the status; do not chase a "
                    f"blocker that no longer exists. {(row.get('title') or '')[:90]}")
+            if self._seen is not None:
+                try:
+                    missed = bid not in self._seen()
+                except Exception:
+                    missed = False
+                if missed:
+                    msg += (" EVENT MISSED: chaski emitted no workitem-unblocked for "
+                            "it, so the event path did not correct it. Check the emitter.")
             if self._push(self._reg, self._panes, msg):
                 ledger[bid] = now
                 surfaced.append(bid)

@@ -272,3 +272,32 @@ def test_both_governor_surfaces_forward_the_configured_pace(tmp_path, monkeypatc
     else:
         cli._tend_once(_Args(tmp_path, backend='files'))
     assert [(p.window, p.ratio) for p in seen] == [('seven_day', 1.5)]
+
+
+def test_a_spending_envelope_sends_its_bound_AT_THIS_ELAPSED(tmp_path):
+    """aegis-zowv5j: Creel's trajectory is ratio x elapsed, so an envelope row is
+    sent as its bound at the reading's elapsed — which puts Creel's target on the
+    envelope now — and an elapsed that cannot be stated is said, not guessed."""
+    from shantytown.governor import Pace
+    probe = tmp_path / "probe.js"
+    probe.write_text("// fixture")
+    pace = Pace("seven_day", None, curve=((0.0, 20.0), (43.0, 65.0), (100.0, 100.0)))
+    week, now = 604800, 1_000_000
+    sent = {}
+
+    def run(cmd, **kwargs):
+        sent.update(json.loads(open(cmd[cmd.index("--state") + 1]).read()))
+        t = sent["paceTargets"]["seven_day"]
+        return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps({
+            "controller_line": "governor recommends 0", "controller": {"windows": {
+                "seven_day": {"paceRatio": t["ratio"], "windowLength": t["length"]}}}}))
+    reading = Reading(pct=50, at=now, reset_at=now + week * (1 - 0.43))
+    line = advisory.controller_line({"seven_day": reading}, running=6, cap=9,
+        now=now, paces=(pace,), probe=str(probe), node="node", run=run)
+    assert line == "governor recommends 0"
+    assert sent["paceTargets"]["seven_day"]["ratio"] == pytest.approx(0.65 / 0.43)
+
+    blind = advisory.controller_line({"seven_day": Reading(pct=50, at=now)},
+        running=6, cap=9, now=now, paces=(pace,), probe=str(probe), node="node",
+        run=run)
+    assert blind.startswith("advisory unavailable:") and "envelope" in blind

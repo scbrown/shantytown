@@ -1,6 +1,6 @@
-"""st — the CLI. Six verbs, five groups, thirty-one grouped commands: thirty-seven, and the count is load-bearing: each earns its slot.
+"""st — the CLI. Seven verbs, five groups, thirty-three grouped commands: forty, and the count is load-bearing: each earns its slot.
 
-    task · go · inbox [--count] · crew [--count|--governor]
+    task · go · sling · inbox [--count] · crew [--count|--governor]
     · anchor [--short|--events|--harness] · attach [-r|--no-start]
     work  → repool · defer · cost [--sync] · dream [--run] · triage
             · jobs [list|check|run|history]
@@ -9,8 +9,9 @@
     fleet → start [--mode] · tend [--install|--status|--reauth|--target]
             · roles [--check|set|band|sync] · init · hold gaming [--clear|--status|--probe]
             · window {plan|drain|clear|release|abort} · dashboard [admin]
+            · watch [--peer|--metrics|--dry-run]
     repo  → worktree [--gc] · push [--branch] · context
-    ops   → doctor [--install] · provision [agent] · subscribe · help <topic>
+    ops   → doctor [--install] · provision [agent] · subscribe · hooks <register|list|check> · help <topic>
 
 THE SURFACE WAS REGROUPED, and the count did not move (Stiwi, 2026-09-17). Six
 verbs stay top-level — the ones typed all day, and the ones an external status
@@ -34,6 +35,14 @@ The count is thirty-three LEAVES: the six verbs plus the twenty-seven grouped
 commands, i.e. everything that runs a handler. A group runs nothing and earns
 no slot; it is a namespace, and the discipline this file argues is about what
 gets a handler.
+
+`fleet watch` earned the fortieth slot (aegis-az0a40, Stiwi 2026-09-29: "You should
+have an alert for this. And she should have an alert for if you can't be contacted.
+And each of you should try to fix that."). Each host's administrator watches the
+OTHER host's: probe, alert the local admin, relaunch via the peer's own `st agent
+new`, escalate only when that fails. It is a command and not a flag on `tend`
+because tend supervises THIS host's cards and this reaches across a host boundary
+with its own state, rate limits and exit contract (0 ok, 1 down, 2 unknown).
 
 `harness <agent> [claude|codex]` earned the thirty-first slot (aegis-6glmer, Stiwi
 2026-09-04: "it should be easy for you to convert crew to claude"). It is a command
@@ -192,12 +201,13 @@ from . import supervisor as sup_mod
 from . import tend as tend_mod
 from . import provision as prov_mod
 from . import notify as notify_mod
-from .files import (FilesRegistry, FilesTracker, plate as files_plate,
+from .files import (FilesRegistry, FilesTracker, plate as files_plate, write_text_atomic,
                     items as files_items)
 from .launched import FilesLaunches, CURRENT, STALE, UNKNOWN
 from .stopped import FilesStops
 from . import agent_hold
 from .quipu import QuipuRegistry, QuipuQueryRejected, QuipuWriteRejected
+from . import entity_suggest
 from . import graph_adoption
 from . import window as window_mod
 from . import selfcheck
@@ -359,12 +369,13 @@ def _default_bd_repo(a) -> str | None:
         return None
 
 
-def _plate(a, *, snapshot=False):
+def _plate(a, *, snapshot=False, require_complete=False):
     """The plate reader matching the selected tracker."""
     trk = _tracker(a)
     if _backend(a) in ("beads", "br"):
         from .br import plate as br_plate, plate_reader
-        return plate_reader(trk) if snapshot else lambda who: br_plate(trk, who)
+        return (plate_reader(trk, require_complete=require_complete) if snapshot
+                else lambda who: br_plate(trk, who))
     return lambda who: files_plate(trk, who)
 
 
@@ -568,6 +579,43 @@ def _account_launch_refusal(a, card, *, replacing=False):
         return f'account governor cannot establish admission ({type(exc).__name__})'
 
 
+
+def _governor_windows(g) -> dict:
+    """Per window: (pct, next_at, reset_seconds), or None when not published.
+
+    ONE computation for both `st crew --governor` forms (aegis-apfuey). The prose
+    line and the JSON used to be built separately, and the status bar parsed the
+    prose; when the prose changed shape, the bar went blind while st exited 0."""
+    out = {}
+    now = time.time()
+    for window in (gov_mod.FIVE_HOUR, gov_mod.SEVEN_DAY):
+        r = g.reader.read_all().get(window)
+        if r is None or r.lost(now, g.policy.max_age_seconds):
+            out[window] = None
+            continue
+        pct = int(round(r.pct))
+        thresholds = sorted(t.at for t in g.policy.tiers_for(window) if t.at > pct)
+        left = r.resets_in(now)
+        out[window] = (pct, thresholds[0] if thresholds else None,
+                       None if left is None else max(0, int(left)))
+    return out
+
+
+def _window_prose(b) -> str:
+    if b is None:
+        return '?/?/?'
+    pct, nxt, reset = b
+    return f"{pct}/{'-' if nxt is None else nxt}/{'-' if reset is None else reset}"
+
+
+def _window_wire(b) -> dict:
+    """`published: false` with null numbers, never a zero: an unpublished window
+    must not be able to read as a low one."""
+    if b is None:
+        return dict(published=False, pct=None, next=None, reset_seconds=None)
+    pct, nxt, reset = b
+    return dict(published=True, pct=pct, next=nxt, reset_seconds=reset)
+
 def _crew_account_governor(a):
     from . import fleet_governor as fg
     from .deployment import local_host
@@ -581,8 +629,15 @@ def _crew_account_governor(a):
     cfg, governors = _governors(a)
     fleet = getattr(a, '_account_governor', None)
     if fleet is None:
-        print(json.dumps(fg.snapshot(local_host(a.root) or 'local', governors,
-                                     _governor_agents(a))))
+        snap = fg.snapshot(local_host(a.root) or 'local', governors, _governor_agents(a))
+        # The status bar reads THIS on a host with no account fleet, so it carries
+        # the same bar fields as the fleet form (aegis-apfuey). Added here, not in
+        # fg.snapshot: that is the host-to-host wire format and --local stays it.
+        for name, g in governors.items():
+            snap['governors'][name].update(
+                windows={w: _window_wire(b) for w, b in _governor_windows(g).items()},
+                effect=g.evaluate(persist=False).effect())
+        print(json.dumps(snap))
         return OK
     counts = fleet.counts()
     verdicts = {name: g.evaluate(persist=False) for name, g in governors.items()}
@@ -595,7 +650,14 @@ def _crew_account_governor(a):
                                   signal_lost=v.signal_lost, frozen=v.frozen,
                                   why=v.why, policy_host=fleet.policy_hosts[name],
                                   provenance=governors[name].reader.provenance,
-                                  readings=fg.observations(governors[name]))
+                                  readings=fg.observations(governors[name]),
+                                  # aegis-apfuey: what the status bar needs, from the
+                                  # SAME computation as the prose line, so a bar that
+                                  # pins this JSON cannot disagree with `st crew
+                                  # --governor`. Additive: version stays 1.
+                                  windows={w: _window_wire(b) for w, b in
+                                           _governor_windows(governors[name]).items()},
+                                  effect=v.effect())
                                   for name, v in verdicts.items()},
                               balance=_balance_wire(fleet))))
     else:
@@ -603,18 +665,7 @@ def _crew_account_governor(a):
             print('off' if not fleet.errors else 'lost ' + fleet.fallback())
         for name, v in verdicts.items():
             g = governors[name]
-            parts = []
-            for window in (gov_mod.FIVE_HOUR, gov_mod.SEVEN_DAY):
-                r = g.reader.read_all().get(window)
-                if r is None or r.lost(time.time(), g.policy.max_age_seconds):
-                    parts.append('?/?/?')
-                    continue
-                pct = int(round(r.pct))
-                thresholds = sorted(t.at for t in g.policy.tiers_for(window) if t.at > pct)
-                next_at = thresholds[0] if thresholds else '-'
-                left = r.resets_in(time.time())
-                reset = '-' if left is None else str(max(0, int(left)))
-                parts.append(f'{pct}/{next_at}/{reset}')
+            parts = [_window_prose(b) for b in _governor_windows(g).values()]
             sources = ','.join(f'{w}@{h}' for w, h in g.reader.provenance.items())
             print(f'{name} {"lost" if v.signal_lost else "ok"} '
                   + ('' if v.signal_lost else ' '.join(parts))
@@ -878,6 +929,194 @@ def _hostmem_verdict(cfg):
 #: squeeze on ordinary work; it is a ceiling on the pathological case.
 _TEND_SWEEP_BUDGET_S = float(os.environ.get("SHANTY_TEND_SWEEP_BUDGET_S", "120"))
 
+def _hooks_running(a, cards) -> list:
+    """The agents RUNNING now, each with the settings file its PROCESS was
+    launched on (read from the process, never the card) and, when the launch
+    stamp describes that same file, the bytes or hash it launched on.
+
+    An agent whose pane has no process is not running and is left out: live
+    verdicts are about processes, and a stale stamp for a stopped agent (they
+    outlive the process until `st agent stop`) must not produce one."""
+    from .hook_bundles import Running
+    from .runtime import settings_path_in_cmdline
+    try:
+        panes, launches = _panes(a), _launches(a)
+    except Exception:
+        return []
+    out = []
+    for c in cards:
+        if not getattr(c, "pane", None):
+            continue
+        try:
+            cmdline = panes.cmdline(c.pane)
+        except Exception:
+            continue
+        path = settings_path_in_cmdline(cmdline) if cmdline else None
+        if not path:
+            continue
+        p = Path(path)
+        if p.is_dir():                      # codex: CODEX_HOME names the directory
+            p = p / "config.toml"
+        stamp = launches.get(c.name)
+        same = stamp is not None and Path(stamp.settings).resolve() == p.resolve()
+        out.append(Running(agent=c.name, settings_file=str(p),
+                           launch_bytes=launches.snapshot(c.name) if same else None,
+                           launch_sha256=stamp.sha256 if same else None))
+    return out
+
+
+def _hooks_check_context(a) -> tuple[dict[str, str], list]:
+    """What `hooks check` needs from the cards, resolved the way launch resolves it.
+
+    agent_roles: the settings PROFILE each local card launches on (a worker with
+    direct reports gets the lead profile, exactly as the settings resolver does),
+    so a per-agent file is checked against the bundles its agent really carries.
+    layers: claude settings files st does NOT emit (the user's global file and
+    each workspace's own), where a bundle command would fire a second time.
+    Best effort: no crew or an unreadable registry still checks the role files."""
+    from .deployment import local_host
+    roles: dict[str, str] = {}
+    layers: list[Path] = [Path.home() / ".claude" / "settings.json"]
+    try:
+        cards = [c for c in _registry(a).all().exact() if c.host in (None, local_host(a.root))]
+    except Exception:
+        return roles, layers
+    receivers = {c.reports_to for c in cards if c.reports_to}
+    for c in cards:
+        roles[c.name] = "lead" if c.role == "worker" and c.name in receivers else c.role
+        if c.workspace:
+            # A workspace file is loaded only by the agent working there, so it
+            # can only duplicate THAT agent's role file.
+            ws = Path(c.workspace) / ".claude"
+            layers += [(ws / "settings.json", roles[c.name]),
+                       (ws / "settings.local.json", roles[c.name])]
+    return roles, layers
+
+
+def _hooks_reassert(root) -> list[Path]:
+    """Re-render EVERY role settings file st has emitted, so a registry change
+    reaches the same set of files `st ops hooks check` inspects (aegis-68j0ys).
+
+    `st fleet roles set` renders only the (harness, role) pairs some card names,
+    so a role file no card currently uses (a codex lead file, with no codex lead
+    today) kept its old hooks and check reported the new bundle `missing` there,
+    measured 2026-09-30. Per-agent files are named, not rewritten: they are
+    rendered at that agent's launch, through the same seam."""
+    from . import hook_bundles as hb
+    files, unresolved = hb.emitted_role_files(root)
+    written: list[Path] = []
+    for harness, role, path in files:
+        if path.name.startswith("agent-") or path.parent.name.startswith("agent-"):
+            print(f"  not re-rendered (per-agent, rendered at launch): {path}")
+            continue
+        written += _emit_role_settings(Path(root), {role}, harness_name=harness)
+    for p in unresolved:
+        print(f"  not re-rendered (per-agent, rendered at launch): {p}")
+    for p in written:
+        print(f"  rendered {p}")
+    return written
+
+
+def _hooks_reassert_or_say(root) -> bool:
+    """_hooks_reassert, and if a render fails: the REGISTRY has already changed
+    while some role files have not, so say exactly that and how to finish it
+    (aegis-yb8ifi). Each file is written atomically, so none is left torn."""
+    try:
+        _hooks_reassert(root)
+        return True
+    except Exception as e:  # noqa: BLE001 - reported, and the exit code says so
+        print(f"st: the registry changed, but re-rendering the role files FAILED "
+              f"({type(e).__name__}: {e}). Files already rendered are current; the rest "
+              f"still hold their previous content. Fix the cause, then run "
+              f"`st ops hooks apply`.", file=sys.stderr)
+        return False
+
+
+def _cmd_hooks(a) -> int:
+    """`st ops hooks` (aegis-68j0ys). st keeps registered bundles rendered; it
+    knows nothing about what is in them."""
+    from . import hook_bundles as hb
+    from .deployment import local_host
+    root = a.root
+    if a.hooks_cmd == "register":
+        try:
+            name, outcome = hb.register(root, a.file)
+        except (OSError, ValueError) as e:
+            print(f"refused: {e}", file=sys.stderr)
+            return 1
+        print(f"{name}: {outcome}")
+        if outcome != "unchanged" and not a.no_apply and not _hooks_reassert_or_say(root):
+            return 1
+        if outcome != "unchanged":
+            print("  a running agent picks it up at its next launch")
+        return 0
+    if a.hooks_cmd == "unregister":
+        try:
+            gone = hb.unregister(root, a.name)
+        except ValueError as e:
+            print(f"refused: {e}", file=sys.stderr)
+            return 1
+        print(f"{a.name}: {'removed' if gone else 'not registered'}")
+        if gone and not a.no_apply and not _hooks_reassert_or_say(root):
+            return 1
+        return 0 if gone else 1
+    if a.hooks_cmd == "apply":
+        return 0 if _hooks_reassert_or_say(root) else 1
+    if a.hooks_cmd == "list":
+        reg = hb.load(root)
+        if a.json:
+            print(json.dumps({"bundles": [
+                {"name": b.name, "version": b.version, "owner": b.owner, "roles": list(b.roles),
+                 "hooks": [{"event": h.event, "matcher": h.matcher, "command": h.command,
+                            "timeout": h.timeout, "harnesses": list(h.harnesses)} for h in b.hooks]}
+                for b in reg.bundles],
+                "errors": [{"file": f, "reason": r} for f, r in reg.errors]}, indent=2))
+            return 1 if reg.errors else 0
+        if not reg.bundles and not reg.errors:
+            print(f"no hook bundles registered in {hb.registry_dir(root)}")
+        for b in reg.bundles:
+            print(f"{b.name} {b.version}  owner={b.owner}  roles={','.join(b.roles)}  "
+                  f"hooks={len(b.hooks)}")
+        for f, r in reg.errors:
+            print(f"BROKEN {f}: {r}")
+        return 1 if reg.errors else 0
+    agent_roles, layers = _hooks_check_context(a)
+    from .runtime import builtin_hook_bundles
+    res = hb.check(root, agent_roles=agent_roles, other_layers=layers,
+                   builtin=builtin_hook_bundles(root))
+    try:
+        from .deployment import local_host as _lh
+        cards = [c for c in _registry(a).all().exact() if c.host in (None, _lh(a.root))]
+    except Exception:
+        cards = []
+    running = _hooks_running(a, cards)
+    hb.apply_live(res, running)
+    from . import stats as _stats
+    hb.apply_firing(res, hb.load(root), running=running,
+                    last_active=_stats.last_activity(Path(root)))
+    if a.json:
+        print(json.dumps(res.to_json(root=root, host=local_host(root)), indent=2))
+        return res.exit_code
+    s = res.summary()
+    for e in res.registry_errors:
+        print(f"REGISTRY {e['file']}: {e['reason']}")
+    for i in res.items:
+        if i["firing"] == "silent":
+            print(f"SILENT      {i['harness']}/{i['role']} {i['bundle']} {i['event']}: {i['detail']}")
+        if i["live"] == "stale":
+            print(f"LIVE-STALE  {i['harness']}/{i['role']} {i['bundle']} {i['event']}: {i['detail']}")
+        if i["configured"] != "ok":
+            print(f"{i['configured'].upper():11} {i['harness']}/{i['role']} {i['bundle']} "
+                  f"{i['event']}: {i['command']}")
+            if i["detail"]:
+                print(f"            {i['detail']}")
+    print(f"hook bundles: {s['items']} item(s), {s['configured_ok']} configured, "
+          f"{s['missing']} missing, {s['unsupported']} unsupported, {s['duplicate']} duplicate; "
+          f"live: {s['live_ok']} ok, {s['live_stale']} stale; "
+          f"firing: {s['firing_ok']} ok, {s['firing_silent']} silent")
+    return res.exit_code
+
+
 def _default_root() -> Path:
     """Where the store is when nobody said — the shared discovery chain.
 
@@ -897,9 +1136,9 @@ from .surface import SURFACE, GROUP_OF  # noqa: E402
 _GROUP_HELP = {
     "work": "the item and the board: repool, defer, cost, dream, triage, jobs",
     "agent": "one agent: new, stop, harness, cycle, input, ask, answer, log, history, stats",
-    "fleet": "the fleet: start, tend, roles, init, hold, window, dashboard",
+    "fleet": "the fleet: start, tend, roles, init, hold, window, dashboard, watch",
     "repo": "a shared project repo: worktree, push, context",
-    "ops": "the installation: doctor, provision, subscribe, help",
+    "ops": "the installation: doctor, provision, subscribe, hooks, help",
 }
 #: Set to silence the one-line notice an old spelling prints. For tests and
 #: hooks — an operator typing `st cycle` is exactly who the line is for.
@@ -1039,6 +1278,18 @@ def build_parser() -> argparse.ArgumentParser:
                          "A READ: it never marks anything delivered (see events.py)")
     mr.add_argument("--harness", action="store_true",
                     help="print ONLY this agent's harness name (e.g. claude)")
+    mr.add_argument("--json", action="store_true",
+                    help="the task context as JSON for hooks and tools: agent, harness, and "
+                         "the plate item (id, title, status, priority) or null")
+
+    sling = sub.add_parser("sling", help="hand a beaded design to the executive administrator")
+    sling.add_argument("item")
+    note = sling.add_mutually_exclusive_group()
+    note.add_argument("--note")
+    note.add_argument("--note-file", type=Path)
+    sling.add_argument("--dry-run", "-n", action="store_true")
+    sling.add_argument("--receiving-host", help=argparse.SUPPRESS)
+    sling.add_argument("--executive", help=argparse.SUPPRESS)
 
     go = sub.add_parser("go", help="dispatch an item to an agent")
     go.add_argument("item")
@@ -1445,6 +1696,26 @@ def build_parser() -> argparse.ArgumentParser:
     pv.add_argument("agent", nargs="?", help="one local crew card; all local cards if omitted")
     pv.add_argument("--json", action="store_true", help="versioned registration receipt; no credentials")
 
+    hk = leaf("hooks", help="registered hook bundles: register, list, check, unregister")
+    hk_sub = hk.add_subparsers(dest="hooks_cmd", required=True)
+    hk_reg = hk_sub.add_parser("register", help="validate a bundle file, add it to the registry, "
+                                                  "and re-render every emitted role file")
+    hk_reg.add_argument("file", type=Path)
+    hk_reg.add_argument("--no-apply", action="store_true",
+                        help="only install into the registry; render later with `st ops hooks apply`")
+    hk_un = hk_sub.add_parser("unregister", help="remove a bundle by name, and re-render")
+    hk_un.add_argument("name")
+    hk_un.add_argument("--no-apply", action="store_true",
+                       help="only remove from the registry; render later with `st ops hooks apply`")
+    hk_sub.add_parser("apply", help="re-render every emitted role settings file from the registry "
+                                    "(idempotent): the files `check` inspects")
+    hk_ls = hk_sub.add_parser("list", help="registered bundles")
+    hk_ls.add_argument("--json", action="store_true")
+    hk_ck = hk_sub.add_parser("check", help="is every registered hook in every emitted role file? "
+                                            "exit 0 ok, 1 drift, 2 cannot tell")
+    hk_ck.add_argument("--json", action="store_true",
+                       help='machine-readable report, schema "st.hook-check/1"')
+
     dr = leaf("doctor", help="what tools are installed, what's stale, what's missing")
     dr.add_argument("tool", nargs="?", help="check one tool; all if omitted")
     dr.add_argument("--deploy", action="store_true",
@@ -1556,6 +1827,39 @@ def build_parser() -> argparse.ArgumentParser:
                     help="refresh every SECS (default 5)")
     db.add_argument("--once", action="store_true",
                     help="render one snapshot and exit (no refresh loop)")
+
+    # aegis-az0a40: each host's administrator watches the other's. ONE pass;
+    # arming it (cron/systemd/launchd) is the deployment's separate step.
+    pw = leaf("watch", help="one liveness pass on the PEER host's administrator: "
+                            "probe, alert the local admin, repair, escalate. "
+                            "exit 0 ok, 1 down, 2 unknown")
+    pw.add_argument("--peer", metavar="AGENT",
+                    help="the peer administrator (default: the one administrator "
+                         "the peer host's own census lists)")
+    pw.add_argument("--peer-host", metavar="HOST",
+                    help="which declared [host.peers.<HOST>] to watch "
+                         "(default: the only one)")
+    pw.add_argument("--watcher", metavar="AGENT",
+                    help="the LOCAL administrator to alert (default: this host's "
+                         "one administrator)")
+    pw.add_argument("--metrics", type=Path, metavar="PATH",
+                    help="atomic Prometheus textfile: admin_peer_up{watcher,peer} "
+                         "and admin_peer_watch_last_run_timestamp_seconds")
+    pw.add_argument("--escalate-after", type=float, default=15, metavar="MIN",
+                    help="page a human once the peer has been down this long "
+                         "(default 15); a FAILED repair pages sooner")
+    pw.add_argument("--repair-cooldown", type=float, default=30, metavar="MIN",
+                    help="at most one relaunch attempt per MIN (default 30)")
+    pw.add_argument("--alert-every", type=float, default=60, metavar="MIN",
+                    help="re-alert the local admin during an outage every MIN "
+                         "(default 60)")
+    pw.add_argument("--severity", default="high",
+                    help="severity passed to the escalation command (default high)")
+    pw.add_argument("--no-repair", action="store_true",
+                    help="alert and escalate, but never relaunch the peer")
+    pw.add_argument("-n", "--dry-run", action="store_true",
+                    help="probe (read-only), then print what would be done; "
+                         "no alert, repair, escalation, state or metrics write")
 
     sb = leaf("subscribe",
                         help="watch quipu entity events; route assigned workflows to the admin")
@@ -1916,7 +2220,7 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_doctor(a)
     from .deployment import command_environment
     from .quipu import NamespaceUnconfigured
-    with command_environment(a.root):
+    with command_environment(a.root, a.root_how):
         try:
             return _run_command(a)
         except NamespaceUnconfigured as e:
@@ -1935,6 +2239,9 @@ def _run_command(a) -> int:
         return _cmd_hold(a)
     if a.cmd == "anchor":
         return _cmd_anchor(a)
+    if a.cmd == "sling":
+        from .sling_cli import command
+        return command(a)
     if a.cmd == "go":
         return _cmd_go(a)
     if a.cmd == "repool":
@@ -1964,6 +2271,8 @@ def _run_command(a) -> int:
         return _cmd_provision(a)
     if a.cmd == "doctor":
         return _cmd_doctor(a)
+    if a.cmd == "hooks":
+        return _cmd_hooks(a)
     if a.cmd == "stop":
         return _cmd_stop(a)
     if a.cmd == "log":
@@ -2035,6 +2344,8 @@ def _run_command(a) -> int:
         return _cmd_answer(a)
     if a.cmd == "dashboard":
         return _cmd_dashboard(a)
+    if a.cmd == "watch":
+        return _cmd_watch(a)
     if a.cmd == "subscribe":
         return _cmd_subscribe(a)
     if a.cmd == "help":
@@ -2208,6 +2519,20 @@ def _record_launch_unretirement(a, card) -> bool:
     print(f"  {card.name}: sanctioned launch cleared RETIRED "
           f"(UN-RETIRED by {actor} at {at}).")
     return True
+
+
+# Sweeps that read the SHARED board and push to the local admin. They run on the
+# fleet owner host only (aegis-1g55ji); everything else in a tend pass is host-local.
+FLEET_SWEEPS = ("idle-fleet", "governor-setpoint", "governor-utilization",
+                "blocked-stale", "deferral-sweep", "unblocked-events",
+                "blocked-misstatus")
+
+
+def runs_fleet_sweeps(cfg) -> bool:
+    """True on the host that owns fleet-wide sweeps: the declared
+    [host] admission_owner, or any host when none is declared (single host)."""
+    owner = getattr(cfg, "host_admission_owner", None)
+    return owner is None or owner == getattr(cfg, "host_name", None)
 
 
 def tend_fate(launches, agent: str) -> str:
@@ -3672,6 +3997,7 @@ def _cmd_graph_adoption(a) -> int:
     window = f" in the last {hours:g}h" if hours else ""
     rows = graph_adoption.read_rows(a.root, cutoff)
     s = graph_adoption.summarize(rows, include_dry_run=a.include_dry_run)
+    o = graph_adoption.suggestion_outcomes(rows)
     if a.json:
         print(json.dumps({
             "window_hours": hours,
@@ -3682,6 +4008,9 @@ def _cmd_graph_adoption(a) -> int:
             "by_agent": s.by_agent,
             "reasons": dict(s.reasons), "nodes": dict(s.nodes.most_common(20)),
             "zero_node_agents": s.zero_node_agents,
+            "suggestions": {"suggested": o.suggested, "accepted": o.accepted,
+                            "rejected": o.rejected, "pending": o.pending,
+                            "precision": o.precision},
             "scope": graph_adoption.SCOPE_NOTE,
         }, indent=2, sort_keys=True))
         return OK
@@ -3721,6 +4050,13 @@ def _cmd_graph_adoption(a) -> int:
         print("  most-cited nodes:")
         for node, n in s.nodes.most_common(5):
             print(f"    {n:>3}  {node}")
+    if o.suggested:
+        # aegis-4hhqoe.12: the live precision read. Accepted = a later row for
+        # the same item cited the suggested node; rejected = it cited something
+        # else or stated no-context. Pending ones decide nothing yet.
+        print(f"  linker suggestions:   {o.suggested:>4}  accepted {o.accepted}, "
+              f"rejected {o.rejected}, pending {o.pending}"
+              f"   precision {pct(o.precision)}")
     print("  server-side denominator: quipu_http_client_requests_total{client=...} "
           "in prometheus — this ledger counts DISPATCHES, not reads.")
     return OK
@@ -3857,6 +4193,11 @@ def _cmd_doctor(a) -> int:
         print(doc.render_stashes(stash_found, stash_n))
         print(_render_socket(sock_v, sock_why))
         code = _fold_socket(_doctor_exit(doc, healths, self_h), sock_v, doc)
+        if any(spec.name == "quipu" for spec in specs):
+            from . import quipu_health
+            write_health = quipu_health.check(deployment_default(a.root, "QUIPU_SERVER"))
+            print(write_health.render())
+            code = _fold_generic(code, write_health.code)
         # The untracked-hook liveness leg (aegis-06ue4): out-of-band answer to
         # "has the fail-open governance nudge actually run?" Only on a full run —
         # `st ops doctor bobbin` asked about bobbin, not the fleet's hooks.
@@ -4312,7 +4653,9 @@ def _emit_role_settings(root: Path, roles: set[str],
         # merge AND the serialization are the harness's render() — one call,
         # because they are one decision and this emitter must not learn a second
         # file format to keep the rule.
-        p.write_text(program.render(emitted, _read_text(p), root=root))
+        # ATOMIC (aegis-yb8ifi): every agent on this role launches on this file,
+        # and write_text truncates first, so a failure mid-write left it 0 bytes.
+        write_text_atomic(p, program.render(emitted, _read_text(p), root=root))
         written.append(p)
     return written
 
@@ -4516,7 +4859,7 @@ def _cmd_inbox(a) -> int:
               "nothing was sent", file=sys.stderr)
         return CANNOT_TELL
     if getattr(a, "durable", False):
-        return _inbox_durable(a, agent, msg, panes, typed=typed)
+        return _inbox_durable(a, agent, msg, panes, typed=typed, sender=sender)
 
     # ROUTINE — unchanged. send-keys only, ephemeral.
     relayed = _relay_if_offhost(a, agent, typed, sender)
@@ -4632,6 +4975,62 @@ def _files_message_recipient(a):
     return Agent(name=a.agent, role=row["role"].split(",")[0], host=row["host"])
 
 
+def _peer_inbox_ssh(peer, name: str, typed: str, sender: str | None):
+    """Run the peer host's own EPHEMERAL `st inbox` over ssh — THE cross-host
+    live-send transport, shared by the ephemeral relay and the durable path's
+    live nudge (aegis-az0a40) so the two cannot drift. Raises OSError /
+    TimeoutExpired; returns the CompletedProcess otherwise. The remote
+    attributes the message from $SHANTY_AGENT, so the RAW text is sent."""
+    import shlex
+    import subprocess
+    q = shlex.quote
+    remote_cmd = (
+        (f"SHANTY_AGENT={q(sender)} " if sender else "")
+        + 'PATH="$HOME/.local/bin:$PATH" '
+        + f"st --registry files --root {q(peer.root)} inbox {q(name)} {q(typed)}")
+    return subprocess.run(
+        ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
+         peer.ssh, remote_cmd],
+        capture_output=True, text=True, timeout=45)
+
+
+def _offhost_nudge(a, agent, typed: str, sender: str | None) -> tuple[bool, str]:
+    """Best-effort LIVE nudge of an off-host recipient, after a durable persist.
+
+    (delivered, how). `how` is the TRUTH for the caller's one-line report:
+    either where it went, or why nothing was attempted/delivered. Never raises
+    — the durable message is already stored, and a nudge failure must not be
+    able to turn that into a non-zero exit (GitHub #26's rule).
+
+    THE DEFECT (aegis-az0a40): the durable path computed `live = not offhost
+    and ...`, so an off-host recipient was NEVER nudged and the report said
+    "recipient not live" — measured false against a peer administrator that
+    was up and busy, while `st go` reached the same pane through the peer path.
+    """
+    import subprocess
+    from .deployment import local_host
+    local = local_host(a.root)
+    if local is None:
+        return False, ("this deployment declares no [host] name, so the "
+                       f"recipient's host {agent.host} cannot be reached")
+    cfg, _err = config.load_or_default(a.root)
+    peer = cfg.host_peers.get(agent.host)
+    if peer is None:
+        return False, f"no [host.peers.{agent.host}] declared in shantytown.toml"
+    try:
+        res = _peer_inbox_ssh(peer, agent.name, typed, sender)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return False, f"host {agent.host} ({peer.ssh}) did not answer: {type(e).__name__}"
+    if res.returncode == OK:
+        return True, f"host {agent.host} via {peer.ssh}"
+    lines = [ln.strip() for ln in ((res.stderr or "") + "\n" + (res.stdout or "")).splitlines()
+             if ln.strip()]
+    last = lines[-1][:160] if lines else f"exit {res.returncode}"
+    if res.returncode == 255:
+        return False, f"ssh to host {agent.host} ({peer.ssh}) failed: {last}"
+    return False, f"host {agent.host} did not deliver live (exit {res.returncode}): {last}"
+
+
 def _relay_if_offhost(a, agent, typed: str, sender: str | None) -> int | None:
     """Route an EPHEMERAL send to the host the recipient's card names
     (aegis-5du1bz). None = the recipient is here (or nobody said where anyone
@@ -4657,12 +5056,6 @@ def _relay_if_offhost(a, agent, typed: str, sender: str | None) -> int | None:
               f"host-independent) or declare the peer (ssh + root).",
               file=sys.stderr)
         return REFUSED
-    import shlex
-    q = shlex.quote
-    remote_cmd = (
-        (f"SHANTY_AGENT={q(sender)} " if sender else "")
-        + 'PATH="$HOME/.local/bin:$PATH" '
-        + f"st --registry files --root {q(peer.root)} inbox {q(agent.name)} {q(typed)}")
     if a.dry_run:
         print(f"  would: relay via ssh {peer.ssh} -> host {agent.host} "
               f"(st --root {peer.root} inbox {agent.name} …)")
@@ -4671,10 +5064,7 @@ def _relay_if_offhost(a, agent, typed: str, sender: str | None) -> int | None:
         return OK
     import subprocess
     try:
-        res = subprocess.run(
-            ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
-             peer.ssh, remote_cmd],
-            capture_output=True, text=True, timeout=45)
+        res = _peer_inbox_ssh(peer, agent.name, typed, sender)
     except (OSError, subprocess.TimeoutExpired) as e:
         print(f"  could not tell: host {agent.host} ({peer.ssh}) did not answer "
               f"the relay ({type(e).__name__}); nothing is known to have been "
@@ -4713,7 +5103,8 @@ def _looks_stranded(panes, pane: str) -> bool:
         return False
 
 
-def _inbox_durable(a, agent, msg: str, panes, typed: str | None = None) -> int:
+def _inbox_durable(a, agent, msg: str, panes, typed: str | None = None,
+                   sender: str | None = None) -> int:
     """Persist, deliver live when possible, then retire that delivered pointer."""
     # BEADS BY DEFAULT for -d (dearing, qdal.2 follow-up). `-d` is the flag you
     # reach for when the message MUST survive your session dying. A local files
@@ -4732,6 +5123,15 @@ def _inbox_durable(a, agent, msg: str, panes, typed: str | None = None) -> int:
     live = not offhost and agent.pane is not None and panes.exists(agent.pane)
     if a.dry_run:
         print(f"  would: deliver a durable message to {agent.name}'s inbox via {backend}")
+        if offhost:
+            cfg, _err = config.load_or_default(a.root)
+            peer = cfg.host_peers.get(agent.host) if local else None
+            print("  would: " + (f"+ live relay via ssh {peer.ssh} -> host {agent.host}"
+                                 if peer else
+                                 f"off-host: not nudged (no reachable peer for host "
+                                 f"{agent.host}); survives in the inbox"))
+            print("\n  1 durable write." + (" 1 relay." if peer else " 0 send-keys."))
+            return OK
         print(f"  would: {'+ live send-keys -> ' + agent.pane if live else 'no live send (recipient down); survives in the inbox'}")
         print("\n  1 durable write." + (" 1 send-keys." if live else " 0 send-keys."))
         return OK
@@ -4812,6 +5212,26 @@ def _inbox_durable(a, agent, msg: str, panes, typed: str | None = None) -> int:
         except Exception as e:                    # noqa: BLE001 — delivery already succeeded
             print(f"  -> {agent.name}    delivered to inbox as {item.id} ({backend}) "
                   f"+ live to {agent.pane}; pointer close FAILED "
+                  f"({type(e).__name__}: {str(e)[:80]}) — it remains open for `st inbox`.")
+    elif offhost:
+        # OFF-HOST: nudge through the SAME peer transport the ephemeral relay
+        # and `st go` use, and report what is TRUE. "not live" was a claim
+        # about a pane nobody looked at (aegis-az0a40).
+        # The remote attributes from $SHANTY_AGENT, so send the RAW text with
+        # the verified sender; an already-attributed body goes unsigned.
+        sent, how = (_offhost_nudge(a, agent, typed, sender) if typed is not None
+                     else _offhost_nudge(a, agent, msg, None))
+        if not sent:
+            print(f"  -> {agent.name}    delivered to inbox as {item.id} ({backend}); "
+                  f"off-host: not nudged ({how}) — they read it with `st inbox`.")
+            return OK
+        try:
+            box.mark_read(agent.name, ids=[item.id])
+            print(f"  -> {agent.name}    delivered to inbox as {item.id} ({backend}) "
+                  f"+ live on {how}; pointer closed on live delivery")
+        except Exception as e:                    # noqa: BLE001 — delivery already succeeded
+            print(f"  -> {agent.name}    delivered to inbox as {item.id} ({backend}) "
+                  f"+ live on {how}; pointer close FAILED "
                   f"({type(e).__name__}: {str(e)[:80]}) — it remains open for `st inbox`.")
     else:
         print(f"  -> {agent.name}    delivered to inbox as {item.id} ({backend}); "
@@ -5039,6 +5459,19 @@ def _cmd_anchor(a) -> int:
     plate_publish.publish(
         Path(a.root), me, p.item, session=plate_publish.own_session()
     )
+    if getattr(a, "json", False):
+        # THE GENERIC TASK CONTEXT (aegis-68j0ys): what any hook needs to know
+        # about the agent's current task, without reading st internals. The same
+        # resolution as the human render, so the two cannot disagree. A tool
+        # that wants more (labels, links) asks its tracker with the id.
+        it = p.item
+        print(json.dumps({
+            "schema": "st.task-context/1", "agent": me, "harness": _hn or None,
+            "item": None if it is None else {
+                "id": it.id, "title": it.title or None, "status": it.status,
+                "priority": it.priority},
+        }))
+        return OK
     if getattr(a, "short", False):
         # The id, or nothing. An empty plate prints an empty line's worth of
         # NOTHING — not "nothing.", not a dash: the consumer renders the segment
@@ -5208,7 +5641,7 @@ def _graph_context(a):
     return ctx, None
 
 
-def _go_on_host(a, note: str | None) -> int | None:
+def _go_on_host(a, note: str | None, *, recipient=None) -> int | None:
     """Run dispatch where the card lives, never against a colliding local pane.
 
     The destination owns triage, workspace preparation, delivery verification
@@ -5231,7 +5664,7 @@ def _go_on_host(a, note: str | None) -> int | None:
     if not local:
         return None
     try:
-        agent = _message_recipient(a)
+        agent = recipient if recipient is not None else _message_recipient(a)
     except LookupError as exc:
         print(f"  refused: dispatch destination — {exc}", file=sys.stderr)
         return REFUSED
@@ -5261,15 +5694,19 @@ def _go_on_host(a, note: str | None) -> int | None:
     argv = ["st", "--root", peer.root, "--registry", "files"]
     if getattr(a, "backend", None):
         argv += ["--backend", a.backend]
-    argv += ["go", a.item, a.agent, "--receiving-host", agent.host, "--note-file", "-"]
-    for flag, value in (("--worktree", a.worktree),
-                        ("--no-graph-context", a.no_graph_context)):
-        if value:
-            argv += [flag, value]
-    for node in a.quipu_node:
-        argv += ["--quipu-node", node]
-    if a.reassign:
-        argv.append("--reassign")
+    if getattr(a, "cmd", "go") == "sling":
+        argv += ["sling", a.item, "--executive", a.agent,
+                 "--receiving-host", agent.host, "--note-file", "-"]
+    else:
+        argv += ["go", a.item, a.agent, "--receiving-host", agent.host, "--note-file", "-"]
+        for flag, value in (("--worktree", a.worktree),
+                            ("--no-graph-context", a.no_graph_context)):
+            if value:
+                argv += [flag, value]
+        for node in a.quipu_node:
+            argv += ["--quipu-node", node]
+        if a.reassign:
+            argv.append("--reassign")
     if a.dry_run:
         argv.append("--dry-run")
     command = ('PATH="$HOME/.local/bin:$PATH" '
@@ -5288,7 +5725,8 @@ def _go_on_host(a, note: str | None) -> int | None:
         print(f"  [{agent.host}] {line}",
               file=sys.stdout if result.returncode == OK else sys.stderr)
     if result.returncode == OK:
-        print(f"  -> {agent.name}    {'previewed' if a.dry_run else 'dispatched'} "
+        action = 'handed off' if getattr(a, 'cmd', 'go') == 'sling' else 'dispatched'
+        print(f"  -> {agent.name}    {'previewed' if a.dry_run else action} "
               f"on host {agent.host} via {peer.ssh}")
         return OK
     if result.returncode == REFUSED:
@@ -5509,10 +5947,16 @@ def _cmd_go(a) -> int:
     # put the denominator out of step with the fleet's actual work. Fail-silent
     # by construction: a measurement must never be able to break the thing it
     # measures.
-    graph_adoption.record(a.root, "go", a.agent, a.item, gctx, session=p.pane)
+    # aegis-4hhqoe.12: no node named, so suggest one. AFTER the send, so the
+    # hint never delays the dispatch; never raises, so it cannot undo it.
+    suggestion = None if gctx.nodes else entity_suggest.suggest(a.root, a.item)
+    graph_adoption.record(a.root, "go", a.agent, a.item, gctx, session=p.pane,
+                          suggestion=suggestion)
     print(f"  {p.item_id} -> {p.agent}          in progress")
     print(f"  sent to pane {p.pane}")
     print(f"  {gctx.render()}")
+    if suggestion is not None:
+        print(f"  {suggestion.render()}")
     if p.track_attempts > 1:
         # THE LINE THAT MAKES AN INTERMITTENT FAULT COUNTABLE (aegis-8xc5w).
         # go() now reads its tracker write back and re-writes on a verified loss,
@@ -5686,6 +6130,16 @@ def _cmd_crew(a) -> int:
         if _why:
             cycle_blocked[_who] = (_path, _why)
     cycling = set(_pending) - set(cycle_blocked)
+    # aegis-az0a40.1: a request nobody consumed within the bound is not a cycle
+    # in flight, so it stops reading as one and the agent is judged by its pane
+    # (up/down), like any other. NO new state (sattler's ruling): three
+    # consumers enumerate st crew states and reject or reroute on an unknown one.
+    # What it IS rides as additive fields (cycle_request_age/_stale) + a summary line.
+    _requests = cycle_mod.Requests(a.root)
+    _request_age = {who: _requests.age(rec) for who, rec in _pending.items()}
+    cycle_stale = {who for who in cycling
+                   if (_request_age.get(who) or 0) > cycle_mod.stuck_after()}
+    cycling -= cycle_stale
     panes = _panes(a)
     try:
         agents = _registry(a).all().exact()
@@ -5695,12 +6149,23 @@ def _cmd_crew(a) -> int:
     if local:
         agents = [ag for ag in agents if ag.host in (None, local)]
     runtime = _runtime(a, panes)
+    # One snapshot supplies availability and the assigned-item line. A failed
+    # read is unknown, never evidence that the agent has an empty plate.
+    def unavailable_plate(_who):
+        raise RuntimeError("assignment unavailable")
+
+    try:
+        plate = _plate(a, snapshot=True, require_complete=True)
+    except Exception:
+        plate = unavailable_plate
     if getattr(a, "json", False):
         launches = _launches(a)
+        from . import stats as _stats_mod
+        last_active = _stats_mod.last_activity(Path(a.root))
         local_rows = []
         for ag, state, work, posture in _crew_states(
                 agents, panes, runtime, cycling=cycling, untracked_root=a.root,
-                cycle_blocked=cycle_blocked, budget_root=a.root):
+                cycle_blocked=cycle_blocked, budget_root=a.root, plate=plate):
             live = bool(ag.pane and panes.exists(ag.pane))
             actual = None
             reader = getattr(panes, "cmdline", None)
@@ -5709,8 +6174,23 @@ def _cmd_crew(a) -> int:
                     actual = harness_mod.running_name(reader(ag.pane))
                 except Exception:
                     pass
+            fg = None
+            if live and callable(getattr(panes, "foreground", None)):
+                try:
+                    fg = panes.foreground(ag.pane)
+                except Exception:
+                    pass
             local_rows.append(dict(
+                # foreground/last_active: OPTIONAL, read by `st fleet watch`
+                # on a peer host (aegis-az0a40); None = not measured.
+                foreground=fg, last_active=(last_active or {}).get(ag.name),
+                # OPTIONAL (aegis-az0a40.1): seconds since this agent's pending
+                # cycle request was made; None = no request.
+                cycle_request_age=(_request_age.get(ag.name)
+                                   if ag.name in _pending else None),
+                cycle_request_stale=ag.name in cycle_stale,
                 name=ag.name, host=local or "local", role=",".join(ag.effective_roles()),
+                tree_role=ag.role, retired=bool(ag.retired),
                 state=state, work=work, posture=posture, pane=ag.pane or "—",
                 live=live, harness=actual or harness_mod.name_for(ag, root=a.root),
                 settings=_settings_verdict(launches, ag.name, state == "up"),
@@ -5728,14 +6208,15 @@ def _cmd_crew(a) -> int:
             print("unknown " + "; ".join(peer_errors))
             return CANNOT_TELL
         return _crew_count(agents, panes, runtime, untracked_root=a.root,
-                           peer_rows=fleet_mod.rows(peer_results))
+                           peer_rows=fleet_mod.rows(peer_results), plate=plate,
+                           cycling=cycling, cycle_blocked=cycle_blocked, budget_root=a.root)
     if not agents and not peer_results:
         print("  no agents. `st agent new <agent>`.")
         return OK
     launches = _launches(a)
     stops = _stops(a)
     runtime = _runtime(a, panes)
-    free, busy, queued, shelled = [], [], [], []
+    free, busy, queued, shelled, stalled = [], [], [], [], []
     work_unknown = []
     context_unknown = []
     deliberate = []
@@ -5760,17 +6241,13 @@ def _cmd_crew(a) -> int:
     import shutil
     title_width = None if getattr(a, "wide", False) else max(
         1, shutil.get_terminal_size().columns - 14)
-    try:
-        plate = _plate(a, snapshot=True)
-    except Exception:
-        plate = None
     print()
     if peer_results:
         print(f"  {'HOST':<22} {'AGENT':<11} {'ROLE':<14} {'STATE':<13} "
               f"{'SETTINGS':<8} {'TREE':<9} {'WORK':<16} {'POSTURE':<7} PANE")
     for ag, state, work, posture in _crew_states(
             agents, panes, runtime, cycling=cycling, untracked_root=a.root,
-            cycle_blocked=cycle_blocked, budget_root=a.root):
+            cycle_blocked=cycle_blocked, budget_root=a.root, plate=plate):
         if state == "cycling":
             cycling_agents.append(ag.name)
         if state == "cycle-blocked":
@@ -5780,6 +6257,8 @@ def _cmd_crew(a) -> int:
             shelled.append(f"{ag.name}({work.rsplit('+', 1)[1][:-2]})")
         if work.startswith(triage_mod.IDLE):
             free.append(ag.name)
+        elif work == "stalled":
+            stalled.append(ag.name)
         elif work.startswith(triage_mod.BUSY):
             busy.append(ag.name)
         elif work.startswith(triage_mod.QUEUED):
@@ -5934,6 +6413,13 @@ def _cmd_crew(a) -> int:
         print("    Each of these agents keeps working on a context already judged "
               "full. Commit + `st repo push` that tree, and the next `st fleet tend` serves "
               "the cycle.")
+    if cycle_stale:
+        print(f"  ⚠ {len(cycle_stale)} cycle request(s) NOT consumed within "
+              f"{int(cycle_mod.stuck_after() // 60)}m, so read by pane, not as cycling: "
+              + ", ".join(f"{w} ({int((_request_age.get(w) or 0) // 60)}m)"
+                          for w in sorted(cycle_stale)))
+        print("    Nothing on this host acted on them. Run `st fleet tend`, or clear "
+              "a request that is no longer wanted.")
     if cycling_agents:
         print(f"  {len(cycling_agents)} planned context cycle(s): "
               f"{', '.join(cycling_agents)}")
@@ -5943,15 +6429,19 @@ def _cmd_crew(a) -> int:
     # scan 14 rows; the question is "who can take this", so print the list.
     if free:
         print(f"  {len(free)} free: {', '.join(free)}")
-    elif busy and not work_unknown:
+    elif busy and not work_unknown and not stalled:
         print("  0 free — every live agent is mid-flight. Dispatching now "
               "interrupts work.")
+    if stalled:
+        print(f"  ⚠ {len(stalled)} stalled: {', '.join(stalled)}")
+        print("    Idle with an in_progress plate item. Resume the assigned work "
+              "before dispatching more.")
     if busy:
         print(f"  {len(busy)} busy: {', '.join(busy)}")
     if work_unknown:
         print(f"  ⚠ {len(work_unknown)} UNKNOWN work state: "
               f"{', '.join(work_unknown)}")
-        print("    Not counted as free or busy — pane content did not prove either. "
+        print("    Not counted as free or busy — pane or assignment evidence did not prove availability. "
               "Inspect with `st agent log <agent>` before dispatching.")
     # WHO CAN TAKE THIS is only half the dispatcher's question; the other half is
     # WHAT IS NOT QUEUED ANYWHERE. See _unassigned_open (aegis-jqcs3).
@@ -6340,7 +6830,7 @@ def _keeper_findings(agents, rule_path: Path, alert) -> list[str]:
 
 
 def _crew_states(agents, panes, runtime, cycling=(), untracked_root=None,
-                 cycle_blocked=(), budget_root=None):
+                 cycle_blocked=(), budget_root=None, plate=None):
     """(agent, pane state, work verdict, permission posture) per agent, by name.
     THE code path for the busy/idle judgment — the table renders it and `--count`
     counts it, so the number a status bar shows can never disagree with the roster
@@ -6517,6 +7007,15 @@ def _crew_states(agents, panes, runtime, cycling=(), untracked_root=None,
             posture = "—"
         if held := agent_hold.reason(untracked_root, ag.name):
             work = held
+        # This is a reporting refinement, not a new pane/dispatch verdict.
+        # Holds, shells, unknown observations and lifecycle states win.
+        if state == "up" and work == triage_mod.IDLE and plate is not None:
+            try:
+                item = plate(ag.name)
+                if item is not None and item.status == "in_progress":
+                    work = "stalled"
+            except Exception:
+                work = f"{triage_mod.UNSURE} (assignment unavailable)"
         yield ag, state, work, posture
 
 
@@ -6735,7 +7234,7 @@ def _crew_governor(a) -> int:
         if verdict.pacing:
             pace = " ".join(
                 f"PACE[{p.window} {p.pct:.0f}%used/{p.elapsed_pct:.0f}%elapsed "
-                f"={p.ratio:.2f}x <={p.threshold:.2f}x]"
+                f"={p.ratio:.2f}x <={p.bound_text()}]"
                 for p in verdict.pacing)
         label = "; ".join(t.label() for t in verdict.restrictions)
         cap = ("" if verdict.max_agents is None
@@ -7004,7 +7503,8 @@ def _utilization(harness, *, readings, policy, verdict, live, now, advisory,
     return seen
 
 
-def _crew_count(agents, panes, runtime, untracked_root=None, peer_rows=()) -> int:
+def _crew_count(agents, panes, runtime, untracked_root=None, peer_rows=(),
+                *, plate=None, cycling=(), cycle_blocked=(), budget_root=None) -> int:
     """`st crew --count` — print `busy/total`, nothing else.
 
     TOTAL IS NOT THE ROSTER SIZE. It is the number of agents we can actually
@@ -7017,7 +7517,8 @@ def _crew_count(agents, panes, runtime, untracked_root=None, peer_rows=()) -> in
     """
     busy = idle = 0
     for _ag, _state, work, _posture in _crew_states(
-            agents, panes, runtime, untracked_root=untracked_root):
+            agents, panes, runtime, untracked_root=untracked_root, plate=plate,
+            cycling=cycling, cycle_blocked=cycle_blocked, budget_root=budget_root):
         if work == triage_mod.BUSY:
             busy += 1
         elif work == triage_mod.IDLE:
@@ -8080,12 +8581,14 @@ def _cmd_cycle(a) -> int:
                   f"graph context and nothing is lost.", file=sys.stderr)
             return REFUSED
         quipu_nodes = list(gctx.nodes)
+        no_in_place = bool(getattr(a, "no_in_place", False))
         cycle_mod.Requests(a.root).request(agent_name, a.reason.strip(),
                                            checkpoint_bead or posted_to,
-                                           quipu_nodes)
+                                           quipu_nodes, no_in_place=no_in_place)
         graph_adoption.record(a.root, "cycle", agent_name,
                               checkpoint_bead or posted_to or "-", gctx)
-        print(f"  {agent_name}: cycle REQUESTED — checkpoint recorded.")
+        print(f"  {agent_name}: cycle REQUESTED — checkpoint recorded"
+              f"{'; the process will be REPLACED (--no-in-place)' if no_in_place else ''}.")
         if posted_to:
             print(f"  checkpoint file posted to {posted_to}.")
         if quipu_nodes:
@@ -8125,6 +8628,7 @@ def _cmd_cycle(a) -> int:
             # is not what makes it slow.
             staleness=lambda t: tree_staleness(
                 t, fetch=True, untracked_all=True, tracked_only=True,
+                cycle_per_install=True,
                 fetch_timeout=cfg.keep_current_fetch_timeout_seconds),
             allow_loss=a.allow_loss)
     except subprocess.TimeoutExpired as e:
@@ -8288,12 +8792,26 @@ def _write_resume_brief(a, card, agent_name: str, checkpoint: str) -> str:
     if card.workspace:
         docs.append(f"{card.workspace}/CLAUDE.md — your charter, re-read it")
     docs.append("`st ops help handoff` — why cycles work the way they do")
+    nodes = list(getattr(a, "quipu_node", None) or [])
+    suggested = ""
+    if not nodes and item:
+        # aegis-4hhqoe.12: the resuming session's query-first step gets a real
+        # node to start from. Logged as a suggest-only row, so the next cycle
+        # that cites (or does not cite) it is the live precision read.
+        try:
+            sug = entity_suggest.suggest(a.root, item)
+            if sug is not None and sug.node:
+                suggested = sug.node
+                graph_adoption.record(a.root, graph_adoption.SUGGEST, agent_name,
+                                      item, graph_adoption.unstated(),
+                                      suggestion=sug)
+        except Exception:  # noqa: BLE001 — a hint must never cost the brief
+            suggested = ""
     try:
         text = resume_brief_mod.compose(
             agent_name, checkpoint=checkpoint,
             checkpoint_bead=getattr(a, "checkpoint_bead", "") or "",
-            quipu_nodes=list(getattr(a, "quipu_node", None) or []),
-            item=item, docs=docs)
+            quipu_nodes=nodes, item=item, docs=docs, suggested=suggested)
         return str(resume_brief_mod.Briefs(a.root).put(
             agent_name, text, checkpoint=checkpoint, item=item))
     except Exception as e:  # noqa: BLE001
@@ -10308,8 +10826,10 @@ def _cmd_hold(a) -> int:
         try:
             panes = _panes(a)
             pids = [(card.name, pid) for card in _registry(a).all().exact()
-                    if (pid := panes.pane_pid(_session_for(card)))] if status.held else []
-            for line in gaming_scopes.reconcile(root, status.held, pids):
+                    if (pid := panes.pane_pid(_session_for(card)))] if status.throttled else []
+            # throttled, not held: a Steam shader compile with no game bounds the crew
+            # without holding dispatch (aegis-da2tfj).
+            for line in gaming_scopes.reconcile(root, status.throttled, pids):
                 print(line)
                 slowdown_unknown |= "UNKNOWN" in line
         except Exception as exc:
@@ -10337,8 +10857,82 @@ def _cmd_hold(a) -> int:
         if sent:
             print("quiet-time advisory delivered to coordinator: " + ", ".join(sent))
     if a.status:
-        return CANNOT_TELL if status.state == "unknown" else int(status.held)
+        # THROTTLED, not held (aegis-da2tfj review). This exit code is the admission gate
+        # for heavy work that runs OUTSIDE the throttled pane scopes: the CD cargo build,
+        # the cargo wrapper and the CVE scan all proceed on 0 and defer on 1. A shader
+        # compile holds no dispatch, but a build must still defer through it, or it starts
+        # during a real launch's pre-reaper shader phase.
+        return CANNOT_TELL if status.state == "unknown" else int(status.throttled)
     return CANNOT_TELL if status.state == "unknown" or slowdown_unknown else OK
+
+
+def _cmd_watch(a) -> int:
+    """`st fleet watch` — one liveness pass on the peer host's administrator
+    (aegis-az0a40). The decision table lives in peer_watch.py; this resolves
+    WHO and WHERE from the deployment and wires the real side effects."""
+    from . import peer_watch as pw
+    from .deployment import local_host, deployment_default
+    cfg, err = config.load_or_default(Path(a.root))
+    if err:
+        print(f"  could not tell: {err}", file=sys.stderr)
+        return CANNOT_TELL
+    local = local_host(a.root)
+    if not local:
+        print("  refused: this deployment declares no [host] name, so it has no "
+              "peer host to watch", file=sys.stderr)
+        return REFUSED
+    if a.peer_host:
+        peer = cfg.host_peers.get(a.peer_host)
+        if peer is None:
+            print(f"  refused: no [host.peers.{a.peer_host}] declared", file=sys.stderr)
+            return REFUSED
+    elif len(cfg.host_peers) == 1:
+        peer = next(iter(cfg.host_peers.values()))
+    else:
+        print(f"  refused: {len(cfg.host_peers)} peer hosts declared; name one "
+              "with --peer-host", file=sys.stderr)
+        return REFUSED
+    watcher = a.watcher
+    if not watcher:
+        try:
+            cards = [ag for ag in _registry(a).all().exact()
+                     if ag.host in (None, local) and not ag.retired
+                     and "administrator" in ag.effective_roles()]
+        except Exception as e:  # noqa: BLE001 — a registry we cannot read
+            print(f"  could not tell: local registry ({type(e).__name__}: {e})",
+                  file=sys.stderr)
+            return CANNOT_TELL
+        if len(cards) != 1:
+            print(f"  refused: {len(cards)} local administrators; name one with "
+                  "--watcher", file=sys.stderr)
+            return REFUSED
+        watcher = cards[0].name
+    root = Path(a.root)
+    state_dir = root / "peer-watch"
+    escalate_cmd = deployment_default(root, pw.ESCALATE_ENV)
+    print(f"st fleet watch: {watcher}@{local} watching "
+          f"{a.peer or 'the administrator'}@{peer.name}"
+          + (" (dry run)" if a.dry_run else ""))
+    outcome = pw.run_pass(
+        watcher=watcher, peer_host=peer.name, peer_name=a.peer,
+        probe_fn=lambda name: pw.probe(peer, name),
+        alert_fn=lambda text: pw.alert_via_inbox(root, watcher, text),
+        repair_fn=None if a.no_repair else (lambda name: pw.repair(peer, name)),
+        escalate_fn=lambda desc: pw.escalate_via_command(escalate_cmd, a.severity, desc),
+        state=pw.State(state_dir / f"{peer.name}.json"),
+        log_path=state_dir / "log.jsonl", dry_run=a.dry_run,
+        escalate_after=a.escalate_after * 60, repair_cooldown=a.repair_cooldown * 60,
+        alert_every=a.alert_every * 60)
+    if a.metrics:
+        if a.dry_run:
+            print(f"  would: write metrics to {a.metrics}")
+        else:
+            try:
+                pw.write_metrics(a.metrics, pw.metrics(watcher, outcome, time.time()))
+            except OSError as e:
+                print(f"  ⚠ metrics not written ({type(e).__name__}): {a.metrics}",
+                      file=sys.stderr)
+    return outcome.exit_code
 
 
 def _cmd_tend(a) -> int:
@@ -10832,6 +11426,21 @@ def _tend_once(a, quiet: bool = False) -> int:
                       f"supervision continues without it this pass", file=sys.stderr)
                 return []
 
+        # FLEET-WIDE sweeps run on the fleet owner host ONLY (aegis-1g55ji). They
+        # read the shared board and push to the LOCAL admin, so a second host's
+        # tend (the Mac) duplicated every one of them to its own admin, with no
+        # dedup across hosts. Host-local supervision (respawn, blocked worker,
+        # cycles, stalled) still runs everywhere. No declared owner means a
+        # single-host fleet, which is its own owner.
+        fleet_owner = runs_fleet_sweeps(cfg)
+        skipped_fleet: list[str] = []
+
+        def _fleet_sweep(label, fn):
+            if not fleet_owner:
+                skipped_fleet.append(label)
+                return []
+            return _sweep(label, fn)
+
         woke = _sweep("blocked-worker", lambda: notify_mod.Notifier(
             Path(a.root), _registry(a), panes, log=_log).sweep(agents, runtime))
         if woke:
@@ -10877,8 +11486,12 @@ def _tend_once(a, quiet: bool = False) -> int:
             # an explicit machine exemption: re-asking here would put the
             # question to a sweep loop, which cannot answer it.
             req_nodes = list(request.get("quipu_nodes") or [])
+            # THE REQUEST decides in-place vs replace (aegis-2fxldr), never tend's
+            # own namespace: tend has no --no-in-place, so reading it there made
+            # every self-requested relaunch an in-place clear.
+            req_no_in_place = bool(request.get("no_in_place", False))
             rc_c = _sweep(f"cycle:{who}", lambda w=who, c=checkpoint, b=checkpoint_bead,
-                          n=req_nodes: _cmd_cycle(
+                          n=req_nodes, nip=req_no_in_place: _cmd_cycle(
                 argparse.Namespace(**{**vars(a), "cmd": "cycle", "agent": w,
                                       "reason": c, "self_": False,
                                       "_automatic_cycle": True,
@@ -10887,6 +11500,7 @@ def _tend_once(a, quiet: bool = False) -> int:
                                       "no_graph_context": "" if n else
                                       "mechanical: tend serving a cycle the agent "
                                       "already requested and gated",
+                                      "no_in_place": nip,
                                       "allow_loss": False, "dry_run": False})))
             # The request is cleared by _cmd_cycle ONLY on a completed cycle, so a
             # refusal (dirty tree, no checkpoint) leaves it pending and the agent
@@ -10919,14 +11533,14 @@ def _tend_once(a, quiet: bool = False) -> int:
         # a coordinator forgetting to dispatch is the same invisible failure w0kk
         # fixed for blocked workers. Deduped per idle episode, fail-open, and it
         # reuses the SAME free/dispatchable computation as hfta's hard gate.
-        idle = _sweep("idle-fleet", lambda: notify_mod.IdleFleetAlerter(
+        idle = _fleet_sweep("idle-fleet", lambda: notify_mod.IdleFleetAlerter(
             Path(a.root), _registry(a), panes, runtime, log=_log,
             balance=lambda: _fleet_balance(a),
             verdict_for=_card_verdict).sweep(agents))
         if idle:
             print(f"  ⚠ alerted the coordinator — {len(idle)} newly-idle feedable "
                   f"worker(s) with work ready: {', '.join(idle)}", file=sys.stderr)
-        advised = _sweep("governor-setpoint", lambda: creel_advisory_mod.Alerter(
+        advised = _fleet_sweep("governor-setpoint", lambda: creel_advisory_mod.Alerter(
             Path(a.root), _registry(a), panes).sweep(setpoint_advisories))
         if advised:
             print(f"  ⚠ pushed changed governor setpoint advisory to the "
@@ -10937,7 +11551,7 @@ def _tend_once(a, quiet: bool = False) -> int:
         # other's push. Same recommendation-keyed dedup either way (1641346): a
         # standing "fill toward cap" keeps asking until it is acted on, a hold is
         # read once and goes quiet.
-        utilized = _sweep("governor-utilization", lambda: creel_advisory_mod.Alerter(
+        utilized = _fleet_sweep("governor-utilization", lambda: creel_advisory_mod.Alerter(
             Path(a.root), _registry(a), panes,
             filename="governor_utilization.json",
             label="governor utilization").sweep(utilization_advisories))
@@ -10969,7 +11583,7 @@ def _tend_once(a, quiet: bool = False) -> int:
         # a bead blocked on a person is operationally identical to abandoned
         # while its status makes it look handled. Seventeen days on a P1
         # security bead is the specimen. This is the only thing that re-asks.
-        stale_blocked = _sweep("blocked-stale", lambda: notify_mod.BlockedStaleAlerter(
+        stale_blocked = _fleet_sweep("blocked-stale", lambda: notify_mod.BlockedStaleAlerter(
             Path(a.root), _registry(a), panes, log=_log).sweep())
         if stale_blocked:
             print(f"  ⚠ re-surfaced {len(stale_blocked)} bead(s) blocked "
@@ -10984,7 +11598,7 @@ def _tend_once(a, quiet: bool = False) -> int:
         # author's memory: that one landed the same day and the bead sat nine
         # days. Reports only; it never un-defers, and it reports each bead once
         # per state (wu: transitions, not state).
-        deferred_due = _sweep("deferral-sweep", lambda: notify_mod.DeferralAlerter(
+        deferred_due = _fleet_sweep("deferral-sweep", lambda: notify_mod.DeferralAlerter(
             Path(a.root), _registry(a), panes, log=_log).sweep())
         if deferred_due:
             print(f"  ⚠ surfaced {len(deferred_due)} deferral(s) whose date has "
@@ -10993,11 +11607,29 @@ def _tend_once(a, quiet: bool = False) -> int:
         # A DIFFERENT condition and a DIFFERENT action from age: these beads do
         # not need their blocker chased; every issue blocker is already closed
         # and the stale status itself is what hides them (aegis-mwc5j).
-        misstatused = _sweep("blocked-misstatus", lambda: notify_mod.BlockedMisstatusAlerter(
-            Path(a.root), _registry(a), panes, log=_log).sweep())
+        # EVENT-FIRST (aegis-sfpfwf): chaski emits `workitem-unblocked` when a
+        # WorkItem's last blocker resolves. The consumer re-checks br and CORRECTS a
+        # stale `blocked` status; deferrals and non-bead blocker labels are reported,
+        # never lifted. It runs BEFORE the scanner, so a corrected bead is no longer
+        # blocked when the scanner looks, and the scanner becomes the backstop: a
+        # mis-statused bead with NO firing means the emitter missed it.
+        from . import unblocked_events as unblocked_mod
+        consumer = unblocked_mod.UnblockedEventConsumer(
+            Path(a.root), _registry(a), panes, log=_log)
+        unblocked = _fleet_sweep("unblocked-events", consumer.sweep)
+        if unblocked:
+            print(f"  ✓ acted on {len(unblocked)} unblocked event(s): "
+                  f"{', '.join(f'{b} {v}' for b, v in unblocked)}", file=sys.stderr)
+        misstatused = _fleet_sweep("blocked-misstatus", lambda: notify_mod.BlockedMisstatusAlerter(
+            Path(a.root), _registry(a), panes, log=_log,
+            seen=consumer.seen_foci).sweep())
         if misstatused:
             print(f"  ⚠ found {len(misstatused)} MIS-STATUSED blocked bead(s) "
                   f"whose dependencies are ALL CLOSED: {', '.join(misstatused)}",
+                  file=sys.stderr)
+        if skipped_fleet:
+            print(f"  · fleet-wide sweeps belong to {cfg.host_admission_owner}; "
+                  f"not run on {cfg.host_name}: {', '.join(skipped_fleet)}",
                   file=sys.stderr)
         # STALLED (aegis-e01l): the PROGRESS-over-time twin of the point-in-time
         # push above — an agent parked idle HOLDING an in_progress item with no
@@ -11094,24 +11726,34 @@ def _drain_sweep(a, verdict, agents, panes, *, governor_name="base", episode=Non
     up — a self-perpetuating shutdown nobody asked for, arriving long after the
     tier relaxed.
     """
-    if verdict is None or not verdict.tier:
-        # Not draining (or no governor). The sweep still runs so the LEDGER gets
-        # cleared when a tier relaxes — otherwise the next episode would be
-        # deduped against a stale one and half the fleet would never be told.
-        gov_mod.DrainLedger(Path(a.root)).clear()
-        return []
-    inbox = _inbox(a, default="beads")
-    me = _me(a) or "st fleet tend"
     # Each provider has its own drain episode and ledger.  Reusing the legacy
     # ledger would let a relaxing sibling clear another provider's outstanding
     # drain, precisely when its workers still need to report their pushed WIP.
     drain_root = Path(a.root) if governor_name == "base" else (
         Path(a.root) / "governor-harness" / governor_name)
+    if verdict is None:
+        # No verdict: nothing can say whether a drain still applies, so nothing
+        # is retracted — AND THE LEDGER IS KEPT, exactly as a lost signal keeps
+        # it. Clearing it here discarded the only record of which drains were
+        # out, so a verdict that went None transiently (a misconfiguration, a
+        # load error) left their messages unretractable forever (sattler's
+        # review of aegis-l2m4t2).
+        return []
+    if not gov_mod.DrainLedger(drain_root).agents() and not verdict.tier:
+        # Nothing outstanding and nothing to send: skip opening the inbox, which
+        # on a tracker backend lists the store — every pass, forever.
+        return []
+    inbox = _inbox(a, default="beads")
+    me = _me(a) or "st fleet tend"
     drainer = gov_mod.Drainer(
         drain_root,
         deliver=lambda who, body: inbox.deliver(who, body, frm=me),
         stops=_stops(a),
-        log=lambda msg: print(f"  {msg}", file=sys.stderr))
+        log=lambda msg: print(f"  {msg}", file=sys.stderr),
+        # THE TAKE-BACK (aegis-l2m4t2). Reading a message is finishing it, so
+        # closing the drain is exactly "this is no longer for you" — and a
+        # fresh session's `st inbox` never lists it again.
+        retract=lambda who, msg_id: inbox.mark_read(who, [msg_id]))
     rows = drainer.sweep(agents, verdict,
                          _governor_episode(a) if episode is None else episode,
                          live=lambda ag: bool(ag.pane) and panes.exists(ag.pane),

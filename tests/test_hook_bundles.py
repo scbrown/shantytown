@@ -1,0 +1,771 @@
+"""Registered hook bundles (aegis-68j0ys): render, preserve, check, and know nothing.
+
+The failure this exists for: a tool's hand-installed hooks were silently BLOWN
+AWAY when crew settings moved to st's generator, because `merge_one_level` lets
+the emitted `hooks` key win and nothing declared them. So the load-bearing test
+is regeneration: emit, emit again over the first file, and the bundle survives.
+"""
+from __future__ import annotations
+
+import json
+import re
+import tomllib
+from pathlib import Path
+
+import pytest
+
+from shantytown import harness as harness_mod
+from shantytown import hook_bundles as hb
+
+EXAMPLE_CMD = "example-tool hook on-prompt || true"
+
+
+def bundle(**over) -> dict:
+    b = {"schema": hb.SCHEMA, "name": "example", "version": "1.2.3", "owner": "example-installer",
+         "roles": ["*"],
+         "hooks": [{"event": "UserPromptSubmit", "command": EXAMPLE_CMD, "timeout": 10},
+                   {"event": "PostToolUse", "matcher": "Write|Edit",
+                    "command": "example-tool hook after-edit || true"}]}
+    b.update(over)
+    return b
+
+
+def register(root: Path, obj: dict) -> None:
+    f = root / f"src-{obj['name']}.json"
+    f.write_text(json.dumps(obj))
+    hb.register(root, f)
+
+
+def emit(root: Path, harness: str, role: str) -> Path:
+    """Write a role settings file exactly as `roles set` does: harness.settings,
+    rendered over whatever is on disk."""
+    h = harness_mod.get(harness)
+    path = root / "settings" / h.settings_name(role)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    existing = path.read_text() if path.exists() else ""
+    path.write_text(h.render(h.settings(role, root=root), existing, root=root))
+    return path
+
+
+def commands(harness: str, path: Path, event: str) -> list[str]:
+    text = path.read_text()
+    data = tomllib.loads(text) if harness == "codex" else json.loads(text)
+    return [h["command"] for g in data.get("hooks", {}).get(event, []) for h in g["hooks"]]
+
+
+@pytest.fixture
+def root(tmp_path) -> Path:
+    r = tmp_path / ".shanty"
+    (r / "settings").mkdir(parents=True)
+    return r
+
+
+# --- validation ------------------------------------------------------------------
+
+def test_a_valid_bundle_validates():
+    assert hb.validate(bundle()) == []
+
+
+@pytest.mark.parametrize("bad, fragment", [
+    ({"schema": "nope"}, "schema"),
+    ({"name": "Bad Name"}, "name"),
+    ({"roles": []}, "roles"),
+    ({"hooks": []}, "hooks"),
+    ({"hooks": [{"event": "UserPromptSubmit", "command": ""}]}, "command"),
+    ({"hooks": [{"event": "UserPromptSubmit", "command": "x", "timeout": 0}]}, "timeout"),
+    ({"hooks": [{"event": "UserPromptSubmit", "command": "x", "harnesses": ["vim"]}]}, "harnesses"),
+])
+def test_invalid_bundles_are_refused_with_the_reason(bad, fragment):
+    errs = hb.validate(bundle(**bad))
+    assert errs and any(fragment in e for e in errs), errs
+
+
+def test_register_is_idempotent_and_reports_updates(root):
+    f = root / "b.json"
+    f.write_text(json.dumps(bundle()))
+    assert hb.register(root, f) == ("example", "installed")
+    assert hb.register(root, f) == ("example", "unchanged")
+    f.write_text(json.dumps(bundle(version="2.0.0")))
+    assert hb.register(root, f) == ("example", "updated")
+
+
+def test_register_refuses_an_invalid_file_and_writes_nothing(root):
+    f = root / "b.json"
+    f.write_text(json.dumps(bundle(schema="nope")))
+    with pytest.raises(ValueError, match="schema"):
+        hb.register(root, f)
+    assert not (root / hb.REGISTRY_DIR / "example.json").exists()
+
+
+# --- rendering ---------------------------------------------------------------------
+
+@pytest.mark.parametrize("harness", ["claude", "codex"])
+def test_bundle_hooks_render_after_sts_own_hooks(root, harness):
+    before = commands(harness, emit(root, harness, "worker"), "UserPromptSubmit")
+    assert before, "control: st emits its own UserPromptSubmit hook"
+    register(root, bundle())
+    after = commands(harness, emit(root, harness, "worker"), "UserPromptSubmit")
+    assert after[: len(before)] == before, "st's own hooks keep their place"
+    assert after[len(before):] == [EXAMPLE_CMD]
+
+
+@pytest.mark.parametrize("harness", ["claude", "codex"])
+def test_a_bundle_SURVIVES_regeneration(root, harness):
+    """The "blown away" failure: emit twice, over the first file. Still there."""
+    register(root, bundle())
+    path = emit(root, harness, "worker")
+    emit(root, harness, "worker")
+    emit(root, harness, "worker")
+    assert commands(harness, path, "UserPromptSubmit").count(EXAMPLE_CMD) == 1
+
+
+def test_role_filter(root):
+    register(root, bundle(roles=["lead"]))
+    assert EXAMPLE_CMD in commands("claude", emit(root, "claude", "lead"), "UserPromptSubmit")
+    assert EXAMPLE_CMD not in commands("claude", emit(root, "claude", "worker"), "UserPromptSubmit")
+
+
+def test_harness_filter(root):
+    b = bundle()
+    b["hooks"][0]["harnesses"] = ["claude"]
+    register(root, b)
+    assert EXAMPLE_CMD in commands("claude", emit(root, "claude", "worker"), "UserPromptSubmit")
+    assert EXAMPLE_CMD not in commands("codex", emit(root, "codex", "worker"), "UserPromptSubmit")
+
+
+def test_an_event_codex_does_not_run_is_not_written_and_IS_reported(root):
+    register(root, bundle(hooks=[{"event": "PostToolUseFailure", "command": "x-fail || true"}]))
+    assert "x-fail || true" not in commands("codex", emit(root, "codex", "worker"), "PostToolUseFailure")
+    assert "x-fail || true" in commands("claude", emit(root, "claude", "worker"), "PostToolUseFailure")
+    res = hb.check(root)
+    unsup = [i for i in res.items if i["configured"] == "unsupported"]
+    assert [(i["harness"], i["event"]) for i in unsup] == [("codex", "PostToolUseFailure")]
+    assert res.exit_code == 1, "unsupported is loud, never a silent drop"
+
+
+def test_a_broken_dropin_does_not_stop_settings_being_written_and_check_names_it(root):
+    register(root, bundle())
+    (root / hb.REGISTRY_DIR / "broken.json").write_text("{not json")
+    path = emit(root, "claude", "worker")
+    assert EXAMPLE_CMD in commands("claude", path, "UserPromptSubmit"), "good bundles still render"
+    res = hb.check(root)
+    assert [e["file"] for e in res.registry_errors] == ["broken.json"]
+    assert res.exit_code == 1
+
+
+# --- check -------------------------------------------------------------------------
+
+def test_check_ok_after_emit(root):
+    register(root, bundle())
+    emit(root, "claude", "worker")
+    emit(root, "codex", "worker")
+    res = hb.check(root)
+    assert res.items and all(i["configured"] == "ok" for i in res.items)
+    assert all(i["live"] == hb.NOT_CHECKED and i["firing"] == hb.NOT_CHECKED for i in res.items)
+    assert res.exit_code == 0
+
+
+def test_check_reports_a_hook_removed_by_hand_as_missing(root):
+    register(root, bundle())
+    path = emit(root, "claude", "worker")
+    data = json.loads(path.read_text())
+    data["hooks"]["UserPromptSubmit"] = [g for g in data["hooks"]["UserPromptSubmit"]
+                                          if g["hooks"][0]["command"] != EXAMPLE_CMD]
+    path.write_text(json.dumps(data))
+    res = hb.check(root)
+    missing = [i for i in res.items if i["configured"] == "missing"]
+    assert [(i["event"], i["command"]) for i in missing] == [("UserPromptSubmit", EXAMPLE_CMD)]
+    assert res.exit_code == 1
+
+
+def test_check_registered_but_never_emitted_is_missing(root):
+    emit(root, "claude", "worker")
+    register(root, bundle())                 # registered AFTER the emit
+    assert hb.check(root).exit_code == 1
+
+
+def test_check_unreadable_file_is_cannot_tell(root):
+    register(root, bundle())
+    emit(root, "claude", "worker").write_text("{garbage")
+    res = hb.check(root)
+    assert {i["configured"] for i in res.items} == {"unreadable"}
+    assert res.exit_code == 2
+
+
+def test_check_empty_registry_is_ok_not_cannot_tell(root):
+    emit(root, "claude", "worker")
+    res = hb.check(root)
+    assert res.items == [] and res.exit_code == 0
+
+
+def test_check_json_schema_keys(root):
+    register(root, bundle())
+    emit(root, "claude", "worker")
+    doc = hb.check(root).to_json(root=root, host="h")
+    assert doc["schema"] == "st.hook-check/1"
+    assert set(doc) >= {"host", "root", "checked_at", "exit", "summary", "registry_errors", "items"}
+    assert set(doc["items"][0]) >= {"bundle", "version", "harness", "role", "event", "matcher",
+                                    "command", "file", "configured", "live", "firing", "detail"}
+
+
+# --- st knows nothing about what is in a bundle ------------------------------------
+
+STACK_NAMES = re.compile(r"bobbin|quipu|yupana|desire.?path|camayoc|caboodle|\bdp\b", re.I)
+
+
+def test_no_tool_names_in_the_bundle_code_path():
+    """Stiwi 2026-09-29: st offers GENERIC hook support; the tools configure
+    themselves. A tool name in this path would be st taking on WHAT."""
+    src = Path(hb.__file__).read_text()
+    assert not STACK_NAMES.findall(src), STACK_NAMES.findall(src)
+    import inspect
+    from shantytown import cli
+    handler = inspect.getsource(cli._cmd_hooks)
+    assert not STACK_NAMES.findall(handler), STACK_NAMES.findall(handler)
+
+
+# --- codex notify: a single-slot harness key, one owner ---------------------------
+
+NOTIFY = ["bash", "-c", "printf '%s' \"$1\" | example-tool ingest", "--"]
+
+
+def test_codex_notify_renders_from_its_one_owner_and_survives_regeneration(root):
+    register(root, bundle(name="notifier", hooks=[], codex_notify=NOTIFY))
+    path = emit(root, "codex", "worker")
+    emit(root, "codex", "worker")
+    assert tomllib.loads(path.read_text())["notify"] == NOTIFY
+    assert "notify" not in json.loads(emit(root, "claude", "worker").read_text()), "codex only"
+    res = hb.check(root)
+    assert [(i["event"], i["configured"]) for i in res.items] == [("notify", "ok")]
+    assert res.exit_code == 0
+
+
+def test_two_notify_claimants_render_NEITHER_and_check_says_why(root):
+    register(root, bundle(name="one", hooks=[], codex_notify=NOTIFY))
+    register(root, bundle(name="two", hooks=[], codex_notify=["other"]))
+    path = emit(root, "codex", "worker")
+    assert "notify" not in tomllib.loads(path.read_text())
+    res = hb.check(root)
+    assert {i["configured"] for i in res.items} == {"unsupported"}
+    assert all("claimed by 2 bundles" in i["detail"] for i in res.items)
+    assert res.exit_code == 1
+
+
+def test_notify_changed_by_hand_is_missing(root):
+    register(root, bundle(name="notifier", hooks=[], codex_notify=NOTIFY))
+    path = emit(root, "codex", "worker")
+    path.write_text(path.read_text().replace("example-tool ingest", "something else"))
+    assert hb.check(root).exit_code == 1
+
+
+# --- increment 2: per-agent files, cross-layer duplicates, a loud swallowed error ---
+
+def emit_agent(root: Path, harness: str, agent: str, role: str) -> Path:
+    h = harness_mod.get(harness)
+    path = root / "settings" / h.agent_settings_name(agent)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(h.render(h.settings(role, root=root), "", root=root))
+    return path
+
+
+@pytest.mark.parametrize("harness", ["claude", "codex"])
+def test_a_per_agent_file_carries_bundles_and_is_checked_against_its_agents_role(root, harness):
+    register(root, bundle(roles=["lead"]))
+    path = emit_agent(root, harness, "alice", "lead")
+    assert EXAMPLE_CMD in commands(harness, path, "UserPromptSubmit"), "same seam, same bundles"
+    res = hb.check(root, agent_roles={"alice": "lead"})
+    mine = [i for i in res.items if i["file"] == str(path)]
+    assert mine and all(i["configured"] == "ok" for i in mine)
+    assert res.exit_code == 0
+
+
+def test_a_per_agent_file_losing_a_bundle_is_missing(root):
+    register(root, bundle())
+    path = emit_agent(root, "claude", "alice", "worker")
+    path.write_text(path.read_text().replace(EXAMPLE_CMD, "something-else || true"))
+    res = hb.check(root, agent_roles={"alice": "worker"})
+    assert any(i["file"] == str(path) and i["configured"] == "missing" for i in res.items)
+    assert res.exit_code == 1
+
+
+def test_a_per_agent_file_with_no_known_role_is_cannot_tell_not_skipped(root):
+    register(root, bundle())
+    emit_agent(root, "claude", "ghost", "worker")
+    res = hb.check(root, agent_roles={})
+    assert [i["configured"] for i in res.items if "agent-ghost" in i["file"]] == ["unreadable"]
+    assert res.exit_code == 2
+
+
+def test_identical_text_in_another_layer_is_NOT_a_failure_but_is_noted(root, tmp_path):
+    """Claude Code de-duplicates hooks with identical command text across settings
+    sources (measured 2026-09-29: 22 actions, 22 records). So identical text is not
+    a double-fire: ok, with a note saying where the extra copy lives."""
+    register(root, bundle())
+    emit(root, "claude", "worker")
+    glob = tmp_path / "global-settings.json"
+    glob.write_text(json.dumps({"hooks": {"UserPromptSubmit": [
+        {"hooks": [{"type": "command", "command": EXAMPLE_CMD}]}]}}))
+    res = hb.check(root, other_layers=[glob])
+    item = [i for i in res.items if i["event"] == "UserPromptSubmit" and i["harness"] == "claude"][0]
+    assert item["configured"] == "ok" and str(glob) in item["detail"]
+    assert res.exit_code == 0
+
+
+def test_a_bundle_command_also_in_a_non_st_layer_is_a_DUPLICATE(root, tmp_path):
+    """A DIFFERENT spelling of the same command ($HOME vs absolute) is not identical
+    text, so the harness does not de-duplicate it: it runs twice."""
+    register(root, bundle())
+    emit(root, "claude", "worker")
+    emit(root, "codex", "worker")
+    register(root, bundle(hooks=[{"event": "UserPromptSubmit", "command": "$HOME/p.sh || true"}]))
+    emit(root, "claude", "worker")
+    glob = tmp_path / "global-settings.json"
+    glob.write_text(json.dumps({"hooks": {"UserPromptSubmit": [
+        {"hooks": [{"type": "command", "command": f"{Path.home()}/p.sh || true"}]}]}}))
+    res = hb.check(root, other_layers=[glob, tmp_path / "absent.json"])
+    dup = [i for i in res.items if i["configured"] == "duplicate"]
+    assert [(i["harness"], i["event"]) for i in dup] == [("claude", "UserPromptSubmit")]
+    assert str(glob) in dup[0]["detail"]
+    assert res.exit_code == 1
+    assert res.summary()["duplicate"] == 1
+
+
+def test_control_no_other_layer_no_duplicate(root, tmp_path):
+    register(root, bundle())
+    emit(root, "claude", "worker")
+    unrelated = tmp_path / "g.json"
+    unrelated.write_text(json.dumps({"hooks": {"UserPromptSubmit": [
+        {"hooks": [{"type": "command", "command": "unrelated || true"}]}]}}))
+    assert hb.check(root, other_layers=[unrelated]).exit_code == 0
+
+
+def test_a_registry_that_cannot_load_writes_settings_without_bundles_AND_says_so(root, monkeypatch, capsys):
+    register(root, bundle())
+    def boom(_root):
+        raise RuntimeError("disk on fire")
+    monkeypatch.setattr(hb, "load", boom)
+    out = hb.apply({"hooks": {"Stop": []}}, "worker", "claude", root)
+    assert out == {"hooks": {"Stop": []}}
+    assert "hook bundles NOT rendered" in capsys.readouterr().err
+
+
+# --- increment 2: the LIVE layer -------------------------------------------------
+
+import hashlib
+
+from shantytown.launched import FilesLaunches
+
+
+def live_items(res, event="UserPromptSubmit"):
+    return [i for i in res.items if i["event"] == event and i["harness"] == "claude"]
+
+
+def test_live_ok_when_the_running_process_launched_on_bytes_carrying_the_hook(root):
+    register(root, bundle())
+    path = emit(root, "claude", "worker")
+    res = hb.check(root)
+    hb.apply_live(res, [hb.Running("alice", str(path), launch_bytes=path.read_bytes())])
+    assert {i["live"] for i in live_items(res)} == {"ok"}
+    assert res.exit_code == 0
+
+
+def test_live_STALE_when_it_launched_before_the_bundle_was_rendered(root):
+    """The failure launched.py exists for, per hook: the file is right, the
+    process is not, and nothing is wrong until someone relaunches."""
+    before = emit(root, "claude", "worker").read_bytes()      # launched on this
+    register(root, bundle())
+    path = emit(root, "claude", "worker")                     # fixed afterwards
+    res = hb.check(root)
+    hb.apply_live(res, [hb.Running("alice", str(path), launch_bytes=before)])
+    items = live_items(res)
+    assert {i["live"] for i in items} == {"stale"}
+    assert "alice" in items[0]["detail"]
+    assert res.exit_code == 1
+
+
+def test_live_uses_the_hash_when_no_snapshot_and_the_file_is_unchanged(root):
+    register(root, bundle())
+    path = emit(root, "claude", "worker")
+    sha = hashlib.sha256(path.read_bytes()).hexdigest()
+    res = hb.check(root)
+    hb.apply_live(res, [hb.Running("alice", str(path), launch_sha256=sha)])
+    assert {i["live"] for i in live_items(res)} == {"ok"}
+
+
+def test_live_unknown_when_no_snapshot_and_the_file_changed(root):
+    register(root, bundle())
+    path = emit(root, "claude", "worker")
+    res = hb.check(root)
+    hb.apply_live(res, [hb.Running("alice", str(path), launch_sha256="0" * 64)])
+    assert {i["live"] for i in live_items(res)} == {"unknown"}
+    assert res.exit_code == 2
+
+
+def test_live_not_checked_when_nobody_runs_on_the_file(root):
+    register(root, bundle())
+    emit(root, "claude", "worker")
+    lead = emit(root, "claude", "lead")
+    res = hb.check(root)
+    hb.apply_live(res, [hb.Running("bob", str(lead), launch_bytes=lead.read_bytes())])
+    worker = [i for i in live_items(res) if i["role"] == "worker"]
+    assert {i["live"] for i in worker} == {hb.NOT_CHECKED}
+
+
+def test_launch_records_a_snapshot_that_matches_its_stamp_and_forget_clears_it(tmp_path):
+    settings = tmp_path / "worker.settings.json"
+    settings.write_text('{"hooks": {}}')
+    store = FilesLaunches(tmp_path / "launched")
+    store.record("alice", settings)
+    assert store.snapshot("alice") == settings.read_bytes()
+    settings.write_text('{"hooks": {"Stop": []}}')           # file changes after launch
+    assert store.snapshot("alice") == b'{"hooks": {}}', "the launch bytes, not today's"
+    store.forget("alice")
+    assert store.snapshot("alice") is None
+
+
+def test_a_snapshot_disagreeing_with_its_stamp_is_not_trusted(tmp_path):
+    settings = tmp_path / "s.json"
+    settings.write_text("{}")
+    store = FilesLaunches(tmp_path / "launched")
+    store.record("alice", settings)
+    (tmp_path / "launched" / "alice.snapshot").write_bytes(b'{"torn": true}')
+    assert store.snapshot("alice") is None
+
+
+# --- migration: a bundle may take over a hook st still hard-codes ------------------
+
+def _st_own_command(root, harness, event):
+    """A hook st itself emits today, read from a render with an EMPTY registry."""
+    path = emit(root, harness, "worker")
+    cmds = commands(harness, path, event)
+    assert cmds, f"control: st emits a {event} hook"
+    return cmds[0]
+
+
+@pytest.mark.parametrize("harness", ["claude", "codex"])
+def test_a_bundle_hook_identical_to_an_st_hook_renders_ONCE(root, harness):
+    own = _st_own_command(root, harness, "SessionStart")
+    before = commands(harness, emit(root, harness, "worker"), "SessionStart")
+    register(root, bundle(hooks=[{"event": "SessionStart", "command": own}]))
+    after = commands(harness, emit(root, harness, "worker"), "SessionStart")
+    assert after == before, "registering the same hook changes nothing rendered"
+    assert after.count(own) == 1
+    res = hb.check(root)
+    assert [i["configured"] for i in res.items if i["harness"] == harness] == ["ok"]
+
+
+def test_the_same_command_under_a_DIFFERENT_matcher_is_still_added(root):
+    own = _st_own_command(root, "claude", "SessionStart")
+    register(root, bundle(hooks=[{"event": "SessionStart", "matcher": "compact", "command": own}]))
+    after = commands("claude", emit(root, "claude", "worker"), "SessionStart")
+    assert after.count(own) == 2, "a different matcher is a different hook"
+
+
+def test_HOME_and_absolute_forms_of_one_command_are_one_hook(root):
+    """A portable bundle writes $HOME/...; st emits the absolute path. The shell
+    expands them identically, so rendering both would fire the hook twice."""
+    absolute = f"{Path.home()}/.tool/hooks/capture.sh"
+    st_settings = {"hooks": {"Stop": [{"hooks": [{"type": "command", "command": absolute}]}]}}
+    register(root, bundle(hooks=[{"event": "Stop", "command": "$HOME/.tool/hooks/capture.sh"}]))
+    out = hb.apply(st_settings, "worker", "claude", root)
+    assert [h["command"] for g in out["hooks"]["Stop"] for h in g["hooks"]] == [absolute]
+
+
+@pytest.mark.parametrize("cmd, same", [
+    ("$HOME/x.sh", True), ("${HOME}/x.sh", True), ("~/x.sh", True),
+    ("$HOMEY/x.sh", False), ("~other/x.sh", False), ("/elsewhere/x.sh", False),
+])
+def test_home_normalisation_is_exact(cmd, same):
+    assert (hb.same_command_key(cmd) == hb.same_command_key(f"{Path.home()}/x.sh")) is same
+
+
+def test_the_rendered_text_is_never_rewritten(root):
+    register(root, bundle(hooks=[{"event": "UserPromptSubmit", "command": "$HOME/p.sh || true"}]))
+    assert "$HOME/p.sh || true" in commands("claude", emit(root, "claude", "worker"), "UserPromptSubmit")
+
+
+def test_a_WORKSPACE_copy_duplicates_only_its_own_agents_role(root, tmp_path):
+    """A workspace's settings.local.json is loaded by the agent working there and
+    nobody else, so it double-fires for THAT role only; a global file does for all."""
+    register(root, bundle())
+    emit(root, "claude", "worker")
+    emit(root, "claude", "lead")
+    register(root, bundle(name="spelled", hooks=[{"event": "UserPromptSubmit", "command": "$HOME/p.sh || true"}]))
+    emit(root, "claude", "worker")
+    emit(root, "claude", "lead")
+    local = tmp_path / "ws-settings.local.json"
+    local.write_text(json.dumps({"hooks": {"UserPromptSubmit": [
+        {"hooks": [{"type": "command", "command": f"{Path.home()}/p.sh || true"}]}]}}))
+    res = hb.check(root, other_layers=[(local, "worker")])
+    dup = {(i["role"], i["event"]) for i in res.items if i["configured"] == "duplicate"}
+    assert dup == {("worker", "UserPromptSubmit")}
+    res_global = hb.check(root, other_layers=[local])            # no role: global
+    assert {i["role"] for i in res_global.items if i["configured"] == "duplicate"} == {"worker", "lead"}
+
+
+# --- provisioning must not re-duplicate what the role file now owns --------------
+
+def _workspace_commands(text: str, event: str) -> list[str]:
+    return [h["command"] for g in json.loads(text).get("hooks", {}).get(event, [])
+            for h in g.get("hooks", [])]
+
+
+def test_provision_drops_a_workspace_hook_the_role_file_owns_and_keeps_it_otherwise(tmp_path):
+    """The u1ybxo blocker: provisioning re-wrote hooks into every workspace's
+    settings.local.json at each launch, re-duplicating a registered bundle."""
+    from shantytown.provision import _workspace_capture
+    from shantytown.runtime import _yupana_post_tool_cmd, _yupana_action_outcome_cmd
+    post_edit = _yupana_post_tool_cmd()["command"]
+    outcome = _yupana_action_outcome_cmd()["command"]
+    root = tmp_path / ".shanty"
+    root.mkdir()
+    # Control: a role file WITHOUT those hooks -> the workspace keeps them.
+    bare = tmp_path / "bare.settings.json"
+    bare.write_text(json.dumps({"hooks": {}}))
+    kept = _workspace_capture("{}", root, bare)
+    assert post_edit in _workspace_commands(kept, "PostToolUse")
+    assert outcome in _workspace_commands(kept, "PostToolUseFailure")
+    # A role file that carries them (as a registered bundle renders them) -> dropped.
+    owning = tmp_path / "owning.settings.json"
+    owning.write_text(json.dumps({"hooks": {
+        "PostToolUse": [{"matcher": ".*", "hooks": [{"type": "command", "command": post_edit}]},
+                        {"matcher": "Bash", "hooks": [{"type": "command", "command": outcome}]}],
+        "PostToolUseFailure": [{"matcher": "Bash", "hooks": [{"type": "command", "command": outcome}]}]}}))
+    out = _workspace_capture("{}", root, owning)
+    assert post_edit not in _workspace_commands(out, "PostToolUse")
+    assert outcome not in _workspace_commands(out, "PostToolUse")
+    assert outcome not in _workspace_commands(out, "PostToolUseFailure")
+    assert any("shantytown.stats capture" in c for c in _workspace_commands(out, "PostToolUse")), \
+        "unrelated workspace hooks survive"
+
+
+# --- the FIRING layer ---------------------------------------------------------------
+
+def _firing_setup(root, max_age=3600):
+    b = bundle(hooks=[{"event": "UserPromptSubmit", "command": EXAMPLE_CMD,
+                       "evidence": {"command": "example-tool last-run", "max_age_seconds": max_age}}])
+    register(root, b)
+    path = emit(root, "claude", "worker")
+    res = hb.check(root)
+    hb.apply_live(res, [hb.Running("alice", str(path), launch_bytes=path.read_bytes())])
+    return res
+
+
+def _claude(res):
+    return [i for i in res.items if i["harness"] == "claude"][0]
+
+
+def test_firing_ok_when_evidence_is_fresh(root):
+    res = _firing_setup(root)
+    hb.apply_firing(res, hb.load(root), now=10_000, runner=lambda c: (9_500.0, ""))
+    assert _claude(res)["firing"] == "ok" and res.exit_code in (0, 2)
+
+
+def _carrier(root):
+    return [hb.Running("alice", str(emit(root, "claude", "worker")))]
+
+
+def test_firing_SILENT_when_live_but_evidence_is_old(root):
+    """Configured, launched, WORKING, and the hook not running: the decorative-hook shape."""
+    res = _firing_setup(root, max_age=60)
+    hb.apply_firing(res, hb.load(root), now=10_000, runner=lambda c: (1_000.0, ""),
+                    running=_carrier(root), last_active={"alice": 9_990.0})
+    item = _claude(res)
+    assert item["firing"] == "silent" and "last ran 9000s ago" in item["detail"]
+    assert "alice" in item["detail"]
+    assert res.exit_code == 1
+
+
+def test_firing_IDLE_is_not_silent(root):
+    """sattler #117 review: a fleet idle overnight must not turn every hook silent and page."""
+    res = _firing_setup(root, max_age=60)
+    hb.apply_firing(res, hb.load(root), now=10_000, runner=lambda c: (1_000.0, ""),
+                    running=_carrier(root), last_active={"alice": 1_500.0})
+    item = _claude(res)
+    assert item["firing"] == hb.NOT_CHECKED and "idle is not silent" in item["detail"]
+    assert res.exit_code != 1
+
+
+def test_firing_agent_with_no_activity_row_is_idle(root):
+    res = _firing_setup(root, max_age=60)
+    hb.apply_firing(res, hb.load(root), now=10_000, runner=lambda c: (1_000.0, ""),
+                    running=_carrier(root), last_active={"someone-else": 9_999.0})
+    assert _claude(res)["firing"] == hb.NOT_CHECKED
+
+
+def test_firing_old_evidence_with_UNREADABLE_activity_is_unknown(root):
+    """Cannot tell idle from silent: never silent (a false page), never ok."""
+    res = _firing_setup(root, max_age=60)
+    hb.apply_firing(res, hb.load(root), now=10_000, runner=lambda c: (1_000.0, ""),
+                    running=_carrier(root), last_active=None)
+    assert _claude(res)["firing"] == "unknown" and res.exit_code == 2
+
+
+def test_last_activity_reads_newest_per_agent_and_None_without_a_store(tmp_path):
+    from shantytown import stats
+    assert stats.last_activity(tmp_path) is None
+    conn = stats._db(tmp_path)
+    conn.executemany("INSERT INTO events(ts, agent, kind) VALUES (?,?,?)",
+                     [(5.0, "a", "tool"), (9.0, "a", "stop"), (7.0, "b", "tool")])
+    conn.commit(); conn.close()
+    assert stats.last_activity(tmp_path) == {"a": 9.0, "b": 7.0}
+
+
+def test_firing_unknown_when_evidence_fails(root):
+    res = _firing_setup(root)
+    hb.apply_firing(res, hb.load(root), now=10_000, runner=lambda c: (None, "exited 1"))
+    assert _claude(res)["firing"] == "unknown"
+
+
+def test_firing_not_checked_without_a_live_carrier(root):
+    register(root, bundle(hooks=[{"event": "UserPromptSubmit", "command": EXAMPLE_CMD,
+                                  "evidence": {"command": "x", "max_age_seconds": 60}}]))
+    emit(root, "claude", "worker")
+    res = hb.check(root)                               # no apply_live: nobody runs it
+    calls = []
+    hb.apply_firing(res, hb.load(root), now=1, runner=lambda c: calls.append(c) or (0.0, ""))
+    assert _claude(res)["firing"] == hb.NOT_CHECKED and calls == []
+
+
+def test_firing_evidence_runs_once_per_check(root):
+    res = _firing_setup(root)
+    emit(root, "claude", "lead")
+    calls = []
+    hb.apply_firing(res, hb.load(root), now=10, runner=lambda c: calls.append(c) or (9.0, ""))
+    assert calls == ["example-tool last-run"]
+
+
+def test_evidence_is_validated():
+    bad = bundle(hooks=[{"event": "Stop", "command": "x", "evidence": {"command": "", "max_age_seconds": 0}}])
+    errs = hb.validate(bad)
+    assert any("evidence.command" in e for e in errs) and any("max_age_seconds" in e for e in errs)
+
+
+def test_the_real_evidence_runner_is_fail_closed():
+    assert hb._run_evidence("echo 1790000000")[0] == 1790000000.0
+    assert hb._run_evidence("echo not-a-number")[0] is None
+    assert hb._run_evidence("exit 3")[0] is None
+
+
+# --- register re-renders EVERY emitted role file (the set check inspects) --------------
+
+def _hooks_cmd(root, cmd, **kw):
+    from types import SimpleNamespace
+    from shantytown import cli
+    return cli._cmd_hooks(SimpleNamespace(root=root, hooks_cmd=cmd, json=False, **kw))
+
+
+def _emit_all(root):
+    return [emit(root, h, r) for h, r in (("claude", "worker"), ("codex", "worker"),
+                                          ("codex", "lead"), ("codex", "administrator"))]
+
+
+def test_register_renders_into_role_files_no_card_uses(root):
+    """Measured 2026-09-30: a codex notify bundle landed in codex/worker (a card
+    re-emitted it) and was `missing` in codex/lead and codex/administrator, which
+    no card named, so nothing re-rendered them while check still inspected them."""
+    _emit_all(root)
+    src = root / "src-notifier.json"
+    src.write_text(json.dumps(bundle(name="notifier", codex_notify=NOTIFY)))
+    assert _hooks_cmd(root, "register", file=src, no_apply=False) == 0
+    res = hb.check(root)
+    assert res.items and {i["configured"] for i in res.items} == {"ok"}, \
+        [(i["harness"], i["role"], i["event"], i["configured"]) for i in res.items]
+    for r in ("worker", "lead", "administrator"):
+        doc = tomllib.loads((root / "settings" / "codex" / r / "config.toml").read_text())
+        assert doc["notify"] == NOTIFY
+
+
+def test_register_no_apply_leaves_files_until_apply(root):
+    """The control: without the re-render the same files ARE missing, so the test
+    above measures the re-render and not a check that always says ok."""
+    _emit_all(root)
+    src = root / "src-notifier.json"
+    src.write_text(json.dumps(bundle(name="notifier", codex_notify=NOTIFY)))
+    assert _hooks_cmd(root, "register", file=src, no_apply=True) == 0
+    assert "missing" in {i["configured"] for i in hb.check(root).items}
+    assert _hooks_cmd(root, "apply") == 0
+    assert {i["configured"] for i in hb.check(root).items} == {"ok"}
+
+
+def test_unregister_re_renders_so_the_bundle_hooks_leave_every_file(root):
+    _emit_all(root)
+    src = root / "src-example.json"
+    src.write_text(json.dumps(bundle()))
+    _hooks_cmd(root, "register", file=src, no_apply=False)
+    assert EXAMPLE_CMD in (root / "settings" / "codex" / "lead" / "config.toml").read_text()
+    assert _hooks_cmd(root, "unregister", name="example", no_apply=False) == 0
+    for f in ("worker.settings.json", "codex/worker/config.toml", "codex/lead/config.toml",
+              "codex/administrator/config.toml"):
+        assert EXAMPLE_CMD not in (root / "settings" / f).read_text(), f
+
+
+@pytest.mark.xfail(strict=True, reason="aegis-ipjh44: render preserves a top-level key st "
+                   "no longer owns, so a removed notify owner's argv is orphaned")
+def test_unregister_drops_an_orphaned_codex_notify(root):
+    _emit_all(root)
+    src = root / "src-notifier.json"
+    src.write_text(json.dumps(bundle(name="notifier", codex_notify=NOTIFY)))
+    _hooks_cmd(root, "register", file=src, no_apply=False)
+    _hooks_cmd(root, "unregister", name="notifier", no_apply=False)
+    doc = tomllib.loads((root / "settings" / "codex" / "lead" / "config.toml").read_text())
+    assert doc.get("notify") != NOTIFY
+
+
+# --- emitted role settings are written ATOMICALLY (aegis-yb8ifi) -----------------------
+
+def _break_render(monkeypatch, harness):
+    """A render whose output cannot be ENCODED: the write fails part-way, after the
+    target was opened. A lone surrogate is a real mid-write failure, and it does not
+    depend on which write call the implementation uses."""
+    h = harness_mod.get(harness)
+    monkeypatch.setattr(type(h), "render", lambda self, s, e="", root=None: '{"torn": "\ud800"}')
+
+
+@pytest.mark.parametrize("harness", ["claude", "codex"])
+def test_a_failed_emit_leaves_the_previous_role_file_intact(root, monkeypatch, harness):
+    from shantytown import cli
+    path = emit(root, harness, "worker")
+    before = path.read_bytes()
+    assert before
+    _break_render(monkeypatch, harness)
+    with pytest.raises(Exception):
+        cli._emit_role_settings(root, {"worker"}, harness_name=harness)
+    assert path.read_bytes() == before, "a failed write must not truncate the file agents launch on"
+    assert not [p for p in path.parent.iterdir() if p.name.startswith(path.name + ".")], \
+        "no temp file left beside it"
+
+
+def test_atomic_emit_keeps_each_files_mode(root):
+    """Live vati, 2026-09-30: codex lead/worker config.toml are 0600, the rest 0664.
+    A rewrite must neither widen a private file nor narrow a shared one."""
+    import os
+    import stat
+    from shantytown import cli
+    for harness, mode in (("codex", 0o600), ("claude", 0o664)):
+        path = emit(root, harness, "worker")
+        os.chmod(path, mode)
+        cli._emit_role_settings(root, {"worker"}, harness_name=harness)
+        assert stat.S_IMODE(path.stat().st_mode) == mode, (harness, oct(path.stat().st_mode))
+
+
+def test_register_whose_render_fails_says_to_run_apply(root, monkeypatch, capsys):
+    """The registry changed but some file did not: say so, and exit nonzero."""
+    _emit_all(root)
+    _break_render(monkeypatch, "codex")
+    src = root / "src-example.json"
+    src.write_text(json.dumps(bundle()))
+    rc = _hooks_cmd(root, "register", file=src, no_apply=False)
+    err = capsys.readouterr().err
+    assert rc != 0 and "st ops hooks apply" in err, (rc, err)
+
+
+def test_atomic_write_goes_through_a_symlink_and_keeps_the_link(tmp_path):
+    from shantytown.files import write_text_atomic
+    real = tmp_path / "real.json"
+    real.write_text("old")
+    link = tmp_path / "link.json"
+    link.symlink_to(real)
+    write_text_atomic(link, "new")
+    assert link.is_symlink() and real.read_text() == "new"
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["link.json", "real.json"]

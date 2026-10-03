@@ -301,6 +301,28 @@ def _deferred_until_is_future(value, now=None) -> bool:
     return when > (now or datetime.now(timezone.utc))
 
 
+def drop_parked(rows, now=None) -> list:
+    """The in_progress rows that are ACTIVE anchors: those not parked by a
+    future `defer_until`.
+
+    The plate reader already applies this rule through is_unworkable. The
+    tend haul does not go through the plate. It reads `br list --status
+    in_progress` directly, and the status alone does not say whether a bead is
+    parked. A re-defer that writes defer_until and leaves the status in_progress
+    (sattler's 09-25 bulk ruling did exactly that) therefore stayed in the
+    active set. Tend re-served aegis-rgvout to wu inside its park (aegis-1d3fze).
+    Measured 2026-09-30 05:50Z: 3 of 67 in_progress rows were parked, and all 3
+    were in the haul's active set.
+
+    The fix sits on the reader, not the defer verb, so it holds for every writer
+    of defer_until. The fail-open rule of _deferred_until_is_future carries
+    over: an absent, lapsed or unreadable stamp keeps the row active.
+    """
+    return [r for r in rows
+            if not (isinstance(r, dict)
+                    and _deferred_until_is_future(r.get("defer_until"), now))]
+
+
 def is_unworkable(status) -> bool:
     """Is this status one that must never occupy a plate at all?
 

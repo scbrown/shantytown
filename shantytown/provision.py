@@ -870,7 +870,43 @@ def _workspace_capture(text: str, root, settings_path=None) -> str:
             if commands:
                 kept.append({**group, "hooks": commands})
         cfg["hooks"][event] = kept
+    _drop_hooks_the_role_file_owns(cfg, role_hooks)
     return json.dumps(cfg, indent=2) + "\n"
+
+
+def _drop_hooks_the_role_file_owns(cfg: dict, role_hooks: dict) -> None:
+    """ONE OWNER PER HOOK: remove from the workspace file every hook the agent's
+    role file already carries (same event, same matcher, same command once
+    $HOME forms are expanded). One owner per hook: identical text in both files
+    is de-duplicated by the harness (measured), but a different spelling of the
+    same command is not and would run twice, and either way `st ops hooks check`
+    wants a single owner.
+
+    This is what lets a registered hook bundle take over a hook provisioning
+    still injects here (aegis-68j0ys): once the bundle renders it into the role
+    file, the workspace copy is dropped on the next launch. Where no bundle
+    supplies it, the role file lacks it and the workspace keeps it, so nothing
+    is lost on a host that has not registered the bundle. Nothing here names a
+    tool; it compares hooks."""
+    from .hook_bundles import _commands_in
+    hooks = cfg.get("hooks")
+    if not isinstance(hooks, dict):
+        return
+    for event, groups in list(hooks.items()):
+        owned = _commands_in(role_hooks.get(event)) if isinstance(role_hooks.get(event), list) else set()
+        if not owned or not isinstance(groups, list):
+            continue
+        kept = []
+        for group in groups:
+            if not isinstance(group, dict):
+                kept.append(group)
+                continue
+            rest = [h for h in group.get("hooks", [])
+                    if not (isinstance(h, dict) and isinstance(h.get("command"), str)
+                            and _commands_in([{"matcher": group.get("matcher"), "hooks": [h]}]) <= owned)]
+            if rest:
+                kept.append({**group, "hooks": rest})
+        hooks[event] = kept
 
 
 def _provision_capture_without_kit(card: Agent, root, ws: Path, settings_path) -> None:
@@ -880,6 +916,34 @@ def _provision_capture_without_kit(card: Agent, root, ws: Path, settings_path) -
     text = path.read_text() if path.is_file() else "{}"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(_workspace_capture(text, root, settings_path))
+
+
+def headerless_quipu(servers: dict) -> list[str]:
+    """Names of DIRECT quipu MCP entries that lack a headersHelper (aegis-g034ts).
+
+    Quipu requires a bearer for writes. The two safe shapes are the homelab proxy,
+    which holds the credential server-side, and a direct entry whose
+    headersHelper prints the header at connect time, so the secret is never
+    written into any config. A direct entry without one either 401s on its first
+    write (the aegis-nvw6ye Mac failure) or carries the token in the file.
+
+    Measured 2026-09-30: 0 such entries across 115 emitted kit files on vati.
+    This is a regression guard. An entry is direct when its URL host is a quipu
+    host OR its server NAME is quipu* (aegis-w35nwd): a quipu at an IP or at
+    localhost:3030, which is where a Mac's local quipu serves, has no quipu in
+    its hostname and was emitted. A stdio server has no URL and is out of
+    scope, and the proxy is named homelab, not quipu.
+    """
+    from urllib.parse import urlparse
+    out = []
+    for name, cfg in (servers or {}).items():
+        if not isinstance(cfg, dict) or not isinstance(cfg.get("url"), str):
+            continue
+        host = (urlparse(cfg["url"]).hostname or "").lower()
+        direct = host.split(".")[0].startswith("quipu") or str(name).lower().startswith("quipu")
+        if direct and not cfg.get("headersHelper"):
+            out.append(name)
+    return sorted(out)
 
 
 def provision(card: Agent, root, *, secrets=None, settings_path=None,
@@ -1034,6 +1098,13 @@ def provision(card: Agent, root, *, secrets=None, settings_path=None,
         rendered = json.dumps(mcp_limits.project(json.loads(rendered), root, card.name), indent=2)
     except (OSError, ValueError, TypeError) as exc:
         raise ProvisionError(f"invalid MCP containment policy: {exc}") from exc
+    if (bare := headerless_quipu(json.loads(rendered).get("mcpServers", {}))):
+        raise ProvisionError(
+            f"cannot provision {card.name}: the kit declares a DIRECT quipu MCP "
+            f"entry without headersHelper ({', '.join(bare)}). Quipu writes need a "
+            f"bearer, and this shape either 401s or carries the secret in the file. "
+            f"Route through the homelab proxy, or add a headersHelper that prints "
+            f"the header at connect time (aegis-g034ts, aegis-nvw6ye.1).")
     target = ws / ".mcp.json"
     # Create privately BEFORE writing secret bytes, then atomically publish.
     # chmod after write leaves a newly created file readable for that window.

@@ -39,6 +39,56 @@ def write_json_atomic(path: Path, value) -> None:
     os.replace(tmp, path)
 
 
+def write_text_atomic(path: Path, text: str) -> None:
+    """write_json_atomic for TEXT a caller already rendered (TOML, JSON with its
+    own layout), with the three properties a file other processes LAUNCH on
+    needs (aegis-yb8ifi, emitted role settings):
+
+    - a UNIQUE temp name in the same directory, so two concurrent writers of
+      one file cannot interleave into one temp file (`st ops hooks apply` and a
+      `roles set` can run at once);
+    - the file's MODE is kept. Live role files differ (codex lead/worker
+      config.toml 0600, the rest 0664, measured 2026-09-30); mkstemp's 0600
+      would narrow shared ones, and a fixed default would widen private ones.
+      A new file gets what write_text would have given it (0666 & ~umask);
+    - a symlinked path is written THROUGH (the target is replaced, the link
+      stays), as write_text did; os.replace on the link would swap it for a
+      regular file.
+    A failure at any point leaves the previous file untouched and no temp file."""
+    import tempfile
+    target = Path(os.path.realpath(path))
+    try:
+        mode = os.stat(target).st_mode & 0o7777
+    except FileNotFoundError:
+        umask = os.umask(0)
+        os.umask(umask)
+        mode = 0o666 & ~umask
+    fd, tmp = tempfile.mkstemp(dir=target.parent, prefix=target.name + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.chmod(tmp, mode)
+        os.replace(tmp, target)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    # The rename is durable only once the DIRECTORY entry is on disk. Best-effort:
+    # the file is already correct for every reader, and some filesystems refuse it.
+    try:
+        dfd = os.open(target.parent, os.O_RDONLY)
+        try:
+            os.fsync(dfd)
+        finally:
+            os.close(dfd)
+    except OSError:
+        pass
+
+
 class FilesRegistry:
     """Identity from a directory of yaml-ish json. The leak detector for quipu."""
 

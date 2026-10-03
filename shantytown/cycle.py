@@ -168,7 +168,7 @@ class TreeRisk:
 
 @dataclass
 class TreeStranded:
-    """Unpushed commits in a tree whose push remote is MEASURED unreachable.
+    """Unpushed commits whose push is blocked by an outage or authority policy.
 
     Reported, never blocking — and the reasoning is the asymmetry TreeRisk's own
     docstring already states: `dirty` dies with the session, `unpushed` SURVIVES
@@ -184,8 +184,9 @@ class TreeStranded:
     Refusing to cycle a saturated agent to protect commits that a cycle does not
     touch is the wrong way round (aegis-tig80i).
 
-    ONLY A MEASURED FAILURE REACHES HERE. `remote_reachable` is three-state and
-    its None means could-not-tell, which keeps gating. And `dirty` is never
+    Only a measured outage or the shared push authority refusal reaches here.
+    `remote_reachable` is three-state; None keeps gating when authority policy
+    has not established a refusal. And `dirty` is never
     downgraded: a tree that is both dirty and unpushed still refuses on the dirt.
     """
     path: str
@@ -196,12 +197,30 @@ class TreeStranded:
     def render(self) -> list:
         scope = (f"not verified on remote {self.publication_remote}"
                  if self.publication_remote else "on no remote ref")
+        if self.detail:
+            return [
+                f"{self.path}: {self.unpushed} commit(s) {scope} — push authority "
+                "guard refuses; NOT blocking this cycle. Commits remain in this clone.",
+                "    Preserve this branch and arrange publication to an authorized peer; "
+                "do not weaken the push guard or discard the work to cycle.",
+                f"    {self.detail}",
+            ]
         return [
             f"{self.path}: {self.unpushed} commit(s) {scope}, and the "
             f"push remote is UNREACHABLE — not blocking this cycle, because a "
             f"cycle relaunches this same clone and does not touch commits",
             f"    PUSH THESE when the remote returns: cd {self.path} && st repo push",
         ]
+
+
+@dataclass
+class TreePerInstall:
+    path: str
+    files: tuple = ()
+
+    def render(self) -> list:
+        return [f"{self.path}: per-install, not loss — " + ", ".join(self.files)
+                + "; declared in committed .st-per-install, left untouched"]
 
 
 @dataclass
@@ -251,6 +270,7 @@ class Verdict:
     #: Trees whose behind-count could not be measured (a dead remote). Reported,
     #: never a refusal — see TreeUnverified.
     unverified: list = field(default_factory=list)
+    per_install: list = field(default_factory=list)
 
     def notice_lines(self) -> list:
         """The non-blocking reports (untracked, stranded-by-outage, unverified
@@ -260,6 +280,8 @@ class Verdict:
             lines += u.render()
         for st_ in self.stranded:
             lines += st_.render()
+        for pi in self.per_install:
+            lines += pi.render()
         for uv in self.unverified:
             lines += uv.render()
         return lines
@@ -329,6 +351,7 @@ def assess(agent: str, trees, checkpoint: str, staleness,
     notices: list[TreeUntracked] = []
     stranded: list[TreeStranded] = []
     unverified: list[TreeUnverified] = []
+    per_install: list[TreePerInstall] = []
     # One cache across every tree: a fleet's worktrees mostly share one forge, so
     # the honest answer for the second tree is the answer measured for the first.
     reach_cache: dict = {}
@@ -361,6 +384,8 @@ def assess(agent: str, trees, checkpoint: str, staleness,
             notices.append(TreeUntracked(
                 str(tree), files=list(getattr(s, "untracked", ()) or ()),
                 total=count))
+        if getattr(s, "per_install", ()):
+            per_install.append(TreePerInstall(str(tree), s.per_install))
         publication_remote = getattr(s, "publication_remote", "")
         if s.dirty or s.unpushed:
             # UNPUSHED-ONLY, AND THE REMOTE MEASURED UNREACHABLE, IS NOT A
@@ -368,6 +393,13 @@ def assess(agent: str, trees, checkpoint: str, staleness,
             # trade and not a loosening. `dirty` is never downgraded, and a
             # could-not-tell (None) keeps gating.
             if s.unpushed and not s.dirty:
+                from .workspace import push_authority_refusal
+                refusal = push_authority_refusal(tree)
+                if refusal:
+                    stranded.append(TreeStranded(
+                        str(tree), unpushed=s.unpushed, detail=refusal,
+                        publication_remote=publication_remote))
+                    continue
                 try:
                     verdict = reachable(tree)
                 except Exception:
@@ -388,11 +420,11 @@ def assess(agent: str, trees, checkpoint: str, staleness,
             "NOT a general --force: this override is named on its own so that "
             "reaching past some other refusal cannot disarm it).",
             risks=risks, checkpoint=checkpoint, untracked=notices,
-            stranded=stranded, unverified=unverified)
+            stranded=stranded, unverified=unverified, per_install=per_install)
 
     return Verdict(agent, True, risks=risks, checkpoint=checkpoint,
                    untracked=notices, stranded=stranded,
-                   unverified=unverified)
+                   unverified=unverified, per_install=per_install)
 
 
 def _parse_ts(value):
@@ -499,6 +531,29 @@ def durable_gate(agent: str, bead: str, since, comments, error: str = "") -> Dur
     return DurableGate(agent, bead, str(since), ok, "")
 
 
+STUCK_AFTER_DEFAULT = 30 * 60
+STUCK_AFTER_ENV = "SHANTY_CYCLE_STUCK_AFTER"
+
+
+def stuck_after() -> float:
+    """How long a pending, un-refused cycle request may read as `cycling`
+    (aegis-az0a40.1). After it, `st crew` stops calling the agent `cycling`,
+    judges it by its pane (up/down), and marks the request stale in its JSON.
+
+    A request is consumed by `st fleet tend`. On a host where nothing consumes
+    it (measured: the MacBook, 00:33Z to past 02:55Z on 2026-09-30) it used to
+    read as a cycle in flight FOREVER, and `st fleet watch` treats a cycle in
+    flight as cannot-tell, so the peer administrator became unwatchable.
+    Seconds, from $SHANTY_CYCLE_STUCK_AFTER; a bad value falls back to 30 min."""
+    import os
+    raw = os.environ.get(STUCK_AFTER_ENV, "")
+    try:
+        v = float(raw)
+        return v if v > 0 else STUCK_AFTER_DEFAULT
+    except ValueError:
+        return STUCK_AFTER_DEFAULT
+
+
 class Requests:
     """Durable cycle REQUESTS — the `--self` half, and the important one.
 
@@ -535,7 +590,8 @@ class Requests:
         write_json_atomic(self.path, data)
 
     def request(self, agent: str, checkpoint: str, checkpoint_bead: str = "",
-                quipu_nodes: list | None = None) -> None:
+                quipu_nodes: list | None = None,
+                no_in_place: bool = False) -> None:
         data = self._load()
         data[agent] = {"checkpoint": checkpoint,
                        "checkpoint_bead": checkpoint_bead,
@@ -544,6 +600,14 @@ class Requests:
                        # context it just shed. Always a list, never absent, so the
                        # resume path never has to branch on presence.
                        "quipu_nodes": list(quipu_nodes or []),
+                       # aegis-az0a40.1: WHEN it was asked, so a request nobody
+                       # consumes can age out of reading as a cycle in flight.
+                       "requested_at": time.time(),
+                       # aegis-2fxldr: a self-requested RELAUNCH. tend serves the
+                       # request from its own namespace, which has no --no-in-place,
+                       # so a flag not stored here never reaches the plan and every
+                       # self-cycle ran as an in-place clear.
+                       "no_in_place": bool(no_in_place),
                        # aegis-7xptd5: a NEW request re-arms. The old refusal
                        # described a tree state the agent has since had a chance to
                        # fix, and carrying it forward would report a stall that may
@@ -583,6 +647,23 @@ class Requests:
         self._save(data)
         return True
 
+    def age(self, record: dict, now: float | None = None) -> float | None:
+        """Seconds since this request was made; None when that cannot be told.
+
+        Records written before `requested_at` existed fall back to the ledger
+        file's mtime. That is an UPPER bound on the time since the latest write,
+        and the ledger is rewritten on every request, so a legacy record can only
+        look YOUNGER than it is. The error is towards "still cycling", never
+        towards calling a fresh request stale (aegis-az0a40.1)."""
+        now = time.time() if now is None else now
+        at = record.get("requested_at") if isinstance(record, dict) else None
+        if isinstance(at, (int, float)) and not isinstance(at, bool):
+            return max(0.0, now - float(at))
+        try:
+            return max(0.0, now - self.path.stat().st_mtime)
+        except OSError:
+            return None
+
     def pending(self) -> dict:
         # Old string entries remain readable after the record upgrade.
         def norm(value):
@@ -594,6 +675,8 @@ class Requests:
                  else {"checkpoint": str(value), "checkpoint_bead": ""})
             d.setdefault("checkpoint_bead", "")
             d.setdefault("quipu_nodes", [])
+            # False, never absent: a record from before the field meant in-place.
+            d.setdefault("no_in_place", False)
             # None, never absent — so every reader tests one thing (is there a
             # refusal?) and none of them has to branch on the record's vintage.
             d.setdefault("refused", None)

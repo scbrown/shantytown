@@ -17,6 +17,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import governor as gov_mod
 from .governor import DEFAULT_MAX_AGE_S
 
 
@@ -184,8 +185,26 @@ def controller_line(readings, *, running: int, cap: int | None,
 
     clock = int(now if now is not None else time.time())
     state = {"readings": {}}
-    pace_targets = {p.window: {"ratio": p.ratio, "length": p.window_length()}
-                    for p in paces}
+    pace_targets = {}
+    for p in paces:
+        ratio = p.ratio
+        if p.curve:
+            # A SPENDING ENVELOPE (aegis-zowv5j) has no single ratio: Creel's
+            # trajectory is ratio x elapsed, so hand it the envelope's bound at
+            # THIS reading's elapsed, which puts its target exactly on the
+            # envelope now. When that cannot be stated (no reading, no reset, or
+            # 0% elapsed) the advisory says so: omitting the window would let
+            # Creel display its own shipped default as though it were ours —
+            # the exact substitution the applied-pace check below refuses.
+            reading = readings.get(p.window)
+            frac, why = gov_mod.window_elapsed(
+                getattr(reading, "reset_at", None), clock, p.window_length())
+            ratio = p.bound(frac)
+            if ratio is None:
+                return _unavailable(
+                    f"{p.window} spending envelope has no ratio at this reading "
+                    f"({why or '0% elapsed'})")
+        pace_targets[p.window] = {"ratio": ratio, "length": p.window_length()}
     if pace_targets:
         state["paceTargets"] = pace_targets
     stale = []

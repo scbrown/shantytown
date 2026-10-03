@@ -38,18 +38,31 @@ def cli_active() -> bool:
 
 
 @contextmanager
-def command_environment(root):
+def command_environment(root, how=None):
     """Carry this command's [env] to all readers and child processes.
 
     Restore the caller's environment even on refusal. This is a CLI boundary,
     not a library-client constructor: two library clients keep their own roots.
+
+    SHANTY_ROOT is carried too when the caller has none and the store was FOUND
+    rather than guessed (aegis-0681f6). The send journal reads only the
+    environment, so every cron-driven `st inbox` delivered but went UNJOURNALED:
+    cron sets no SHANTY_ROOT, yet the CLI had already resolved the deployment
+    through the box's pointer. The journal is how we catch detectors that never
+    deliver, and cron is exactly that population. The cwd fallback (`how ==
+    BY_CWD`) is excluded on purpose: it is a guess against wherever cron happens
+    to run, and the journal refuses that guess (the nipg fragmentation mode).
     """
     from .config import load_or_default
     cfg, _err = load_or_default(root)
-    previous = {key: os.environ.get(key) for key in cfg.env}
+    carried = dict(cfg.env)
+    if (not os.environ.get("SHANTY_ROOT") and "SHANTY_ROOT" not in carried
+            and how in (BY_FLAG, BY_WALKUP, BY_POINTER) and Path(root).is_dir()):
+        carried["SHANTY_ROOT"] = str(Path(root).resolve())
+    previous = {key: os.environ.get(key) for key in carried}
     token = _cli_active.set(True)
     try:
-        os.environ.update(cfg.env)
+        os.environ.update(carried)
         yield
     finally:
         for key, value in previous.items():

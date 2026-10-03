@@ -580,6 +580,26 @@ def _resume_brief_cmd(root=None) -> dict:
     return {"type": "command", "command": cmd}
 
 
+def _session_anchor_cmd(root=None) -> dict:
+    """The SessionStart ANCHOR (aegis-7edci3). See session_anchor.py.
+
+    Identity, plate, lead and role startup instructions, injected at every
+    session start — including after a clear and after a compaction, which fire
+    SessionStart too. Before this, 0 of 3 emitted role files ran `st anchor`, so
+    a session knew its work only if its dispatch note said so.
+
+    ROOTED for the same reason as _resume_brief_cmd: it reads state, and an
+    unrooted hook resolves the agent's own workspace, which has no store. The
+    codex builder passes no root; the module then falls back to $SHANTY_ROOT.
+
+    SECOND in the group: after the resume brief (a cycle must learn THAT first),
+    ahead of standing advice, because the plate is the instruction."""
+    cmd = f"{_hook_interpreter()} -m shantytown.session_anchor"
+    if root:
+        cmd += f" --root {Path(root).resolve()}"
+    return {"type": "command", "command": cmd, "timeout": 15}
+
+
 def _yupana_brief_cmd() -> dict:
     """The SessionStart WORK-ITEM BRIEFING (`yupana hook session-start`).
 
@@ -972,6 +992,21 @@ def role_stop_hooks(role: str, root=None) -> list[dict]:
     return stop
 
 
+def builtin_hook_bundles(root=None) -> list:
+    """The hooks st emits from CODE that `st ops hooks check` must verify
+    (aegis-7edci3). Checked, never rendered through the bundle path: they are
+    already in the generator. Each harness gets the command it is actually
+    emitted with — claude's is rooted, codex's builder passes no root."""
+    from .hook_bundles import Bundle, BundleHook
+    return [Bundle(
+        name="st-session-anchor", version="1", owner="st", roles=("*",),
+        hooks=(BundleHook(event="SessionStart", timeout=15, harnesses=("claude",),
+                          command=_session_anchor_cmd(root)["command"]),
+               BundleHook(event="SessionStart", timeout=15, harnesses=("codex",),
+                          command=_session_anchor_cmd()["command"])),
+        source="builtin")]
+
+
 def session_start_hooks(root=None) -> list[dict]:
     """QUERY-FIRST at session start (aegis-rcyd): inject the "ask the knowledge
     graph before you act" directive into live context, the same way the
@@ -993,8 +1028,8 @@ def session_start_hooks(root=None) -> list[dict]:
     caller keep working unchanged; passing it is what lets the brief find a
     store that is not under the agent's cwd.
     """
-    return [{"hooks": [_resume_brief_cmd(root), _query_first_cmd(),
-                       _yupana_brief_cmd()]}]
+    return [{"hooks": [_resume_brief_cmd(root), _session_anchor_cmd(root),
+                       _query_first_cmd(), _yupana_brief_cmd()]}]
 
 
 # THE MATCHER, once. Both harnesses emit it and both readers look for it, so a
@@ -1155,6 +1190,16 @@ def claude_settings_for_role(role: str, root=None) -> dict:
     from the three shared builders above.
     """
     capture = _capture_cmd(root)
+    artifact_hooks = []
+    # Deployment-owned publication policy must survive settings regeneration.
+    # Scope it to administrators; workers and other harnesses do not publish
+    # through Claude's Artifact tool. No deployment paths live in this package.
+    artifact_guard = deployment_default(root, "SHANTY_ADMIN_ARTIFACT_GUARD")
+    if role == "administrator" and artifact_guard:
+        artifact_hooks.append({
+            "matcher": "Artifact",
+            "hooks": [{"type": "command", "command": artifact_guard, "timeout": 120}],
+        })
     return {
         "hooks": {
             # QUERY-FIRST at session start (aegis-rcyd). See session_start_hooks.
@@ -1163,7 +1208,7 @@ def claude_settings_for_role(role: str, root=None) -> dict:
             "Stop": [{"hooks": role_stop_hooks(role, root=root)},
                      {"hooks": [capture]}],
             # yupana policy guard on every edit-shaped tool call. See _YUPANA_GUARD.
-            "PreToolUse": pre_tool_use_hooks(root) + [
+            "PreToolUse": pre_tool_use_hooks(root) + artifact_hooks + [
                 {"matcher": ".*", "hooks": [capture]}],
             "PostToolUse": [{"matcher": ".*", "hooks": [capture]}],
             "PostToolUseFailure": [{"matcher": ".*", "hooks": [capture]}],

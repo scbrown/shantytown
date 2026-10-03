@@ -140,7 +140,10 @@ def policy_wire(policy):
     data = {key: getattr(policy, key) for key in POLICY_FIELDS}
     data.update(tier=[asdict(t) for t in policy.tiers],
                 burndown=[asdict(b) for b in policy.burndowns],
-                pace=[asdict(p) for p in policy.paces])
+                # An empty `curve` is "no envelope" and must not travel as one:
+                # the parser reads a present `curve` key as a declared envelope.
+                pace=[{k: v for k, v in asdict(p).items()
+                       if not (k == 'curve' and not v)} for p in policy.paces])
 
     def clean(value):
         if isinstance(value, dict):

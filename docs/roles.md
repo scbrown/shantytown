@@ -224,3 +224,13 @@ model defeated.
   go looking for work to distribute.
 - **Not an approval chain.** Escalation moves *information*, not permission.
 - **Not an org chart.** Two tiers, config-defined, because a specific failure demanded it.
+
+### Deployment publication guard
+
+`SHANTY_ADMIN_ARTIFACT_GUARD` configures a Claude Code `PreToolUse` hook matching
+`Artifact` for the administrator role. Use the normal deployment configuration
+sources. The command receives the hook JSON on stdin; exit 2 refuses publication.
+The emitted timeout is 120 seconds. No hook is emitted when unset, for other
+roles, or for other harnesses. Re-emit settings and relaunch existing sessions
+after changing the deployment setting. The deployment owns the validator and
+must keep it installed at a stable execution path.

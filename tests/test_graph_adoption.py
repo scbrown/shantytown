@@ -361,3 +361,45 @@ def test_the_scope_note_is_in_the_json(tmp_path, capsys):
     assert main(["--root", str(root), "stats", "--graph", "--json"]) == OK
     payload = json.loads(capsys.readouterr().out)
     assert "self-advances" in payload["scope"]
+
+
+# ---- the entity-linker suggestion on the go path (aegis-4hhqoe.12) ----------
+
+def test_a_go_with_no_node_records_and_prints_a_suggestion(tmp_path, monkeypatch, capsys):
+    from shantytown import entity_suggest as es
+    panes = NullPanes(screen="")
+    monkeypatch.setattr(cli, "Tmux", lambda *a, **k: panes)
+    asked = []
+    monkeypatch.setattr(cli.entity_suggest, "suggest",
+                        lambda root, item: asked.append(item) or es.Suggestion(
+                            node="dolt-server", confidence=0.9))
+    root = _root(tmp_path)
+    assert main(["--root", str(root), "go", "item-1", "ellie"]) == OK
+    assert asked == ["item-1"]
+    row = _ledger(root)[0]
+    assert row["nodes"] == [], "a suggestion is never an asserted node"
+    assert row["suggested"] == "dolt-server"
+    assert "dolt-server" not in panes.sent[0][1], "the agent's payload carries only asserted nodes"
+    assert "--quipu-node dolt-server" in capsys.readouterr().out
+
+
+def test_a_go_that_names_a_node_asks_for_no_suggestion(tmp_path, monkeypatch):
+    panes = NullPanes(screen="")
+    monkeypatch.setattr(cli, "Tmux", lambda *a, **k: panes)
+    monkeypatch.setattr(cli, "_verification_registry", lambda a: None)
+    monkeypatch.setattr(cli.entity_suggest, "suggest",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("asked")))
+    root = _root(tmp_path)
+    assert main(["--root", str(root), "go", "item-1", "ellie",
+                 "--quipu-node", "dolt-server.service"]) == OK
+    assert "suggested" not in _ledger(root)[0]
+
+
+def test_a_dry_run_asks_for_no_suggestion(tmp_path, monkeypatch):
+    panes = NullPanes(screen="")
+    monkeypatch.setattr(cli, "Tmux", lambda *a, **k: panes)
+    monkeypatch.setattr(cli.entity_suggest, "suggest",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("asked")))
+    root = _root(tmp_path)
+    assert main(["--root", str(root), "go", "item-1", "ellie", "-n",
+                 "--no-graph-context", "preview"]) == OK

@@ -13,6 +13,7 @@
 st anchor [--short|--events|--harness]
                               who am I, what's on my plate         <- the anchor
 st go <item> <agent>          dispatch. this is the one that matters. the agent is required.
+st sling <bead>                  hand a beaded design to the executive for scheduling.
 st inbox <agent> <message>    put a message in an agent's inbox (send-keys; -d persists)
 st inbox [--count|--read|--read-id ID]
                               read or acknowledge your own inbox
@@ -79,6 +80,7 @@ st fleet                      the whole crew
   window plan|drain|clear|release|abort <id>
                               transactional fleet-maintenance ledger + relaunch lease
   dashboard [admin]           live, tier-scoped view: roster/state/work, self-refreshing
+  watch [--peer|--metrics]    one liveness pass on the PEER host's administrator
 st repo                       a shared project repo
   worktree <repo> [agent]     provision an agent's isolated worktree off a SHARED project repo
   push <repo> [agent]         push wt/<agent> to EVERY remote; refuses if invoked from another branch
@@ -87,9 +89,34 @@ st ops                        the installation
   doctor [--install]          what's installed, stale, missing (out-of-box)
   provision [agent]           register Quipu tooling for local crew without launching
   subscribe                   watch quipu entity events; route governed workflows to the admin
+  hooks <register|list|check> keep tools' registered hook bundles rendered, and check they are
   help <topic>                rationale pages: handoff/cycle, haul, inbox
 st <launch cmd> --despite-hold  launch THROUGH a gaming hold, for that one command
 ```
+
+Cycling leaves the existing clone and worktrees on disk. Clean unpublished
+commits are reported without blocking when the push authority guard refuses
+publication, just as during a measured remote outage. The authority check is
+shared with `st repo push`; cycling never grants push permission. Preserve the
+branch and arrange publication to an authorized peer. Uncommitted work still
+blocks, and the durable checkpoint requirement still applies.
+
+For tracked files deliberately modified by each installation, commit a
+`.st-per-install` file at the repository root containing one exact relative path
+per line (blank lines and `#` comments are allowed). For example:
+
+```text
+# Generated host wiring; do not publish the local modification.
+scripts/hooks/pre-commit
+```
+
+Only unstaged modifications to existing regular files named by the committed
+manifest are exempt from the cycle loss gate. The verdict names them as
+`per-install, not loss`. Staged changes, deletions, renames, symlinks, and edits
+to undeclared paths still block. Invalid entries (absolute paths, traversal,
+globs, or the manifest itself) disable the exemption. Local edits to the manifest
+do not change the policy. No file or index flag is changed; refresh/staleness
+checks continue to see these modifications.
 
 Context occupancy hints are opt-in in `shantytown.toml`:
 
@@ -215,7 +242,7 @@ Codex input already includes its cached subset. This makes
 `cache_read / usage_in` a provider-independent prompt-cache hit rate. The fields
 are omitted—not zeroed—when every matching transcript is unknown.
 
-Thirty-seven. Six verbs at the top level and thirty-one grouped commands under five groups
+Forty. Seven verbs at the top level and thirty-three grouped commands under five groups
 (`work`, `agent`, `fleet`, `repo`, `ops`). A group is a namespace and runs nothing, so it earns no
 slot; the count is the leaves. The flat spellings from before the grouping (st cycle for
 st agent cycle, and so on) still parse into the same handler, print one line on stderr saying
@@ -227,7 +254,7 @@ pair, owner-directed), **context** (the bobbin Context protocol), **doctor**
 routing governed workflows to the admin), **repool** (the whole hand-back in one verified
 write — clearing an assignee alone leaves an item in_progress, which parks it outside `bd ready`,
 every haul, and every plate; a hand-back that drops work off the board was the measured defect),
-**defer** (the whole structured park: status, exactly one blocker-kind label, and a durable
+**hooks** (registered hook bundles: a tool declares its hooks once and st renders them into every role's claude and codex settings on every emit, so a regeneration can no longer silently drop them, and `check` reports drift — Stiwi's 2026-09-29 ask, aegis-68j0ys), **defer** (the whole structured park: status, exactly one blocker-kind label, and a durable
 reason in one verified action), and **history** (the durable transcript archive: codex writes its
 rollouts under a CODEX_HOME on tmpfs, so an agent's sessions — reasoning included — were RAM-resident
 and died with the machine; `history` lists what was captured and, per session, whether its source
@@ -302,6 +329,34 @@ new command, and the test that pins the number is what proves it:
 If it grows a `st convoy`, a `st rig`, or a `st formula`, we've rebuilt the thing we left —
 but the guard against that is now the test, not this sentence.
 
+### Transcript derivatives and credential boundaries
+
+The raw transcript archive stays local and unindexed. `st-history-scrub.sh`
+creates a separate derivative: it omits supported harness tool-result objects
+wholesale, including nested Claude results and their `toolUseResult` mirrors,
+Codex call outputs and tool-role
+messages. Unparseable records are omitted rather than copied without a known
+schema. The raw records remain available for investigation.
+
+Retained dialogue, reasoning and tool invocations receive credential-pattern
+redaction. Private-key PEM envelopes are redacted with their full body; an
+unfinished envelope removes the remaining text in that string. The directory
+name `history-scrubbed` does **not** mean arbitrary
+credentials are absent: an unrecognized value pasted into dialogue can remain.
+A successful scrub proves only the named patterns and supported result types
+are absent. Off-host publication needs its own credential checks.
+
+Each derivative records the exact scrub policy that produced it. A policy
+change rebuilds older files despite their modification time; skipped files
+still undergo the residual check. Writes are private and atomic. The corpus
+projector independently excludes tool results as a security boundary, and its
+version invalidates cached projections when that boundary changes.
+
+Run `python3 -m pytest -q tests/test_history_archiver.py tests/test_history_corpus.py`
+to exercise both directions: unshaped canaries are removed from results while
+ordinary dialogue controls survive, and a contaminated current derivative
+makes the scrub fail.
+
 ## `st anchor` — the anchor
 
 The anchor answers **"who am I and what do I do next"** in one call, at session start, with no
@@ -347,7 +402,51 @@ Four things, and each one has to earn its line:
 
 Gas Town's primer has a `--hook` mode that fires at SessionStart and mutates state. That coupling is
 why "did I get primed?" became unanswerable when the hook silently didn't register. `st anchor` is
-a pure read, safe to run twice, and if you want it at session start you wire it there yourself.
+a pure read, safe to run twice.
+
+st wires it into SessionStart for every role (`shantytown.session_anchor`, aegis-7edci3). That
+hook runs the same render in-process and adds role startup instructions. It fires on startup,
+clear and compact, and a plate it could not read is stated in one line, never rendered as
+silence. "Did I get anchored?" is answerable: `st ops hooks check` verifies st's own
+emitted hooks (`st-session-anchor`) alongside registered bundles, and reports MISSING, or names
+the running agents that were launched without it.
+
+## `st sling` — design handoff
+
+Design → bead (epic and children) → `st sling <bead>`. The executive administrator
+owns scheduling and worker dispatch. This command does not claim or dispatch the design.
+
+```sh
+st sling design-42 --note-file handoff.md --dry-run
+st sling design-42 --note-file handoff.md
+```
+
+Mark exactly one administrator with the additive `executive` role in the role
+registry: `role = "administrator"`, `roles = ["administrator", "executive"]`.
+Keep its host placement current. This marker does not create a new tree position.
+An absent, ambiguous, retired, or non-administrator executive refuses delivery.
+For files registries with peers, the configured graph supplies fleet identity;
+without a graph, a complete peer census is required. An unavailable source refuses
+rather than choosing the first administrator.
+
+The bead must have a nonblank description or design body. The full note and direct
+parent-child references are recorded in a structured handoff comment. A bounded
+bead pointer goes to the durable inbox (br by default; explicit files is available
+for standalone deployments). Receipt read-back is required for success. A live
+pane nudge is best effort; the unread receipt remains for the executive's next stop.
+Long notes belong in `--note-file` or stdin (`--note-file -`), never shell interpolation.
+
+Cross-host handoffs use the same configured peer relay as `st go`; the destination
+rechecks executive and host placement and reads its configured shared board.
+An explicit local `--repo` cannot be reinterpreted on another host. Both deployments
+must have this command installed. `--dry-run` reads the design and previews target,
+pointer, children and note without writing a comment, receipt or event.
+
+Each handoff has an atomic event under `<root>/sling/*.json` containing sender,
+executive, bead, children, timestamp and verified receipt. The same content retries
+with the same marker, including when its inbox receipt has already been read.
+After an indeterminate write, inspect that marker before retrying; changed content
+is a new handoff. The structured comment provides the same provenance on the bead.
 
 ## `st go` — dispatch
 
@@ -897,6 +996,44 @@ linked, stop hooks verified on the live process — so an agent booted this way 
 Exit codes: **0** every selected agent is up · **1** refused, nothing launched · **2** the pass ran
 and somebody is not known to be up.
 
+## `st fleet watch` — each administrator watches the other (aegis-az0a40)
+
+A two-host deployment has two administrators, and until this nothing noticed when
+either could not be reached. `st fleet watch` runs ONE pass from this host's
+administrator against the declared peer host's:
+
+```
+st fleet watch                         probe, alert, repair, escalate; exit 0 ok · 1 down · 2 unknown
+st fleet watch -n                      probe (read-only), print what it would do, write nothing
+st fleet watch --metrics <textfile>    also write the Prometheus textfile (atomic)
+```
+
+Probes run cheapest first: the peer host answers ssh; the peer's own
+`st crew --json --local` answers; the administrator's pane exists; its foreground
+process is not a shell (and it is not wedged or auth-dead). The age of its last stop
+event is reported and exported but is never a verdict: an administrator idle at its
+prompt overnight is contactable.
+
+**Unknown is not down.** A host that is asleep or off the network, or a peer st that
+does not answer, proves nothing about the administrator. It never alerts, repairs or
+escalates, and it is exported as `admin_peer_unknown`, never as `admin_peer_up`.
+
+On **down**: the local administrator is told through `st inbox -d` (again at most every
+`--alert-every`, 60 min); ONE relaunch per `--repair-cooldown` (30 min) runs the peer
+host's own `st agent new <peer>` over the same ssh transport, and counts only if a
+second probe sees the peer up; every non-ok pass is appended to
+`<root>/peer-watch/log.jsonl`, and the rate-limit state lives beside it. A human is
+paged through `SHANTY_ESCALATE_COMMAND` only when the repair failed or the outage has
+lasted `--escalate-after` (15 min) — once per outage. A pane whose runtime exited is
+down but not repairable from here (`agent new` refuses an existing session), so it
+waits the threshold.
+
+Metrics: `admin_peer_up{watcher,peer}` (1/0, absent when unknown),
+`admin_peer_unknown{watcher,peer}`, `admin_peer_down_seconds{watcher,peer}`,
+`admin_peer_last_activity_age_seconds{watcher,peer}` and
+`admin_peer_watch_last_run_timestamp_seconds{watcher}` — the last one is what makes a
+watcher that itself died visible. Arming (a timer on each host) is the deployment's step.
+
 ## `st attach` — and it starts what is down
 
 ```bash
@@ -1070,6 +1207,40 @@ next real crash read as somebody's decision.
 
 ## `st ops doctor` — the out-of-box feature
 
+A full doctor run, or `st ops doctor quipu`, also checks write authorization
+against `QUIPU_SERVER`, including with `--no-latest` (that flag skips release
+lookups). It POSTs `{}` to `/episode`: authorization precedes JSON validation,
+so the expected validation refusal proves access without storing an episode.
+It reports `ok`, `no-token`, `bad-token`, `read-only`, `unreachable`, or
+`unknown`/`unconfigured`. This checks permission to attempt writes, not successful
+storage commits. Failures affect the doctor exit code (1 actionable, 2 unknown).
+
+### Quipu credentials
+
+Obtain a credential from the administrator of the target Quipu server over your
+approved secret distribution channel. The administrator must first activate
+its shared bearer or register the issued named credential on that server.
+Installing a random string locally does not grant access.
+
+The client convention is `~/.config/quipu/token`, read on every request, so
+already-running sessions see provisioning and rotation. `QUIPU_AUTH_TOKEN`
+(nonempty) overrides `QUIPU_AUTH_TOKEN_FILE`, which overrides the default path.
+An explicit file override does not fall back to another token if unreadable.
+Install an administrator-supplied file without putting its contents in shell
+history or command arguments:
+
+```sh
+install -d -m 700 "$HOME/.config/quipu" && install -m 400 /secure/issued-token "$HOME/.config/quipu/token"
+st ops doctor quipu --no-latest
+```
+
+For existing deployments using a different location, keep
+`QUIPU_AUTH_TOKEN_FILE` pointing to it until provisioning and rotation target
+the canonical path together. Do not copy credentials into a second independent
+file that rotation will miss. Never commit token files or paste their contents
+into logs, command arguments, issues or the knowledge graph.
+
+
 `st --root "/path/to/.shanty" ops doctor --relay` checks incoming SSH environment
 requirements together: `PATH` for `st` and `tmux`, `SHANTY_ROOT`, and
 `SHANTY_BACKEND`. It prints one quoted shell setup recipe without changing files
@@ -1170,6 +1341,15 @@ When a durable message is successfully submitted to a live pane, `st` closes onl
 that message's pointer after confirming the input is not stranded. The closed bead
 retains its content and history. If the recipient is down, the send fails, the input
 is stranded, or pointer closure fails, the pointer remains open for `st inbox`.
+
+An **off-host** durable recipient is nudged through the same declared peer the
+ephemeral relay (and `st go`) uses: the peer host's own `st inbox` over SSH. A
+relay that exits 0 counts as live delivery and closes the pointer. When no nudge
+is possible — no `[host.peers.<host>]`, SSH failure, timeout, or the peer
+refusing the live send — the report says `off-host: not nudged (<why>)` and the
+pointer stays open. It never says "recipient not live" for an agent on another
+host: that sentence claims a pane was looked at, and none was (aegis-az0a40).
+The exit code is 0 in every case once the durable persist succeeded, as before.
 
 For pointers that survive because delivery was offline or uncertain, acknowledgment
 can be selective: repeat `--read-id ID` for messages already absorbed while leaving
@@ -1275,6 +1455,15 @@ beside it (`shantytown/codex.py`), because a guess about another CLI's flags is 
 code that looks shipped and has never run. The Claude Code path is pinned byte-for-byte against the
 pre-split launch strings (`tests/test_harness.py`) and its emitted settings file is pinned against
 the pre-codex bytes (`tests/test_codex_harness.py`).
+
+`st crew` reports `stalled` in WORK when a live, otherwise idle agent has an
+`in_progress` item at the top of its plate. The summary names these agents so
+their assigned work can be resumed; they are neither free nor busy. Busy panes,
+unknown observations, running background shells, holds and planned cycles keep
+their existing verdicts. An unreadable assignment store makes an otherwise idle
+agent unknown, rather than free. The table and `--json` use the same verdict;
+`--count` excludes stalled agents from its busy/idle denominator. Plate reads
+share one snapshot per roster on the br backend, including additional stores.
 
 ## Machine-readable output — five flags, not five commands
 
@@ -1390,6 +1579,23 @@ read completed. Missing starts, unsuccessful or absent reads, ambiguous earlier
 operations, and scopes with no definite action remain UNKNOWN. Shell commands
 are ambiguous; edit/write tools are definite. A successful hook result proves
 completion, not the usefulness of the answer.
+
+The report also includes `weak_observation`, labelled
+`read-before-first-possible-op (weak)`. Its four buckets are always reported:
+`read_before`, `reverse_or_concurrent`, `incomplete`, and `no_matched_read`.
+They compare completed reads with recorded definite **or ambiguous** operations.
+This observation never changes a verdict, feeds a gate, or supplies an adoption
+denominator. A read followed by a shell command can satisfy this weaker ordering
+while its strict verdict remains UNKNOWN.
+
+`strict_population` independently counts existing PASS/FAIL/UNKNOWN verdicts for
+contexts containing possibly-material operations, including CLI-only work. Its
+headline fraction keeps UNKNOWN in the denominator; the separately labelled
+secondary fraction is PASS/(PASS+FAIL). Empty denominators produce `null`.
+Read-only/no-operation contexts are excluded and explicitly counted with their
+context IDs. Incomplete capture is retained as UNKNOWN even when no operation
+start survived: missing evidence does not prove read-only work. All four weak
+buckets exclude the separately counted read-only/no-operation contexts.
 
 This is **declared-scope evidence, not whole-dispatch coverage**. Undeclared tasks
 remain outside this report; reconcile against the dispatch ledger and haul records
@@ -1542,6 +1748,14 @@ game_executable = "reaper"
 game_arguments = ['SteamLaunch', 'AppId=(?P<appid>[0-9]+)']
 shader_executable = "fossilize_replay"
 shader_grace = 1200
+# Steam launches tools and applications through the same reaper as games. An
+# AppId lifts only when its type in Steam's appinfo cache is in lift_app_types or
+# the AppId is in lift_appids. Every other type holds, including "application"
+# and "beta" (multiplayer clients and playtests use them), as does an unreadable
+# one. Defaults shown; setting a key replaces its default list.
+steam_appinfo = "~/.steam/steam/appcache/appinfo.vdf"
+lift_app_types = ["tool", "config", "music", "video"]
+lift_appids = ["431730"]   # Aseprite, a pixel editor typed "Application"
 grace = 300
 lift_delay = 120
 lift_rule = "absent"
@@ -1971,3 +2185,26 @@ Unconfigured windows retain Creel's declared trajectory. Admission caps and drai
 thresholds are unchanged. Both `st crew --governor` and `st fleet tend` use this
 same target. If the configured Creel probe predates this contract, the adapter
 reports the advisory unavailable rather than displaying an outdated target.
+
+### Spending envelope (`curve`)
+
+A `[[governor.pace]]` row may declare a `curve` instead of a `ratio`: points of
+`[elapsed_pct, max_used_pct]`, linearly interpolated, starting at elapsed 0 and
+ending at 100, with used never decreasing.
+
+```toml
+[[governor.pace]]
+window = "seven_day"
+curve  = [[0, 20], [14, 40], [43, 65], [71, 80], [86, 90], [100, 100]]
+```
+
+The window is on pace while its used percentage is at or under the envelope at
+the current elapsed. This expresses a front-loaded burst (20% allowed
+immediately, 40% by the end of day one) with a reserve kept for the final
+days (80% by day five, 90% by day six), which no single ratio can. The gate,
+the utilization line and `st_governor_pace_bound` read the envelope's ratio form
+`curve(e)/e`; the line names the envelope itself, e.g.
+`seven_day 86%used/66%elapsed =1.31x vs 77% envelope`. Creel receives the bound
+at the current elapsed, and its advisory is unavailable when that cannot be
+stated. A row declaring both `ratio` and `curve` is refused. Drains are
+unchanged.

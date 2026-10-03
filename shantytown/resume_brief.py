@@ -68,7 +68,7 @@ STALE_AFTER_S = 24 * 60 * 60
 
 
 def compose(agent: str, checkpoint: str = "", checkpoint_bead: str = "",
-            quipu_nodes=(), item: str = "", docs=()) -> str:
+            quipu_nodes=(), item: str = "", docs=(), suggested: str = "") -> str:
     """The brief itself. Pure text from facts the cycle already holds.
 
     ORDER IS THE POINT. The first line says what just happened, because a session
@@ -103,6 +103,13 @@ def compose(agent: str, checkpoint: str = "", checkpoint_bead: str = "",
     for node in quipu_nodes:
         pointers.append(f"  graph context: {node} — ask quipu about it before "
                         f"you re-derive anything.")
+    if suggested and not quipu_nodes:
+        # aegis-4hhqoe.12: labelled as a SUGGESTION, because it is one. Citing it
+        # is the session's call, and that act is what the precision read counts.
+        pointers.append(f"  suggested graph context: {suggested} — inferred by Jev "
+                        f"from the bead, not confirmed. Check it in quipu; if it is "
+                        f"right, cite it with --quipu-node {suggested} on your next "
+                        f"cycle.")
     for doc in docs:
         pointers.append(f"  docs: {doc}")
     if pointers:

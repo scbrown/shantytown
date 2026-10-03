@@ -418,3 +418,61 @@ def test_an_unreadable_receipt_does_not_crash_or_flatter(tmp_path, ws):
     _projected_skill(ws, "foreign", tmp_path / "someoneelse" / "skills")
     (ws / P.tooling.RECEIPT).write_text("{not json")
     assert P.codex_skills_linked(ws) == ["ownsrc"]
+
+
+# --- aegis-g034ts: never emit a DIRECT quipu MCP entry without headersHelper --
+
+def _with_server(root, name, cfg):
+    tmpl = json.loads(json.dumps(TEMPLATE))
+    tmpl["mcpServers"][name] = cfg
+    (root / "provision" / P.MCP_TEMPLATE).write_text(json.dumps(tmpl))
+
+
+def test_a_headerless_direct_quipu_entry_is_refused_and_nothing_is_written(root, ws):
+    _with_server(root, "quipu", {"type": "http", "url": "http://quipu.invalid/mcp"})
+    with pytest.raises(P.ProvisionError, match="headersHelper"):
+        P.provision(_card(ws), root)
+    assert not (ws / ".mcp.json").exists(), "the refused kit must not reach disk"
+
+
+def test_a_static_bearer_is_not_a_substitute_for_headersHelper(root, ws):
+    # A literal header puts the secret in the file, which is the other half of
+    # what the helper exists to prevent.
+    _with_server(root, "quipu-direct", {"type": "http", "url": "https://quipu.example.test/mcp",
+                                        "headers": {"Authorization": "Bearer ${HOMELAB_MCP_TOKEN}"}})
+    with pytest.raises(P.ProvisionError, match="quipu-direct"):
+        P.provision(_card(ws), root)
+
+
+def test_a_direct_quipu_entry_WITH_headersHelper_is_emitted(root, ws):
+    _with_server(root, "quipu", {"type": "http", "url": "http://quipu.invalid/mcp",
+                                 "headersHelper": "/usr/local/bin/quipu-mcp-headers"})
+    P.provision(_card(ws), root)
+    got = json.loads((ws / ".mcp.json").read_text())["mcpServers"]["quipu"]
+    assert got["headersHelper"] == "/usr/local/bin/quipu-mcp-headers"
+
+
+def test_CONTROL_the_proxy_and_other_servers_are_untouched(root, ws):
+    # The default kit (bobbin + the homelab proxy with a static header) must
+    # still provision: the guard keys on a quipu HOST, not on any bearer.
+    P.provision(_card(ws), root)
+    assert set(json.loads((ws / ".mcp.json").read_text())["mcpServers"]) == {"bobbin", "homelab"}
+
+
+@pytest.mark.parametrize("name,cfg,expected", [
+    ("x", {"type": "http", "url": "http://quipu.invalid/mcp"}, ["x"]),
+    ("x", {"type": "http", "url": "http://quipu-staging.invalid:8080/mcp"}, ["x"]),
+    ("x", {"type": "http", "url": "http://homelab-mcp.invalid/mcp"}, []),
+    ("x", {"type": "http", "url": "http://notquipu.invalid/mcp"}, []),
+    ("x", {"type": "stdio", "command": "quipu", "args": ["mcp"]}, []),
+    ("x", {"type": "http", "url": "http://quipu.invalid/mcp", "headersHelper": "/h"}, []),
+    # aegis-w35nwd: a quipu-NAMED entry at an IP or localhost is direct too.
+    ("quipu", {"type": "http", "url": "http://127.0.0.1:3030/mcp"}, ["quipu"]),
+    ("quipu", {"type": "http", "url": "http://203.0.113.5/mcp"}, ["quipu"]),
+    ("Quipu-local", {"type": "http", "url": "http://localhost:3030/mcp"}, ["Quipu-local"]),
+    ("quipu", {"type": "http", "url": "http://127.0.0.1:3030/mcp", "headersHelper": "/h"}, []),
+    ("quipu", {"type": "stdio", "command": "quipu", "args": ["mcp"]}, []),
+    ("homelab", {"type": "http", "url": "http://127.0.0.1:8080/mcp"}, []),
+])
+def test_headerless_quipu_classification(name, cfg, expected):
+    assert P.headerless_quipu({name: cfg}) == expected

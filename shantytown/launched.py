@@ -94,6 +94,19 @@ class FilesLaunches:
         from .files import write_json_atomic
         write_json_atomic(self.root / f"{agent}.json",
                           {"settings": stamp.settings, "sha256": stamp.sha256})
+        # THE BYTES IT LAUNCHED ON (aegis-68j0ys). The hash says THAT the file
+        # changed since launch, never WHAT the process is missing; a per-hook
+        # "is this hook live?" needs the content. Best effort, like the stamp:
+        # a failed snapshot costs a live verdict (it reads as unknown), never a
+        # launch.
+        try:
+            data = Path(settings_path).read_bytes()
+            if hashlib.sha256(data).hexdigest() == h:   # the same bytes we stamped
+                tmp = self.root / f".{agent}.snapshot.tmp"
+                tmp.write_bytes(data)
+                tmp.replace(self.root / f"{agent}.snapshot")
+        except OSError:
+            pass
         return stamp
 
     def get(self, agent: str) -> Stamp | None:
@@ -115,6 +128,19 @@ class FilesLaunches:
         `current` for a dead agent's settings. Stamps describe LIVE launches only.
         """
         self.root.joinpath(f"{agent}.json").unlink(missing_ok=True)
+        self.root.joinpath(f"{agent}.snapshot").unlink(missing_ok=True)
+
+    def snapshot(self, agent: str) -> bytes | None:
+        """The exact bytes `agent` launched on, or None (never recorded, or the
+        stamp and snapshot disagree, which means a torn pair: trust neither)."""
+        stamp = self.get(agent)
+        try:
+            data = (self.root / f"{agent}.snapshot").read_bytes()
+        except OSError:
+            return None
+        if stamp is None or hashlib.sha256(data).hexdigest() != stamp.sha256:
+            return None
+        return data
 
     def verdict(self, agent: str) -> str:
         """CURRENT | STALE | UNKNOWN for one agent, probed NOW.

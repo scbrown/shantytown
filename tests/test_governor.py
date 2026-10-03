@@ -882,7 +882,9 @@ def test_the_drain_message_fits_the_durable_channel(tmp_path):
     be DELIVERED durably is a drain that does not survive the session it is
     killing — which is the entire point of the tier."""
     body = gov.drain_message("a-very-long-agent-name", 95, 99.5)
-    assert len(body) <= 493, f"drain message is {len(body)} chars"
+    # BYTES, the unit the tracker enforces (aegis-2bjel). Counted in chars this
+    # passed at 488 while the body was 494 bytes — over the cap (aegis-l2m4t2).
+    assert len(body.encode()) <= 493, f"drain message is {len(body.encode())} bytes"
 
 
 def test_a_down_agent_is_not_told_to_drain(tmp_path):

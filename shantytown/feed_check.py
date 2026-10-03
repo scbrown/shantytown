@@ -675,10 +675,16 @@ def _br_tracker(root, reg):
     from .deployment import deployment_default
     if deployment_default(root, "SHANTY_BACKEND") not in ("beads", "br"):
         return None
+    from .beads import EXTRA_REPOS_KEY, parse_extra_repos
     from .br import BrTracker
+    # The SAME store set the plate readers use (cli._tracker, stop_event): without
+    # extra_repos the haul feed saw only the primary, so work in a repo store was on
+    # a plate but never self-fed.
     return BrTracker(repo=(deployment_default(root, "SHANTY_BR_REPO")
                            or deployment_default(root, "SHANTY_BEADS_REPO")
-                           or bd_cwd(reg)))
+                           or bd_cwd(reg)),
+                     extra_repos=parse_extra_repos(
+                         deployment_default(root, EXTRA_REPOS_KEY)))
 
 
 class TrackerAdapter:
@@ -714,8 +720,9 @@ class TrackerAdapter:
             from .br import in_progress
             value = in_progress(self.tracker)
         else:
-            value = self._legacy("bd", "list", "--status", "in_progress",
-                                 "--json", "--limit", "0")
+            from .inbox import drop_parked
+            value = drop_parked(self._legacy("bd", "list", "--status", "in_progress",
+                                             "--json", "--limit", "0") or [])
         return Answer.complete_read(value, how=f"{self.kind} list in_progress --limit 0")
 
     def blocked(self) -> Answer[list[dict]]:
@@ -940,7 +947,8 @@ def bd_in_progress(cwd: str | None, root=None, reg=None) -> list[dict]:
                        capture_output=True, text=True, timeout=20, cwd=cwd)
     if r.returncode != 0:
         raise RuntimeError(f"bd list failed: {r.stderr.strip()}")
-    return json.loads(r.stdout)
+    from .inbox import drop_parked      # parked is not active (aegis-1d3fze)
+    return drop_parked(json.loads(r.stdout))
 
 
 def bd_blocked(cwd: str | None, root=None, reg=None) -> list[dict]:
