@@ -285,22 +285,28 @@ def role_set(registry: MutableRegistry, agent_name: str, role: str,
     # rather than only in `_cmd_role` protects every caller of role_set, not one
     # command; adapters.md documented the gate firing at role-set time and it
     # never did — the check lived only on the `st agent new` launch path.
-    _require_writes_hostable(plan, root)
+    _require_writes_hostable(plan, root, catalog)
     if not dry_run:
         for a in plan.writes:
             registry.set(a)
     return plan
 
 
-def _require_writes_hostable(plan: RolePlan, root=None) -> None:
+def _require_writes_hostable(plan: RolePlan, root=None, catalog=None) -> None:
     """Refuse the plan if any WRITTEN card's role needs a stop capability its
     harness lacks. Local imports keep tier free of a load-time runtime/harness
-    dependency (neither imports tier, so no cycle — but the layer stays clean)."""
+    dependency (neither imports tier, so no cycle — but the layer stays clean).
+
+    Judged by the SAME catalog the router uses (aegis-vj3uet, ian's review of
+    PR A): the caller's catalog, else the deployment's. With the built-in three
+    only, a declared router role (keeper) read as "not a recipient" here while
+    route_stop sent it every stop, so it could be written onto a stopless harness."""
     from . import harness, runtime
+    catalog = catalog if catalog is not None else deployment_catalog(root)
     for card in plan.writes:
-        if runtime.needs_stop_delivery(card):
+        if runtime.needs_stop_delivery(card, catalog):
             runtime.require_capability(harness.for_card(card, root=root), card,
-                                       consequence="Nothing written.")
+                                       consequence="Nothing written.", catalog=catalog)
 
 
 # --- stop-hook routing: a worker's stop event reaches its lead. THE TIER. ---

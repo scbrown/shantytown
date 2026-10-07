@@ -83,3 +83,47 @@ def test_router_and_capability_gate_cannot_disagree():
                  Agent(name="w", role="worker"), Agent(name="k", role="keeper"),
                  Agent(name="s", role="worker", roles=("worker", "keeper"))):
         assert runtime.needs_stop_delivery(card, cat) == receives_stops(card, cat)
+
+
+class _Stopless:
+    name = "stopless-test"
+
+    def hooks(self, card):
+        return runtime.HookSpec(blocking_stop=False)
+
+
+def test_gate_refuses_a_declared_keeper_on_a_stopless_harness(tmp_path, monkeypatch):
+    # ian's review of PR A: the router used the deployment catalog and the gate did
+    # not, so a declared keeper card could be written onto a harness that cannot
+    # deliver the stops routed to it. Drive the write gate with ONLY a root whose
+    # config declares keeper, as the launcher and a data flip would.
+    from shantytown.tier import RolePlan, _require_writes_hostable
+    (tmp_path / "shantytown.toml").write_text(
+        '[roles.keeper]\nattachment = ["reports-to"]\n'
+        'coordination = ["absorbs", "dispatches"]\n'
+        'workIntake = ["dispatched", "self-directed"]\n')
+    monkeypatch.setattr("shantytown.harness.for_card", lambda card, root=None: _Stopless())
+    plan = RolePlan()
+    plan.writes.append(Agent(name="dearing", role="keeper", reports_to="sattler"))
+    with pytest.raises(runtime.CapabilityError, match="blocking stop hooks"):
+        _require_writes_hostable(plan, root=tmp_path)
+    # Control: the same plan without the declaration is judged by the built-ins,
+    # where keeper is unknown and the legacy literal does not gate it.
+    _require_writes_hostable(plan, root=tmp_path / "no-such-deployment")
+
+
+def test_gate_positive_control_lead_still_refused(tmp_path, monkeypatch):
+    from shantytown.tier import role_set
+    monkeypatch.setattr("shantytown.harness.for_card", lambda card, root=None: _Stopless())
+    r = reg(tmp_path, sattler={"role": "administrator"},
+            dearing={"role": "worker", "reports_to": "sattler"})
+    with pytest.raises(runtime.CapabilityError):
+        role_set(r, "dearing", "lead", root=tmp_path)
+
+
+def test_launch_gate_uses_the_deployment_catalog():
+    cat = Catalog(KEEPER)
+    keeper = Agent(name="dearing", role="keeper")
+    with pytest.raises(runtime.CapabilityError):
+        runtime.require_capability(_Stopless(), keeper, catalog=cat)
+    runtime.require_capability(_Stopless(), keeper)   # built-ins: keeper unknown -> legacy literal, no refusal
