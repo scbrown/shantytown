@@ -47,7 +47,7 @@ def test_a_future_deferral_is_silent():
 
 
 def test_lapsed_reports_the_age_because_age_is_the_argument():
-    rows = [_row(defer_until=_iso(timedelta(days=-26)))]
+    rows = [_row(defer_until=_iso(timedelta(days=-26)), labels=["needs-human"])]
     f = deferrals.evaluate(rows, NOW)[0]
     assert f.lapsed_days == 26 and "LAPSED 26d ago" in f.render()
 
@@ -185,7 +185,7 @@ def test_the_sweep_mutates_nothing_it_was_given():
 def test_an_unchanged_deferral_is_reported_once_and_then_never(tmp_path):
     """115 lapsed deferrals printed every tend cycle is a channel the admin mutes
     within a day — the failure grant fixed in dfllto."""
-    rows = [_row(defer_until=_iso(timedelta(days=-26)))]
+    rows = [_row(defer_until=_iso(timedelta(days=-26)), labels=["needs-human"])]
     seen = deferrals.Reported(tmp_path)
     first = deferrals.evaluate(rows, NOW)
     assert seen.unreported(first) == first
@@ -239,9 +239,9 @@ def test_the_report_counts_its_own_tail_rather_than_truncating_silently():
     assert "and 25 more" in lines[-1]
 
 
-def test_the_report_says_it_changed_nothing():
+def test_the_report_identifies_judgement():
     rows = [_row(defer_until=_iso(timedelta(days=-2)))]
-    assert "nothing was un-deferred" in deferrals.report(
+    assert "judgement required" in deferrals.report(
         deferrals.evaluate(rows, NOW))[0].lower()
 
 
@@ -273,7 +273,7 @@ def _alerter(tmp_path, rows, **kw):
 
 
 def test_the_alerter_pushes_a_lapsed_deferral_to_the_admin_once(tmp_path):
-    rows = [_row(defer_until=_iso(timedelta(days=-26)))]
+    rows = [_row(defer_until=_iso(timedelta(days=-26)), labels=["needs-human"])]
     sent = []
     a = _alerter(tmp_path, rows, push=lambda _r, _p, m: sent.append(m) or "sattler")
     assert a.sweep() == ["aegis-1"]
@@ -285,7 +285,7 @@ def test_an_UNREACHABLE_admin_records_nothing_so_the_finding_is_not_lost(tmp_pat
     """push_to_admin returns None when there is no admin or its pane is gone. If
     the sweep recorded these as said, they would never re-report — the state does
     not change again. A failed push must stay pending, never a silent success."""
-    rows = [_row(defer_until=_iso(timedelta(days=-26)))]
+    rows = [_row(defer_until=_iso(timedelta(days=-26)), labels=["needs-human"])]
     assert _alerter(tmp_path, rows, push=lambda *_a: None).sweep() == []
     assert _alerter(tmp_path, rows).sweep() == ["aegis-1"], "the finding was lost"
 
@@ -312,9 +312,8 @@ def test_a_condition_lookup_that_raises_is_untestable_not_unmet(tmp_path):
     a = _alerter(tmp_path, rows, is_closed=blow_up,
                  push=lambda _r, _p, m: sent.append(m) or "sattler")
     # The raise must not escape: one unreadable bead may not cost the other 114.
-    assert a.sweep() == ["aegis-1"]
-    assert "CONDITION MET" not in sent[0]
-    assert "UNTESTABLE" in sent[0] and "NOT unmet" in sent[0]
+    assert a.sweep() == []
+    assert sent == [], "read errors belong to scheduled retries, not a ruling"
 
 
 def test_a_future_deferral_produces_no_push_at_all(tmp_path):
@@ -513,3 +512,100 @@ def test_a_deferred_bead_merely_MENTIONING_inbox_is_still_a_strand():
     row = _row("aegis-real", title="fix the inbox: pointer lifecycle")
     out = deferrals.evaluate([row], NOW)
     assert len(out) == 1 and out[0].conditionless is True
+
+
+class MechanicalHarness:
+    def __init__(self, tmp_path, row, **kw):
+        self.row = dict(row)
+        self.releases, self.sent, self.logs = [], [], []
+        def release(bead):
+            self.releases.append(bead)
+            self.row.update(status='open', defer_until=None)
+        kw.setdefault('release', release)
+        kw.setdefault('show', lambda _: dict(self.row))
+        self.alerter = _alerter(tmp_path, [self.row],
+            push=lambda _r, _p, text: self.sent.append(text) or 'admin',
+            log=self.logs.append, **kw)
+
+
+def test_lapsed_timestamp_is_released_and_read_back_without_a_ruling(tmp_path):
+    h = MechanicalHarness(tmp_path, _row(defer_until=_iso(timedelta(days=-1))))
+    assert h.alerter.sweep() == []
+    assert h.releases == ['aegis-1'] and h.sent == []
+    assert 'verified open' in h.logs[-1]
+    h.alerter.sweep()
+    assert h.releases == ['aegis-1'] and h.sent == []
+
+
+def test_closed_condition_read_error_retries_next_pass_then_releases(tmp_path):
+    answers = iter([None, True, True])
+    h = MechanicalHarness(tmp_path, _row(notes='resume_when: closed:aegis-blocker'),
+                          is_closed=lambda _: next(answers))
+    assert h.alerter.sweep() == []
+    assert h.releases == h.sent == []
+    assert h.alerter.sweep() == []
+    assert h.releases == ['aegis-1'] and h.sent == []
+    h.alerter.sweep()
+    assert h.releases == ['aegis-1'] and h.sent == []
+
+
+def test_date_condition_releases_without_a_timestamp(tmp_path):
+    h = MechanicalHarness(tmp_path, _row(notes='resume_when: date:2026-09-01'))
+    h.alerter.sweep()
+    assert h.releases == ['aegis-1'] and h.sent == []
+
+
+def test_mechanical_release_cannot_override_other_gates(tmp_path):
+    base = _row(notes='resume_when: closed:aegis-blocker')
+    variants = [dict(labels=['needs-human']), dict(labels=['decision-stiwi']),
+        dict(labels=['blocked:external']), dict(labels=['parked:by-design']),
+        dict(defer_until=_iso(timedelta(days=1))),
+        dict(dependencies=[{'id': 'aegis-other', 'dependency_type': 'blocks', 'status': 'open'}]),
+        dict(notes='resume_when: closed:aegis-blocker and ask for approval'),
+        dict(notes='resume_when: closed:aegis-blocker\nresume_when: date:2028-01-01'),
+        dict(notes='resume_when: date:2026-09-01\nresume_when: approval from owner')]
+    for n, change in enumerate(variants):
+        h = MechanicalHarness(tmp_path / str(n), dict(base, **change), is_closed=lambda _: True)
+        h.alerter.sweep()
+        assert h.releases == [], change
+
+
+def test_changed_row_at_write_boundary_is_not_released(tmp_path):
+    row = _row(notes='resume_when: date:2026-09-01')
+    h = MechanicalHarness(tmp_path, row, show=lambda _: dict(row, notes='resume_when: date:2028-01-01'))
+    h.alerter.sweep()
+    assert h.releases == h.sent == []
+
+
+def test_indeterminate_release_is_read_next_pass_not_reposted(tmp_path):
+    h = MechanicalHarness(tmp_path, _row(notes='resume_when: date:2026-09-01'))
+    def release(bead):
+        h.releases.append(bead)
+        h.row.update(status='open', defer_until=None)
+        raise RuntimeError('response lost after write')
+    h.alerter._release = release
+    h.alerter.sweep()
+    h.alerter.sweep()
+    assert h.releases == ['aegis-1'] and h.sent == []
+
+
+def test_unmet_mechanical_condition_does_not_request_a_ruling(tmp_path):
+    h = MechanicalHarness(tmp_path, _row(notes='resume_when: closed:aegis-blocker',
+        defer_until=_iso(timedelta(days=-2))), is_closed=lambda _: False)
+    h.alerter.sweep()
+    assert h.releases == h.sent == []
+
+
+def test_met_condition_waits_for_future_timestamp_without_a_ruling(tmp_path):
+    h = MechanicalHarness(tmp_path, _row(notes='resume_when: closed:aegis-blocker',
+        defer_until=_iso(timedelta(days=2))), is_closed=lambda _: True)
+    h.alerter.sweep()
+    assert h.releases == h.sent == []
+
+
+def test_incomplete_condition_read_is_retried_not_treated_as_open(tmp_path):
+    h = MechanicalHarness(tmp_path, _row(notes='resume_when: closed:aegis-blocker'),
+        show=lambda bead: {'id': bead})
+    h.alerter.sweep()
+    assert h.releases == h.sent == []
+    assert any('retry next pass' in msg for msg in h.logs)

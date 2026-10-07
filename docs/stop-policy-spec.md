@@ -55,7 +55,8 @@ Naming the non-goals, because a consolidation that quietly widens is the thing
 being guarded against.
 
 - **Delivery mechanics.** `stop_event`'s persist/route/drain/BLOCK-ONCE and the
-  deferral rule (a mid-flight sender's event is not delivered and not marked) are
+  busy-stop rule (an ordinary mid-flight sender's event is consumed without
+  waking the recipient; governance and risen events still deliver) are
   correct and are reused verbatim, not rewritten.
 - **Ownership.** st still only STOPS or RESPAWNS what it launched. Unrelated.
 - **The capture hook.** `SHANTY_STOP_CAPTURE` stays a separate, appended,

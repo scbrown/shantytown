@@ -761,6 +761,12 @@ class TrackerAdapter:
             value = value[0] if isinstance(value, list) else value
         return Answer.complete_read(value, how=f"{self.kind} show {item}")
 
+    def undefer(self, item: str) -> None:
+        """Clear both historical status and timestamp representations."""
+        if self.tracker is not None:
+            return self.tracker.update(item, status="open", defer_until="")
+        self._legacy("bd", "update", item, "--status", "open", "--defer", "", "--json")
+
     def claim(self, item: str) -> None:
         if self.tracker is not None:
             from .br import claim

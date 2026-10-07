@@ -903,25 +903,23 @@ def _compose_reason(events: list[StopEvent], verdicts: dict, now: float,
     return "\n".join(lines)
 
 
-# DEFER HAS A CEILING (aegis-d1qko). The defer gate below holds an event back
-# while its SENDER is busy — but "busy" is measured NOW, at the coordinator's
-# drain, and the event is a record of something that already happened. An agent
-# that stops and immediately picks up the next item is busy at every drain that
-# follows, so its stop events are deferred again and again while pending() keeps
-# counting them: the coordinator's hook re-fires with the same count every turn
-# and a genuinely new event hides behind the stale ones. Measured 2026-08-24:
-# 9 events to sattler, all from two agents holding one in_progress item across
-# repeated stops.
-#
-# The gate is still right — a turn boundary must not wake a coordinator for an
-# agent that is mid-flight (aegis-w9z1) — it just must not be able to hold an
-# event indefinitely. Past this age the event is delivered regardless of what the
-# sender is doing, because at that point it is no longer a turn-boundary artifact.
-#
-# ts == 0 means the event predates timestamps and CANNOT be aged. Such an event
-# is delivered rather than deferred: refusing forever on a measurement we cannot
-# make is the bug, not the guard.
-DEFER_MAX_AGE_S = float(os.environ.get("SHANTY_DEFER_MAX_AGE_S", 30 * 60))
+def discard_busy(events, me: str, busy: set, candidates=None) -> list:
+    """Consume obsolete turn-boundary notices, preserving urgent events.
+
+    A busy pane supersedes an ordinary stop regardless of its age. Leaving it
+    pending (or delivering it after a timer) manufactures administrator work.
+    FilesEvents retains the consumed record for audit; nothing is deleted.
+    """
+    if not busy:
+        return []
+    candidates = list(events.pending(me)) if candidates is None else candidates
+    ids = {e.id for e in candidates if e.frm in busy
+           and not is_governance(e.reason) and not e.rose}
+    dropped = events.drain(me, lambda e: e.id in ids)
+    if dropped:
+        print(f"stop_event: discarded {len(dropped)} obsolete busy stop(s): "
+              + ", ".join(sorted({e.frm for e in dropped})), file=sys.stderr)
+    return dropped
 
 
 def _drain(events: FilesEvents, me: str, reg=None, panes=None,
@@ -931,7 +929,7 @@ def _drain(events: FilesEvents, me: str, reg=None, panes=None,
     administrator, also append a prioritized workflow over fleet state.
 
     reg/panes/shows_ready_ui are optional so a caller with no pane backend still
-    gets delivery (verdicts read `?`). Without them nothing is deferred: refusing
+    gets delivery (verdicts read `?`). Without them nothing is discarded: refusing
     to deliver on the strength of a check we did not run would be worse than the
     bug being fixed. plate/rank feed the admin's prioritized workflow.
 
@@ -946,63 +944,17 @@ def _drain(events: FilesEvents, me: str, reg=None, panes=None,
     """
     now = time.time()
     verdicts: dict[str, str] = {}
-    deferred = 0
-    urgent_delivered = 0
-    deferred_by: dict[str, float] = {}   # sender -> oldest deferred age (s)
-    overdue: list[str] = []              # senders whose events beat the ceiling
-    accept = None
     if reg is not None and panes is not None and shows_ready_ui is not None:
-        def accept(ev: StopEvent) -> bool:            # noqa: F811 — the wired form
-            nonlocal deferred, urgent_delivered
-            if is_governance(ev.reason) or ev.rose:
-                # NEVER defer an untracked-work alert OR a risen event. The defer gate exists to
-                # stop a TURN BOUNDARY waking a coordinator for an agent that is
-                # still mid-flight (aegis-w9z1) — but "that agent is mid-flight"
-                # IS this alert's content. Passing it through the same gate would
-                # hold back exactly the events that are true and release only the
-                # ones about agents that had already stopped working untracked.
-                # A risen event is the same urgency contract from the other side:
-                # its lead was unreachable, so it already waited once. Rank 1 in
-                # stop_policy calls it "must not wait"; deferring it here made
-                # that rank re-block the administrator with the same batch every
-                # turn while drain() marked nothing delivered (aegis-lfo4l).
-                urgent_delivered += 1
-                return True
+        candidates = list(events.pending(me))
+        for ev in candidates:
             if ev.frm not in verdicts:
                 verdicts[ev.frm] = _liveness(reg, panes, shows_ready_ui, ev.frm,
-                                             awaiting_answer)
-            if verdicts[ev.frm] == triage.BUSY:
-                # Bounded: an event older than the ceiling is delivered anyway.
-                # ev.ts == 0 (pre-timestamp) is treated as ancient, not as
-                # "cannot tell, so hold" — see DEFER_MAX_AGE_S above.
-                age = (now - ev.ts) if ev.ts else float("inf")
-                if age <= DEFER_MAX_AGE_S:
-                    deferred += 1
-                    deferred_by[ev.frm] = max(deferred_by.get(ev.frm, 0.0), age)
-                    return False                      # DEFER — still pending
-                overdue.append(ev.frm)
-            return True
-
-    got = events.drain(me, accept)                 # BLOCK-ONCE happens in drain()
+                                            awaiting_answer)
+        discard_busy(events, me, {name for name, state in verdicts.items()
+                                  if state == triage.BUSY}, candidates)
+    got = events.drain(me)
     if not got:
-        # Nothing to act on -> NO block -> idle. This is now also the turn-boundary
-        # case: every pending sender is still mid-flight, so there is no decision
-        # to make and waking the destination would be the aegis-w9z1 bug itself.
-        if deferred:
-            # Name the senders and the oldest age. A bare count is what made
-            # aegis-d1qko read as a phantom: the operator could not tell a held
-            # event from a stuck one, nor see it converging.
-            who = ", ".join(f"{a} ({m/60:.0f}m)"
-                            for a, m in sorted(deferred_by.items(),
-                                               key=lambda kv: -kv[1]))
-            print(f"stop_event: {deferred} event(s) held back — sender(s) still "
-                  f"mid-flight: {who}; delivered regardless after "
-                  f"{DEFER_MAX_AGE_S/60:.0f}m", file=sys.stderr)
         return 0
-    if urgent_delivered:
-        print(f"stop_event: {urgent_delivered} event(s) that must not wait "
-              f"delivered now; ordinary held events are delivered regardless "
-              f"after {DEFER_MAX_AGE_S/60:.0f}m", file=sys.stderr)
     # The event's item fields are a stop-time snapshot, while the pane verdict
     # above is read at drain time.  Re-read the tracker at that same drain seam
     # so disagreements are visible instead of rendering stale and live facts as
@@ -1016,7 +968,7 @@ def _drain(events: FilesEvents, me: str, reg=None, panes=None,
                                        if item else (None, None))
             except Exception:                    # noqa: BLE001
                 current_items[name] = (None, "?")
-    reason = _compose_reason(got, verdicts, now, deferred,
+    reason = _compose_reason(got, verdicts, now,
                              current_items=current_items)
     # ADMIN ENRICHMENT: only when a stop event actually fired (rides BLOCK-ONCE),
     # so a persistently-idle fleet can never re-block the admin every stop. A bare

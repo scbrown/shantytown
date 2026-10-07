@@ -155,7 +155,7 @@ def test_a_risen_event_drains_ONCE_even_when_its_sender_is_busy(tmp_path, capsys
     assert stop_event._drain(ev, "maldoon", reg, busy, _ready) == 0
     first = capsys.readouterr()
     assert "ROSE: lead-unreachable" in json.loads(first.out)["reason"]
-    assert "delivered regardless after 30m" in first.err
+    assert "delivered regardless" not in first.err
     assert _pending(tmp_path, "maldoon") == []
 
     assert stop_event._drain(ev, "maldoon", reg, busy, _ready) == 0
@@ -255,7 +255,7 @@ def _pending(root: Path, to: str) -> list:
             and json.loads(p.read_text())["to"] == to]
 
 
-def test_drain_DEFERS_an_event_whose_sender_is_still_mid_flight(tmp_path, capsys):
+def test_drain_discards_an_event_whose_sender_is_still_mid_flight(tmp_path, capsys):
     """THE BUG (sattler, 2026-07-19). "tim stopped" arrived while tim was in
     `Envisioning… (39s)`; acting on it would have re-dispatched over live work.
 
@@ -270,11 +270,10 @@ def test_drain_DEFERS_an_event_whose_sender_is_still_mid_flight(tmp_path, capsys
     assert rc == 0
     assert capsys.readouterr().out == "", \
         "blocked the lead on a turn boundary — the whole aegis-w9z1 bug"
-    assert len(_pending(tmp_path, "maldoon")) == 1, \
-        "a deferred event was consumed, not held — that LOSES the stop"
+    assert _pending(tmp_path, "maldoon") == [], "obsolete stop stayed pending"
 
 
-def test_a_deferred_event_delivers_once_the_sender_really_stops(tmp_path, capsys):
+def test_only_a_NEW_event_delivers_once_the_sender_really_stops(tmp_path, capsys):
     """The other half: deferral is a wait, not a filter. Same event, same store —
     only the pane changed."""
     reg = _reg(tmp_path)
@@ -284,6 +283,8 @@ def test_a_deferred_event_delivers_once_the_sender_really_stops(tmp_path, capsys
     stop_event._drain(ev, "maldoon", reg,
                       _Panes({"p-ellie"}, {"p-ellie": BUSY_SCREEN}), _ready)
     capsys.readouterr()
+    assert ev.pending("maldoon") == []
+    ev.persist(to="maldoon", frm="ellie", reason=None, rose=False)
     stop_event._drain(ev, "maldoon", reg,
                       _Panes({"p-ellie"}, {"p-ellie": IDLE_SCREEN}), _ready)
     payload = json.loads(capsys.readouterr().out)
@@ -594,65 +595,23 @@ def _age_event(tmp_path, ev_id: str, seconds: float) -> None:
     p.write_text(json.dumps(d, indent=2, sort_keys=True))
 
 
-def test_a_deferred_event_is_delivered_once_it_beats_the_ceiling(tmp_path, capsys):
-    """THE BUG (sattler, 2026-08-24, aegis-d1qko). "busy" is measured at the
-    coordinator's drain, but the event records something that already happened.
-    An agent that stops and immediately takes the next item is busy at EVERY
-    later drain, so its stop events were deferred again and again while
-    pending() kept counting them — the coordinator's hook re-fired with the same
-    count every turn and a genuinely new event hid behind the stale ones.
-    Measured: 9 events to sattler from two agents each holding one in_progress
-    item across repeated stops.
-
-    The gate stays (aegis-w9z1); it just cannot hold an event forever."""
+def test_old_and_unstamped_busy_events_are_discarded_without_a_wake(tmp_path, capsys):
     reg = _reg(tmp_path)
     ev = FilesEvents(tmp_path / "events")
-    persisted = ev.persist(to="maldoon", frm="ellie", reason=None, rose=False)
-    busy = _Panes({"p-ellie"}, {"p-ellie": BUSY_SCREEN})
-
-    # Young + busy -> still deferred. The w9z1 protection is intact.
-    assert stop_event._drain(ev, "maldoon", reg, busy, _ready) == 0
-    assert len(_pending(tmp_path, "maldoon")) == 1
-    capsys.readouterr()
-
-    # Same event, same busy sender, only older than the ceiling -> DELIVERED.
-    _age_event(tmp_path, persisted.id, stop_event.DEFER_MAX_AGE_S + 60)
-    stop_event._drain(ev, "maldoon", reg, busy, _ready)
-    payload = json.loads(capsys.readouterr().out)
-    assert "ellie stopped" in payload["reason"]
-    assert _pending(tmp_path, "maldoon") == [], \
-        "beat the ceiling but stayed pending — the count still never converges"
-
-
-def test_an_event_with_no_timestamp_is_delivered_not_deferred_forever(tmp_path, capsys):
-    """ts == 0 marks an event written before timestamps existed, so its age
-    cannot be measured. Holding it forever on a measurement we cannot make is
-    the bug this ceiling exists to kill, not the guard working."""
-    reg = _reg(tmp_path)
-    ev = FilesEvents(tmp_path / "events")
-    persisted = ev.persist(to="maldoon", frm="ellie", reason=None, rose=False)
-    p = tmp_path / "events" / f"{persisted.id}.json"
-    d = json.loads(p.read_text())
-    d["ts"] = 0
-    p.write_text(json.dumps(d, indent=2, sort_keys=True))
-
+    for age in (0, 3600):
+        persisted = ev.persist(to="maldoon", frm="ellie", reason=None, rose=False)
+        p = tmp_path / "events" / f"{persisted.id}.json"
+        d = json.loads(p.read_text())
+        d["ts"] = 0 if age == 0 else __import__("time").time() - age
+        p.write_text(json.dumps(d))
     stop_event._drain(ev, "maldoon", reg,
                       _Panes({"p-ellie"}, {"p-ellie": BUSY_SCREEN}), _ready)
-    payload = json.loads(capsys.readouterr().out)
-    assert "ellie stopped" in payload["reason"]
-
-
-def test_the_held_back_line_names_the_sender_and_the_ceiling(tmp_path, capsys):
-    """A bare count is what made this read as a phantom: the operator could not
-    tell a held event from a stuck one, nor see that it converges."""
-    reg = _reg(tmp_path)
-    ev = FilesEvents(tmp_path / "events")
-    ev.persist(to="maldoon", frm="ellie", reason=None, rose=False)
-    stop_event._drain(ev, "maldoon", reg,
-                      _Panes({"p-ellie"}, {"p-ellie": BUSY_SCREEN}), _ready)
-    err = capsys.readouterr().err
-    assert "ellie" in err, "the held-back line must name WHO"
-    assert "delivered regardless after" in err, "must say the hold is bounded"
+    result = capsys.readouterr()
+    assert result.out == ""
+    assert "discarded 2 obsolete busy stop(s): ellie" in result.err
+    assert ev.pending("maldoon") == []
+    assert all(json.loads(p.read_text())["delivered"]
+               for p in (tmp_path / "events").glob("ev-*.json"))
 
 
 # --- aegis-jms5s8 item 2: re-probe a cannot-read before believing it -----------

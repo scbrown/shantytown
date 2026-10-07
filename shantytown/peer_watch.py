@@ -24,7 +24,7 @@ It never alerts, never repairs, never escalates, and is exported as its own
 gauge — never folded into up=0 or up=1. The Prometheus rule is the backstop
 for a long unknown and for a watcher that itself died.
 
-ON DOWN, in order: (i) tell the LOCAL administrator, rate-limited; (ii) ONE
+ON DOWN, in order: (i) tell the LOCAL administrator once per transition; (ii) ONE
 repair attempt per cooldown — the peer host's own `st agent new <peer>`, over
 the same ssh transport as every other cross-host st verb — verified by
 probing again, never by the relaunch's exit code alone; (iii) record every
@@ -317,8 +317,10 @@ def run_pass(*, watcher: str, peer_host: str, peer_name: str | None,
             res = do("alert", text, lambda: alert_fn(text))
             if res is not None:
                 say(f"  alerted {watcher}: recovered ({'ok' if res[0] else 'FAILED: ' + res[1]})")
-        for k in ("down_since", "last_alert", "escalated_episode", "last_escalation"):
-            new.pop(k, None)
+        # A failed recovery delivery stays pending; a later scheduled pass retries.
+        if down_since is None or (res is not None and res[0]):
+            for k in ("down_since", "last_alert", "escalated_episode", "last_escalation"):
+                new.pop(k, None)
     elif obs.verdict == UNKNOWN:
         say("  unknown is not down: no alert, no repair, no escalation.")
     else:
@@ -326,18 +328,24 @@ def run_pass(*, watcher: str, peer_host: str, peer_name: str | None,
             down_since = t
         new["down_since"] = down_since
         down_for = t - down_since
-        # (i) alert the local administrator, rate-limited within the episode.
+        # (i) alert once per outage. The old hourly reminder woke an agent
+        # to judge an unchanged fact. alert_every now bounds failed-send retries.
         last_alert = st.get("last_alert")
-        if last_alert is None or last_alert < down_since or t - last_alert >= alert_every:
+        if ((last_alert is None or last_alert < down_since)
+                and (st.get("last_alert_attempt") is None
+                     or st["last_alert_attempt"] < down_since
+                     or t - st["last_alert_attempt"] >= alert_every)):
             text = (f"[st fleet watch] peer administrator {peer}@{peer_host} is DOWN "
                     f"(~{int(down_for // 60)}m): {obs.reason}. Repairing if possible; "
                     f"see st fleet watch.")
             res = do("alert", text, lambda: alert_fn(text))
             if res is not None:
-                new["last_alert"] = t
+                new["last_alert_attempt"] = t
+                if res[0]:
+                    new["last_alert"] = t
                 say(f"  alerted {watcher}: {'ok' if res[0] else 'FAILED: ' + res[1]}")
         else:
-            say(f"  alert suppressed (last {int((t - last_alert) // 60)}m ago)")
+            say("  alert suppressed (unchanged outage or delivery retry pending)")
         # (ii) one repair per cooldown, verified by a second probe.
         repair_state = None
         if not obs.repairable:
@@ -364,10 +372,11 @@ def run_pass(*, watcher: str, peer_host: str, peer_name: str | None,
                     say(f"  repair VERIFIED: {after.reason}")
                     text = (f"[st fleet watch] peer administrator {peer}@{peer_host} was "
                             f"down ({obs.reason}) and was relaunched; verified up.")
-                    alert_fn(text)
-                    for k in ("down_since", "last_alert", "escalated_episode",
-                              "last_escalation"):
-                        new.pop(k, None)
+                    recovered = do("alert", text, lambda: alert_fn(text))
+                    if recovered is not None and recovered[0]:
+                        for k in ("down_since", "last_alert", "escalated_episode",
+                                  "last_escalation"):
+                            new.pop(k, None)
                 else:
                     repair_state = "failed"
                     if after is not None:
@@ -395,9 +404,10 @@ def run_pass(*, watcher: str, peer_host: str, peer_name: str | None,
                     if rc in (0, 1):
                         new["escalated_episode"] = down_since
                     say(f"  escalation: rc={rc} {detail}")
-    down_seconds = (t - new["down_since"]) if new.get("down_since") is not None else (
-        0.0 if verdict == OK else None)
+    down_seconds = (0.0 if verdict == OK else
+                    t - new["down_since"] if new.get("down_since") is not None else None)
     if not dry_run:
+        new["last_verdict"] = verdict
         state.write(new)
         if obs.verdict != OK or actions or st.get("last_verdict") not in (None, OK):
             append_log(log_path, dict(ts=t, watcher=watcher, peer=peer,

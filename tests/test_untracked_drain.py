@@ -146,7 +146,7 @@ def test_an_alert_is_delivered_even_though_its_sender_is_busy(tmp_path, capsys):
     assert ev.pending("sattler") == [], "delivered, so block-once marked it"
 
 
-def test_a_real_stop_from_a_busy_sender_is_still_deferred(tmp_path, capsys):
+def test_a_real_stop_from_a_busy_sender_is_discarded(tmp_path, capsys):
     """The gate still works for what it was built for — this change widens
     nothing except the one reason that means the opposite."""
     ev = _events(tmp_path)
@@ -156,4 +156,4 @@ def test_a_real_stop_from_a_busy_sender_is_still_deferred(tmp_path, capsys):
                 awaiting_answer=lambda _s: False)
     assert rc == 0
     assert capsys.readouterr().out == "", "a mid-flight sender's stop must not deliver"
-    assert len(ev.pending("sattler")) == 1, "deferred, not dropped"
+    assert ev.pending("sattler") == [], "obsolete event stayed pending"

@@ -190,7 +190,7 @@ def test_down_then_repaired_alerts_repairs_verifies_and_never_pages(tmp_path):
     assert h.escalations == []
     rec = json.loads(h.log.read_text().splitlines()[-1])
     assert rec["observed"] == "down" and rec["verdict"] == "ok"
-    assert rec["actions"] == ["alert", "repair"]
+    assert rec["actions"] == ["alert", "repair", "alert"]
     assert "down_since" not in h.state.read()
 
 
@@ -429,3 +429,46 @@ def test_a_resolved_peer_is_still_remembered(tmp_path):
     h.probe = lambda name: (asked.append(name), h.script.pop(0))[1]
     h.run(); h.run(advance=300)
     assert asked == [None, "bea"]                      # CONTROL: real names persist
+
+
+def test_steady_down_never_renotifies_but_recovery_and_new_outage_do(tmp_path):
+    h = Harness(tmp_path, *([down(False)] * 10), up(), up(), down(False))
+    for _ in range(10):
+        h.run(advance=3601)
+    assert len(h.alerts) == 1
+    assert len(h.escalations) == 1
+    h.run(advance=60)
+    h.run(advance=60)
+    assert len(h.alerts) == 2 and 'back up' in h.alerts[-1]
+    h.run(advance=60)
+    assert len(h.alerts) == 3 and 'DOWN' in h.alerts[-1]
+
+
+def test_failed_transition_delivery_is_retried_not_marked_success(tmp_path):
+    state = pw.State(tmp_path / 'state.json')
+    sent = []
+    outcomes = iter([False, True, False, True])
+    def run(t, obs):
+        return pw.run_pass(watcher='ada', peer_host='host-b', peer_name='bea',
+            probe_fn=lambda _: obs, alert_fn=lambda text: (sent.append(text) or next(outcomes), 'receipt'),
+            repair_fn=None, escalate_fn=lambda _: (0, 'sent'), state=state,
+            log_path=tmp_path / 'log.jsonl', now=lambda: t, say=lambda _: None)
+    run(100, down(False))
+    assert 'last_alert' not in state.read()
+    run(200, down(False))
+    assert len(sent) == 1  # retry cooldown
+    run(4000, down(False))
+    run(8000, down(False))
+    assert len(sent) == 2
+    run(8100, up())
+    assert 'down_since' in state.read()  # failed recovery is pending
+    run(8200, up())
+    run(8300, up())
+    assert len(sent) == 4 and 'down_since' not in state.read()
+
+
+def test_unknown_between_down_samples_does_not_reset_the_episode(tmp_path):
+    h = Harness(tmp_path, down(False), pw.Observation(pw.UNKNOWN, 'no transport'), down(False), up())
+    for _ in range(4):
+        h.run(advance=4000)
+    assert len(h.alerts) == 2

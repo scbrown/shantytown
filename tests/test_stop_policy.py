@@ -354,14 +354,14 @@ def test_urgent_events_are_deliverable_even_from_a_busy_sender(tmp_path):
         "urgent-but-not-deliverable would block forever and deliver nothing"
 
 
-def test_a_held_event_past_the_ceiling_becomes_deliverable(tmp_path):
+def test_an_old_busy_event_never_becomes_deliverable(tmp_path):
     """stop_policy and _drain must share the ceiling, or they disagree again."""
     import time as _t
-    old = _d1qko_ev(frm="ellie", ts=_t.time() - (se.DEFER_MAX_AGE_S + 60))
+    old = _d1qko_ev(frm="ellie", ts=_t.time() - 3600)
     inp = sp.Inputs(me="maldoon", role="administrator",
                              pending=[old], busy_senders={"ellie"})
-    assert len(inp.deliverable) == 1, \
-        "past the ceiling _drain WILL deliver it, so rank 4 must block for it"
+    assert inp.deliverable == []
+    assert not sp.decide(inp).block
 
 
 def test_main_refuses_a_leaked_agent_identity_before_verdict(monkeypatch, tmp_path):
@@ -400,3 +400,27 @@ def test_main_refuses_a_leaked_agent_identity_before_verdict(monkeypatch, tmp_pa
 
     assert sp.main(["--root", str(tmp_path)]) == 1
     assert called == [], "a refused identity must neither persist nor render a verdict"
+
+
+def test_gather_consumes_busy_events_even_when_policy_allows(tmp_path, monkeypatch):
+    from shantytown.events import FilesEvents
+    from shantytown.protocols import Agent
+    from types import SimpleNamespace
+    ev = FilesEvents(tmp_path / 'events')
+    ev.persist('lead', 'worker', None, False)
+    reg = SimpleNamespace(get=lambda n: Agent(name=n, role='lead', pane='p'))
+    monkeypatch.setattr(se, '_liveness', lambda *a, **k: 'busy')
+    inp = sp.gather(tmp_path, 'lead', reg=reg, panes=object(),
+        runtime=SimpleNamespace(shows_ready_ui=lambda _: False), events=ev)
+    assert not sp.decide(inp).block
+    assert ev.pending('lead') == []
+
+
+def test_busy_discard_does_not_consume_a_new_stop_outside_measured_snapshot(tmp_path):
+    from shantytown.events import FilesEvents
+    ev = FilesEvents(tmp_path / 'events')
+    ev.persist('lead', 'worker', None, False)
+    snapshot = ev.pending('lead')
+    new = ev.persist('lead', 'worker', None, False)
+    se.discard_busy(ev, 'lead', {'worker'}, snapshot)
+    assert [e.id for e in ev.pending('lead')] == [new.id]
