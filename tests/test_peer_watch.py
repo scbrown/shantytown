@@ -190,7 +190,7 @@ def test_down_then_repaired_alerts_repairs_verifies_and_never_pages(tmp_path):
     assert h.escalations == []
     rec = json.loads(h.log.read_text().splitlines()[-1])
     assert rec["observed"] == "down" and rec["verdict"] == "ok"
-    assert rec["actions"] == ["alert", "repair"]
+    assert rec["actions"] == ["alert", "repair", "alert"]
     assert "down_since" not in h.state.read()
 
 
@@ -429,3 +429,100 @@ def test_a_resolved_peer_is_still_remembered(tmp_path):
     h.probe = lambda name: (asked.append(name), h.script.pop(0))[1]
     h.run(); h.run(advance=300)
     assert asked == [None, "bea"]                      # CONTROL: real names persist
+
+
+def test_steady_down_never_renotifies_but_recovery_and_new_outage_do(tmp_path):
+    h = Harness(tmp_path, *([down(False)] * 10), up(), up(), down(False))
+    for _ in range(10):
+        h.run(advance=3601)
+    assert len(h.alerts) == 1
+    assert len(h.escalations) == 1
+    h.run(advance=60)
+    h.run(advance=60)
+    assert len(h.alerts) == 2 and 'back up' in h.alerts[-1]
+    h.run(advance=60)
+    assert len(h.alerts) == 3 and 'DOWN' in h.alerts[-1]
+
+
+def test_failed_transition_delivery_is_retried_not_marked_success(tmp_path):
+    state = pw.State(tmp_path / 'state.json')
+    sent = []
+    outcomes = iter([False, True, False, True])
+    def run(t, obs):
+        return pw.run_pass(watcher='ada', peer_host='host-b', peer_name='bea',
+            probe_fn=lambda _: obs, alert_fn=lambda text: (sent.append(text) or next(outcomes), 'receipt'),
+            repair_fn=None, escalate_fn=lambda _: (0, 'sent'), state=state,
+            log_path=tmp_path / 'log.jsonl', now=lambda: t, say=lambda _: None)
+    run(100, down(False))
+    assert 'last_alert' not in state.read()
+    run(200, down(False))
+    assert len(sent) == 1  # retry cooldown
+    run(4000, down(False))
+    run(8000, down(False))
+    assert len(sent) == 2
+    run(8100, up())
+    assert 'down_since' not in state.read()  # actual outage ended
+    assert len(state.read()['pending_recoveries']) == 1
+    run(8200, up())
+    assert len(sent) == 3  # failed recovery respects the retry cooldown
+    run(12000, up())
+    assert len(sent) == 4 and state.read()['pending_recoveries'] == []
+
+
+def test_unknown_between_down_samples_does_not_reset_the_episode(tmp_path):
+    h = Harness(tmp_path, down(False), pw.Observation(pw.UNKNOWN, 'no transport'), down(False), up())
+    for _ in range(4):
+        h.run(advance=4000)
+    assert len(h.alerts) == 2
+
+
+def test_failed_recovery_does_not_hide_second_outage(tmp_path):
+    state = pw.State(tmp_path / 'state.json')
+    alerts, pages = [], []
+    def run(at, obs):
+        return pw.run_pass(watcher='ada', peer_host='host-b', peer_name='bea',
+            probe_fn=lambda _: obs,
+            alert_fn=lambda text: (alerts.append(text), ('DOWN' in text, 'transport'))[1],
+            repair_fn=None,
+            escalate_fn=lambda text: (pages.append(text), (0, 'sent'))[1],
+            state=state, log_path=tmp_path / 'log', now=lambda: at,
+            escalate_after=0, alert_every=100, say=lambda _: None)
+    run(1000, down(False))
+    run(1010, up())
+    assert 'down_since' not in state.read()
+    assert len(state.read()['pending_recoveries']) == 1
+    run(1020, down(False))
+    assert len(pages) == 2
+    assert len([text for text in alerts if 'DOWN' in text]) == 2
+    assert len(alerts) == 3, 'failed recovery respects delivery cooldown'
+    run(1110, down(False))
+    assert len(alerts) == 4 and len(pages) == 2
+    assert state.read()['down_since'] == 1020
+
+
+def test_new_recovery_is_sent_while_old_recovery_waits_for_retry(tmp_path):
+    state = pw.State(tmp_path / 'state.json')
+    sent = []
+    def run(at, obs, delivered):
+        pw.run_pass(watcher='ada', peer_host='host-b', peer_name='bea',
+            probe_fn=lambda _: obs,
+            alert_fn=lambda text: (sent.append(text), (delivered, 'transport'))[1],
+            repair_fn=None, escalate_fn=lambda _: (0, 'sent'),
+            state=state, log_path=tmp_path / 'log', now=lambda: at,
+            alert_every=3600, say=lambda _: None)
+    run(100, down(False), True)
+    run(200, up(), False)
+    run(300, down(False), True)
+    run(400, up(), True)
+    assert len(sent) == 4
+    assert 'back up' in sent[-1] and '1970-01-01T00:06:40+00:00' in sent[-1]
+    assert 'current probe: OK' in sent[-1]
+    assert len(state.read()['pending_recoveries']) == 1
+    # A long transport outage remains bounded and reports coalesced history.
+    for at in range(500, 2500, 100):
+        run(at, down(False), False)
+        run(at + 1, up(), False)
+    queued = state.read()['pending_recoveries']
+    assert len(queued) == pw.MAX_PENDING_RECOVERIES
+    assert sum(r.get('coalesced', 0) for r in queued) == 5
+    assert 'older recovery notices coalesced' in sent[-1]

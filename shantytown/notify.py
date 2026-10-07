@@ -1534,11 +1534,9 @@ class DeferralAlerter:
     lapsed 26 days — and aegis-o2w6v, the campaign bead to burn the queue down, is
     itself deferred.
 
-    IT NEVER UN-DEFERS. A lapsed deferral may still be the right call and only the
-    person who deferred it knows; this reports and the admin rules (item 3 of
-    aegis-boj8a2). The policy — what counts as lapsed, what a condition is, and
-    what has already been said — is `deferrals`, kept separate so it is testable
-    without a fleet.
+    Mechanical conditions are re-read and released; prose and judgement gates
+    still go to the administrator. Read/write errors stay in the scheduled retry
+    path, and cannot change a verdict into MET.
 
     TRANSITIONS, NOT STATE (wu's constraint on the bead). 115 lapsed lines every
     tend cycle is a channel the admin mutes within a day — the failure grant fixed
@@ -1549,13 +1547,15 @@ class DeferralAlerter:
     """
 
     def __init__(self, root, reg, panes, *, push=push_to_admin,
-                 read=None, is_closed=None, now=None, log=None):
+                 read=None, is_closed=None, show=None, release=None, now=None, log=None):
         self._root = root
         self._reg = reg
         self._panes = panes
         self._push = push
         self._read = read
         self._is_closed = is_closed
+        self._show = show
+        self._release = release
         self._now = now
         self._log = log or (lambda msg: None)
 
@@ -1563,16 +1563,24 @@ class DeferralAlerter:
         """One pass. Returns the bead ids actually reported (usually none)."""
         from datetime import datetime, timezone
         from . import deferrals as pol
-        from .feed_check import backend_adapter, bd_cwd
+        from .feed_check import backend_adapter
 
+        adapter = None
+        def backend():
+            nonlocal adapter
+            if adapter is None:
+                adapter = backend_adapter(self._root, self._reg)
+            return adapter
+
+        store_error = False
         try:
             if self._read is not None:
                 rows = self._read()
             else:
-                rows = backend_adapter(self._root, self._reg).deferred().exact()
+                rows = backend().deferred().exact()
         except Exception as e:                       # FAIL OPEN
             self._log(f"deferral-sweep: could not read the store ({e!r})")
-            return []
+            rows, store_error = [], True
 
         now = self._now() if callable(self._now) else self._now
         if now is None:
@@ -1582,21 +1590,97 @@ class DeferralAlerter:
         # UNTESTABLE — reporting it unmet would be a silent wrong answer, and
         # reporting it met would send the admin to un-defer live work.
         cache: dict = {}
+        def show(bead):
+            detail = self._show(bead) if self._show else backend().show(bead).exact()
+            if (not isinstance(detail, dict) or detail.get("id") != bead
+                    or not detail.get("status")):
+                raise ValueError(f"incomplete show for {bead}")
+            return detail
+
         def is_closed(bead: str):
-            if self._is_closed is not None:
-                return self._is_closed(bead)
             if bead not in cache:
                 try:
-                    detail = backend_adapter(
-                        self._root, self._reg).show(bead).exact()
-                    cache[bead] = (str((detail or {}).get("status") or "")
-                                   == "closed")
+                    cache[bead] = (self._is_closed(bead) if self._is_closed
+                                   else show(bead).get("status") == "closed")
                 except Exception as e:
-                    self._log(f"deferral-sweep: could not read {bead} ({e!r})")
+                    self._log(f"deferral-sweep: could not read {bead} ({e!r}); retry next pass")
                     cache[bead] = None
             return cache[bead]
 
+        rows = [r for r in rows if isinstance(r, dict)
+                and (r.get("status") == "deferred" or r.get("defer_until") is not None)]
         findings = pol.evaluate(rows, now, is_closed=is_closed)
+        by_id = {r["id"]: r for r in rows if isinstance(r, dict) and r.get("id")}
+        reports, retry = [], set()
+        budget = pol.RetryBudget(self._root)
+        def failed(finding):
+            if budget.failed(finding.bead):
+                from dataclasses import replace
+                reports.append(replace(finding, met=False, read_error=False,
+                    untestable="read/release failed for 3 consecutive scheduled passes"
+                        + (f" [{finding.condition.render()}]" if finding.condition else "")
+                        + "; inspect deferral-sweep logs"))
+            else:
+                retry.add(finding.bead)
+            self._log(f"deferral-sweep: {finding.bead} read/release retry pending")
+
+        if store_error:
+            # A blind whole-store pass proves no existing failure recovered.
+            budget.current.update(budget.previous)
+            retry.update(pol.Reported(self._root)._load())
+            findings.append(pol.Finding(bead="tracker-store", read_error=True))
+        for finding in findings:
+            if finding.read_error:
+                failed(finding)
+                continue
+            row = by_id[finding.bead]
+            if (finding.condition and finding.condition.testable()
+                    and not finding.met and not finding.untestable):
+                continue  # a known unmet mechanical gate needs no ruling
+            stamp = pol.parse_stamp(row.get("defer_until"))
+            if stamp is not None and stamp > now and not finding.untestable:
+                continue  # the condition is met, but its separate date is not
+            if not pol.can_release(row, finding, now):
+                reports.append(finding)
+                continue
+            try:
+                # The list is only a candidate set. Re-read the complete bead
+                # (including dependencies) and its condition before mutation.
+                detail = show(finding.bead)
+                if (detail.get("status") not in ("open", "deferred")
+                        or (detail.get("status") == "open" and not detail.get("defer_until"))):
+                    continue
+                cache.clear()
+                fresh = pol.evaluate([detail], now, is_closed=is_closed)
+                if not fresh:
+                    continue  # re-deferred, closed or already released
+                current = fresh[0]
+                if (current.condition and current.condition.testable()
+                        and not current.met and not current.untestable):
+                    continue  # the condition changed to a known unmet gate
+                if current.read_error:
+                    failed(current)
+                    continue
+                if not pol.can_release(detail, current, now):
+                    # A complete fresh read found a judgement gate. Retrying
+                    # that fact would strand it just as surely as an error.
+                    stamp = pol.parse_stamp(detail.get("defer_until"))
+                    if current.untestable or stamp is None or stamp <= now:
+                        reports.append(current)
+                    continue
+                release = self._release or backend().undefer
+                release(finding.bead)
+                after = show(finding.bead)
+                if after.get("status") != "open" or after.get("defer_until"):
+                    raise RuntimeError("release read-back still held")
+                self._log(f"deferral-sweep: auto-undeferred {finding.bead}; verified open, no defer_until")
+            except Exception as e:
+                # An indeterminate write is re-read next pass, never blindly
+                # repeated. An already-open row is not a release candidate.
+                failed(finding)
+                self._log(f"deferral-sweep: {finding.bead} release/read failed ({e!r}); retry next pass")
+        budget.save()
+        findings = reports
         seen = pol.Reported(self._root)
         fresh = seen.unreported(findings)
         if fresh:
@@ -1612,7 +1696,7 @@ class DeferralAlerter:
         # Record the FULL current state, not just what was pushed: a bead that
         # stopped being lapsed must drop out of the ledger so it can report again
         # if it lapses anew.
-        seen.record(findings)
+        seen.record(findings, preserve=retry)
         return [f.bead for f in fresh]
 
 

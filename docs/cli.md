@@ -2208,3 +2208,37 @@ the utilization line and `st_governor_pace_bound` read the envelope's ratio form
 at the current elapsed, and its advisory is unavailable when that cannot be
 stated. A row declaring both `ratio` and `curve` is refused. Drains are
 unchanged.
+
+
+### Scheduled supervision: state changes and mechanical deferrals
+
+`st fleet watch` sends one local DOWN notification per outage and one recovery
+notification. A steady outage does not generate hourly reminders. `--alert-every`
+now controls retries of failed DOWN and recovery delivery. Recovery observation
+ends the outage immediately; pending recovery delivery cannot hide a later outage.
+Each new recovery is attempted immediately even while an older send is cooling
+down. Notices name the observation time and current verdict. Pending recovery
+history is capped at 16 notices; coalesced older notices are counted explicitly. UNKNOWN does not reset an outage or manufacture a recovery. Repair and
+human-escalation cooldowns are unchanged.
+
+`st fleet tend` rechecks deferrals on every scheduled pass. A lapsed `defer_until`
+or a met `resume_when: date:...` / `resume_when: closed:...` condition can clear
+both the deferred status and timestamp after a fresh tracker read. It verifies
+that the item is open and the timestamp cleared. Automatic release requires a
+marker-only notes (or empty notes for a timestamp-only hold), no future date,
+no open blocking dependency,
+and no human/external/parked hold label. Prose, ambiguous markers and met
+conditions with other holds still request judgement once per state. Read errors
+and indeterminate writes retry on the next pass. Three consecutive failures
+produce one UNTESTABLE finding for the administrator; continued failure stays
+silent after successful notification. The budget survives process restarts and
+resets on recovery. An already released item is not written again. Known unmet
+mechanical conditions remain quiet even after a separate timestamp lapses;
+unsupported conditions request judgement even with a future timestamp.
+
+The Stop hook consumes ordinary stop notices when their sender is currently
+busy, at any age, without waking the recipient. The on-disk event remains for
+audit. A later real stop creates a new notice. Urgent governance and risen
+notices, waiting senders and unknown liveness remain deliverable. Only events
+in the measured snapshot are discarded; a new event arriving during that check
+is left for the next observation.

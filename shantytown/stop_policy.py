@@ -121,40 +121,15 @@ class Inputs:
     def deliverable(self) -> list:
         """Pending events that would ACTUALLY be handed over on this stop.
 
-        RANK 4 SAYS "a DELIVERABLE pending event" AND THE CODE READ `pending`
-        (aegis-d1qko). `_drain` holds an event back while its SENDER is
-        mid-flight, so on a busy fleet the coordinator blocked on events that the
-        very next call then declined to deliver: ~10 no-op turns in one night
-        against 2 held events. Blocking on a set larger than the deliverable one
-        is a wake with nothing to do, every turn, for as long as the senders keep
-        working — which on a healthy fleet is indefinitely.
-
-        Urgent events are deliverable BY DEFINITION: `_drain` never defers a
-        governance alert or a risen event, so the two filters must agree or a
-        rank-1 block would hand over nothing."""
-        import time as _t
-        now = _t.time()
+        Ordinary stops from a busy sender are obsolete at any age. Urgent
+        governance and risen events still deliver immediately. gather consumes
+        the obsolete snapshot before deciding, so an ALLOW does not leave
+        old events queued to wake an administrator later.
+        """
         out = []
         for e in self.pending:
-            if is_governance(e.reason) or e.rose:
-                out.append(e)                     # never deferred by _drain
-                continue
-            # getattr, not attribute access: an event that cannot tell us its
-            # sender is treated as DELIVERABLE, never held. Fail-open is this
-            # module's rule everywhere else (see the unknown-role branch in
-            # gather) and it is the right direction here too — holding a stop
-            # back on a field we could not read is the aegis-d1qko bug wearing a
-            # different hat.
-            frm = getattr(e, "frm", None)
-            if frm is None or frm not in self.busy_senders:
-                out.append(e)
-                continue
-            # Sender is busy — held, UNLESS it has beaten _drain's ceiling.
-            # This must use the same bound _drain does, or the two disagree
-            # again and we are back to blocking on undeliverable events.
-            ts = getattr(e, "ts", 0)
-            age = (now - ts) if ts else float("inf")
-            if age > stop_event.DEFER_MAX_AGE_S:
+            if (is_governance(e.reason) or e.rose
+                    or getattr(e, "frm", None) not in self.busy_senders):
                 out.append(e)
         return out
 
@@ -323,6 +298,10 @@ def gather(root, me: str, *, reg=None, panes=None, runtime=None,
         except Exception as e:  # noqa: BLE001 — unreadable pane is not busy
             print(f"stop_policy: could not read liveness for {name!r} ({e!r}) "
                   f"— treating as deliverable", file=sys.stderr)
+    # Consume before deciding: an ALLOW must not leave obsolete events to
+    # wake the administrator later when the sender becomes idle again.
+    discarded = {e.id for e in stop_event.discard_busy(events, me, busy, pending)}
+    pending = [e for e in pending if e.id not in discarded]
     inp = Inputs(me=me, role=role, pending=pending, busy_senders=busy)
 
     if role != "administrator":

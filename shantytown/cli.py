@@ -1856,7 +1856,7 @@ def build_parser() -> argparse.ArgumentParser:
     pw.add_argument("--repair-cooldown", type=float, default=30, metavar="MIN",
                     help="at most one relaunch attempt per MIN (default 30)")
     pw.add_argument("--alert-every", type=float, default=60, metavar="MIN",
-                    help="re-alert the local admin during an outage every MIN "
+                    help="retry failed down notifications after MIN "
                          "(default 60)")
     pw.add_argument("--severity", default="high",
                     help="severity passed to the escalation command (default high)")
@@ -11601,13 +11601,13 @@ def _tend_once(a, quiet: bool = False) -> int:
         # to it and NOTHING re-asks. A resume condition written as prose — "until
         # franklin's converge lands" — has no mechanism behind it but the
         # author's memory: that one landed the same day and the bead sat nine
-        # days. Reports only; it never un-defers, and it reports each bead once
-        # per state (wu: transitions, not state).
+        # days. Mechanical conditions now release automatically; judgement gates
+        # report once per state and read errors retry on the next pass.
         deferred_due = _fleet_sweep("deferral-sweep", lambda: notify_mod.DeferralAlerter(
             Path(a.root), _registry(a), panes, log=_log).sweep())
         if deferred_due:
-            print(f"  ⚠ surfaced {len(deferred_due)} deferral(s) whose date has "
-                  f"LAPSED or whose condition is MET (nothing un-deferred): "
+            print(f"  ⚠ surfaced {len(deferred_due)} deferral(s) that "
+                  f"need judgement after mechanical releases: "
                   f"{', '.join(deferred_due)}", file=sys.stderr)
         # A DIFFERENT condition and a DIFFERENT action from age: these beads do
         # not need their blocker chased; every issue blocker is already closed

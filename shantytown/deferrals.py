@@ -1,4 +1,4 @@
-"""deferrals — surface a deferral whose time or condition has come. REPORT ONLY.
+"""deferrals — evaluate resume conditions and retain judgement gates.
 
 THE FAILURE (aegis-boj8a2). `deferred` is the one status invisible to EVERY feeder:
 `br ready` excludes it by design, hauls take only ready items, stop_event/tend/
@@ -19,11 +19,9 @@ deferral from `status = 'deferred'` to a `defer_until` TIMESTAMP with status lef
 defer_until. A sweeper that reads only one of those shapes is blind to most of the
 board, so everything here keys off the FIELD and ignores the status entirely.
 
-WHAT THIS DOES NOT DO: it never un-defers anything. A lapsed deferral may still be
-the right call, and the person who deferred it is the person who knows. It reports;
-the admin rules. That is item 3 of the bead and it is not negotiable — an
-auto-undefer would take a queue nobody reads and start feeding it work nobody
-re-judged.
+Mechanical conditions are released by tend after a fresh read. Prose and
+judgement gates still go to the administrator. Unreadable conditions are retried
+on the next scheduled pass rather than becoming a human ruling.
 """
 from __future__ import annotations
 
@@ -203,6 +201,7 @@ class Finding:
     # automated path there is. 101 of 112 deferrals were in this state when the
     # check was added (aegis-hm8994).
     conditionless: bool = False
+    read_error: bool = False
 
     def key(self) -> str:
         """The transition key: bead + the STATE being reported.
@@ -286,6 +285,7 @@ def evaluate(rows, now: datetime, is_closed=None) -> list:
         botched = cond is None and _MARKER_PRESENT.search(notes_text) is not None
 
         met, untestable = False, ""
+        read_error = False
         if cond is not None:
             if cond.kind == "date":
                 stamp = parse_stamp(cond.arg)
@@ -306,6 +306,7 @@ def evaluate(rows, now: datetime, is_closed=None) -> list:
                         verdict = None
                 if verdict is None:
                     untestable = f"{cond.render()} (could not read {cond.arg})"
+                    read_error = True
                 else:
                     met = bool(verdict)
             else:
@@ -384,9 +385,47 @@ def evaluate(rows, now: datetime, is_closed=None) -> list:
             priority=row.get("priority"),
             lapsed_at=when if lapsed else None,
             lapsed_days=(now - when).days if lapsed else 0,
-            condition=cond, met=met, untestable=untestable))
+            condition=cond, met=met, untestable=untestable, read_error=read_error))
     out.sort(key=lambda f: (-(f.lapsed_days), f.bead))
     return out
+
+
+def can_release(row: dict, finding: Finding, now: datetime) -> bool:
+    """Only an unambiguous mechanical condition may change tracker state.
+
+    A parsed prefix is enough to REPORT, not enough to mutate: trailing prose,
+    multiple markers, future timestamps and human gates must keep their hold.
+    """
+    from .unblocked_events import HOLDING_LABEL, BEAD_BLOCK_LABEL, TOPIC_LABELS
+    if row.get("status") not in ("open", "deferred"):
+        return False
+    if row.get("status") == "open" and not row.get("defer_until"):
+        return False
+    labels = row.get("labels") or []
+    if any(HOLDING_LABEL.match(l) and l != BEAD_BLOCK_LABEL and l not in TOPIC_LABELS
+           for l in labels):
+        return False
+    if any(d.get("dependency_type") == "blocks" and d.get("status") != "closed"
+           for d in (row.get("dependencies") or [])):
+        return False
+    if finding.untestable or finding.read_error:
+        return False
+    raw = row.get("defer_until")
+    if raw is not None:
+        stamp = parse_stamp(raw)
+        if stamp is None or stamp > now:
+            return False
+    notes = str(row.get("notes") or "")
+    markers = list(_CONDITION.finditer(notes))
+    if finding.condition is not None:
+        if (len(markers) != 1 or len(_MARKER_PRESENT.findall(notes)) != 1
+                or not finding.met):
+            return False
+        # The defer command stores the supplied reason verbatim. Only a
+        # marker-only reason is mechanically decidable; prose on ANY line may
+        # carry an additional approval gate that a parser must not discard.
+        return _CONDITION.fullmatch(notes.strip()) is not None
+    return bool(finding.lapsed_at and not notes.strip())
 
 
 class Reported:
@@ -422,7 +461,7 @@ class Reported:
         seen = self._load()
         return [f for f in findings if seen.get(f.bead) != f.key()]
 
-    def record(self, findings) -> None:
+    def record(self, findings, preserve=()) -> None:
         """Mark the CURRENT state of every finding as said.
 
         Beads absent from `findings` are DROPPED: a deferral that stopped being
@@ -431,7 +470,41 @@ class Reported:
         """
         from .files import write_json_atomic
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        write_json_atomic(self.path, {f.bead: f.key() for f in findings})
+        previous = self._load()
+        current = {f.bead: f.key() for f in findings}
+        current.update({b: previous[b] for b in preserve if b in previous})
+        write_json_atomic(self.path, current)
+
+
+class RetryBudget:
+    """Three consecutive scheduled failures become one persistent finding.
+
+    Healthy sweeps reset the count. Counts are capped, and the reported finding
+    has stable wording so another failed pass does not wake the admin again.
+    """
+    limit = 3
+
+    def __init__(self, root):
+        self.path = Path(root) / "notify" / "deferral-retries.json"
+        try:
+            self.previous = json.loads(self.path.read_text())
+            if not isinstance(self.previous, dict):
+                self.previous = {}
+        except (OSError, ValueError):
+            self.previous = {}
+        self.current = {}
+
+    def failed(self, bead):
+        old = self.previous.get(bead, 0)
+        old = old if isinstance(old, int) and old >= 0 else 0
+        count = min(old + 1, self.limit)
+        self.current[bead] = count
+        return count >= self.limit
+
+    def save(self):
+        from .files import write_json_atomic
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        write_json_atomic(self.path, self.current)
 
 
 def report(findings, cap: int = 12, blind_cap: int = 6) -> list:
@@ -456,7 +529,7 @@ def report(findings, cap: int = 12, blind_cap: int = 6) -> list:
     lines = []
     if actionable:
         lines.append(f"{len(actionable)} deferral(s) need a ruling "
-                     f"(REPORT ONLY — nothing was un-deferred):")
+                     f"(judgement required):")
         lines += [f"    {f.render()}" for f in actionable[:cap]]
         if len(actionable) > cap:
             lines.append(f"    ... and {len(actionable) - cap} more — "
