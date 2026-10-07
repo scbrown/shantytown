@@ -20,7 +20,9 @@ Selected by SHANTY_BACKEND=seeds (opt-in). Configuration, from the deployment
 env like the other SHANTY_* keys:
   SHANTY_SD_STORE  path to a local seeds store, or
   SHANTY_SD_QUIPU  base URL of the quipu server holding the board
-  SHANTY_SD_PREFIX expected id prefix (e.g. aegis); checked when set
+  SHANTY_SD_PREFIX the board's id prefix (e.g. aegis). REQUIRED: a fresh or
+                   wrong store reports sd's default prefix, so this is what
+                   catches a mistyped store in quipu mode
   SHANTY_SD_BIN    the sd binary (default: sd)
 """
 from __future__ import annotations
@@ -89,13 +91,25 @@ class SdTracker(BrTracker):
     def prove_store(self) -> StoreProof:
         """`sd where --json` for the configured store, or raise StoreUnproven.
 
-        Run once per tracker (one st invocation) and before any other command,
-        so every read this tracker returns, empty or not, sits behind it.
+        Run once per tracker and before any other command, so every read this
+        tracker returns, empty or not, sits behind it. The proof is CACHED on the
+        tracker object: right for one st invocation, but a long-lived process
+        holding one tracker never re-proves.
+
+        `sd where` reports the same for a store path that does not exist as for a
+        real one (measured, sd 0.0.4), and sd then creates the store on the first
+        write. So a local store must EXIST, and the prefix must match: creating a
+        board is an explicit admin act, never a side effect of st.
         """
         if self._proof is not None:
             return self._proof
         loc = self._location()
         named = loc[1]
+        if not self.prefix:
+            raise StoreUnproven(
+                f"seeds backend: SHANTY_SD_PREFIX is not set for {named}. It is "
+                "required: a missing or wrong store reports the default prefix, and "
+                "only the prefix check can tell it from the real board")
         try:
             r = subprocess.run([self._bin, *loc, "where", "--json"], cwd=self.repo,
                                capture_output=True, text=True, timeout=self.timeout)
@@ -115,6 +129,11 @@ class SdTracker(BrTracker):
             raise StoreUnproven(
                 f"seeds backend: sd resolved its store from {source!r}, not from "
                 f"{expect_source} {named}; refusing to read an unproven store")
+        if self.store and not os.path.isfile(w.get("database_path") or ""):
+            raise StoreUnproven(
+                f"seeds backend: no seeds store at {w.get('database_path')!r} "
+                f"(SHANTY_SD_STORE={self.store!r}). Refusing: sd would read it as an "
+                "empty board and create it on the first write")
         if self.store and w.get("database_path") != os.path.abspath(self.store):
             raise StoreUnproven(
                 f"seeds backend: sd reads {w.get('database_path')!r}, configured "
@@ -123,7 +142,7 @@ class SdTracker(BrTracker):
             raise StoreUnproven(
                 f"seeds backend: sd reads {w.get('quipu_url')!r}, configured "
                 f"quipu is {self.quipu!r}")
-        if self.prefix and w.get("prefix") != self.prefix:
+        if w.get("prefix") != self.prefix:
             raise StoreUnproven(
                 f"seeds backend: store {named} has prefix {w.get('prefix')!r}, "
                 f"expected {self.prefix!r}")

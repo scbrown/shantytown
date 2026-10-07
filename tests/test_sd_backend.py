@@ -53,7 +53,7 @@ def _tracker(proj, store, prefix="aegis"):
 # 1. NO SILENT EMPTY BOARD ---------------------------------------------------
 
 def test_no_configured_store_refuses_instead_of_reading_a_default(tmp_path):
-    t = SdTracker(repo=str(tmp_path))
+    t = SdTracker(repo=str(tmp_path), prefix="aegis")
     with pytest.raises(StoreUnproven, match="no store configured"):
         br_mod.ready(t)
 
@@ -82,9 +82,33 @@ def test_the_measured_fallback_is_refused_and_names_the_store(tmp_path, monkeypa
 
 
 def test_both_stores_named_refuses(tmp_path):
-    t = SdTracker(repo=str(tmp_path), store=str(tmp_path / "a.db"), quipu="http://x")
+    t = SdTracker(repo=str(tmp_path), store=str(tmp_path / "a.db"), quipu="http://x",
+                  prefix="aegis")
     with pytest.raises(StoreUnproven, match="exactly one"):
         br_mod.ready(t)
+
+
+def test_a_nonexistent_store_refuses_and_is_not_created(tmp_path):
+    """dearing's review: `sd where` reports a MISSING store exactly like a real one,
+    and `list` answers it with an empty board at rc 0. A typo in SHANTY_SD_STORE
+    must refuse, and must not leave a freshly minted store behind."""
+    proj, _ = _project(tmp_path)
+    typo = tmp_path / "boardd.db"
+    # CONTROL: sd itself reads the missing store as an empty board, rc 0.
+    r = subprocess.run([SD, "--store", str(typo), "list", "--json"], cwd=proj,
+                       capture_output=True, text=True)
+    assert r.returncode == 0 and '"total":0' in r.stdout.replace(" ", "")
+    with pytest.raises(StoreUnproven, match="no seeds store at"):
+        br_mod.ready(_tracker(proj, typo))
+    with pytest.raises(StoreUnproven):
+        _tracker(proj, typo).create("would mint a store", assignee="wu")
+    assert not typo.exists()
+
+
+def test_an_unset_prefix_refuses(tmp_path):
+    proj, store = _project(tmp_path)
+    with pytest.raises(StoreUnproven, match="SHANTY_SD_PREFIX"):
+        br_mod.ready(SdTracker(repo=str(proj), store=str(store)))
 
 
 def test_a_wrong_prefix_is_refused(tmp_path):
@@ -97,6 +121,8 @@ def test_a_wrong_prefix_is_refused(tmp_path):
 
 def test_an_empty_proven_board_reads_empty_and_says_where(tmp_path):
     proj, store = _project(tmp_path)
+    only = _sd(proj, store, "create", "done already", "--silent")
+    _sd(proj, store, "close", only, "--reason", "fixture")
     t = _tracker(proj, store)
     assert br_mod.ready(t) == []
     assert t._proof.location_source == "--store"
