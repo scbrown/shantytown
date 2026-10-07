@@ -944,6 +944,7 @@ def _drain(events: FilesEvents, me: str, reg=None, panes=None,
     """
     now = time.time()
     verdicts: dict[str, str] = {}
+    candidates = None
     if reg is not None and panes is not None and shows_ready_ui is not None:
         candidates = list(events.pending(me))
         for ev in candidates:
@@ -952,7 +953,8 @@ def _drain(events: FilesEvents, me: str, reg=None, panes=None,
                                             awaiting_answer)
         discard_busy(events, me, {name for name, state in verdicts.items()
                                   if state == triage.BUSY}, candidates)
-    got = events.drain(me)
+    ids = {e.id for e in candidates} if candidates is not None else None
+    got = events.drain(me, None if ids is None else lambda e: e.id in ids)
     if not got:
         return 0
     # The event's item fields are a stop-time snapshot, while the pane verdict

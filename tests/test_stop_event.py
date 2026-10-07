@@ -259,7 +259,7 @@ def test_drain_discards_an_event_whose_sender_is_still_mid_flight(tmp_path, caps
     """THE BUG (sattler, 2026-07-19). "tim stopped" arrived while tim was in
     `Envisioning… (39s)`; acting on it would have re-dispatched over live work.
 
-    A deferral must do BOTH things: not wake the lead, and not lose the event.
+    The obsolete notice must not wake the lead or remain in its pending queue.
     """
     reg = _reg(tmp_path)
     ev = FilesEvents(tmp_path / "events")
@@ -274,8 +274,7 @@ def test_drain_discards_an_event_whose_sender_is_still_mid_flight(tmp_path, caps
 
 
 def test_only_a_NEW_event_delivers_once_the_sender_really_stops(tmp_path, capsys):
-    """The other half: deferral is a wait, not a filter. Same event, same store —
-    only the pane changed."""
+    """A new real stop delivers; the obsolete turn boundary never reappears."""
     reg = _reg(tmp_path)
     ev = FilesEvents(tmp_path / "events")
     ev.persist(to="maldoon", frm="ellie", reason=None, rose=False)
@@ -670,3 +669,18 @@ def test_a_down_lead_is_not_retried(tmp_path):
     assert bool(verdict) is False
     assert "DOWN" in verdict.detail and "restart" in verdict.detail
     assert panes.calls == 0, "the pane-existence check decides this before any wiring read"
+
+
+
+def test_drain_leaves_new_stop_for_a_new_liveness_measurement(tmp_path, capsys, monkeypatch):
+    reg = _reg(tmp_path)
+    ev = FilesEvents(tmp_path / "events")
+    ev.persist(to="maldoon", frm="ellie", reason=None, rose=False)
+    created = []
+    def liveness(*args, **kwargs):
+        created.append(ev.persist(to="maldoon", frm="ellie", reason=None, rose=False))
+        return "busy"
+    monkeypatch.setattr(stop_event, "_liveness", liveness)
+    stop_event._drain(ev, "maldoon", reg, _Panes({"p-ellie"}), _ready)
+    assert capsys.readouterr().out == ""
+    assert [e.id for e in ev.pending("maldoon")] == [created[0].id]
