@@ -4472,8 +4472,12 @@ def _cmd_role(a) -> int:
             if not a.lead:
                 raise ValueError("--create requires --lead")
             lead = registry.get(a.lead)
-            if lead.role not in ("lead", "administrator"):
-                raise ValueError("--lead must name a lead or administrator")
+            # Asked by trait, as route_stop asks it: a declared router role is a
+            # valid --lead, and a role that absorbs nothing is not (vj3uet PR B).
+            from .traits import receives_stops
+            if not receives_stops(lead, _catalog(a)):
+                raise ValueError("--lead must name a stop recipient: a role "
+                                 "that absorbs, e.g. lead or administrator")
             try:
                 local_card = FilesRegistry(a.root / "crew").get(a.agent)
             except LookupError:
