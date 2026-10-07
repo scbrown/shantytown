@@ -209,6 +209,26 @@ def plan_role_set(registry: Registry, agent_name: str, role: str,
                                    pane=pane_for(agent_name, agent.pane)))
         return plan
 
+    # IN THE TREE BUT NOT A ROUTER (aegis-vj3uet PR B). A declared role that does
+    # not absorb — the review/design lead once the deployment says so — sits under
+    # someone and takes no reports: route_stop raises for a worker reporting to a
+    # card that absorbs nothing, so handing it reports would plan a stranded stop.
+    # This branch used to fall through to the lead branch below, which wrote
+    # role="lead" whatever was asked for: `role set dearing keeper` wrote a lead.
+    if role != "administrator" and not catalog.of(role).absorbs:
+        if reports:
+            raise ValueError(
+                f"{role!r} does not absorb (it receives no stop events), so it "
+                f"cannot take reports {reports}. Point them at a role that absorbs.")
+        stranded = [a.name for a in _reports_of(registry, agent_name)]
+        if stranded:
+            raise ValueError(
+                f"{agent_name} -> {role} would strand its reports {stranded}: a "
+                f"{role} receives no stop events. Re-point them first.")
+        plan.writes.append(replace(agent, role=role,
+                                   pane=pane_for(agent_name, agent.pane)))
+        return plan
+
     if role == "administrator":
         # Q4: an administrator reports to nobody (it is the root).
         plan.writes.append(replace(agent, role="administrator",
@@ -220,38 +240,48 @@ def plan_role_set(registry: Registry, agent_name: str, role: str,
                                        pane=pane_for(r, ra.pane)))
         return plan
 
-    # role == "lead"
-    # Q1: depth 2. The new lead may not itself report to a lead — checked once,
-    # regardless of whether it has reports (a lead with 0 reports is still a lead
-    # under a lead if its own reports_to is a lead).
+    # A ROUTER: a role whose coordination absorbs (lead built-in; keeper once a
+    # deployment declares it). The role is written VERBATIM (aegis-vj3uet PR B) —
+    # this branch used to hardcode role="lead". Depth 2 (Q1) is a rule about
+    # routers, so it is asked by trait, not by the literal "lead": with the
+    # built-in three the only non-administrator router IS lead, so nothing a
+    # deployment that declares nothing does changes.
+    def is_router(card: Agent) -> bool:
+        return card.role != "administrator" and traits_mod.receives_stops(card, catalog)
+
+    # Q1: depth 2. The new router may not itself report to a router — checked
+    # once, regardless of whether it has reports (a router with 0 reports is still
+    # one under a router if its own reports_to is one).
     if agent.reports_to:
         up = registry.get(agent.reports_to)
-        if up.role == "lead":
+        if is_router(up):
             raise ValueError(
-                f"{agent_name} reports to lead {up.name}; a lead under a lead is depth 3 (Q1). "
-                f"{up.name} must be an administrator, or {agent_name} must report elsewhere."
+                f"{agent_name} reports to {up.role} {up.name}; a {role} under a "
+                f"{up.role} is depth 3 (Q1). {up.name} must be an administrator, "
+                f"or {agent_name} must report elsewhere."
             )
     for r in reports:
         ra = registry.get(r)                  # LookupError if unknown report
-        # Q1: a lead's report may not itself be a lead.
-        if ra.role == "lead":
+        # Q1: a router's report may not itself be a router.
+        if is_router(ra):
             raise ValueError(
-                f"{r} is a lead; a lead cannot report to another lead (depth 2, roles.md Q1). "
-                f"Demote {r} to worker first, or make {agent_name} an administrator."
+                f"{r} is a {ra.role}; it cannot report to another {role} (depth 2, "
+                f"roles.md Q1). Demote {r} to worker first, or make {agent_name} "
+                f"an administrator."
             )
         if r == agent_name:
             raise ValueError(f"{agent_name} cannot report to itself (cycle)")
 
-    # A lead MUST have somewhere to escalate. If it has no reports_to yet, wire it
-    # to the sole administrator (the common case). If none exists, leave it None —
-    # `roles --check` will flag it as an orphan lead rather than us pretending it
-    # has an escalation path. Generative, but honest about the gap.
+    # A router MUST have somewhere to escalate. If it has no reports_to yet, wire
+    # it to the sole administrator (the common case). If none exists, leave it
+    # None — `roles --check` will flag it as an orphan lead rather than us
+    # pretending it has an escalation path. Generative, but honest about the gap.
     lead_reports_to = agent.reports_to
     if lead_reports_to is None:
         admin = find_administrator(registry)
         if admin and admin != agent_name:
             lead_reports_to = admin
-    plan.writes.append(replace(agent, role="lead", reports_to=lead_reports_to,
+    plan.writes.append(replace(agent, role=role, reports_to=lead_reports_to,
                                pane=pane_for(agent_name, agent.pane)))
     for r in reports:
         ra = registry.get(r)

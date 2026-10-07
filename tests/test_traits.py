@@ -279,3 +279,61 @@ def test_the_catalog_query_NAMES_the_axis_predicates():
     for axis in traits.AXES:
         assert f"trait{axis[0].upper()}{axis[1:]}" in q
     assert q.count("OPTIONAL") == len(traits.AXES)
+
+
+# --- role set writes a declared router VERBATIM (aegis-vj3uet PR B) ----------
+
+def _catalog_with_keeper_and_review_lead():
+    """vj3uet's target vocabulary: keeper routes (absorbs), and lead is redefined
+    as review/design, so it absorbs nothing."""
+    return traits.Catalog({
+        "keeper": {"attachment": "reports-to",
+                   "coordination": ["absorbs", "dispatches"]},
+        "lead": {"attachment": "reports-to", "coordination": ["neither"],
+                 "workIntake": ["routed"]},
+    })
+
+
+def test_role_set_writes_a_declared_router_as_ITSELF_not_as_lead():
+    """The step-3 blocker: every non-worker, non-admin role went down the lead
+    branch, so `role set dearing keeper` wrote role="lead"."""
+    reg = _Reg([Agent(name="admin", role="administrator"),
+                Agent(name="dee", role="worker", reports_to="admin"),
+                Agent(name="bond", role="worker", reports_to="admin")])
+    plan = tier.plan_role_set(reg, "dee", "keeper", reports=["bond"],
+                              catalog=_catalog_with_keeper_and_review_lead())
+    assert [(a.name, a.role, a.reports_to) for a in plan.writes] == \
+        [("dee", "keeper", "admin"), ("bond", "worker", "dee")]
+    assert plan.routes == [("bond", "dee")], "a router's reports get stop routing"
+
+
+def test_depth_2_is_asked_by_trait_so_a_keeper_under_a_keeper_is_refused():
+    cat = _catalog_with_keeper_and_review_lead()
+    deep = _Reg([Agent(name="admin", role="administrator"),
+                 Agent(name="dee", role="keeper", reports_to="admin"),
+                 Agent(name="sub", role="worker", reports_to="dee")])
+    with pytest.raises(ValueError, match="depth 3"):
+        tier.plan_role_set(deep, "sub", "keeper", catalog=cat)
+    reg = _Reg([Agent(name="admin", role="administrator"),
+                Agent(name="dee", role="worker", reports_to="admin"),
+                Agent(name="kay", role="keeper", reports_to="admin")])
+    with pytest.raises(ValueError, match="depth 2"):
+        tier.plan_role_set(reg, "dee", "keeper", reports=["kay"], catalog=cat)
+
+
+def test_a_non_absorbing_tree_role_is_written_verbatim_and_takes_no_reports():
+    """The review/design lead: under its keeper, receives no stops, so it can
+    neither take reports nor keep the ones it had."""
+    cat = _catalog_with_keeper_and_review_lead()
+    reg = _Reg([Agent(name="admin", role="administrator"),
+                Agent(name="kay", role="keeper", reports_to="admin"),
+                Agent(name="ian", role="worker", reports_to="kay"),
+                Agent(name="bond", role="worker", reports_to="kay")])
+    plan = tier.plan_role_set(reg, "ian", "lead", catalog=cat)
+    assert [(a.name, a.role, a.reports_to) for a in plan.writes] == \
+        [("ian", "lead", "kay")]
+    assert plan.routes == []
+    with pytest.raises(ValueError, match="does not absorb"):
+        tier.plan_role_set(reg, "ian", "lead", reports=["bond"], catalog=cat)
+    with pytest.raises(ValueError, match="strand"):
+        tier.plan_role_set(reg, "kay", "lead", catalog=cat)
