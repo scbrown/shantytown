@@ -6542,8 +6542,9 @@ def _cmd_crew(a) -> int:
               f"REFUSES them (the depth is in the")
         print(f"    work cell). Remedy: the agent {handoff_text.coordinator_tag()}, "
               f"THEN takes the task. tend")
-        print(f"    cycles it at an idle turn once a checkpoint is on its plate bead "
-              f"(aegis-zl7jwm); do NOT tell it")
+        # tend auto-cycles a checkpointed saturated agent (aegis-zl7jwm).
+        print(f"    cycles it at an idle turn once a checkpoint is on its plate bead; "
+              f"do NOT tell it")
         print(f"    to /clear (that drops bypass). Still here means no checkpoint "
               f"yet: `st agent advise <name>`.")
     # The bead this state was built for (aegis-arma). An operator re-login rotates

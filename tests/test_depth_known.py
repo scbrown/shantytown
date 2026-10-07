@@ -15,7 +15,7 @@ from shantytown.stats import _claude_project_dir
 def test_the_project_slug_replaces_every_non_alphanumeric():
     assert (_claude_project_dir("/srv/my_repo/crew/malcolm")
             == "-srv-my-repo-crew-malcolm")
-    assert _claude_project_dir("/home/u/.cache/x") == "-home-u--cache-x"
+    assert _claude_project_dir("/srv/x/.cache/y") == "-srv-x--cache-y"
 
 
 def _usage_line(tokens):
