@@ -162,6 +162,7 @@ import time
 from dataclasses import replace
 from pathlib import Path
 from .answer import CouldNotLook, PartialAnswer
+from .sd import BR_LIKE
 
 from . import beads as beads_mod
 from . import cycle as cycle_mod
@@ -310,9 +311,9 @@ def _backend(a, default="files") -> str:
         return explicit
     declared = _deployment_default(a, "SHANTY_BACKEND")
     if declared:
-        if declared not in ("files", "beads", "br", "forgejo"):
+        if declared not in ("files", "beads", "br", "seeds", "forgejo"):
             raise SystemExit(f"  refused: SHANTY_BACKEND={declared!r} is not a "
-                             "backend (files|beads|br|forgejo). Fix [env] in "
+                             "backend (files|beads|br|seeds|forgejo). Fix [env] in "
                              "shantytown.toml (or the environment); a typo must "
                              "not silently mean files.")
         return declared
@@ -329,6 +330,10 @@ def _tracker(a, default="files"):
     lives in the live br store, identity does not.
     """
     b = _backend(a, default)
+    if b == "seeds":
+        from .sd import br_like_tracker
+        return br_like_tracker(lambda k: _deployment_default(a, k), "seeds",
+                               repo=getattr(a, "repo", None))
     if b in ("beads", "br"):
         from .br import BrTracker
         return BrTracker(
@@ -372,7 +377,7 @@ def _default_bd_repo(a) -> str | None:
 def _plate(a, *, snapshot=False, require_complete=False):
     """The plate reader matching the selected tracker."""
     trk = _tracker(a)
-    if _backend(a) in ("beads", "br"):
+    if _backend(a) in BR_LIKE:
         from .br import plate as br_plate, plate_reader
         return (plate_reader(trk, require_complete=require_complete) if snapshot
                 else lambda who: br_plate(trk, who))
@@ -431,7 +436,7 @@ def _inbox(a, default="files"):
     # command that reports a different store than it wrote to is the exact lie
     # this repo exists to refuse, and it is worse than the missing default:
     # you would go looking in beads for a message that is not there.
-    if _backend(a, default) in ("beads", "br"):
+    if _backend(a, default) in BR_LIKE:
         trk = _tracker(a, default)
         from .br import items as br_items
         return TrackerInbox(trk, lambda: br_items(trk),
@@ -1229,7 +1234,7 @@ def build_parser() -> argparse.ArgumentParser:
                     help="the store. Unset: $SHANTY_ROOT, else a .shanty found by "
                          "walking up from here, else the box's deployment pointer "
                          "(~/.config/shantytown/root), else ./.shanty")
-    ap.add_argument("--backend", choices=["files", "beads", "br", "forgejo"], default=None,
+    ap.add_argument("--backend", choices=["files", "beads", "br", "seeds", "forgejo"], default=None,
                     help="tracker backend (identity is always files). #3. "
                          "Unset means the deployment's SHANTY_BACKEND "
                          "([env] in shantytown.toml, then env), else per-command "
@@ -8304,7 +8309,7 @@ def _durable_checkpoint_gate(a, agent_name: str):
         return cycle_mod.durable_gate(agent_name, "", since, [], error=f"plate unreadable ({e})")
     if not bead:
         return cycle_mod.durable_gate(agent_name, "", since, [])
-    if _backend(a, "files") not in ("beads", "br"):
+    if _backend(a, "files") not in BR_LIKE:
         return cycle_mod.durable_gate(
             agent_name, bead, since, [],
             error=f"backend {_backend(a, 'files')!r} has no comments to read")
@@ -8550,7 +8555,7 @@ def _cmd_cycle(a) -> int:
                     # (test_swap pins it), so this reaches the beads helper
                     # directly and other backends degrade below rather than
                     # pretend. See beads.append_comment.
-                    if _backend(a, "files") not in ("beads", "br"):
+                    if _backend(a, "files") not in BR_LIKE:
                         raise RuntimeError(
                             f"backend {_backend(a, 'files')!r} cannot append a "
                             f"comment; checkpoint kept as the reason line")

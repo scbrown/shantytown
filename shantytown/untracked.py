@@ -390,6 +390,12 @@ def plate_reader(root: Path):
     """
     from .deployment import deployment_default, resolve_root
     backend = deployment_default(root, "SHANTY_BACKEND") or "files"
+    if backend == "seeds":
+        from .br import plate as br_plate
+        from .sd import br_like_tracker
+        sd_trk = br_like_tracker(lambda k: deployment_default(root, k), "seeds",
+                                 timeout=BD_TIMEOUT_S)
+        return lambda who: br_plate(sd_trk, who)
     if backend in ("beads", "br"):
         from .beads import EXTRA_REPOS_KEY, parse_extra_repos
         from .br import BrTracker, plate as br_plate

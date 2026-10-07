@@ -9,7 +9,7 @@ import sys
 
 from . import config
 
-BACKENDS = {"files", "beads", "br", "forgejo"}
+BACKENDS = {"files", "beads", "br", "seeds", "forgejo"}
 
 
 def check(root: Path, *, backend: str | None = None) -> tuple[int, str]:
