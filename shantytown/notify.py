@@ -48,7 +48,7 @@ from . import triage as triage_mod
 from .attribution import ST_TEND, attribute
 from .tmux import PaneNotAgent
 from .protocols import Agent
-from .runtime import asks_a_question, auth_expired
+from .runtime import asks_a_question, auth_expired, limit_reached
 from .tier import route_stop
 
 
@@ -163,6 +163,10 @@ class PaneRead(NamedTuple):
     a different thing from a low depth and must never collapse into one."""
     state: str
     depth_k: float | None
+    # Background shells the agent still owns (aegis-zl7jwm review). None = no
+    # indicator on screen, which on an idle ready UI is the no-shells case: the
+    # runtime prints a count only when there is one.
+    shells: int | None = None
 
 
 def agent_states(agents, panes, runtime) -> dict:
@@ -201,8 +205,12 @@ def agent_states(agents, panes, runtime) -> dict:
             state=triage_mod.work_state(
                 screen, runtime.shows_ready_ui(plain),
                 awaiting=asks_a_question(runtime, plain),
-                auth_dead=auth_expired(runtime, plain)),
-            depth_k=triage_mod.context_tokens_k(screen))
+                auth_dead=auth_expired(runtime, plain),
+                # A usage-limited pane is not SATURATED: cycling it starts a
+                # session that cannot run (aegis-zl7jwm review).
+                limited=limit_reached(runtime, plain)),
+            depth_k=triage_mod.context_tokens_k(screen),
+            shells=triage_mod.running_shells(plain))
     return out
 
 
@@ -2086,6 +2094,15 @@ class AutoCycler:
 
         for agent, read in sorted(states.items()):
             if read.state != triage_mod.SATURATED:
+                continue
+            if read.shells:
+                # A build or a watch still running in the background dies with
+                # the session. Wait for it; the episode stays open.
+                if book.get(agent, {}).get("noted") != "shells":
+                    self._log(f"auto-cycle: {agent} is past the line but owns "
+                              f"{read.shells} running shell(s); not cycling yet")
+                    book.setdefault(agent, {"prompted_at": now, "nudged": False})
+                    book[agent]["noted"] = "shells"
                 continue
             if prompted_ledger.get(agent) != "saturated":
                 continue                       # not prompted yet, or dark

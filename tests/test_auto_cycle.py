@@ -215,3 +215,81 @@ def test_tend_still_serves_an_agents_own_request_while_busy(tmp_path, monkeypatc
     """The agent asked; its own request keeps today's behaviour."""
     cycle_mod.Requests(tmp_path).request("worker", "mine")
     assert "worker" in _tend(tmp_path, monkeypatch, BUSY)
+
+
+# --- sattler review of #145: shells, check-then-act, double serve ------------
+
+SHELL_IDLE = ("❯ \n                  new task? /clear to save 646.0k tokens\n"
+              "  ⏵⏵ bypass permissions on (shift+tab to cycle) · 1 shell · ← for agents")
+
+
+def test_a_running_background_shell_is_never_auto_cycled(tmp_path):
+    from shantytown import triage
+    assert triage.running_shells(SHELL_IDLE) == 1, "fixture must show a shell"
+    ac, panes, reqs, pushed, store, clock = _world(tmp_path, SHELL_IDLE)
+    store["comments"] = [{"author": "kelly", "created_at": _iso(clock.t + 10)}]
+    for _ in range(3):
+        _sweep(ac)
+        clock.t += 300
+    assert reqs.pending() == {}
+
+
+class _LivePanes:
+    """A pane whose screen changes between reads: the check-then-act window."""
+    def __init__(self, screens):
+        self._screens = list(screens)
+
+    def exists(self, pane):
+        return True
+
+    def capture(self, pane, history=0, attrs=False):
+        return self._screens.pop(0) if len(self._screens) > 1 else self._screens[0]
+
+
+def _locked_world(tmp_path, monkeypatch, screens):
+    from types import SimpleNamespace
+    import argparse as ap
+    cycle_mod.Requests(tmp_path).request("kelly", "auto", auto=True)
+    performed = []
+    monkeypatch.setattr(cli, "_cycle_stop_refusal", lambda a, n: "" if n in
+                        cycle_mod.Requests(tmp_path).pending() else "cycle request cancelled")
+    monkeypatch.setattr(cli, "_perform_cycle_locked", lambda *a, **k:
+                        performed.append(a[6].mode) or (cli.OK, a[6].mode))
+    monkeypatch.setattr(cli, "_foreign_session_refusal", lambda *a, **k: None)
+    card = Agent(name="kelly", role="worker", pane="p-kelly")
+    a = ap.Namespace(root=str(tmp_path), _automatic_cycle=True, no_in_place=False)
+    plan = cycle_mod.Plan(cycle_mod.SOFT, "planned while idle")
+    return a, card, _LivePanes(screens), plan, performed
+
+
+def test_an_agent_that_went_busy_after_the_plan_is_refused_not_respawned(tmp_path, monkeypatch):
+    a, card, panes, plan, performed = _locked_world(tmp_path, monkeypatch, [BUSY])
+    rc, _ = cli._perform_cycle(a, card, "kelly", "p-kelly", panes, _Runtime(), plan, None)
+    assert rc == cli.REFUSED and performed == []
+    assert "kelly" in cycle_mod.Requests(tmp_path).pending(), "must stay pending"
+
+
+def test_the_plan_is_recomputed_from_the_locked_read(tmp_path, monkeypatch):
+    a, card, panes, _, performed = _locked_world(tmp_path, monkeypatch,
+                                                 [_saturated_pane(646.0)])
+    stale = cycle_mod.Plan(cycle_mod.RESPAWN, "stale plan from before the lock")
+    rc, _ = cli._perform_cycle(a, card, "kelly", "p-kelly", panes, _Runtime(), stale, None)
+    assert rc == cli.OK and performed == [cycle_mod.SOFT]
+
+
+def test_a_second_server_after_success_stands_down(tmp_path, monkeypatch):
+    a, card, panes, plan, performed = _locked_world(tmp_path, monkeypatch,
+                                                    [_saturated_pane(646.0)])
+    args = (a, card, "kelly", "p-kelly", panes, _Runtime(), plan, None)
+    assert cli._perform_cycle(*args)[0] == cli.OK
+    assert cli._perform_cycle(*args)[0] == cli.REFUSED, "double serve"
+    assert performed == [cycle_mod.SOFT]
+
+
+def test_a_down_agent_is_still_relaunched_automatically(tmp_path, monkeypatch):
+    a, card, _, plan, performed = _locked_world(tmp_path, monkeypatch, [IDLE])
+    gone = type("P", (), {"exists": lambda s, p: False})()
+    relaunch = cycle_mod.Plan(cycle_mod.RELAUNCH, "no live session")
+    monkeypatch.setattr(cli, "_cycle_plan", lambda *a, **k: relaunch)
+    rc, _ = cli._perform_cycle(a, card, "kelly", "p-kelly", gone, _Runtime(), relaunch, None)
+    assert rc == cli.OK and performed == [cycle_mod.RELAUNCH]

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Token cost by context depth band, from Claude transcripts (aegis-zl7jwm).
+"""Token cost by context depth band, from Claude Code transcripts.
 
 Usage: depth_cost.py [HOURS]. One row per assistant message id. Depth is
 input + cache_read + cache_creation on that turn; cost is depth + output.

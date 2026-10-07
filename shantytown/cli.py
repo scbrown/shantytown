@@ -8818,6 +8818,7 @@ def _serve_cycle_request(a, who: str, request: dict) -> int:
 SELF_SERVE_ENV = "SHANTY_SELF_CYCLE_SERVE"
 SELF_SERVE_TIMEOUT_S = 20 * 60
 SELF_SERVE_POLL_S = 5.0
+SELF_SERVE_RETRY_S = 60.0
 
 
 def _spawn_self_cycle_server(a, agent: str) -> str:
@@ -8866,8 +8867,14 @@ def _serve_own_request(a, agent: str, *, sleep=time.sleep, clock=time.monotonic)
         except Exception as e:  # noqa: BLE001 — retry until the deadline
             read = None
             print(f"  {agent}: pane unreadable ({e}); retrying", file=sys.stderr)
-        if read is not None and read.state in (triage_mod.IDLE, triage_mod.SATURATED):
-            return _serve_cycle_request(a, agent, request)
+        if (read is not None and read.state in (triage_mod.IDLE, triage_mod.SATURATED)
+                and not read.shells):
+            if _serve_cycle_request(a, agent, request) == OK:
+                return OK
+            # Refused under the lock (went busy, a shell, a dirty tree). The
+            # request is still pending; keep waiting, more slowly.
+            sleep(SELF_SERVE_RETRY_S)
+            continue
         sleep(SELF_SERVE_POLL_S)
     print(f"  {agent}: never idle within {SELF_SERVE_TIMEOUT_S // 60}m; the request "
           f"stays pending for `st fleet tend`.", file=sys.stderr)
@@ -8960,6 +8967,35 @@ def _write_resume_brief(a, card, agent_name: str, checkpoint: str) -> str:
         return ""
 
 
+def _automatic_cycle_refusal(card, session: str, panes, runtime) -> str:
+    """Why an UNATTENDED cycle must not touch this pane now, or "" (aegis-zl7jwm).
+
+    Read once, fresh, under the lifecycle lock. Nobody asked at this moment, so
+    anything that is not a quiet, empty, shell-free ready prompt waits for the
+    next pass: a respawn would kill a turn, a clear would append to typed text,
+    and either would kill a background shell."""
+    if not session or not panes.exists(session):
+        return ""   # nothing running to interrupt: the plan is a plain relaunch
+    try:
+        screen = panes.capture(session, attrs=True)
+    except Exception as e:  # noqa: BLE001 — unreadable is not idle
+        return f"pane unreadable ({e})"
+    plain = triage_mod.strip_attrs(screen)
+    state = triage_mod.work_state(
+        screen, runtime.shows_ready_ui(plain),
+        awaiting=asks_a_question(runtime, plain),
+        auth_dead=auth_expired(runtime, plain),
+        limited=limit_reached(runtime, plain))
+    if state not in (triage_mod.IDLE, triage_mod.SATURATED):
+        return f"pane reads {state}, not idle"
+    if triage_mod.input_state(screen) != triage_mod.INPUT_EMPTY:
+        return "the input box is not empty"
+    shells = triage_mod.running_shells(plain)
+    if shells:
+        return f"{shells} background shell(s) still running"
+    return ""
+
+
 def _perform_cycle(a, card, agent_name: str, session: str, panes, runtime,
                    chosen, verdict) -> tuple:
     # Stop can arrive during Git preflight or while tend waits on another
@@ -8968,8 +9004,24 @@ def _perform_cycle(a, card, agent_name: str, session: str, panes, runtime,
         if refusal := _cycle_stop_refusal(a, agent_name):
             print(f"  refused: {agent_name}: {refusal}", file=sys.stderr)
             return REFUSED, chosen.mode
-        return _perform_cycle_locked(a, card, agent_name, session, panes,
-                                     runtime, chosen, verdict)
+        automatic = getattr(a, "_automatic_cycle", False)
+        if automatic:
+            # CHECK AND ACT UNDER ONE LOCK (aegis-zl7jwm review). The plan above
+            # was read before the tree guard's network fetch; the agent may have
+            # gone busy since. Re-read, refuse rather than respawn a live turn,
+            # and re-plan from the fresh reading.
+            if refusal := _automatic_cycle_refusal(card, session, panes, runtime):
+                print(f"  refused: {agent_name}: {refusal}; the request stays "
+                      f"pending for the next idle pass", file=sys.stderr)
+                return REFUSED, chosen.mode
+            chosen = _cycle_plan(a, card, session, panes, runtime)
+        rc, performed = _perform_cycle_locked(a, card, agent_name, session, panes,
+                                              runtime, chosen, verdict)
+        if automatic and rc == OK:
+            # Cleared INSIDE the lock, so a second server (tend and the --self
+            # waiter) that was waiting on it sees no request and stands down.
+            cycle_mod.Requests(a.root).clear(agent_name)
+        return rc, performed
 
 
 def _perform_cycle_locked(a, card, agent_name, session, panes, runtime,
