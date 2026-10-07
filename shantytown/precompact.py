@@ -426,8 +426,11 @@ def _tracker(root: Path):
     from .beads import EXTRA_REPOS_KEY, parse_extra_repos
     from .br import BrTracker
     from .deployment import deployment_default
+    if deployment_default(root, "SHANTY_BACKEND") == "seeds":
+        from .sd import br_like_tracker
+        return br_like_tracker(lambda k: deployment_default(root, k), "seeds")
     if (deployment_default(root, "SHANTY_BACKEND") or "files") not in ("beads", "br"):
-        raise RuntimeError("deployment backend is not beads/br; cannot comment")
+        raise RuntimeError("deployment backend is not beads/br/seeds; cannot comment")
     return BrTracker(repo=(deployment_default(root, "SHANTY_BR_REPO")
                            or deployment_default(root, "SHANTY_BEADS_REPO")),
                      extra_repos=parse_extra_repos(

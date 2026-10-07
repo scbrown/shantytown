@@ -673,6 +673,9 @@ def _br_tracker(root, reg):
     (aegis-mxgzh). Two readers of the same store must not resolve it two ways.
     """
     from .deployment import deployment_default
+    if deployment_default(root, "SHANTY_BACKEND") == "seeds":
+        from .sd import br_like_tracker
+        return br_like_tracker(lambda k: deployment_default(root, k), "seeds")
     if deployment_default(root, "SHANTY_BACKEND") not in ("beads", "br"):
         return None
     from .beads import EXTRA_REPOS_KEY, parse_extra_repos

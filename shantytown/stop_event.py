@@ -282,6 +282,11 @@ def _plate_reader(root: Path):
     Unknown/unset backend falls back to files (the built-in default), matching
     _backend()'s baseline; a beads repo comes from SHANTY_BEADS_REPO.
     """
+    if deployment_default(root, "SHANTY_BACKEND") == "seeds":
+        from .br import plate as br_plate
+        from .sd import br_like_tracker
+        sd_tracker = br_like_tracker(lambda k: deployment_default(root, k), "seeds")
+        return lambda who, warn=None: br_plate(sd_tracker, who, warn=warn)
     if (deployment_default(root, "SHANTY_BACKEND") or "files") in ("beads", "br"):
         from .beads import EXTRA_REPOS_KEY, parse_extra_repos
         from .br import BrTracker, plate as br_plate
