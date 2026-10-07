@@ -173,7 +173,7 @@ BACKOFF_RETRIES = 5           # then retire rather than thrash
 # So they stay separate, and the throttle reads traits.survival_key instead. The
 # sign trap that motivated the merge is handled where it belongs — the bands are
 # NAMES (`first`…`last`), so there is no direction left to remember.
-_TIER_ORDER = {"administrator": 0, "lead": 1, "worker": 2}
+_TIER_ORDER = {"administrator": 0, "keeper": 1, "lead": 1, "worker": 2}
 
 
 def _tree_depth(agent, fleet, _max_hops: int = 64) -> int:

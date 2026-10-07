@@ -312,6 +312,40 @@ class Catalog:
         return winners[0]
 
 
+# The literal the stop path keyed on before eligibility was a trait. It is the
+# FALLBACK, not the rule: a card whose role stack the catalog cannot resolve
+# (an undeclared role, an unranked conflict) keeps exactly the answer it had.
+LEGACY_STOP_RECIPIENTS = frozenset({"lead", "administrator"})
+
+
+def receives_stops(agent, catalog=None) -> bool:
+    """Can this card RECEIVE stop events? One question, asked by trait (aegis-vj3uet).
+
+    A card receives stops iff its resolved coordination includes ``absorbs``.
+    Before this, the router and the capability gate each held their own literal
+    ("lead" or "administrator"), so redefining which role routes work meant
+    chasing every copy. Built-in, that is exactly lead + administrator, so a
+    deployment that declares nothing behaves as it always did; a deployment that
+    declares ``[roles.keeper]`` with ``coordination = ["absorbs", ...]`` gets a
+    router without another edit here.
+
+    Unresolvable -> the legacy literal on the tree role, never a guess in either
+    direction. The live fleet stacks roles that only the graph declares
+    (``keeper``, ``escalation-target``); against a file catalog those are unknown,
+    and treating "unknown" as "absorbs" would make a worker a stop recipient on
+    the strength of a role nothing here describes.
+    """
+    catalog = catalog if catalog is not None else default_catalog()
+    roles = tuple(getattr(agent, "effective_roles", lambda: ())() or ())
+    if not roles:
+        role = getattr(agent, "role", None)
+        roles = (role,) if role else ()
+    try:
+        return catalog.of(list(roles)).absorbs
+    except (UnknownRole, AmbiguousTrait):
+        return getattr(agent, "role", None) in LEGACY_STOP_RECIPIENTS
+
+
 def survival_band(catalog, agent) -> str | None:
     """This agent's DECLARED survival band, or None if nothing declared one.
 

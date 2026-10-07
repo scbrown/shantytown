@@ -81,6 +81,16 @@ class HookSpec:
 _ROLES_NEEDING_STOP = frozenset({"lead", "administrator"})
 
 
+def needs_stop_delivery(card, catalog=None) -> bool:
+    """The gate's question, asked the router's way (aegis-vj3uet PR A): a card
+    that can RECEIVE stops must run on a harness that DELIVERS them. One
+    predicate (traits.receives_stops) answers both, so the router and the gate
+    cannot disagree about who is a recipient. _ROLES_NEEDING_STOP stays as the
+    built-in answer and the unresolvable-role fallback, not as a second rule."""
+    from .traits import receives_stops
+    return receives_stops(card, catalog)
+
+
 class CapabilityError(RuntimeError):
     """The card's ROLE needs a capability the RUNTIME cannot declare. REFUSE:
     write nothing, launch nothing. The loud refusal IS the point (adapters.md) —
@@ -207,7 +217,8 @@ class Runtime(Protocol):
 
 
 def require_capability(program, card: Agent,
-                       consequence: str = "Nothing written, nothing launched.") -> None:
+                       consequence: str = "Nothing written, nothing launched.",
+                       catalog=None) -> None:
     """Refuse a card whose ROLE needs a capability the launched PROGRAM lacks.
 
     `consequence` is the caller's TRUE statement of what did not happen, appended
@@ -232,7 +243,7 @@ def require_capability(program, card: Agent,
     truth. Duck-typed on `.hooks()`/`.name`: a Harness satisfies it, and so does a
     self-contained runtime that is its own program (StoplessRuntime, the test double).
     """
-    if card.role in _ROLES_NEEDING_STOP and not program.hooks(card).blocking_stop:
+    if needs_stop_delivery(card, catalog) and not program.hooks(card).blocking_stop:
         raise CapabilityError(
             f"harness {program.name!r} does not declare blocking stop hooks; "
             f"role {card.role!r} requires stop-event delivery to the model. "
@@ -1693,7 +1704,11 @@ class ClaudeRuntime:
         program = harness_mod.for_card(card, root=self._root)   # UnknownHarness -> refuse
         # Launch site: the card may already be on disk (a prior `role set`), so
         # only "Nothing launched." is true here — not "Nothing written" (w5l9).
-        require_capability(program, card, consequence="Nothing launched.")
+        # The deployment's catalog, as route_stop uses (aegis-vj3uet): a declared
+        # router role on a stopless program must refuse here too.
+        from .tier import deployment_catalog
+        require_capability(program, card, consequence="Nothing launched.",
+                           catalog=deployment_catalog(self._root))
         settings_path = self.settings_path(card)
         if not settings_path:
             # A new store may have a card whose role has never been emitted.

@@ -83,7 +83,7 @@ def blocked_workers(agents, panes, runtime):
     return out
 
 
-def wake_recipient(reg, panes, worker: str, message: str) -> str | None:
+def wake_recipient(reg, panes, worker: str, message: str, *, catalog=None) -> str | None:
     """Deliver `message` into the pane of whoever `worker`'s stops route to.
 
     route_stop ALREADY resolves that recipient (the lead, or the administrator
@@ -97,7 +97,7 @@ def wake_recipient(reg, panes, worker: str, message: str) -> str | None:
     does not exist is not a notification.
     """
     try:
-        routing = route_stop(reg, worker)
+        routing = route_stop(reg, worker, catalog=catalog)
     except LookupError:
         return None
     try:
@@ -607,6 +607,13 @@ class Notifier:
         self.path = Path(root) / "notify" / "blocked.json"
         self._reg = reg
         self._panes = panes
+        # The real waker judges recipients by the SAME catalog as the stop
+        # stream (tier.deployment_catalog), so a wake goes where the worker's
+        # stops go. An injected waker is the caller's business, called as before.
+        if wake is wake_recipient:
+            from functools import partial
+            from .tier import deployment_catalog
+            wake = partial(wake_recipient, catalog=deployment_catalog(root))
         self._wake = wake
         self._log = log or (lambda msg: None)
 
