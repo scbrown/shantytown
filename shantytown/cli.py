@@ -11606,8 +11606,8 @@ def _tend_once(a, quiet: bool = False) -> int:
         deferred_due = _fleet_sweep("deferral-sweep", lambda: notify_mod.DeferralAlerter(
             Path(a.root), _registry(a), panes, log=_log).sweep())
         if deferred_due:
-            print(f"  ⚠ surfaced {len(deferred_due)} deferral(s) whose date has "
-                  f"needs judgement after mechanical releases: "
+            print(f"  ⚠ surfaced {len(deferred_due)} deferral(s) that "
+                  f"need judgement after mechanical releases: "
                   f"{', '.join(deferred_due)}", file=sys.stderr)
         # A DIFFERENT condition and a DIFFERENT action from age: these beads do
         # not need their blocker chased; every issue blocker is already closed

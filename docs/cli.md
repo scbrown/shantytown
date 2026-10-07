@@ -2214,8 +2214,8 @@ unchanged.
 
 `st fleet watch` sends one local DOWN notification per outage and one recovery
 notification. A steady outage does not generate hourly reminders. `--alert-every`
-now controls retries of failed DOWN delivery; successful delivery ends those
-retries. UNKNOWN does not reset an outage or manufacture a recovery. Repair and
+now controls retries of failed DOWN and recovery delivery. Recovery observation
+ends the outage immediately; pending recovery delivery cannot hide a later outage. UNKNOWN does not reset an outage or manufacture a recovery. Repair and
 human-escalation cooldowns are unchanged.
 
 `st fleet tend` rechecks deferrals on every scheduled pass. A lapsed `defer_until`
@@ -2225,8 +2225,12 @@ that the item is open and the timestamp cleared. Automatic release requires a
 single complete mechanical marker, no future date, no open blocking dependency,
 and no human/external/parked hold label. Prose, ambiguous markers and met
 conditions with other holds still request judgement once per state. Read errors
-and indeterminate writes stay in the next-pass retry path, without waking an
-administrator; an already released item is not written again.
+and indeterminate writes retry on the next pass. Three consecutive failures
+produce one UNTESTABLE finding for the administrator; continued failure stays
+silent after successful notification. The budget survives process restarts and
+resets on recovery. An already released item is not written again. Known unmet
+mechanical conditions remain quiet even after a separate timestamp lapses;
+unsupported conditions request judgement even with a future timestamp.
 
 The Stop hook consumes ordinary stop notices when their sender is currently
 busy, at any age, without waking the recipient. The on-disk event remains for

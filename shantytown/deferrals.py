@@ -423,9 +423,10 @@ def can_release(row: dict, finding: Finding, now: datetime) -> bool:
             return False
         # The marker must occupy its own complete line. 'date:X and approval'
         # is a judgement condition, not permission to ignore the second half.
-        lines = [ln.strip() for ln in notes.splitlines()
-                 if _CONDITION.search(ln)]
-        return len(lines) == 1 and _CONDITION.fullmatch(lines[0]) is not None
+        # st's defer writer prefixes the marker with its rationale. Accept
+        # that producer shape, but never ignore text AFTER the condition.
+        suffix = notes[markers[0].start():].splitlines()[0].strip()
+        return _CONDITION.fullmatch(suffix) is not None
     return bool(finding.lapsed_at and not _MARKER_PRESENT.search(notes))
 
 
@@ -475,6 +476,37 @@ class Reported:
         current = {f.bead: f.key() for f in findings}
         current.update({b: previous[b] for b in preserve if b in previous})
         write_json_atomic(self.path, current)
+
+
+class RetryBudget:
+    """Three consecutive scheduled failures become one persistent finding.
+
+    Healthy sweeps reset the count. Counts are capped, and the reported finding
+    has stable wording so another failed pass does not wake the admin again.
+    """
+    limit = 3
+
+    def __init__(self, root):
+        self.path = Path(root) / "notify" / "deferral-retries.json"
+        try:
+            self.previous = json.loads(self.path.read_text())
+            if not isinstance(self.previous, dict):
+                self.previous = {}
+        except (OSError, ValueError):
+            self.previous = {}
+        self.current = {}
+
+    def failed(self, bead):
+        old = self.previous.get(bead, 0)
+        old = old if isinstance(old, int) and old >= 0 else 0
+        count = min(old + 1, self.limit)
+        self.current[bead] = count
+        return count >= self.limit
+
+    def save(self):
+        from .files import write_json_atomic
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        write_json_atomic(self.path, self.current)
 
 
 def report(findings, cap: int = 12, blind_cap: int = 6) -> list:

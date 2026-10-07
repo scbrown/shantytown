@@ -609,3 +609,77 @@ def test_incomplete_condition_read_is_retried_not_treated_as_open(tmp_path):
     h.alerter.sweep()
     assert h.releases == h.sent == []
     assert any('retry next pass' in msg for msg in h.logs)
+
+
+def test_persistent_condition_read_failure_reports_once_after_three_passes(tmp_path):
+    row = _row(notes='resume_when: closed:missing')
+    sent = []
+    # Recreate the alerter each time: the budget must survive scheduled processes.
+    for n in range(6):
+        h = MechanicalHarness(tmp_path, row, is_closed=lambda _: None)
+        h.alerter._push = lambda _r, _p, text: sent.append(text) or 'admin'
+        h.alerter.sweep()
+        assert len(sent) == (0 if n < 2 else 1)
+    assert 'UNTESTABLE' in sent[0] and '3 consecutive' in sent[0]
+
+
+def test_release_failures_are_bounded_and_deduplicated(tmp_path):
+    def fail(*_):
+        raise RuntimeError('unavailable')
+    for arm in ('show', 'release', 'readback'):
+        row = _row(notes='resume_when: date:2026-09-01')
+        options = {'show': fail} if arm == 'show' else {'release': fail}
+        if arm == 'readback':
+            options = {'release': lambda _: None}  # write returns, readback stays held
+        h = MechanicalHarness(tmp_path / arm, row, **options)
+        for n in range(6):
+            h.alerter.sweep()
+            assert len(h.sent) == (0 if n < 2 else 1), arm
+        assert 'UNTESTABLE' in h.sent[0]
+
+
+def test_fresh_dependency_gate_requests_judgment_without_releasing(tmp_path):
+    row = _row(notes='resume_when: date:2026-09-01')
+    h = MechanicalHarness(tmp_path, row, show=lambda _: dict(row, dependencies=[
+        {'id': 'other', 'dependency_type': 'blocks', 'status': 'open'}]))
+    h.alerter.sweep()
+    h.alerter.sweep()
+    assert not h.releases and len(h.sent) == 1
+
+
+def test_unsupported_condition_reports_even_before_future_timestamp(tmp_path):
+    h = MechanicalHarness(tmp_path, _row(notes='resume_when: approval:owner',
+        defer_until=_iso(timedelta(days=2))))
+    h.alerter.sweep()
+    assert not h.releases and len(h.sent) == 1
+
+
+def test_inline_condition_from_defer_command_can_release(tmp_path):
+    h = MechanicalHarness(tmp_path, _row(notes='Waiting for review. resume_when: date:2026-09-01'))
+    h.alerter.sweep()
+    assert h.releases == ['aegis-1'] and not h.sent
+
+
+def test_store_read_failure_reports_after_bounded_retries(tmp_path):
+    h = MechanicalHarness(tmp_path, _row())
+    def fail():
+        raise RuntimeError('store unavailable')
+    h.alerter._read = fail
+    for _ in range(5):
+        h.alerter.sweep()
+    assert len(h.sent) == 1 and 'tracker-store' in h.sent[0]
+
+
+def test_recovered_read_resets_retry_budget(tmp_path):
+    h = MechanicalHarness(tmp_path, _row(notes='resume_when: closed:other'),
+                          is_closed=lambda _: None)
+    h.alerter.sweep()
+    h.alerter.sweep()
+    h.alerter._is_closed = lambda _: False
+    h.alerter.sweep()
+    h.alerter._is_closed = lambda _: None
+    h.alerter.sweep()
+    h.alerter.sweep()
+    assert not h.sent
+    h.alerter.sweep()
+    assert len(h.sent) == 1

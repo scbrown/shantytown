@@ -461,10 +461,12 @@ def test_failed_transition_delivery_is_retried_not_marked_success(tmp_path):
     run(8000, down(False))
     assert len(sent) == 2
     run(8100, up())
-    assert 'down_since' in state.read()  # failed recovery is pending
+    assert 'down_since' not in state.read()  # actual outage ended
+    assert len(state.read()['pending_recoveries']) == 1
     run(8200, up())
-    run(8300, up())
-    assert len(sent) == 4 and 'down_since' not in state.read()
+    assert len(sent) == 3  # failed recovery respects the retry cooldown
+    run(12000, up())
+    assert len(sent) == 4 and state.read()['pending_recoveries'] == []
 
 
 def test_unknown_between_down_samples_does_not_reset_the_episode(tmp_path):
@@ -472,3 +474,27 @@ def test_unknown_between_down_samples_does_not_reset_the_episode(tmp_path):
     for _ in range(4):
         h.run(advance=4000)
     assert len(h.alerts) == 2
+
+
+def test_failed_recovery_does_not_hide_second_outage(tmp_path):
+    state = pw.State(tmp_path / 'state.json')
+    alerts, pages = [], []
+    def run(at, obs):
+        return pw.run_pass(watcher='ada', peer_host='host-b', peer_name='bea',
+            probe_fn=lambda _: obs,
+            alert_fn=lambda text: (alerts.append(text), ('DOWN' in text, 'transport'))[1],
+            repair_fn=None,
+            escalate_fn=lambda text: (pages.append(text), (0, 'sent'))[1],
+            state=state, log_path=tmp_path / 'log', now=lambda: at,
+            escalate_after=0, alert_every=100, say=lambda _: None)
+    run(1000, down(False))
+    run(1010, up())
+    assert 'down_since' not in state.read()
+    assert len(state.read()['pending_recoveries']) == 1
+    run(1020, down(False))
+    assert len(pages) == 2
+    assert len([text for text in alerts if 'DOWN' in text]) == 2
+    assert len(alerts) == 3, 'failed recovery respects delivery cooldown'
+    run(1110, down(False))
+    assert len(alerts) == 4 and len(pages) == 2
+    assert state.read()['down_since'] == 1020

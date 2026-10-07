@@ -702,5 +702,16 @@ def test_unreadable_pane_preserves_urgent_and_ordinary_delivery(tmp_path, capsys
     assert json.loads(result.out)["decision"] == "block"
     assert "ROSE: lead-unreachable" in result.out
     assert "ellie stopped" in result.out
-    assert looked == ["ellie"], "urgent delivery attempted a pane probe"
+    assert set(looked) == {"ellie", "other"}, "both display probes should fail safely"
     assert ev.pending("maldoon") == []
+
+
+def test_risen_picker_preserves_blocked_question_display(tmp_path, capsys):
+    reg = _reg(tmp_path)
+    ev = FilesEvents(tmp_path / 'events')
+    ev.persist(to='maldoon', frm='ellie', reason='lead-unreachable', rose=True)
+    stop_event._drain(ev, 'maldoon', reg,
+        _Panes({'p-ellie'}, {'p-ellie': PICKER_SCREEN}), _ready, _asks)
+    reason = json.loads(capsys.readouterr().out)['reason']
+    assert 'BLOCKED ON A QUESTION' in reason and 'ROSE: lead-unreachable' in reason
+    assert not _pending(tmp_path, 'maldoon')

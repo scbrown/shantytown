@@ -897,9 +897,6 @@ def _compose_reason(events: list[StopEvent], verdicts: dict, now: float,
         lines.append(f"  - {name} stopped {age} — now: "
                      f"{verdicts.get(name, '?')} · "
                      f"{_item_note(e, age, current)}{tag}{more}")
-    if deferred:
-        lines.append(f"  ({deferred} more held back: those agents are mid-flight "
-                     f"right now. They will be delivered when they actually stop.)")
     return "\n".join(lines)
 
 
@@ -948,8 +945,6 @@ def _drain(events: FilesEvents, me: str, reg=None, panes=None,
     if reg is not None and panes is not None and shows_ready_ui is not None:
         candidates = list(events.pending(me))
         for ev in candidates:
-            if is_governance(ev.reason) or ev.rose:
-                continue  # urgent delivery must not depend on a pane probe
             if ev.frm not in verdicts:
                 try:
                     verdicts[ev.frm] = _liveness(reg, panes, shows_ready_ui, ev.frm,
