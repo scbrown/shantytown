@@ -52,6 +52,14 @@ def pytest_configure(config):
 
 
 @pytest.fixture(autouse=True)
+def _no_detached_self_cycle_waiter(monkeypatch):
+    """`st agent cycle --self` starts a detached waiter (aegis-oj2z7m). A test
+    must never leave a real background process polling its tmp root; a test of
+    the waiter re-enables it and stubs the spawn."""
+    monkeypatch.setenv("SHANTY_SELF_CYCLE_SERVE", "0")
+
+
+@pytest.fixture(autouse=True)
 def _no_ambient_operator_env(monkeypatch):
     """CI and an operator shell must start each test with the same defaults.
 
