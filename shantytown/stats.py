@@ -670,8 +670,14 @@ def _codex_cwd(path: Path) -> str | None:
 
 
 def _claude_project_dir(workspace: str) -> str:
-    """Claude Code's on-disk project slug for an absolute workspace path."""
-    return workspace.replace("/", "-")
+    """Claude Code's on-disk project slug for an absolute workspace path.
+
+    EVERY non-alphanumeric character becomes "-", not only "/" (aegis-zl7jwm).
+    Replacing only the slash mapped a workspace like /srv/my_repo/crew/x to a
+    directory that does not exist, so every workspace with an underscore read as
+    having no transcripts. Measured on disk: 96 project dirs, none containing
+    "_", and ~/.cache appearing as "--cache"."""
+    return re.sub(r"[^A-Za-z0-9]", "-", workspace)
 
 
 def session_usage(root: Path, since_h: float = 24.0, home: Path | None = None

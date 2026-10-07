@@ -1957,6 +1957,8 @@ def build_parser() -> argparse.ArgumentParser:
     # GUARD before printing "would", or the preview an operator reads to authorise
     # a cycle would be silent about the work it is about to strand.
     cy.add_argument("-n", "--dry-run", action="store_true")
+    # Internal: the detached waiter a --self request starts (aegis-oj2z7m).
+    cy.add_argument("--serve-request", action="store_true", help=argparse.SUPPRESS)
     cy.add_argument("--no-in-place", action="store_true",
                     help="skip the in-place clear and REPLACE THE PROCESS. The "
                          "default clears the live session by typing the "
@@ -6539,11 +6541,11 @@ def _cmd_crew(a) -> int:
         print(f"    decisions, and miss constraints stated long ago. `st go` "
               f"REFUSES them (the depth is in the")
         print(f"    work cell). Remedy: the agent {handoff_text.coordinator_tag()}, "
-              f"THEN takes the task — do NOT")
-        print(f"    auto-cycle, it loses whatever was not saved, and do NOT tell it "
-              f"to /clear (that drops bypass). The")
-        print(f"    saturated agent is the LEAST able to notice it must cycle, so "
-              f"this is the coordinator's to drive.")
+              f"THEN takes the task. tend")
+        print(f"    cycles it at an idle turn once a checkpoint is on its plate bead "
+              f"(aegis-zl7jwm); do NOT tell it")
+        print(f"    to /clear (that drops bypass). Still here means no checkpoint "
+              f"yet: `st agent advise <name>`.")
     # The bead this state was built for (aegis-arma). An operator re-login rotates
     # the shared credential, and EVERY live agent's session goes login-expired at
     # once — still rendering a ready UI over an empty box, i.e. `idle` to every
@@ -8332,6 +8334,11 @@ def _advise_situation(a, agent: str, cfg):
         transcript = (obs.get("payload") or {}).get("transcript_path")
     except (OSError, ValueError, AttributeError):
         pass
+    if transcript and not Path(transcript).exists():
+        # A hint naming a file that is gone (aegis-zl7jwm: malcolm's pointed at a
+        # codex rollout on tmpfs after he moved to claude) must not shadow the
+        # fallback below. It read "depth unknown" for a session with 130M tokens.
+        transcript = None
     if not transcript:
         # No context hint recorded (it needs [session_budget] context_window).
         # Fall back to the EXACT session the stats store last saw, never the
@@ -8347,8 +8354,19 @@ def _advise_situation(a, agent: str, cfg):
         except Exception:  # noqa: BLE001 — advice degrades to unknown, never fails
             pass
     got = context_spend.read_consumed(transcript) if transcript else None
+    depth_k = got[0] / 1000 if got else None
+    if depth_k is None:
+        # LAST SOURCE: the pane footer, the same reading tend's cycle sweep acts
+        # on. Only an idle pane shows it; anything else stays unknown.
+        try:
+            card = _registry(a).get(agent)
+            panes = _panes(a)
+            if card.pane and panes.exists(card.pane):
+                depth_k = triage_mod.context_tokens_k(panes.capture(card.pane))
+        except Exception:  # noqa: BLE001 — advice degrades to unknown, never fails
+            pass
     return cycle_advice.Situation(
-        agent=agent, depth_k=(got[0] / 1000 if got else None),
+        agent=agent, depth_k=depth_k,
         cycle_line_k=triage_mod.CYCLE_THRESHOLD_K,
         next_task=_cycle_anchor_bead(a, agent),
         cache=cycle_advice.read_cache(transcript)), transcript
@@ -8425,7 +8443,8 @@ def _cmd_advise(a) -> int:
             signal=(dataclasses.asdict(signal) if signal else None),
             advice=dataclasses.asdict(advice)), indent=1))
         return OK
-    depth = f"{sit.depth_k:.0f}k" if sit.depth_k is not None else "depth unknown"
+    depth = (f"{sit.depth_k:.0f}k" if sit.depth_k is not None
+             else f"depth unknown ({_depth_unknown_why(a, agent)})")
     idle = (f"idle {sit.idle_seconds / 60:.0f}m" if sit.idle_seconds is not None
             else "idle unknown")
     ttl = (f"TTL {sit.cache.ttl_seconds // 60}m" if sit.cache.ttl_seconds
@@ -8438,6 +8457,20 @@ def _cmd_advise(a) -> int:
         print(f"  signal: {signal.by} " + " ".join(b for b in bits if b))
     print(f"  {advice.render()}")
     return OK
+
+
+def _depth_unknown_why(a, agent: str) -> str:
+    """Name WHY depth is unknown (aegis-zl7jwm). A bare "unknown" read like a
+    measurement, and it hid a stale hint and a wrong project slug for weeks."""
+    try:
+        card = _registry(a).get(agent)
+    except LookupError:
+        return "no card on this host; its own host's tend measures it"
+    except Exception as e:  # noqa: BLE001
+        return f"card unreadable: {e}"
+    if not card.pane or not _panes(a).exists(card.pane):
+        return "no transcript found and no live pane here"
+    return "no transcript found; the pane footer shows depth only when idle"
 
 
 def _cycle_stop_refusal(a, agent_name) -> str:
@@ -8484,6 +8517,9 @@ def _cmd_cycle(a) -> int:
         print(f"  refused: {agent_name}: {refusal}", file=sys.stderr)
         return REFUSED
 
+    if getattr(a, "serve_request", False):
+        return _serve_own_request(a, agent_name)
+
     # --self is a REQUEST, and it cannot be anything else. The stop would kill the
     # session running this very command, so a self-cycle that tried to complete
     # in-process would die halfway through — after the stop, before the relaunch,
@@ -8511,16 +8547,6 @@ def _cmd_cycle(a) -> int:
                 first = next((ln.strip().lstrip("#").strip()
                               for ln in ckpt_body.splitlines() if ln.strip()), "")
                 a.reason = first[:300]
-        if not a.reason.strip():
-            print("  refused: --self needs your checkpoint. You are the only one "
-                  "who can write it, and it is the only thing the cycle destroys. "
-                  "`st agent cycle --self --checkpoint-file <notes>` (or -r '<what you "
-                  "are mid-task on, decisions already made, the exact next step>')",
-                  file=sys.stderr)
-            return REFUSED
-        if a.dry_run:
-            print(f"  would: request a cycle for {agent_name}")
-            return OK
         checkpoint_bead = getattr(a, "checkpoint_bead", "").strip()
         try:
             role = _registry(a).get(agent_name).role
@@ -8528,10 +8554,29 @@ def _cmd_cycle(a) -> int:
             print(f"  refused: could not read {agent_name}'s role for checkpoint policy ({e})",
                   file=sys.stderr)
             return REFUSED
+        # An administrator's durable bead defaults to its PLATE item: that is a
+        # bead, it is durable, and it is where a reader looks (aegis-oj2z7m).
         if cycle_mod.requires_checkpoint_bead(role, checkpoint_bead):
-            print("  refused: administrator cycles require --checkpoint-bead <id>. "
-                  "Create or use the durable handoff bead, then retry.", file=sys.stderr)
+            checkpoint_bead = _cycle_anchor_bead(a, agent_name)
+        # EVERY missing requirement in ONE refusal (aegis-oj2z7m). They used to
+        # arrive one per attempt, so an administrator needed four tries to learn
+        # that two things were required.
+        missing = []
+        if not a.reason.strip():
+            missing.append("your checkpoint: --checkpoint-file <notes> (or -r '<what "
+                           "you are mid-task on, decisions made, the exact next "
+                           "step>'). It is the only thing the cycle destroys.")
+        if cycle_mod.requires_checkpoint_bead(role, checkpoint_bead):
+            missing.append("a durable bead: administrator cycles need "
+                           "--checkpoint-bead <id>, and you hold no plate item to "
+                           "default to.")
+        if missing:
+            print("  refused: --self needs " + ("; and ".join(missing)
+                  if len(missing) > 1 else missing[0]), file=sys.stderr)
             return REFUSED
+        if a.dry_run:
+            print(f"  would: request a cycle for {agent_name}")
+            return OK
         if checkpoint_bead:
             try:
                 _tracker(a).get(checkpoint_bead)
@@ -8601,8 +8646,13 @@ def _cmd_cycle(a) -> int:
                   f"— named in your resume dispatch.")
         elif gctx.exemption:
             print(f"  no graph context: {gctx.exemption} — recorded.")
-        print(f"  `st fleet tend` performs it. You stay up until it does, so keep "
-              f"working; nothing is lost if it never fires.")
+        waiter = _spawn_self_cycle_server(a, agent_name)
+        if waiter:
+            print(f"  it is performed at your next idle turn (waiter log: {waiter}). "
+                  f"End your turn now; nothing is lost if it never fires.")
+        else:
+            print(f"  `st fleet tend` performs it. You stay up until it does, so keep "
+                  f"working; nothing is lost if it never fires.")
         print(f"  {handoff_text.refusal_note()}")
         return OK
 
@@ -8743,6 +8793,86 @@ def _cmd_cycle(a) -> int:
     return OK
 
 
+def _serve_cycle_request(a, who: str, request: dict) -> int:
+    """Perform ONE pending cycle request (tend's sweep and the --self waiter).
+
+    GRAPH CONTEXT ON A MECHANICALLY SERVED CYCLE (aegis-5pchx): the gate was
+    applied when the agent asked, and the request stored the nodes it was given,
+    so they are carried forward; only an empty set falls back to an explicit
+    machine exemption. THE REQUEST decides in-place vs replace (aegis-2fxldr),
+    never the server's own namespace."""
+    nodes = list(request.get("quipu_nodes") or [])
+    return _cmd_cycle(argparse.Namespace(**{
+        **vars(a), "cmd": "cycle", "agent": who,
+        "reason": request.get("checkpoint", ""), "self_": False,
+        "serve_request": False, "_automatic_cycle": True,
+        "checkpoint_bead": request.get("checkpoint_bead", ""),
+        "quipu_node": nodes,
+        "no_graph_context": "" if nodes else
+        "mechanical: tend serving a cycle the agent already requested and gated",
+        "no_in_place": bool(request.get("no_in_place", False)),
+        "allow_loss": False, "dry_run": False}))
+
+
+SELF_SERVE_ENV = "SHANTY_SELF_CYCLE_SERVE"
+SELF_SERVE_TIMEOUT_S = 20 * 60
+SELF_SERVE_POLL_S = 5.0
+
+
+def _spawn_self_cycle_server(a, agent: str) -> str:
+    """Start the detached waiter that performs THIS agent's request (aegis-oj2z7m).
+
+    The request used to wait for a fleet-wide `st fleet tend`, and on a host
+    where none runs (the MacBook) it never came. The waiter is scoped to one
+    agent, runs in its own session so a respawn of the agent's pane cannot kill
+    it, and gives up after SELF_SERVE_TIMEOUT_S, leaving the request for tend.
+    Returns the log path, or "" when disabled or the spawn failed."""
+    import subprocess
+    if os.environ.get(SELF_SERVE_ENV, "").strip().lower() in ("0", "off", "false", "no"):
+        return ""
+    log = Path(a.root) / "logs" / f"self-cycle-{agent}.log"
+    try:
+        log.parent.mkdir(parents=True, exist_ok=True)
+        with open(log, "a") as fh:
+            subprocess.Popen(
+                [sys.executable, "-m", "shantytown.cli", "--root", str(a.root),
+                 "agent", "cycle", agent, "--serve-request"],
+                stdin=subprocess.DEVNULL, stdout=fh, stderr=fh,
+                start_new_session=True, close_fds=True)
+    except OSError as e:
+        print(f"  ⚠ could not start the self-cycle waiter ({e}); `st fleet tend` "
+              f"still serves the request.", file=sys.stderr)
+        return ""
+    return str(log)
+
+
+def _serve_own_request(a, agent: str, *, sleep=time.sleep, clock=time.monotonic) -> int:
+    """The waiter body: once the agent's pane reads idle, perform its request.
+
+    Stops early when the request is gone (served by tend, or withdrawn). A busy
+    pane is the agent still finishing the turn that asked; it is never cut off."""
+    from . import cycle as cycle_mod
+    deadline = clock() + SELF_SERVE_TIMEOUT_S
+    while clock() < deadline:
+        request = cycle_mod.Requests(a.root).pending().get(agent)
+        if request is None:
+            print(f"  {agent}: no pending request; nothing to serve.")
+            return OK
+        try:
+            card = _registry(a).get(agent)
+            panes = _panes(a)
+            read = notify_mod.agent_states([card], panes, _runtime(a, panes)).get(agent)
+        except Exception as e:  # noqa: BLE001 — retry until the deadline
+            read = None
+            print(f"  {agent}: pane unreadable ({e}); retrying", file=sys.stderr)
+        if read is not None and read.state in (triage_mod.IDLE, triage_mod.SATURATED):
+            return _serve_cycle_request(a, agent, request)
+        sleep(SELF_SERVE_POLL_S)
+    print(f"  {agent}: never idle within {SELF_SERVE_TIMEOUT_S // 60}m; the request "
+          f"stays pending for `st fleet tend`.", file=sys.stderr)
+    return REFUSED
+
+
 def _cycle_plan(a, card, session: str, panes, runtime):
     """Observe the pane, then ask cycle.plan. Observation here, policy there.
 
@@ -8766,7 +8896,10 @@ def _cycle_plan(a, card, session: str, panes, runtime):
             screen, runtime.shows_ready_ui(plain),
             awaiting=asks_a_question(runtime, plain),
             auth_dead=auth_expired(runtime, plain))
-        idle = state == triage_mod.IDLE
+        # SATURATED is idle too (aegis-zl7jwm): work_state derives it in the IDLE
+        # branch, and it is the very state a cycle exists for. Reading it as not
+        # idle planned every saturated cycle as a RESPAWN "mid-turn".
+        idle = state in (triage_mod.IDLE, triage_mod.SATURATED)
         input_empty = triage_mod.input_state(screen) == triage_mod.INPUT_EMPTY
     return cycle_mod.plan(
         clear_command=harness_mod.clear_command_for(card, a.root),
@@ -11461,6 +11594,24 @@ def _tend_once(a, quiet: bool = False) -> int:
         if cycled:
             print(f"  ⚠ prompted {len(cycled)} saturated agent(s) to cycle: "
                   f"{', '.join(cycled)}", file=sys.stderr)
+        # PERFORM, not just prompt (aegis-zl7jwm, Steve 2026-10-07). A prompted
+        # agent that is idle past the line and has checkpointed to its plate bead
+        # since the prompt gets a cycle request, served just below by the same
+        # path a self-request takes. $SHANTY_AUTO_CYCLE=0 turns it off.
+        if notify_mod.auto_cycle_enabled():
+            def _auto_comments(bead):
+                if _backend(a, "files") not in BR_LIKE:
+                    raise RuntimeError(f"backend {_backend(a, 'files')!r} has no comments")
+                from .br import comments as br_comments
+                return br_comments(_tracker(a), bead)
+            auto = _sweep("auto-cycle", lambda: notify_mod.AutoCycler(
+                Path(a.root), panes, anchor=lambda w: _cycle_anchor_bead(a, w),
+                comments=_auto_comments, requests=cycle_mod.Requests(a.root),
+                push=notify_mod.push_to_own_pane, reg=_registry(a),
+                log=_log).sweep(agents, runtime))
+            if auto:
+                print(f"  ⚠ auto-cycle requested for {len(auto)} checkpointed "
+                      f"agent(s) past the line: {', '.join(auto)}", file=sys.stderr)
         # HONOUR SELF-REQUESTED CYCLES (aegis-3laza). An agent cannot cycle itself
         # in-process — the stop kills the session running the stop — so `st agent cycle
         # --self` can only record a request, and this is what honours it. It is the
@@ -11472,41 +11623,23 @@ def _tend_once(a, quiet: bool = False) -> int:
         for who, request in _sweep(
                 "cycle-requests",
                 lambda: sorted(cycle_mod.Requests(a.root).pending().items())) or []:
-            checkpoint = request.get("checkpoint", "")
-            checkpoint_bead = request.get("checkpoint_bead", "")
-            # GRAPH CONTEXT ON A MECHANICALLY SERVED CYCLE (aegis-5pchx).
-            # This namespace is built from `tend`'s, whose parser never declared
-            # --quipu-node/--no-graph-context, so `_graph_context` would see
-            # nothing and — under SHANTY_GRAPH_CONTEXT=require — REFUSE. That is
-            # not a coverage gap, it is Rule Zero self-feeding breaking: tend
-            # deliberately leaves a refused request pending, so it would refuse
-            # on every pass, forever, for every agent.
-            #
-            # The gate was already applied when the AGENT asked for the cycle,
-            # and `Requests.request()` stored the nodes it was given. So carry
-            # those forward rather than exempting the path — that is also what
-            # the bead means by injecting the node into live resume context.
-            # Only when the stored set is empty (a record predating the field,
-            # or a request that stated a reason instead) does this fall back to
-            # an explicit machine exemption: re-asking here would put the
-            # question to a sweep loop, which cannot answer it.
-            req_nodes = list(request.get("quipu_nodes") or [])
-            # THE REQUEST decides in-place vs replace (aegis-2fxldr), never tend's
-            # own namespace: tend has no --no-in-place, so reading it there made
-            # every self-requested relaunch an in-place clear.
-            req_no_in_place = bool(request.get("no_in_place", False))
-            rc_c = _sweep(f"cycle:{who}", lambda w=who, c=checkpoint, b=checkpoint_bead,
-                          n=req_nodes, nip=req_no_in_place: _cmd_cycle(
-                argparse.Namespace(**{**vars(a), "cmd": "cycle", "agent": w,
-                                      "reason": c, "self_": False,
-                                      "_automatic_cycle": True,
-                                      "checkpoint_bead": b,
-                                      "quipu_node": n,
-                                      "no_graph_context": "" if n else
-                                      "mechanical: tend serving a cycle the agent "
-                                      "already requested and gated",
-                                      "no_in_place": nip,
-                                      "allow_loss": False, "dry_run": False})))
+            # Graph context and in-place vs replace come from THE REQUEST; see
+            # _serve_cycle_request (aegis-5pchx, aegis-2fxldr).
+            # AN AUTO REQUEST IS SERVED ONLY AT A TURN BOUNDARY (aegis-zl7jwm).
+            # The agent did not ask; tend did. If it has gone busy since, a
+            # respawn would kill its turn, so wait for the next idle pass.
+            if request.get("auto"):
+                card_states = notify_mod.agent_states(
+                    [c for c in agents if c.name == who], panes, runtime)
+                st_now = card_states.get(who)
+                if st_now is None or st_now.state not in (
+                        triage_mod.IDLE, triage_mod.SATURATED):
+                    _log(f"auto-cycle: {who} is not idle "
+                         f"({st_now.state if st_now else 'unreadable'}); "
+                         f"its cycle waits for the next idle pass")
+                    continue
+            rc_c = _sweep(f"cycle:{who}", lambda w=who, r=request:
+                          _serve_cycle_request(a, w, r))
             # The request is cleared by _cmd_cycle ONLY on a completed cycle, so a
             # refusal (dirty tree, no checkpoint) leaves it pending and the agent
             # is retried next pass rather than silently dropped. That is the right

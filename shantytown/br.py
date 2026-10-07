@@ -22,10 +22,11 @@ class BrTracker(BeadsTracker):
     #: failure `br` produced (aegis-7okaae).
     _tool = "br"
 
-    def _bd_in(self, repo: "str | None", *args: str) -> subprocess.CompletedProcess:
+    def _bd_in(self, repo: "str | None", *args: str,
+               stdin: "str | None" = None) -> subprocess.CompletedProcess:
         cmd = [os.environ.get("SHANTY_BR_BIN", "br"), *args]
         return subprocess.run(cmd, cwd=repo, capture_output=True, text=True,
-                              timeout=self.timeout)
+                              timeout=self.timeout, input=stdin)
 
     def _get_failure(self, item_id, result) -> str:
         transport = os.environ.get("SHANTY_BR_BIN", "br")
@@ -477,6 +478,13 @@ def append_comment(tracker: BrTracker, bead_id: str, body: str) -> None:
             f.write(body)
             path = f.name
         r = tracker._bd_for(bead_id, "comments", "add", bead_id, "--file", path)
+        if r.returncode != 0 and "No such file" in (r.stderr or ""):
+            # THE RELAY CASE (aegis-oj2z7m): br is an ssh wrapper to another host,
+            # where this host's temp path does not exist. stdin crosses ssh; a
+            # path does not, and the body as argv would be re-split by the remote
+            # shell. Retry once on the primary store with the body on stdin.
+            r = tracker._bd_in(tracker.repo, "comments", "add", bead_id,
+                               "--file", "/dev/stdin", stdin=body)
         if r.returncode != 0:
             raise RuntimeError(
                 f"br comments add {bead_id} failed: {r.stderr.strip()[:160]}")

@@ -591,7 +591,7 @@ class Requests:
 
     def request(self, agent: str, checkpoint: str, checkpoint_bead: str = "",
                 quipu_nodes: list | None = None,
-                no_in_place: bool = False) -> None:
+                no_in_place: bool = False, auto: bool = False) -> None:
         data = self._load()
         data[agent] = {"checkpoint": checkpoint,
                        "checkpoint_bead": checkpoint_bead,
@@ -608,6 +608,10 @@ class Requests:
                        # so a flag not stored here never reaches the plan and every
                        # self-cycle ran as an in-place clear.
                        "no_in_place": bool(no_in_place),
+                       # aegis-zl7jwm: tend minted this, the agent did not ask.
+                       # tend serves an auto request only while the pane reads
+                       # idle, and withdraws it if the depth drops below the line.
+                       "auto": bool(auto),
                        # aegis-7xptd5: a NEW request re-arms. The old refusal
                        # described a tree state the agent has since had a chance to
                        # fix, and carrying it forward would report a stall that may
@@ -677,6 +681,7 @@ class Requests:
             d.setdefault("quipu_nodes", [])
             # False, never absent: a record from before the field meant in-place.
             d.setdefault("no_in_place", False)
+            d.setdefault("auto", False)
             # None, never absent — so every reader tests one thing (is there a
             # refusal?) and none of them has to branch on the record's vintage.
             d.setdefault("refused", None)

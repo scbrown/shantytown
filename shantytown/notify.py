@@ -1981,3 +1981,157 @@ class BlockedMisstatusAlerter:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         write_json_atomic(self.path, ledger)
         return surfaced
+
+
+AUTO_CYCLE_ENV = "SHANTY_AUTO_CYCLE"
+
+
+def auto_cycle_enabled() -> bool:
+    """On unless $SHANTY_AUTO_CYCLE says 0/off/false/no (aegis-zl7jwm)."""
+    return os.environ.get(AUTO_CYCLE_ENV, "").strip().lower() not in (
+        "0", "off", "false", "no")
+
+
+def _checkpoint_nudge(bead: str, since: str) -> str:
+    return (f"You are past the cycle line. tend will cycle you at your next idle "
+            f"turn once a checkpoint is on {bead} (any comment you write there "
+            f"after {since}): state, landed-vs-local, exact next step. Write it "
+            f"now with `br comments add {bead} --file <notes>`, then stop.")
+
+
+class AutoCycler:
+    """PERFORM the cycle the CycleDriver only asks for (aegis-zl7jwm).
+
+    Steve 2026-10-07: "actually cycle agents when context is deep." The prompt
+    alone left four agents past the 400k line with nothing acting on it, and a
+    deep turn costs about 3x a fresh one. The deep agent is the one least able to
+    notice it should cycle, so the prompt is not enough on its own.
+
+    The old rule against auto-cycling existed because a cycle destroys whatever
+    is not saved. This keeps that guarantee and makes it STRICTER than the manual
+    gate. A cycle is requested only when ALL of these hold:
+
+      * the pane reads SATURATED: idle, input box empty, MEASURED past the line.
+        A busy pane never qualifies, so this only ever acts at a turn boundary;
+      * the agent has been prompted, and the prompt was at least one sweep ago,
+        so the agent has had a turn to answer it;
+      * the agent wrote a comment on its plate bead AFTER that prompt. The manual
+        gate accepts anything since launch, which a 640k session always has.
+
+    No checkpoint means one nudge per episode naming the bead, never a silent
+    skip. Cannot-tell (no plate, unreadable comments) never cycles; it is logged.
+    The request this mints is served by tend's existing cycle-requests sweep, so
+    the tree guard, durable gate, plan and verification all still apply.
+
+    The episode re-arms only on a MEASURED depth below the line, the CycleDriver
+    rule. A pending auto request is withdrawn at that point too, so an agent that
+    cycled itself is not cycled a second time.
+    """
+
+    def __init__(self, root, panes, *, anchor, comments, requests, push,
+                 reg=None, log=None, now=None):
+        self.path = Path(root) / "notify" / "auto-cycle.json"
+        self._prompted = Path(root) / "notify" / "cycling.json"   # CycleDriver's
+        self._panes = panes
+        self._anchor = anchor          # agent -> plate bead id, "" when none
+        self._comments = comments      # bead -> list of comment dicts (raises on error)
+        self._requests = requests      # cycle.Requests
+        self._push = push              # (reg, panes, agent, msg) -> target | None
+        self._reg = reg
+        self._log = log or (lambda msg: None)
+        self._now = now or time.time
+
+    def _load(self) -> dict:
+        try:
+            data = json.loads(self.path.read_text())
+            return data if isinstance(data, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    def _save(self, data: dict) -> None:
+        from .files import write_json_atomic
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        write_json_atomic(self.path, data)
+
+    @staticmethod
+    def _iso(t: float) -> str:
+        from datetime import datetime, timezone
+        return datetime.fromtimestamp(t, tz=timezone.utc).isoformat()
+
+    def sweep(self, agents, runtime) -> list[str]:
+        """One pass, AFTER the CycleDriver's. Returns the agents a cycle was
+        REQUESTED for. Only an agent the CycleDriver ledger holds as "saturated"
+        (prompted, and not dark) is eligible."""
+        from . import cycle as cycle_mod
+        try:
+            prompted_ledger = json.loads(self._prompted.read_text())
+        except (OSError, ValueError):
+            prompted_ledger = {}
+        states = agent_states(agents, self._panes, runtime)
+        book = self._load()
+        pending = self._requests.pending()
+        requested = []
+        now = self._now()
+
+        for agent in list(book):
+            read = states.get(agent)
+            if read is None or read.depth_k is None:
+                continue                       # cannot tell: keep the episode
+            if read.depth_k < triage_mod.CYCLE_THRESHOLD_K:
+                del book[agent]
+                if pending.get(agent, {}).get("auto"):
+                    self._requests.clear(agent)
+                    self._log(f"auto-cycle: {agent} is back under the line at "
+                              f"{int(read.depth_k)}k; withdrew its auto request")
+
+        for agent, read in sorted(states.items()):
+            if read.state != triage_mod.SATURATED:
+                continue
+            if prompted_ledger.get(agent) != "saturated":
+                continue                       # not prompted yet, or dark
+            entry = book.get(agent)
+            if entry is None:
+                # First sight after the prompt. Start the clock; act next sweep.
+                book[agent] = {"prompted_at": now, "nudged": False}
+                continue
+            if agent in pending:
+                continue                       # already requested; tend serves it
+            try:
+                bead = self._anchor(agent)
+            except Exception as e:  # noqa: BLE001
+                bead, why = "", f"plate unreadable ({e})"
+            else:
+                why = "no plate bead to checkpoint onto"
+            if not bead:
+                if entry.get("noted") != why:
+                    self._log(f"auto-cycle: {agent} is past the line but NOT "
+                              f"cycled: {why}")
+                    entry["noted"] = why
+                continue
+            since = self._iso(float(entry.get("prompted_at", now)))
+            try:
+                ok = cycle_mod.checkpoint_since(self._comments(bead), agent, since)
+            except Exception as e:  # noqa: BLE001
+                self._log(f"auto-cycle: {agent} NOT cycled: comments on {bead} "
+                          f"unreadable ({e})")
+                continue
+            if ok:
+                depth = int(read.depth_k)
+                self._requests.request(
+                    agent, f"auto-cycle at {depth}k, past the "
+                           f"{int(triage_mod.CYCLE_THRESHOLD_K)}k line; checkpoint "
+                           f"on {bead}", checkpoint_bead=bead, auto=True)
+                requested.append(agent)
+                self._log(f"auto-cycle: requested a cycle for {agent} at {depth}k "
+                          f"(checkpoint on {bead} since {since})")
+                continue
+            if not entry.get("nudged"):
+                if self._push(self._reg, self._panes, agent,
+                              _checkpoint_nudge(bead, since)) is None:
+                    continue                   # unreachable: retry next sweep
+                entry["nudged"] = True
+                self._log(f"auto-cycle: {agent} has no checkpoint on {bead} since "
+                          f"the prompt; nudged it to write one")
+
+        self._save(book)
+        return requested
