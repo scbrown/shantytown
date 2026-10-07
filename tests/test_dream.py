@@ -33,11 +33,65 @@ def test_ready_but_undispatchable_work_does_not_suppress_dreaming():
     assert cycle is not None and why == ""
 
 
-def test_one_existing_dream_bounds_the_queue():
+def test_one_existing_cycle_bounds_the_queue():
     plan, why = dream.plan(dream.Policy(enabled=True), {},
-                           [{"id": "aegis-d", "labels": ["dream-proposal"]}],
+                           [{"id": "aegis-d", "labels": ["dream", "dream-cycle"]}],
                            [_candidate()], now=100)
     assert plan is None and why == "a dream cycle is already queued"
+
+
+def test_unassigned_dream_outputs_do_not_hold_the_queue():
+    # aegis-2idcev: an unassigned dream-proposal (kpbn61) held the lane 11 days,
+    # and so did a bead merely labelled dream.
+    cycle, why = dream.plan(
+        dream.Policy(enabled=True), {},
+        [{"id": "aegis-kpbn61", "labels": ["dream", "dream-proposal"], "title": "proposal"},
+         {"id": "aegis-2idcev", "labels": ["dream", "shantytown"], "title": "DREAM lane stalled"},
+         {"id": "aegis-disc", "labels": ["dream-discrepancy"]}],
+        [_candidate()], now=100)
+    assert cycle is not None and why == ""
+
+
+def test_a_legacy_cycle_is_recognised_by_its_title():
+    plan, why = dream.plan(
+        dream.Policy(enabled=True), {},
+        [{"id": "aegis-old", "labels": ["dream", "dream-proposal"],
+          "title": "DREAM propose: improve infra"}],
+        [_candidate()], now=100)
+    assert plan is None and why == "a dream cycle is already queued"
+
+
+def test_a_lapsed_cycle_stops_holding_the_queue():
+    item = {"id": "aegis-c", "labels": ["dream", "dream-cycle"],
+            "updated_at": "2026-10-07T00:00:00Z"}
+    t0 = dream._epoch(item["updated_at"])
+    held = dream.plan(dream.Policy(enabled=True), {}, [item], [_candidate()],
+                      now=t0 + dream.CYCLE_IDLE_LIMIT_S - 1)
+    assert held[0] is None and held[1] == "a dream cycle is already queued"
+    cycle, why = dream.plan(dream.Policy(enabled=True), {}, [item], [_candidate()],
+                            now=t0 + dream.CYCLE_IDLE_LIMIT_S + 1)
+    assert cycle is not None and why == ""
+
+
+def test_an_unreadable_timestamp_keeps_the_bound():
+    item = {"id": "aegis-c", "labels": ["dream-cycle"], "updated_at": "not a time"}
+    assert dream.plan(dream.Policy(enabled=True), {}, [item], [_candidate()],
+                      now=10**10)[0] is None
+
+
+def test_new_cycles_carry_the_cycle_label():
+    for state in ({}, {"last_mode": "consolidate"}):
+        cycle, _ = dream.plan(dream.Policy(enabled=True), state, [], [_candidate()], now=100)
+        assert "dream-cycle" in cycle.labels.split(",")
+
+
+def test_cycles_spread_away_from_the_last_agent():
+    cands = [_candidate("malcolm", "claude", 90), _candidate("arnold", "codex", 60)]
+    cycle, _ = dream.plan(dream.Policy(enabled=True), {"last_agent": "malcolm"}, [], cands, now=100)
+    assert cycle.agent == "arnold"
+    alone, _ = dream.plan(dream.Policy(enabled=True), {"last_agent": "malcolm"}, [],
+                          cands[:1], now=100)
+    assert alone.agent == "malcolm", "the last agent still goes when nobody else is eligible"
 
 
 def test_assigned_dream_output_does_not_poison_the_queue_gate():
@@ -54,7 +108,7 @@ def test_mixed_state_blocks_only_for_the_unassigned_cycle():
         dream.Policy(enabled=True), {},
         [{"id": "aegis-output", "labels": ["dream-proposal"],
           "assignee": "ian"},
-         {"id": "aegis-queued", "labels": ["dream"], "assignee": ""}],
+         {"id": "aegis-queued", "labels": ["dream", "dream-cycle"], "assignee": ""}],
         [_candidate()], now=100)
     assert plan is None and why == "a dream cycle is already queued"
 
@@ -80,14 +134,14 @@ def test_rotation_alternates_mode_and_domain_and_picks_most_headroom():
         now=100)
     assert why == ""
     assert (cycle.agent, cycle.mode, cycle.domain) == ("codex", "dream", "infra")
-    assert cycle.labels == "dream,dream-proposal"
+    assert cycle.labels == "dream,dream-proposal,dream-cycle"
     assert "Do not implement" in cycle.description
 
 
 def test_consolidation_is_read_mostly_and_emits_discrepancies():
     cycle, _ = dream.plan(dream.Policy(enabled=True), {}, [], [_candidate()], now=100)
     assert cycle.mode == "consolidate"
-    assert cycle.labels == "dream,dream-discrepancy"
+    assert cycle.labels == "dream,dream-discrepancy,dream-cycle"
     assert "do not mutate infrastructure, code" in cycle.description
 
 
