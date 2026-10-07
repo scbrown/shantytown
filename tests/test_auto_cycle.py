@@ -293,3 +293,37 @@ def test_a_down_agent_is_still_relaunched_automatically(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "_cycle_plan", lambda *a, **k: relaunch)
     rc, _ = cli._perform_cycle(a, card, "kelly", "p-kelly", gone, _Runtime(), relaunch, None)
     assert rc == cli.OK and performed == [cycle_mod.RELAUNCH]
+
+
+# --- sattler re-review: zero must be POSITIVELY visible ----------------------
+
+from shantytown.notify import unattended_shell_block  # noqa: E402
+
+CODEX_BG = "• Waiting for background terminal (2m 53s • esc to interrupt)\n› \n"
+
+
+def test_shell_block_policy_per_harness():
+    assert unattended_shell_block("x · 2 shells · y", "claude").startswith("2 ")
+    assert unattended_shell_block("idle prompt, no count", "claude") == "", \
+        "claude prints a count whenever a shell exists, so silence is zero"
+    assert "cannot be read" in unattended_shell_block("idle prompt", "codex")
+    assert "cannot be read" in unattended_shell_block("idle prompt", None)
+    assert "background terminal" in unattended_shell_block(CODEX_BG, "codex")
+    assert "background terminal" in unattended_shell_block(CODEX_BG, "claude")
+
+
+def test_a_codex_agent_with_no_visible_zero_is_never_auto_cycled(tmp_path):
+    clock = _Clock()
+    root = tmp_path
+    (root / "notify").mkdir()
+    (root / "notify" / "cycling.json").write_text(json.dumps({"kelly": "saturated"}))
+    reqs = cycle_mod.Requests(root)
+    ac = AutoCycler(root, _Panes({"p-kelly": _saturated_pane(646.0)}),
+                    anchor=lambda w: "aegis-plate",
+                    comments=lambda b: [{"author": "kelly", "created_at": _iso(clock.t + 10)}],
+                    requests=reqs, push=lambda *a: "kelly", now=clock,
+                    harness=lambda card: "codex")
+    for _ in range(3):
+        ac.sweep(AGENTS, _Runtime())
+        clock.t += 300
+    assert reqs.pending() == {}

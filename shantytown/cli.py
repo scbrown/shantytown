@@ -8967,7 +8967,7 @@ def _write_resume_brief(a, card, agent_name: str, checkpoint: str) -> str:
         return ""
 
 
-def _automatic_cycle_refusal(card, session: str, panes, runtime) -> str:
+def _automatic_cycle_refusal(card, session: str, panes, runtime, root=None) -> str:
     """Why an UNATTENDED cycle must not touch this pane now, or "" (aegis-zl7jwm).
 
     Read once, fresh, under the lifecycle lock. Nobody asked at this moment, so
@@ -8990,10 +8990,7 @@ def _automatic_cycle_refusal(card, session: str, panes, runtime) -> str:
         return f"pane reads {state}, not idle"
     if triage_mod.input_state(screen) != triage_mod.INPUT_EMPTY:
         return "the input box is not empty"
-    shells = triage_mod.running_shells(plain)
-    if shells:
-        return f"{shells} background shell(s) still running"
-    return ""
+    return notify_mod.unattended_shell_block(plain, harness_mod.name_for(card, root))
 
 
 def _perform_cycle(a, card, agent_name: str, session: str, panes, runtime,
@@ -9010,7 +9007,8 @@ def _perform_cycle(a, card, agent_name: str, session: str, panes, runtime,
             # was read before the tree guard's network fetch; the agent may have
             # gone busy since. Re-read, refuse rather than respawn a live turn,
             # and re-plan from the fresh reading.
-            if refusal := _automatic_cycle_refusal(card, session, panes, runtime):
+            if refusal := _automatic_cycle_refusal(card, session, panes, runtime,
+                                                   a.root):
                 print(f"  refused: {agent_name}: {refusal}; the request stays "
                       f"pending for the next idle pass", file=sys.stderr)
                 return REFUSED, chosen.mode

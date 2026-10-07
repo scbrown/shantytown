@@ -38,6 +38,7 @@ TWO INVARIANTS, both learned expensively in this repo:
 from __future__ import annotations
 import json
 import os
+import re
 import time
 from pathlib import Path
 from typing import NamedTuple
@@ -1993,6 +1994,30 @@ class BlockedMisstatusAlerter:
 
 AUTO_CYCLE_ENV = "SHANTY_AUTO_CYCLE"
 
+# Harnesses whose ready UI prints a background-shell count WHENEVER one exists,
+# so an absent count on an idle ready pane positively means zero. Measured on
+# live Claude panes: agents with no shells show no count, agents with shells show
+# "N shells". Codex is NOT here: a live background terminal there reads
+# "Waiting for background terminal", which carries no count (aegis-zl7jwm review).
+_SHELL_COUNT_COMPLETE = frozenset({"claude"})
+_BACKGROUND_TERMINAL = re.compile(r"background terminal", re.IGNORECASE)
+
+
+def unattended_shell_block(plain: str, harness_name: "str | None") -> str:
+    """Why background work forbids an UNATTENDED cycle now, or "".
+
+    A cycle kills every shell the session owns, so "cannot see" must refuse
+    unless this harness's silence is known to mean none."""
+    n = triage_mod.running_shells(plain)
+    if n:
+        return f"{n} background shell(s) still running"
+    if _BACKGROUND_TERMINAL.search(triage_mod._tail(plain)):
+        return "a background terminal is still running"
+    if n is None and (harness_name or "") not in _SHELL_COUNT_COMPLETE:
+        return (f"background shells cannot be read on the "
+                f"{harness_name or 'unknown'} harness, so zero is not visible")
+    return ""
+
 
 def auto_cycle_enabled() -> bool:
     """On unless $SHANTY_AUTO_CYCLE says 0/off/false/no (aegis-zl7jwm)."""
@@ -2037,7 +2062,7 @@ class AutoCycler:
     """
 
     def __init__(self, root, panes, *, anchor, comments, requests, push,
-                 reg=None, log=None, now=None):
+                 reg=None, log=None, now=None, harness=None):
         self.path = Path(root) / "notify" / "auto-cycle.json"
         self._prompted = Path(root) / "notify" / "cycling.json"   # CycleDriver's
         self._panes = panes
@@ -2048,6 +2073,9 @@ class AutoCycler:
         self._reg = reg
         self._log = log or (lambda msg: None)
         self._now = now or time.time
+        # card -> harness name; the default reads the card's declared harness.
+        self._harness = harness or (lambda card: harness_mod.name_for(card, root))
+        self._agents = []
 
     def _load(self) -> dict:
         try:
@@ -2060,6 +2088,15 @@ class AutoCycler:
         from .files import write_json_atomic
         self.path.parent.mkdir(parents=True, exist_ok=True)
         write_json_atomic(self.path, data)
+
+    def _shell_block(self, agent: str) -> str:
+        """Re-read the pane and ask unattended_shell_block. Unreadable refuses."""
+        try:
+            card = next(c for c in self._agents if c.name == agent)
+            plain = triage_mod.strip_attrs(self._panes.capture(card.pane, attrs=True))
+            return unattended_shell_block(plain, self._harness(card))
+        except Exception as e:  # noqa: BLE001 — cannot tell is not clear
+            return f"background shells unreadable ({e})"
 
     @staticmethod
     def _iso(t: float) -> str:
@@ -2075,6 +2112,7 @@ class AutoCycler:
             prompted_ledger = json.loads(self._prompted.read_text())
         except (OSError, ValueError):
             prompted_ledger = {}
+        self._agents = list(agents)
         states = agent_states(agents, self._panes, runtime)
         book = self._load()
         pending = self._requests.pending()
@@ -2095,14 +2133,15 @@ class AutoCycler:
         for agent, read in sorted(states.items()):
             if read.state != triage_mod.SATURATED:
                 continue
-            if read.shells:
+            block = self._shell_block(agent)
+            if block:
                 # A build or a watch still running in the background dies with
                 # the session. Wait for it; the episode stays open.
-                if book.get(agent, {}).get("noted") != "shells":
-                    self._log(f"auto-cycle: {agent} is past the line but owns "
-                              f"{read.shells} running shell(s); not cycling yet")
+                if book.get(agent, {}).get("noted") != block:
+                    self._log(f"auto-cycle: {agent} is past the line but NOT "
+                              f"cycled yet: {block}")
                     book.setdefault(agent, {"prompted_at": now, "nudged": False})
-                    book[agent]["noted"] = "shells"
+                    book[agent]["noted"] = block
                 continue
             if prompted_ledger.get(agent) != "saturated":
                 continue                       # not prompted yet, or dark
