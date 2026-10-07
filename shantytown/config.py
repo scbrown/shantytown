@@ -1064,7 +1064,7 @@ class Roster:
 # band — see the long note beside tend.py's copy for why an interim draft merged
 # them and why that was reverted. Bring-up is a reporting-tree question; survival
 # is a shed-order question.
-_TIER_ORDER = {"administrator": 0, "lead": 1, "worker": 2}
+_TIER_ORDER = {"administrator": 0, "keeper": 1, "lead": 1, "worker": 2}
 
 
 def resolve_crew(selectors, agents: list[Agent]) -> Roster:

@@ -298,7 +298,7 @@ def _require_writes_hostable(plan: RolePlan, root=None) -> None:
     dependency (neither imports tier, so no cycle — but the layer stays clean)."""
     from . import harness, runtime
     for card in plan.writes:
-        if card.role in runtime._ROLES_NEEDING_STOP:
+        if runtime.needs_stop_delivery(card):
             runtime.require_capability(harness.for_card(card, root=root), card,
                                        consequence="Nothing written.")
 
@@ -385,13 +385,20 @@ class Routing:
         return base
 
 
-def route_stop(registry: Registry, worker: str, lead_is_up=None) -> Routing:
+def route_stop(registry: Registry, worker: str, lead_is_up=None,
+               catalog=None) -> Routing:
     """Route a worker's stop event. Q3 + Q4 live here.
 
     lead_is_up(name) -> bool tells us whether the lead is reachable. Default:
     assume up. When a lead is DOWN, the event RISES to the administrator LOUDLY
     with reason lead-unreachable — never silently queued (Q3).
+
+    WHO MAY RECEIVE is a trait, not a literal (aegis-vj3uet PR A):
+    traits.receives_stops — coordination includes ``absorbs``. `catalog` is the
+    deployment's role catalog; None = the built-in three, which answers exactly
+    as the old "lead or administrator" literal did.
     """
+    from . import traits as traits_mod
     lead_is_up = lead_is_up or (lambda _n: True)
     a = registry.get(worker)
 
@@ -403,8 +410,10 @@ def route_stop(registry: Registry, worker: str, lead_is_up=None) -> Routing:
         return Routing(worker=worker, to=admin, rose=False)
 
     lead = registry.get(a.reports_to)
-    if lead.role != "lead" and lead.role != "administrator":
-        raise LookupError(f"{worker} reports to {lead.name} which is a {lead.role}, not a lead/administrator")
+    if not traits_mod.receives_stops(lead, catalog):
+        raise LookupError(f"{worker} reports to {lead.name} which is a {lead.role}, "
+                          f"not a stop recipient (no role in its stack absorbs: "
+                          f"not a lead/administrator)")
 
     if lead.role == "administrator":
         return Routing(worker=worker, to=lead.name, rose=False)
@@ -423,6 +432,22 @@ def route_stop(registry: Registry, worker: str, lead_is_up=None) -> Routing:
                        reason=Reason.LEAD_UNREACHABLE, detail=detail)
 
     return Routing(worker=worker, to=lead.name, rose=False)
+
+
+def deployment_catalog(root):
+    """The role catalog route_stop should judge recipients by: the deployment's
+    shantytown.toml over the built-in three. None when there is no root or the
+    file cannot be read — route_stop then uses the built-in three, which is the
+    pre-trait behaviour, never a wider one. One loader so the stop stream and the
+    blocked-worker wake (notify) cannot judge the same card differently."""
+    if root is None:
+        return None
+    try:
+        from . import config
+        cfg, _err = config.load_or_default(root)
+        return cfg.catalog()
+    except Exception:                     # noqa: BLE001 — degrade to built-ins
+        return None
 
 
 def find_administrator(registry: Registry) -> str | None:

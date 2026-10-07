@@ -60,7 +60,7 @@ from .protocols import RankUnavailable
 from .runtime import ClaudeRuntime, live_wiring
 from .stopped import FilesStops
 from . import handoff_text
-from .tier import LeadStatus, is_governance, route_stop
+from .tier import LeadStatus, deployment_catalog, is_governance, route_stop
 from .triage import running_shells, context_tokens_k, CYCLE_THRESHOLD_K
 from .tmux import Tmux, declared_socket
 
@@ -328,7 +328,8 @@ def _plate_of(root: Path, me: str) -> "tuple[str | None, str | None, list[str]]"
 def _send(reg: FilesRegistry, events: FilesEvents, panes, me: str,
           root: Path | None = None) -> int:
     try:
-        routing = route_stop(reg, me, lead_is_up=_lead_is_up(reg, panes))
+        routing = route_stop(reg, me, lead_is_up=_lead_is_up(reg, panes),
+                             catalog=deployment_catalog(root))
     except LookupError as e:
         # nowhere for the stop to go (no lead AND no administrator). This is a
         # real misconfiguration, surfaced — not swallowed. Non-zero so it shows.
