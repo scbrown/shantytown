@@ -337,3 +337,14 @@ def test_a_non_absorbing_tree_role_is_written_verbatim_and_takes_no_reports():
         tier.plan_role_set(reg, "ian", "lead", reports=["bond"], catalog=cat)
     with pytest.raises(ValueError, match="strand"):
         tier.plan_role_set(reg, "kay", "lead", catalog=cat)
+
+
+def test_a_non_router_role_with_no_reports_to_is_wired_to_the_administrator():
+    """ian's note on #149: an administrator demoted to the review/design lead
+    kept reports_to=None, i.e. an in-tree card under nobody."""
+    cat = _catalog_with_keeper_and_review_lead()
+    reg = _Reg([Agent(name="admin", role="administrator"),
+                Agent(name="old", role="administrator")])
+    plan = tier.plan_role_set(reg, "old", "lead", catalog=cat)
+    assert [(a.name, a.role, a.reports_to) for a in plan.writes] == \
+        [("old", "lead", "admin")]

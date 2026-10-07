@@ -225,7 +225,15 @@ def plan_role_set(registry: Registry, agent_name: str, role: str,
             raise ValueError(
                 f"{agent_name} -> {role} would strand its reports {stranded}: a "
                 f"{role} receives no stop events. Re-point them first.")
-        plan.writes.append(replace(agent, role=role,
+        # In the tree means under someone: an administrator demoted to this
+        # role has reports_to=None, so wire it to the sole administrator as the
+        # router branch does, and leave the gap for `roles --check` otherwise.
+        member_reports_to = agent.reports_to
+        if member_reports_to is None:
+            admin = find_administrator(registry)
+            if admin and admin != agent_name:
+                member_reports_to = admin
+        plan.writes.append(replace(agent, role=role, reports_to=member_reports_to,
                                    pane=pane_for(agent_name, agent.pane)))
         return plan
 
