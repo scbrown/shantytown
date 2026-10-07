@@ -277,6 +277,18 @@ def test_create_requires_valid_supervisor(fleet):
     assert graph.writes == []
 
 
+def test_create_accepts_a_declared_router_as_lead(fleet):
+    """--lead is asked by trait, as route_stop asks it (vj3uet PR B): a
+    declared keeper that absorbs is a valid supervisor, not only lead/admin."""
+    root, graph, _ = fleet
+    config = root / "shantytown.toml"
+    config.write_text(config.read_text() + '\n[roles.keeper]\nattachment = "reports-to"\n'
+                      'coordination = ["absorbs", "dispatches"]\n')
+    graph.agents["local_admin"] = replace(graph.get("local_admin"), role="keeper")
+    assert cli.main(create_args(root)) == cli.OK
+    assert graph.get("new_worker").reports_to == "local_admin"
+
+
 def test_create_requires_declared_host(fleet, monkeypatch):
     root, graph, _ = fleet
     monkeypatch.delenv("SHANTY_HOST", raising=False)
