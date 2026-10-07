@@ -6,6 +6,7 @@ creation, so a failed write is retried rather than silently consuming a cycle.
 """
 from __future__ import annotations
 
+import datetime as dt
 import json
 import os
 import time
@@ -13,6 +14,15 @@ from dataclasses import dataclass
 from pathlib import Path
 
 DREAM_LABELS = frozenset({"dream", "dream-discrepancy", "dream-proposal"})
+# The CYCLE itself, as opposed to the proposals and discrepancies it produces
+# (aegis-qx96wr). camayoc derives the DreamCycle work kind from this label.
+CYCLE_LABEL = "dream-cycle"
+# Cycles created before CYCLE_LABEL existed are recognised by their title.
+LEGACY_CYCLE_TITLES = ("DREAM consolidate:", "DREAM propose:")
+# A cycle with no tracker activity for this long has lapsed and stops holding
+# the queue. Two 6h dream intervals; the same window as camayoc's DreamCycle
+# idleLimit (PT12H), so the lane and the lapse alert agree on when it is stale.
+CYCLE_IDLE_LIMIT_S = 12 * 3600
 
 
 @dataclass(frozen=True)
@@ -50,7 +60,7 @@ class State:
         now = time.time() if now is None else now
         self.path.parent.mkdir(parents=True, exist_ok=True)
         data = {"last_at": now, "last_item": item_id, "last_mode": plan.mode,
-                "last_domain": plan.domain}
+                "last_domain": plan.domain, "last_agent": plan.agent}
         tmp = self.path.with_suffix(f".tmp.{os.getpid()}")
         tmp.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
         tmp.replace(self.path)
@@ -63,13 +73,43 @@ def is_dream(item: dict) -> bool:
     return bool(DREAM_LABELS.intersection(labels))
 
 
-def is_queued_dream(item: dict) -> bool:
-    """True only for a dream artifact still waiting to be claimed.
+def is_cycle(item: dict) -> bool:
+    """A dream CYCLE, not one of its outputs. An unassigned dream-proposal or
+    dream-discrepancy is reviewable work a cycle produced; counting it as a
+    queued cycle silenced the lane for 11 days (aegis-2idcev)."""
+    labels = item.get("labels") or []
+    if isinstance(labels, str):
+        labels = labels.split(",")
+    if CYCLE_LABEL in labels:
+        return True
+    return "dream" in labels and str(item.get("title") or "").startswith(LEGACY_CYCLE_TITLES)
 
-    Assigned proposal/discrepancy outputs retain dream provenance, but they are
-    somebody's foreground haul rather than a queued reflection cycle.
+
+def _epoch(value) -> float | None:
+    try:
+        return dt.datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp()
+    except (TypeError, ValueError):
+        return None
+
+
+def is_lapsed(item: dict, now: float) -> bool:
+    """True when the cycle has had no tracker activity for CYCLE_IDLE_LIMIT_S.
+    An unreadable timestamp is NOT lapsed: the queue bound holds when in doubt."""
+    seen = _epoch(item.get("updated_at") or item.get("created_at"))
+    return seen is not None and now - seen > CYCLE_IDLE_LIMIT_S
+
+
+def is_queued_dream(item: dict, now: float | None = None) -> bool:
+    """True only for a dream cycle still waiting to be claimed, and still live.
+
+    Assigned cycles are somebody's foreground haul. Outputs (proposals,
+    discrepancies) never hold the queue, whoever holds them. A cycle idle past
+    CYCLE_IDLE_LIMIT_S has lapsed: it stays open for its owner, but it no longer
+    stops the next cycle.
     """
-    return is_dream(item) and not str(item.get("assignee") or "").strip()
+    now = time.time() if now is None else now
+    return (is_cycle(item) and not str(item.get("assignee") or "").strip()
+            and not is_lapsed(item, now))
 
 
 def plan(policy: Policy, state: dict, ready: list[dict], candidates: list[dict],
@@ -86,7 +126,7 @@ def plan(policy: Policy, state: dict, ready: list[dict], candidates: list[dict],
     if (not force and isinstance(last, (int, float))
             and now < float(last) + policy.interval_minutes * 60):
         return None, "not due"
-    if any(is_queued_dream(item) for item in ready):
+    if any(is_queued_dream(item, now) for item in ready):
         return None, "a dream cycle is already queued"
     capacity_eligible = [c for c in candidates
                          if c.get("headroom") is not None
@@ -97,7 +137,10 @@ def plan(policy: Policy, state: dict, ready: list[dict], candidates: list[dict],
     # P4 artifact behind a provider's foreground haul; assignment does not
     # interrupt active work, and the existing-DREAM gate above bounds the queue
     # globally.  Capacity and delegation reserve remain hard gates.
-    chosen = max(capacity_eligible,
+    # Spread cycles: the last cycle's agent goes only when nobody else is
+    # eligible. Most-headroom alone sent 5 of 5 cycles to one agent.
+    others = [c for c in capacity_eligible if c["agent"] != state.get("last_agent")]
+    chosen = max(others or capacity_eligible,
                  key=lambda c: (float(c["headroom"]), c["agent"]))
     domains = policy.domains or Policy.domains
     previous_domain = state.get("last_domain")
@@ -109,13 +152,13 @@ def plan(policy: Policy, state: dict, ready: list[dict], candidates: list[dict],
     mode = "dream" if state.get("last_mode") == "consolidate" else "consolidate"
     if mode == "consolidate":
         title = f"DREAM consolidate: reconcile {domain} reality against Quipu"
-        labels = "dream,dream-discrepancy"
+        labels = f"dream,dream-discrepancy,{CYCLE_LABEL}"
         outcome = ("Document each measured divergence as a dream-discrepancy bead "
                    "and/or Quipu episode. Correct stale truth in Quipu only; do not "
                    "mutate infrastructure, code, or deployed configuration.")
     else:
         title = f"DREAM propose: improve {domain}"
-        labels = "dream,dream-proposal"
+        labels = f"dream,dream-proposal,{CYCLE_LABEL}"
         outcome = ("Create one or more reviewable dream-proposal beads covering "
                    "functional and/or non-functional improvements. Do not implement "
                    "or auto-apply any proposal in this cycle.")
