@@ -498,3 +498,31 @@ def test_failed_recovery_does_not_hide_second_outage(tmp_path):
     run(1110, down(False))
     assert len(alerts) == 4 and len(pages) == 2
     assert state.read()['down_since'] == 1020
+
+
+def test_new_recovery_is_sent_while_old_recovery_waits_for_retry(tmp_path):
+    state = pw.State(tmp_path / 'state.json')
+    sent = []
+    def run(at, obs, delivered):
+        pw.run_pass(watcher='ada', peer_host='host-b', peer_name='bea',
+            probe_fn=lambda _: obs,
+            alert_fn=lambda text: (sent.append(text), (delivered, 'transport'))[1],
+            repair_fn=None, escalate_fn=lambda _: (0, 'sent'),
+            state=state, log_path=tmp_path / 'log', now=lambda: at,
+            alert_every=3600, say=lambda _: None)
+    run(100, down(False), True)
+    run(200, up(), False)
+    run(300, down(False), True)
+    run(400, up(), True)
+    assert len(sent) == 4
+    assert 'back up' in sent[-1] and '1970-01-01T00:06:40+00:00' in sent[-1]
+    assert 'current probe: OK' in sent[-1]
+    assert len(state.read()['pending_recoveries']) == 1
+    # A long transport outage remains bounded and reports coalesced history.
+    for at in range(500, 2500, 100):
+        run(at, down(False), False)
+        run(at + 1, up(), False)
+    queued = state.read()['pending_recoveries']
+    assert len(queued) == pw.MAX_PENDING_RECOVERIES
+    assert sum(r.get('coalesced', 0) for r in queued) == 5
+    assert 'older recovery notices coalesced' in sent[-1]

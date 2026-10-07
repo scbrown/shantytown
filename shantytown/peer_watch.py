@@ -45,6 +45,7 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
@@ -58,6 +59,7 @@ DEFAULT_ESCALATE_AFTER = 15 * 60
 DEFAULT_REPAIR_COOLDOWN = 30 * 60
 DEFAULT_ALERT_EVERY = 60 * 60
 DEFAULT_ESCALATE_RETRY = 30 * 60
+MAX_PENDING_RECOVERIES = 16
 ESCALATE_ENV = "SHANTY_ESCALATE_COMMAND"
 
 
@@ -323,7 +325,7 @@ def run_pass(*, watcher: str, peer_host: str, peer_name: str | None,
         if down_since is not None:
             mins = int((t - down_since) // 60)
             end_episode(f"[st fleet watch] {peer}@{peer_host} is back up after "
-                        f"~{mins}m down (observed at {t:.0f}).")
+                        f"~{mins}m down.")
     elif obs.verdict == UNKNOWN:
         say("  unknown is not down: no alert, no repair, no escalation.")
     else:
@@ -403,20 +405,37 @@ def run_pass(*, watcher: str, peer_host: str, peer_name: str | None,
                     if rc in (0, 1):
                         new["escalated_episode"] = down_since
                     say(f"  escalation: rc={rc} {detail}")
-    # Retry the oldest recovery independently, even if a new outage began.
-    # Keep its original observation time; delivery delay is not outage length.
-    if recoveries:
-        recovery = recoveries[0]
+    # Bound transport-outage history without hiding the current recovery.
+    # Coalesced observations remain in the watch log, and the next retained
+    # notice explicitly reports the coalescing rather than silently losing it.
+    if len(recoveries) > MAX_PENDING_RECOVERIES:
+        dropped = recoveries[:-MAX_PENDING_RECOVERIES]
+        recoveries = recoveries[-MAX_PENDING_RECOVERIES:]
+        recoveries[-1] = dict(recoveries[-1], coalesced=(
+            recoveries[-1].get("coalesced", 0)
+            + sum(1 + r.get("coalesced", 0) for r in dropped)))
+    remaining = []
+    for recovery in recoveries:
         attempted = recovery.get("last_attempt")
-        if attempted is None or t - attempted >= alert_every:
-            text = recovery["text"]
-            res = do("alert", text, lambda: alert_fn(text))
-            if res is not None:
-                if res[0]:
-                    recoveries.pop(0)
-                else:
-                    recoveries[0] = dict(recovery, last_attempt=t)
-                say(f"  recovery delivery: {'ok' if res[0] else 'FAILED: ' + res[1]}")
+        if attempted is not None and t - attempted < alert_every:
+            remaining.append(recovery)
+            continue
+        # Every new recovery gets an immediate attempt; an older failed send
+        # must not leave the admin's latest observation stuck at DOWN.
+        observed = datetime.fromtimestamp(recovery["observed_at"], timezone.utc)
+        text = (f"{recovery['text']} Recovery observed {observed.isoformat()}; "
+                f"current probe: {verdict.upper()}.")
+        if recovery.get("coalesced"):
+            text += (f" {recovery['coalesced']} older recovery notices coalesced; "
+                     "see the watch log.")
+        res = do("alert", text, lambda: alert_fn(text))
+        if res is None:
+            remaining.append(recovery)
+        else:
+            if not res[0]:
+                remaining.append(dict(recovery, last_attempt=t))
+            say(f"  recovery delivery: {'ok' if res[0] else 'FAILED: ' + res[1]}")
+    recoveries = remaining
     new["pending_recoveries"] = recoveries
     down_seconds = (0.0 if verdict == OK else
                     t - new["down_since"] if new.get("down_since") is not None else None)

@@ -621,6 +621,7 @@ def test_persistent_condition_read_failure_reports_once_after_three_passes(tmp_p
         h.alerter.sweep()
         assert len(sent) == (0 if n < 2 else 1)
     assert 'UNTESTABLE' in sent[0] and '3 consecutive' in sent[0]
+    assert 'closed:missing' in sent[0]
 
 
 def test_release_failures_are_bounded_and_deduplicated(tmp_path):
@@ -654,10 +655,10 @@ def test_unsupported_condition_reports_even_before_future_timestamp(tmp_path):
     assert not h.releases and len(h.sent) == 1
 
 
-def test_inline_condition_from_defer_command_can_release(tmp_path):
+def test_prose_before_condition_requires_judgment(tmp_path):
     h = MechanicalHarness(tmp_path, _row(notes='Waiting for review. resume_when: date:2026-09-01'))
     h.alerter.sweep()
-    assert h.releases == ['aegis-1'] and not h.sent
+    assert not h.releases and len(h.sent) == 1
 
 
 def test_store_read_failure_reports_after_bounded_retries(tmp_path):
@@ -683,3 +684,21 @@ def test_recovered_read_resets_retry_budget(tmp_path):
     assert not h.sent
     h.alerter.sweep()
     assert len(h.sent) == 1
+
+
+def test_approval_prose_cannot_be_overridden_by_closed_condition(tmp_path):
+    for n, notes in enumerate([
+        'Needs Stiwi sign-off; resume_when: closed:X',
+        'Needs Stiwi sign-off\nresume_when: closed:X',
+        'resume_when: closed:X\nNeeds Stiwi sign-off',
+    ]):
+        h = MechanicalHarness(tmp_path / str(n), _row(notes=notes), is_closed=lambda _: True)
+        h.alerter.sweep()
+        assert not h.releases and len(h.sent) == 1
+
+
+def test_lapsed_date_with_prose_still_requires_judgment(tmp_path):
+    h = MechanicalHarness(tmp_path, _row(notes='Needs Stiwi sign-off',
+        defer_until=_iso(timedelta(days=-1))))
+    h.alerter.sweep()
+    assert not h.releases and len(h.sent) == 1

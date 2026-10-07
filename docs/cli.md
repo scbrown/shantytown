@@ -2215,14 +2215,18 @@ unchanged.
 `st fleet watch` sends one local DOWN notification per outage and one recovery
 notification. A steady outage does not generate hourly reminders. `--alert-every`
 now controls retries of failed DOWN and recovery delivery. Recovery observation
-ends the outage immediately; pending recovery delivery cannot hide a later outage. UNKNOWN does not reset an outage or manufacture a recovery. Repair and
+ends the outage immediately; pending recovery delivery cannot hide a later outage.
+Each new recovery is attempted immediately even while an older send is cooling
+down. Notices name the observation time and current verdict. Pending recovery
+history is capped at 16 notices; coalesced older notices are counted explicitly. UNKNOWN does not reset an outage or manufacture a recovery. Repair and
 human-escalation cooldowns are unchanged.
 
 `st fleet tend` rechecks deferrals on every scheduled pass. A lapsed `defer_until`
 or a met `resume_when: date:...` / `resume_when: closed:...` condition can clear
 both the deferred status and timestamp after a fresh tracker read. It verifies
 that the item is open and the timestamp cleared. Automatic release requires a
-single complete mechanical marker, no future date, no open blocking dependency,
+marker-only notes (or empty notes for a timestamp-only hold), no future date,
+no open blocking dependency,
 and no human/external/parked hold label. Prose, ambiguous markers and met
 conditions with other holds still request judgement once per state. Read errors
 and indeterminate writes retry on the next pass. Three consecutive failures

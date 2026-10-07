@@ -421,13 +421,11 @@ def can_release(row: dict, finding: Finding, now: datetime) -> bool:
         if (len(markers) != 1 or len(_MARKER_PRESENT.findall(notes)) != 1
                 or not finding.met):
             return False
-        # The marker must occupy its own complete line. 'date:X and approval'
-        # is a judgement condition, not permission to ignore the second half.
-        # st's defer writer prefixes the marker with its rationale. Accept
-        # that producer shape, but never ignore text AFTER the condition.
-        suffix = notes[markers[0].start():].splitlines()[0].strip()
-        return _CONDITION.fullmatch(suffix) is not None
-    return bool(finding.lapsed_at and not _MARKER_PRESENT.search(notes))
+        # The defer command stores the supplied reason verbatim. Only a
+        # marker-only reason is mechanically decidable; prose on ANY line may
+        # carry an additional approval gate that a parser must not discard.
+        return _CONDITION.fullmatch(notes.strip()) is not None
+    return bool(finding.lapsed_at and not notes.strip())
 
 
 class Reported:

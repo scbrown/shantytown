@@ -1617,8 +1617,9 @@ class DeferralAlerter:
             if budget.failed(finding.bead):
                 from dataclasses import replace
                 reports.append(replace(finding, met=False, read_error=False,
-                    untestable="read/release failed for 3 consecutive scheduled passes; "
-                               "inspect deferral-sweep logs"))
+                    untestable="read/release failed for 3 consecutive scheduled passes"
+                        + (f" [{finding.condition.render()}]" if finding.condition else "")
+                        + "; inspect deferral-sweep logs"))
             else:
                 retry.add(finding.bead)
             self._log(f"deferral-sweep: {finding.bead} read/release retry pending")
