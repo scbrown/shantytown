@@ -948,9 +948,16 @@ def _drain(events: FilesEvents, me: str, reg=None, panes=None,
     if reg is not None and panes is not None and shows_ready_ui is not None:
         candidates = list(events.pending(me))
         for ev in candidates:
+            if is_governance(ev.reason) or ev.rose:
+                continue  # urgent delivery must not depend on a pane probe
             if ev.frm not in verdicts:
-                verdicts[ev.frm] = _liveness(reg, panes, shows_ready_ui, ev.frm,
-                                            awaiting_answer)
+                try:
+                    verdicts[ev.frm] = _liveness(reg, panes, shows_ready_ui, ev.frm,
+                                                awaiting_answer)
+                except Exception as exc:
+                    verdicts[ev.frm] = "?"
+                    print(f"stop_event: liveness unreadable for {ev.frm}: {exc!r}",
+                          file=sys.stderr)
         discard_busy(events, me, {name for name, state in verdicts.items()
                                   if state == triage.BUSY}, candidates)
     ids = {e.id for e in candidates} if candidates is not None else None

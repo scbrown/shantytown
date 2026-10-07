@@ -684,3 +684,23 @@ def test_drain_leaves_new_stop_for_a_new_liveness_measurement(tmp_path, capsys, 
     stop_event._drain(ev, "maldoon", reg, _Panes({"p-ellie"}), _ready)
     assert capsys.readouterr().out == ""
     assert [e.id for e in ev.pending("maldoon")] == [created[0].id]
+
+
+
+def test_unreadable_pane_preserves_urgent_and_ordinary_delivery(tmp_path, capsys, monkeypatch):
+    reg = _reg(tmp_path)
+    ev = FilesEvents(tmp_path / "events")
+    ev.persist(to="maldoon", frm="ellie", reason=None, rose=False)
+    ev.persist(to="maldoon", frm="other", reason="lead-unreachable", rose=True)
+    looked = []
+    def unreadable(*args, **kwargs):
+        looked.append(args[3])
+        raise OSError("pane read failed")
+    monkeypatch.setattr(stop_event, "_liveness", unreadable)
+    stop_event._drain(ev, "maldoon", reg, _Panes({"p-ellie"}), _ready)
+    result = capsys.readouterr()
+    assert json.loads(result.out)["decision"] == "block"
+    assert "ROSE: lead-unreachable" in result.out
+    assert "ellie stopped" in result.out
+    assert looked == ["ellie"], "urgent delivery attempted a pane probe"
+    assert ev.pending("maldoon") == []
