@@ -62,3 +62,54 @@ def test_reparented_runtime_requires_both_identity_fields(tmp_path, monkeypatch)
     assert scopes.owned_scope('/test', 'worker', 1, '/test-scope')[0]
     assert not scopes.owned_scope('/other-deployment', 'worker', 1, '/test-scope')[0]
     assert not scopes.owned_scope('/test', 'other-agent', 1, '/test-scope')[0]
+
+
+def test_protected_pane_child_needs_no_environment_read(monkeypatch):
+    from pathlib import Path
+    monkeypatch.setattr(scopes.panemem, 'scope_is_exclusive_to', lambda *a: (False, 'reparented'))
+    monkeypatch.setattr(scopes.panemem, 'scope_pids', lambda *a: [1, 3, 2])
+    monkeypatch.setattr(scopes.panemem, '_is_descendant',
+                        lambda pid, parent: pid == parent or (pid == 3 and parent == 1))
+
+    def environment(path):
+        pid = int(path.parts[-2])
+        if pid in (1, 3):
+            raise AssertionError('proven pane descendants must not need environment access')
+        return b'SHANTY_AGENT=worker\0SHANTY_ROOT=/test\0'
+
+    monkeypatch.setattr(Path, 'read_bytes', environment)
+    assert scopes.owned_scope('/test', 'worker', 1, '/test-scope')[0]
+
+
+def test_protected_child_of_later_attributed_runtime_is_owned(monkeypatch):
+    from pathlib import Path
+    monkeypatch.setattr(scopes.panemem, 'scope_is_exclusive_to', lambda *a: (False, 'reparented'))
+    # The protected child appears before the runtime whose identity proves it.
+    monkeypatch.setattr(scopes.panemem, 'scope_pids', lambda *a: [3, 2, 1])
+    monkeypatch.setattr(scopes.panemem, '_is_descendant',
+                        lambda pid, parent: pid == parent or (pid == 3 and parent == 2))
+
+    def environment(path):
+        if int(path.parts[-2]) == 3:
+            raise PermissionError('protected process environment')
+        return b'SHANTY_AGENT=worker\0SHANTY_ROOT=/test\0'
+
+    monkeypatch.setattr(Path, 'read_bytes', environment)
+    assert scopes.owned_scope('/test', 'worker', 1, '/test-scope')[0]
+    assert not scopes.owned_scope('/other-deployment', 'worker', 1, '/test-scope')[0]
+    assert not scopes.owned_scope('/test', 'other-agent', 1, '/test-scope')[0]
+
+
+def test_unproven_protected_process_still_refuses_scope(monkeypatch):
+    from pathlib import Path
+    monkeypatch.setattr(scopes.panemem, 'scope_is_exclusive_to', lambda *a: (False, 'shared'))
+    monkeypatch.setattr(scopes.panemem, 'scope_pids', lambda *a: [3, 2, 1])
+    monkeypatch.setattr(scopes.panemem, '_is_descendant', lambda pid, parent: pid == parent)
+
+    def environment(path):
+        if int(path.parts[-2]) == 3:
+            raise PermissionError('protected foreign process environment')
+        return b'SHANTY_AGENT=worker\0SHANTY_ROOT=/test\0'
+
+    monkeypatch.setattr(Path, 'read_bytes', environment)
+    assert not scopes.owned_scope('/test', 'worker', 1, '/test-scope')[0]
