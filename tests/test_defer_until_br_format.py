@@ -26,6 +26,7 @@ VALUES = [
 ]
 
 
+@pytest.mark.real_store
 @pytest.mark.skipif(shutil.which("br") is None, reason="requires br CLI")
 @pytest.mark.parametrize("until,accepted", VALUES)
 def test_dry_run_and_write_agree_with_real_br(tmp_path, until, accepted):
