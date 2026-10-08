@@ -1411,7 +1411,10 @@ def _load_json(text: str) -> dict:
     return data if isinstance(data, dict) else {}
 
 
-_HARNESSES = {h.name: h for h in (ClaudeHarness(), CodexHarness())}
+from .opencode import make_harness as _opencode_harness
+
+_HARNESSES = {h.name: h for h in
+              (ClaudeHarness(), CodexHarness(), _opencode_harness(ClaudeHarness))}
 
 
 def all_harnesses() -> tuple[Harness, ...]:

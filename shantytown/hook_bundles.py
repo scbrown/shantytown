@@ -30,7 +30,7 @@ from typing import Any
 SCHEMA = "st.hook-bundle/1"
 REGISTRY_DIR = "hook-bundles"
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
-HARNESSES = ("claude", "codex")
+HARNESSES = ("claude", "codex", "opencode")
 
 #: The hook events each harness is KNOWN to run. Narrow on purpose: an event we
 #: have not seen a harness honour is reported as unsupported rather than written
@@ -41,6 +41,9 @@ SUPPORTED_EVENTS: dict[str, frozenset[str]] = {
                          "PostToolUseFailure", "Stop", "SessionEnd", "PreCompact",
                          "Notification", "SubagentStop"}),
     "codex": frozenset({"SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop"}),
+    # Emitted bridge observed on the 1.18.35 TUI: start/prompt/before/after/idle.
+    # Stop is notification + continuation; router capability remains false.
+    "opencode": frozenset({"SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop"}),
 }
 
 
@@ -361,11 +364,17 @@ def emitted_role_files(root, agent_roles: dict[str, str] | None = None
         add("claude", p.name[: -len(".settings.json")], p)
     for p in sorted(s.glob("codex/*/config.toml")):
         add("codex", p.parent.name, p)
+    for p in sorted(s.glob("opencode/*/opencode.json")):
+        add("opencode", p.parent.name, p)
     return out, unresolved
 
 
 def _read_hooks(harness: str, path: Path) -> dict | None:
     try:
+        if harness == "opencode":
+            from .opencode import bridge_options
+            data = bridge_options(path.read_text())
+            return data.get("hooks", {}) if data is not None else None
         if harness == "codex":
             import tomllib
             data = tomllib.loads(path.read_text())
@@ -528,6 +537,10 @@ class Running:
 
 def _hooks_from_bytes(harness: str, data: bytes) -> dict | None:
     try:
+        if harness == "opencode":
+            from .opencode import bridge_options
+            doc = bridge_options(data.decode())
+            return doc.get("hooks", {}) if doc is not None else None
         if harness == "codex":
             import tomllib
             doc = tomllib.loads(data.decode())
