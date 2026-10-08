@@ -5777,7 +5777,7 @@ def _priority_go_note(a):
         row = next((r for r in ready + active if r.get("id") == a.item), None)
         if row is None:
             row = vars(_tracker(a).get(a.item))
-        return pa.advice(ready, row, pa.down_agents(_registry(a), Tmux()))
+        return pa.advice(ready, row, pa.down_agents(_registry(a), _panes(a)))
     except Exception:
         return "governor: higher-priority advisory unavailable; dispatch continues."
 

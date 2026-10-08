@@ -99,3 +99,17 @@ def test_liveness_exception_is_not_a_down_owner():
     down = pa.down_agents(reg, SimpleNamespace(exists=failed))
     assert down == set()
     assert pa.advice([HIGH | {"assignee": "unknown"}], LOW, down) == ""
+
+
+def test_dispatch_advisory_uses_the_deployments_pane_adapter(monkeypatch):
+    from shantytown.answer import Answer
+    from shantytown.protocols import Agent
+    reg = SimpleNamespace(all=lambda: Answer.complete_read(
+        [Agent(name="live", pane="p")], how="test registry"))
+    monkeypatch.setattr(cli, "_priority_snapshot", lambda a: ([HIGH | {"assignee": "live"}], [LOW]))
+    monkeypatch.setattr(cli, "_registry", lambda a: reg)
+    monkeypatch.setattr(cli, "_panes", lambda a: SimpleNamespace(exists=lambda p: True))
+    def bare_tmux(*a, **kw):
+        raise AssertionError("bare tmux must not classify deployment owners")
+    monkeypatch.setattr(cli, "Tmux", bare_tmux)
+    assert cli._priority_go_note(SimpleNamespace(item="low")) == ""
