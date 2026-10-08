@@ -325,3 +325,30 @@ def test_a_real_guard_is_still_found_beside_the_trace(tmp_path: Path, monkeypatc
 
     codex_text = codex_mod.render(codex_mod.settings_for_role("worker", root=tmp_path))
     assert codex_mod.bash_guard(codex_text) == "/usr/local/lib/guards/host-policy.sh"
+
+
+@pytest.mark.parametrize("delegated", [None, "0", "true", "1"])
+def test_yupana_delegation_requires_explicit_one_and_a_guard(tmp_path, monkeypatch, delegated):
+    from shantytown import runtime
+    if delegated is None:
+        monkeypatch.delenv("SHANTY_BASH_GUARD_RUNS_YUPANA", raising=False)
+    else:
+        monkeypatch.setenv("SHANTY_BASH_GUARD_RUNS_YUPANA", delegated)
+    monkeypatch.delenv("SHANTY_BASH_GUARD", raising=False)
+    assert any(runtime.is_trace_command(h["command"])
+               for h in runtime.bash_group(tmp_path)["hooks"])
+    monkeypatch.setenv("SHANTY_BASH_GUARD", GUARD)
+    hooks = runtime.bash_group(tmp_path)["hooks"]
+    assert hooks[0]["command"] == GUARD
+    assert sum(runtime.is_trace_command(h["command"]) for h in hooks) == (0 if delegated == "1" else 1)
+
+
+def test_delegated_yupana_preserves_guard_readback_in_both_harnesses(tmp_path, monkeypatch):
+    from shantytown import runtime, codex, harness
+    monkeypatch.setenv("SHANTY_BASH_GUARD", GUARD)
+    monkeypatch.setenv("SHANTY_BASH_GUARD_RUNS_YUPANA", "1")
+    claude = runtime.claude_settings_for_role("worker", root=tmp_path)
+    assert harness.get("claude").read_bash_guard(json.dumps(claude)) == GUARD
+    text = codex.render(codex.settings_for_role("worker", root=tmp_path))
+    assert codex.bash_guard(text) == GUARD
+    assert runtime._YUPANA_TRACE not in text
