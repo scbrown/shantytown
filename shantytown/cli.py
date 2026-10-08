@@ -8329,6 +8329,24 @@ def _durable_checkpoint_gate(a, agent_name: str):
     return cycle_mod.durable_gate(agent_name, bead, since, got)
 
 
+def _checkpoint_quality_gate(a, agent_name, checkpoint, session=""):
+    """Optional Jev advice uses only the handoff, never the conversation."""
+    from . import checkpoint_quality
+    command = (_deployment_default(a, "SHANTY_CHECKPOINT_JEV_COMMAND")
+               or _deployment_default(a, "SHANTY_CREATE_JEV_COMMAND"))
+    depth = None
+    if command and not getattr(a, "allow_loss", False):
+        try:
+            card = _registry(a).get(agent_name)
+            if card.pane:
+                panes = _panes(a)
+                depth = triage_mod.context_tokens_k(panes.capture(card.pane))
+        except Exception:  # noqa: BLE001 — unknown depth must never trap a cycle
+            pass
+    return checkpoint_quality.review(a.root, agent_name, checkpoint, session,
+                                     command, depth, triage_mod.CYCLE_THRESHOLD_K)
+
+
 def _advise_situation(a, agent: str, cfg):
     """The measured half of cycle_advice: depth and cache timing from the transcript
     the Stop hook last recorded (context_hint), and the next task from the plate."""
@@ -8636,6 +8654,14 @@ def _cmd_cycle(a) -> int:
                   f"graph context and nothing is lost.", file=sys.stderr)
             return REFUSED
         quipu_nodes = list(gctx.nodes)
+        quality_gate = _durable_checkpoint_gate(a, agent_name)
+        quality_ok, quality_note = _checkpoint_quality_gate(
+            a, agent_name, quality_gate.checkpoint or ckpt_body or a.reason.strip(),
+            quality_gate.since)
+        if quality_note:
+            print(f"  ⚠ {quality_note}", file=sys.stderr)
+        if not quality_ok:
+            return REFUSED
         no_in_place = bool(getattr(a, "no_in_place", False))
         cycle_mod.Requests(a.root).request(agent_name, a.reason.strip(),
                                            checkpoint_bead or posted_to,
@@ -8744,6 +8770,14 @@ def _cmd_cycle(a) -> int:
         print(f"  ⚠ cycling over a missing durable handoff (--allow-loss): "
               f"{gate.bead} has no comment from {agent_name} since "
               f"{gate.since}. That reasoning is being spent.", file=sys.stderr)
+
+    if not a.dry_run and not getattr(a, "_automatic_cycle", False):
+        quality_ok, quality_note = _checkpoint_quality_gate(
+            a, agent_name, gate.checkpoint or a.reason, gate.since)
+        if quality_note:
+            print(f"  ⚠ {quality_note}", file=sys.stderr)
+        if not quality_ok:
+            return REFUSED
 
     # WHICH MECHANISM. Decided from observed pane facts, never assumed — see
     # cycle.plan for what each precondition costs if it is wrong.

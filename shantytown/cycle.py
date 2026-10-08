@@ -496,6 +496,7 @@ class DurableGate:
     since: str = ""
     ok: "bool | None" = None
     note: str = ""
+    checkpoint: str = ""
 
     def render(self) -> str:
         if self.ok:
@@ -528,7 +529,11 @@ def durable_gate(agent: str, bead: str, since, comments, error: str = "") -> Dur
         return DurableGate(agent, bead, "", None,
                            "no launch stamp — cannot date 'since the last relaunch'")
     ok = checkpoint_since(comments, agent, since)
-    return DurableGate(agent, bead, str(since), ok, "")
+    candidates = [c for c in comments or [] if isinstance(c, dict)
+                  and c.get("author") == agent and _parse_ts(c.get("created_at"))
+                  and _parse_ts(c["created_at"]) >= _parse_ts(since)] if ok else []
+    latest = max(candidates, key=lambda c: _parse_ts(c["created_at"]), default={})
+    return DurableGate(agent, bead, str(since), ok, "", latest.get("text", ""))
 
 
 STUCK_AFTER_DEFAULT = 30 * 60
