@@ -93,22 +93,24 @@ def main(argv=None) -> int:
         # A session started outside st: not an error, and not reported — a hook
         # that complains on every non-fleet session start gets removed.
         return 0
+    print(render(root, agent))
+    return 0
+
+
+def render(root: str, agent: str) -> str:
+    """The same context for hook output and verified launch-time delivery."""
     try:
         rc, text = _run_anchor(root, agent)
-    except Exception:  # noqa: BLE001 — FAIL-OPEN, see the module docstring
+    except Exception:  # noqa: BLE001 -- a failed lookup must not hide the launch
         rc, text = 2, ""
     if rc != 0 or not text.strip():
-        print(f"{BANNER} {agent}: could not read your plate at session start "
-              f"(anchor exit {rc}). Run `st anchor` before you pick up work.")
-        return 0
+        return (f"{BANNER} {agent}: could not read your plate at session start "
+                f"(anchor exit {rc}). Run `st anchor` before you pick up work.")
     m = _ROLE_RE.search(text)
     role = m.group(1) if m else ""
     empty = "ON YOUR PLATE\n    nothing." in text
-    print(BANNER)
-    print(text.rstrip())
-    print()
-    print("\n".join(startup_lines(role, empty)))
-    return 0
+    return "\n".join((BANNER, text.rstrip(), "",
+                       "\n".join(startup_lines(role, empty))))
 
 
 if __name__ == "__main__":

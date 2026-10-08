@@ -411,6 +411,13 @@ silence. "Did I get anchored?" is answerable: `st ops hooks check` verifies st's
 emitted hooks (`st-session-anchor`) alongside registered bundles, and reports MISSING, or names
 the running agents that were launched without it.
 
+Codex launches also deliver the same anchor render through the verified startup
+input, together with any unread mail in one message. This works even when the
+inbox is empty. A unique completion marker verifies delivery; failed delivery
+keeps mail unread and reports the missing context. This covers Remote Control
+sessions where a configured SessionStart hook does not supply visible context.
+The hook remains configured for subsequent session lifecycle events.
+
 ## `st sling` — design handoff
 
 Design → bead (epic and children) → `st sling <bead>`. The executive administrator
