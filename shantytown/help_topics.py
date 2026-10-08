@@ -87,9 +87,11 @@ HAUL — the self-feeding queue
   close one and the next is served at your stop. Nobody dispatches per bead.
 
   RELEASING AN ITEM — a bare status change does NOT stop the re-serve
-    done            br close <id>
+    done            sd close <id> --reason <proof>   (seeds backend)
+                    br close <id> --reason <proof>   (br backend)
     gated           st work defer <id> <bead|human|access|external|parked> --reason-file <f>
-    not yours       br update <id> -a ""
+    not yours       sd update <id> --assignee ""     (seeds backend)
+                    br update <id> --assignee ""     (br backend)
 
   Why defer rather than just closing or unassigning: `defer` records the KIND of
   block and takes the bead OUT of the ready pool until you undo it. Clearing the
@@ -112,9 +114,11 @@ INBOX — a pointer channel, not a document store
   your text, after the '[from <you>] ' signature st adds). The cap is on BYTES, so
   non-ASCII (em dashes, arrows, checkmarks) costs more than it looks.
 
-  OVER THE CAP — put the substance in a bead and send the pointer:
+  OVER THE CAP — use the configured tracker, then send the pointer.
+  Choose the matching backend below; never fall back from seeds to br:
 
-    br comments add <id> --file <notes>
+    sd comments add <id> --file <notes>   (seeds backend)
+    br comments add <id> --file <notes>   (br backend)
     st inbox <who> -d 'see <bead-id>: <one-line gist>'
 
   WHY IT IS CAPPED
