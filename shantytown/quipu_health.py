@@ -7,7 +7,7 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 
-from .quipu import request_headers
+from . import quipu_auth
 
 TOKEN_HELP = (
     "Ask the Quipu administrator for an accepted credential; install it in "
@@ -59,12 +59,19 @@ def check(server: str | None, *, timeout: float = 5) -> WriteHealth:
         return WriteHealth("unconfigured", "QUIPU_SERVER is not a valid HTTP(S) base URL.", 2)
     if parsed.scheme not in ("http", "https") or not parsed.netloc or parsed.username or parsed.password or parsed.query or parsed.fragment:
         return WriteHealth("unconfigured", "QUIPU_SERVER must be an HTTP(S) base URL without credentials, query or fragment.", 2)
+    if quipu_auth.status(server) == "writes-disabled":
+        return WriteHealth("writes-disabled", "Credential repair requires a new session; " + TOKEN_HELP, 1)
     try:
-        headers = request_headers()
+        value = quipu_auth.token()
+        headers = {"Content-Type": "application/json"}
+        if value:
+            headers["Authorization"] = f"Bearer {value}"
     except (OSError, UnicodeError, ValueError):
         return WriteHealth("no-token", "Cannot read the configured token file. " + TOKEN_HELP, 1)
     headers["X-Quipu-Client"] = "agent-adhoc"
     token_set = "Authorization" in headers
+    if not token_set:
+        return WriteHealth("no-token", TOKEN_HELP, 1)
     request = urllib.request.Request(server.rstrip("/") + "/episode", data=b"{}", headers=headers, method="POST")
     try:
         with urllib.request.build_opener(_NoRedirect).open(request, timeout=timeout) as response:
