@@ -2,6 +2,7 @@
 
 SOURCE = r'''
 import { spawn } from "node:child_process";
+import { hostname } from "node:os";
 
 export default async ({ client, directory }, options = {}) => {
   const hooks = options.hooks || {};
@@ -29,8 +30,20 @@ export default async ({ client, directory }, options = {}) => {
   };
   async function run(command, payload, timeout) {
     return await new Promise((resolve, reject) => {
+      // Each dispatch owns its native session: a shared process environment
+      // would cross-credit concurrent sessions or inherit the launching harness.
+      const env = {...process.env, QUIPU_HARNESS:"opencode", QUIPU_HOST:hostname()};
+      for (const key of ["QUIPU_AGENT","QUIPU_SESSION","QUIPU_MODEL","OPENCODE_SESSION_ID",
+                         "CLAUDECODE","CLAUDE_CODE_SESSION_ID","CODEX_HOME",
+                         "CODEX_SESSION_ID","CODEX_THREAD_ID"]) delete env[key];
+      if(process.env.SHANTY_AGENT)env.QUIPU_AGENT=process.env.SHANTY_AGENT;
+      if(process.env.SHANTY_MODEL)env.QUIPU_MODEL=process.env.SHANTY_MODEL;
+      if(payload.session_id) {
+        env.QUIPU_SESSION=payload.session_id;
+        env.OPENCODE_SESSION_ID=payload.session_id;
+      }
       const child = spawn("/bin/bash", ["-lc", command],
-        { cwd: directory, env: process.env, detached:true, stdio:["pipe","pipe","pipe"] });
+        { cwd: directory, env, detached:true, stdio:["pipe","pipe","pipe"] });
       const kill = () => {
         try {if(child.pid)process.kill(-child.pid,"SIGKILL");}
         catch {child.kill("SIGKILL");}

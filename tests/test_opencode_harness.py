@@ -223,3 +223,70 @@ catch {denied=true;}
 if(!denied)process.exit(1);
 ''')
     subprocess.run(["node", "runner.mjs"], cwd=tmp_path, check=True, timeout=15)
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="native bridge requires Node/Bun")
+@pytest.mark.parametrize("model", ["ollama/fixture", None])
+def test_hook_provenance_binds_native_session_and_five_direct_headers(tmp_path, model):
+    """Capture actual HTTP headers from hook children; no completeness counter."""
+    import os
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    from shantytown.opencode_bridge import SOURCE
+
+    captured = []
+
+    class Sink(BaseHTTPRequestHandler):
+        def do_POST(self):
+            self.rfile.read(int(self.headers["Content-Length"]))
+            captured.append({k: self.headers.get("X-Quipu-" + k.title())
+                             for k in ("agent", "harness", "host", "session", "model")})
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"{}")
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Sink)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        (tmp_path / "bridge.mjs").write_text(SOURCE)
+        (tmp_path / "writer.py").write_text('''import json,os,urllib.request
+payload=json.load(__import__("sys").stdin)
+headers={ "X-Quipu-"+key.title():os.environ["QUIPU_"+key.upper()]
+          for key in ("agent","harness","host","session","model")
+          if os.environ.get("QUIPU_"+key.upper()) }
+with urllib.request.urlopen(urllib.request.Request(os.environ["SINK"],data=b"{}",headers=headers)) as response:
+ assert response.status==200
+''')
+        options = {"hooks": {"PreToolUse": [{"hooks": [{
+            "type": "command", "command": "python3 writer.py"}]}]}}
+        (tmp_path / "options.json").write_text(json.dumps(options))
+        (tmp_path / "runner.mjs").write_text('''
+import plugin from './bridge.mjs';
+import {readFileSync} from 'node:fs';
+const h=await plugin({client:{},directory:process.cwd()},JSON.parse(readFileSync('options.json')));
+await Promise.all(['ses_native_left','ses_native_right'].map(id =>
+ h['tool.execute.before']({sessionID:id,tool:'bash'},{args:{command:'true'}})));
+''')
+        env = {**os.environ, "SINK": f"http://127.0.0.1:{server.server_port}/proof",
+               "SHANTY_AGENT": "opencode-proof", "QUIPU_AGENT": "stale-agent",
+               "QUIPU_HARNESS": "codex", "QUIPU_SESSION": "parent-session",
+               "QUIPU_MODEL": "parent-model", "QUIPU_HOST": "parent-host",
+               "CODEX_SESSION_ID": "parent-codex", "CLAUDE_CODE_SESSION_ID": "parent-claude"}
+        env.pop("SHANTY_MODEL", None)
+        if model:
+            env["SHANTY_MODEL"] = model
+        subprocess.run(["node", "runner.mjs"], cwd=tmp_path, env=env, check=True, timeout=15)
+        assert len(captured) == 2
+        assert {row["session"] for row in captured} == {"ses_native_left", "ses_native_right"}
+        import socket
+        for row in captured:
+            assert row == {"agent": "opencode-proof", "harness": "opencode",
+                           "host": socket.gethostname(), "session": row["session"], "model": model}
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)

@@ -93,6 +93,14 @@ Version 1.18.35 resolves inherited `PWD` before `process.cwd()`, so changing onl
 subprocess's working directory can send it to the wrong project. Verify a positive
 file-reading control before treating that run as a comparison.
 
+Hook children receive structured Quipu provenance from the current card, actual
+native session, actual host and resolved launch model. Missing model/session
+stays missing, and parent Claude/Codex identities are cleared. Each dispatch has
+its own environment, so concurrent native sessions do not overwrite one another.
+This covers configured hook writers; arbitrary MCP proxy write attribution is
+not certified by this adapter. Verify all five header values directly, since a
+server may classify an unknown harness as complete with fewer fields.
+
 An observed idle callback can notify and request another model turn. It does not
 establish blocking Stop semantics or authorize a router role. Test tool admission
 with both a permitted side effect and a denied one, and verify the files rather
