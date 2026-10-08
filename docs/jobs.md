@@ -37,7 +37,7 @@ digits, `-`, `_`). An optional `name =` must match the file name.
 ```toml
 description = "what this is for"   # optional
 enabled = true                      # default true
-host = "mac"                        # or ["mac", "vati"]; default: every host with the file
+host = "laptop"                     # or ["laptop", "server-1"]; default: every host with the file
 timeout = "10m"                     # exec only; default 10m
 catch_up = true                     # cron only; default true
 
