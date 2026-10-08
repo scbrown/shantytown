@@ -1674,6 +1674,12 @@ before applying, verifies read-back, and restores on lift without overwriting
 external changes. Heavy-work wrappers are deployment integrations; this command never
 modifies Steam or kills processes.
 
+Scope ownership follows the pane's process tree and reparented runtimes whose
+launch environment matches both the agent and deployment. A descendant's
+protected environment does not prevent ownership proof through that ancestry.
+A protected process with no matching ancestor remains unproven; the governor
+refuses to change that scope's limits.
+
 ### Haul delivery after queue changes
 
 The Stop hook reads the current assigned queue at each boundary; work assigned

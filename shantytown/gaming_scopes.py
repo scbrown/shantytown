@@ -61,11 +61,16 @@ def owned_scope(root, agent, pane_pid, cgroup_path):
         pids = panemem.scope_pids(cgroup_path)
         anchors = [int(pane_pid)]
         for pid in pids:
+            if panemem._is_descendant(pid, int(pane_pid)):
+                continue
             try:
                 env = dict(part.split(b'=', 1) for part in
                            Path(f'/proc/{pid}/environ').read_bytes().split(b'\0')
                            if b'=' in part)
-            except FileNotFoundError:
+            except (FileNotFoundError, PermissionError):
+                # Environment access is not ownership proof. A protected child
+                # can still belong to an attributed runtime discovered later;
+                # the final ancestry check refuses every unproven process.
                 continue
             if (env.get(b'SHANTY_AGENT') == agent.encode()
                     and env.get(b'SHANTY_ROOT') == str(root).encode()):
