@@ -457,7 +457,7 @@ anything). The line moves with the MODEL, not the harness. `compaction.jsonl` is
 per agent; codex has produced no points yet.
 
 Everything in the codex column was read out of `openai/codex` `main` on 2026-08-06, with the source
-file named beside each fact in [`shantytown/codex.py`](../shantytown/codex.py). There was no codex
+file named beside each fact in [`shantytown/codex.py`](https://github.com/scbrown/shantytown/blob/main/shantytown/codex.py). There was no codex
 binary on the machine that wrote it, and a guess about another CLI's flags is exactly the kind of
 code that looks shipped and has never run.
 
