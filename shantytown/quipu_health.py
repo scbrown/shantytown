@@ -70,6 +70,8 @@ def check(server: str | None, *, timeout: float = 5) -> WriteHealth:
         return WriteHealth("no-token", "Cannot read the configured token file. " + TOKEN_HELP, 1)
     headers["X-Quipu-Client"] = "agent-adhoc"
     token_set = "Authorization" in headers
+    if not token_set:
+        return WriteHealth("no-token", TOKEN_HELP, 1)
     request = urllib.request.Request(server.rstrip("/") + "/episode", data=b"{}", headers=headers, method="POST")
     try:
         with urllib.request.build_opener(_NoRedirect).open(request, timeout=timeout) as response:
