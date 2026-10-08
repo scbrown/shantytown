@@ -6174,6 +6174,7 @@ def _cmd_crew(a) -> int:
     if getattr(a, 'governor', False) and (getattr(a, 'json', False)
                                         or cfg.host_peers and not getattr(a, 'local', False)):
         return _crew_account_governor(a)
+    from .dashboard import crew_role_sources, crew_role_cell
     peer_results = (fleet_mod.collect(cfg.host_peers)
                     if not getattr(a, "local", False) else [])
     a.crew_peers = peer_results
@@ -6274,6 +6275,7 @@ def _cmd_crew(a) -> int:
                 cycle_request_stale=ag.name in cycle_stale,
                 name=ag.name, host=local or "local", role=",".join(ag.effective_roles()),
                 tree_role=ag.role, retired=bool(ag.retired),
+                role_sources=crew_role_sources(ag, cfg.roles),
                 state=state, work=work, posture=posture, pane=ag.pane or "—",
                 live=live, harness=actual or harness_mod.name_for(ag, root=a.root),
                 settings=_settings_verdict(launches, ag.name, state == "up"),
@@ -6324,11 +6326,18 @@ def _cmd_crew(a) -> int:
              else (lambda pane: None))
     from . import dashboard as dash_mod
     import shutil
+    local_roles = {ag.name: crew_role_cell(crew_role_sources(ag, cfg.roles))
+                   for ag in agents}
+    peer_rows = fleet_mod.rows(peer_results)
+    peer_roles = [crew_role_cell(row.get("role_sources") or
+                                {"declared": row["role"].split(",")})
+                  for row in peer_rows]
+    role_width = max([14, *(len(cell) for cell in [*local_roles.values(), *peer_roles])])
     title_width = None if getattr(a, "wide", False) else max(
         1, shutil.get_terminal_size().columns - 14)
     print()
     if peer_results:
-        print(f"  {'HOST':<22} {'AGENT':<11} {'ROLE':<14} {'STATE':<13} "
+        print(f"  {'HOST':<22} {'AGENT':<11} {'ROLE':<{role_width}} {'STATE':<13} "
               f"{'SETTINGS':<8} {'TREE':<9} {'WORK':<16} {'POSTURE':<7} PANE")
     for ag, state, work, posture in _crew_states(
             agents, panes, runtime, cycling=cycling, untracked_root=a.root,
@@ -6417,9 +6426,9 @@ def _cmd_crew(a) -> int:
         # datum that says keeper outranks worker, and inventing one here would
         # reintroduce that tie-break in the renderer. An undeclared member falls
         # back to its tree position, so an un-migrated fleet looks exactly as before.
-        role_cell = ",".join(ag.effective_roles())
+        role_cell = local_roles[ag.name]
         host_cell = f"{local or 'local':<22} " if peer_results else ""
-        print(f"  {host_cell}{ag.name:<11} {role_cell:<14} {state:<13} {verdict:<8} "
+        print(f"  {host_cell}{ag.name:<11} {role_cell:<{role_width}} {state:<13} {verdict:<8} "
               f"{tree_cell:<9} {work:<16} {posture:<7} {ag.pane or '—'}")
         if state == "up":
             try:
@@ -6436,8 +6445,8 @@ def _cmd_crew(a) -> int:
                 print(f"    {context_label}")
                 if context_label.startswith("context UNKNOWN"):
                     context_unknown.append(ag.name)
-    for row in fleet_mod.rows(peer_results):
-        print(f"  {row['host']:<22} {row['name']:<11} {row['role']:<14} "
+    for row, role_cell in zip(peer_rows, peer_roles):
+        print(f"  {row['host']:<22} {row['name']:<11} {role_cell:<{role_width}} "
               f"{row['state']:<13} {row['settings']:<8} {row['tree']:<9} "
               f"{row['work']:<16} {row['posture']:<7} {row['pane']}")
     for error in peer_errors:
