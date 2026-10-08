@@ -89,3 +89,30 @@ def test_inbox_scopes_recipient_and_closed_receipts_and_refuses_partial(monkeypa
         inbox.unread("worker")
     with pytest.raises(PartialAnswer):
         inbox.find_delivery("worker", "marker")
+
+@pytest.mark.parametrize("stamp", ["2000-01-01", "2099-01-01", "malformed", ""])
+def test_deferral_candidates_keep_both_representations_without_whole_open_read(monkeypatch, stamp):
+    t = SdTracker(quipu="https://example.test", prefix="test")
+    calls = []
+    def run(*args):
+        status = args[args.index("--status") + 1]
+        calls.append(args)
+        assert ("--defer-until-present" in args) == (status == "open")
+        rows = [dict(id=status, status=status, defer_until=stamp if status == "open" else None)]
+        return subprocess.CompletedProcess(args, 0, json.dumps(
+            dict(issues=rows, total=1, has_more=False)), "")
+    monkeypatch.setattr(t, "_bd", run)
+    assert {r["id"] for r in t.deferred_rows().exact()} == {"deferred", "open"}
+    assert len(calls) == 2
+
+@pytest.mark.parametrize("payload", [
+    dict(issues=[], total=2, has_more=True),
+    dict(issues=[dict(id="open", status="open")], total=1, has_more=False),
+])
+def test_deferral_candidates_refuse_partial_or_unscoped_open_rows(monkeypatch, payload):
+    from shantytown.answer import PartialAnswer
+    t = SdTracker(quipu="https://example.test", prefix="test")
+    monkeypatch.setattr(t, "_bd", lambda *args: subprocess.CompletedProcess(
+        args, 0, json.dumps(payload), ""))
+    with pytest.raises(PartialAnswer):
+        t.deferred_rows().exact()

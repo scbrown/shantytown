@@ -741,6 +741,9 @@ class TrackerAdapter:
         """Deferred AND open rows — the deferral sweep keys off `defer_until`,
         which lives under both statuses since the cutover (aegis-boj8a2)."""
         if self.tracker is not None:
+            scoped = getattr(self.tracker, "deferred_rows", None)
+            if callable(scoped):
+                return scoped()
             from .br import deferred
             value = deferred(self.tracker)
         else:

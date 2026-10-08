@@ -153,6 +153,34 @@ class SdTracker(BrTracker):
                                  quipu_url=w.get("quipu_url"), prefix=w.get("prefix"))
         return self._proof
 
+    def deferred_rows(self) -> Answer[list[dict]]:
+        """Both deferral representations, selecting dated open rows remotely."""
+        rows = {}
+        how = "sd list deferred + open --defer-until-present, --limit 0"
+        try:
+            for status in ("deferred", "open"):
+                args = ["list", "--status", status, "--json", "--limit", "0"]
+                if status == "open":
+                    args.append("--defer-until-present")
+                result = self._bd(*args)
+                if result.returncode:
+                    raise RuntimeError(_failure_reason(result))
+                payload = json.loads(result.stdout)
+                candidates = payload.get("issues") if isinstance(payload, dict) else None
+                if (not isinstance(candidates, list) or payload.get("has_more") is not False
+                        or payload.get("total") != len(candidates)):
+                    raise ValueError("deferral listing did not prove completeness")
+                for row in candidates:
+                    if not isinstance(row, dict) or not row.get("id"):
+                        raise ValueError("deferral listing returned an invalid issue")
+                    if status == "open" and row.get("defer_until") is None:
+                        raise ValueError("open deferral listing included an undated issue")
+                    rows[row["id"]] = row
+            return Answer.complete_read(list(rows.values()), how=how)
+        except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as error:
+            return Answer.capped(list(rows.values()), how=how,
+                                 caveat=f"deferral candidates unreadable: {error}")
+
     def plate_rows(self, agent: str) -> Answer[list[dict]]:
         """Query both accepted owner spellings before selecting the plate.
 
