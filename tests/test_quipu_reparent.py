@@ -120,6 +120,8 @@ class Raw(QuipuRegistry):
 def _patch_http(monkeypatch, reg):
     """Route _knot/_retract's urllib through the canned body."""
     import shantytown.quipu as q
+    monkeypatch.setenv("QUIPU_AUTH_TOKEN", "isolated-test-fixture")
+    monkeypatch.setenv("QUIPU_SESSION", f"fixture-{id(reg)}")
 
     class FakeResp:
         def __init__(self, b): self._b = json.dumps(b).encode()

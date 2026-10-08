@@ -455,14 +455,18 @@ def _known_quipu_bearers() -> tuple[bytes, ...]:
     env_value = os.environ.get("QUIPU_AUTH_TOKEN", "").strip()
     if env_value:
         values.append(env_value)
-    token_file = Path(os.environ.get(
-        "QUIPU_TOKEN_FILE", Path.home() / _QUIPU_TOKEN_FILE))
-    try:
-        file_value = token_file.read_text(encoding="utf-8").strip()
-    except OSError:
-        file_value = ""
-    if file_value:
-        values.append(file_value)
+    # Mask shadowed sources too: redaction is broader than writer resolution.
+    paths = {Path.home() / _QUIPU_TOKEN_FILE, Path.home() / '.config/quipu/token'}
+    for name in ('QUIPU_TOKEN_FILE', 'QUIPU_AUTH_TOKEN_FILE'):
+        if os.environ.get(name):
+            paths.add(Path(os.environ[name]))
+    for token_file in paths:
+        try:
+            file_value = token_file.read_text(encoding="utf-8").strip()
+        except (OSError, UnicodeError):
+            continue
+        if file_value:
+            values.append(file_value)
     # Refuse tiny strings: replacing a short misconfigured value such as "yes"
     # would destroy unrelated transcript content rather than protect a secret.
     return tuple(dict.fromkeys(v.encode() for v in values if len(v) >= 16))

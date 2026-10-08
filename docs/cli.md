@@ -2295,3 +2295,20 @@ this advisory does not invent one from labels. Existing governor admission
 checks remain authoritative. A bare tracker assignment bypasses the immediate
 `st go` message; crew/tend detects it once the item is active on a live agent.
 The advisory never reassigns work or changes priorities.
+
+### Session credential refusal
+
+Quipu registry writes require a nonempty credential selected in this order:
+`QUIPU_AUTH_TOKEN` (trimmed), `QUIPU_AUTH_TOKEN_FILE`, then
+`~/.config/quipu/token`. An explicit missing file does not fall back. Missing,
+unreadable or rejected credentials emit one diagnostic and disable later writes
+to that server for the session. Public reads remain available.
+
+When a harness session ID is present, private refusal markers under
+`$XDG_STATE_HOME/shantytown/quipu-auth` (default `~/.local/state`) carry this state
+across invocations. If persistence is unavailable or there is no session ID,
+the diagnostic names the process-only limitation. Repair the credential and start
+a new session. `st ops doctor` reports a disabled session without resetting it;
+its existing empty-episode probe tests authorization, not storage commits.
+Transcript redaction covers canonical, explicit and former credential files,
+including values shadowed by an environment override.
