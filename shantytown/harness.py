@@ -429,7 +429,8 @@ class ClaudeHarness:
         # without stamping it onto every card — and a card still beats both.
         model = resolve_model(card, root)
         if model:
-            flags += f" --model {model}"
+            flags += f" --model {shlex.quote(model)}"
+        model_env = f"SHANTY_MODEL={shlex.quote(model)} " if model else ""
         # BOBBIN_ROLE is how yupana's policy guard resolves WHICH scope applies
         # (yupana#20: tenant is resolved --tenant, then BOBBIN_ROLE; scopes live
         # in .bobbin/config.toml under [yupana.policy.scopes.<role>] — the
@@ -483,8 +484,8 @@ class ClaudeHarness:
         st_domain = f"ST_ROLE_DOMAIN={card.domain} " if card.domain else ""
         st_reports = f"ST_REPORTS_TO={card.reports_to} " if card.reports_to else ""
         launch = (
-            f"{root_env}SHANTY_AGENT={card.name} BOBBIN_ROLE={card.role} "
-            f"BEADS_ACTOR={card.name} {st_roles}{st_domain}{st_reports}"
+            f"env -u SHANTY_MODEL {root_env}SHANTY_AGENT={card.name} BOBBIN_ROLE={card.role} "
+            f"BEADS_ACTOR={card.name} {st_roles}{st_domain}{st_reports}{model_env}"
             f"claude {flags} --settings {settings_path}"
         )
         # Launch IN the agent's workspace so Claude Code auto-loads its .mcp.json +
@@ -918,9 +919,14 @@ class CodexHarness:
         st_roles = f"ST_ROLES={','.join(card.effective_roles())} "
         st_domain = f"ST_ROLE_DOMAIN={card.domain} " if card.domain else ""
         st_reports = f"ST_REPORTS_TO={card.reports_to} " if card.reports_to else ""
+        # Remote tool shells inherit the daemon's environment, not the TUI's.
+        # Resolve once before either process starts so provenance and --model
+        # name the same declared selection, even if configuration later changes.
+        model = resolve_model(card, root)
+        model_env = f"SHANTY_MODEL={shlex.quote(model)} " if model else ""
         identity_env = (
             f"{root_env}SHANTY_AGENT={card.name} BOBBIN_ROLE={card.role} "
-            f"BEADS_ACTOR={card.name} {st_roles}{st_domain}{st_reports}"
+            f"BEADS_ACTOR={card.name} {st_roles}{st_domain}{st_reports}{model_env}"
         )
         # --dangerously-bypass-hook-trust IS A DEFAULT HERE, and it is the one
         # `dangerously-` flag in this repo that is not opt-in per card. The
@@ -1065,7 +1071,7 @@ class CodexHarness:
                 # is the same environment rail as SHANTY_AGENT, not independent
                 # corroboration.  Remove it from the daemon only; the attached
                 # TUI below still inherits its real pane marker from tmux.
-                f"env -u TMUX_PANE {identity_env}"
+                f"env -u TMUX_PANE -u SHANTY_MODEL {identity_env}"
                 f"{codex_mod().HOME_VAR}={daemon_home} "
                 "codex remote-control start "
                 f"{daemon_sandbox}"
@@ -1118,16 +1124,15 @@ class CodexHarness:
         # card -> role -> fleet ladder as ClaudeHarness: resolving in ONE helper
         # is what keeps the two programs from drifting into different answers for
         # the same card, which is the aegis-85ox mismatch class.
-        model = resolve_model(card, root)
         if model:
-            flags += f" --model {model}"
+            flags += f" --model {shlex.quote(model)}"
         # Identical env contract to ClaudeHarness — SHANTY_ROOT the belt for a
         # stale settings snapshot (aegis-nipg), BOBBIN_ROLE for yupana's scope,
         # BEADS_ACTOR so the tracker records WHO (GitHub #24), ST_ROLES carrying
         # the role set OPAQUELY (GitHub #37). None of that is Claude Code's; it
         # is how a shantytown agent knows who it is, whatever program it runs.
         launch = (
-            f"{daemon_start}{identity_env}{codex_mod().HOME_VAR}={home} codex {flags}"
+            f"{daemon_start}env -u SHANTY_MODEL {identity_env}{codex_mod().HOME_VAR}={home} codex {flags}"
         )
         # NO SECRET REACHES THE SESSION ENVIRONMENT (aegis-6qau3t). This used to
         # read `set -a; . <root>/provision/secrets.env; set +a;` so that codex
