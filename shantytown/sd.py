@@ -244,7 +244,15 @@ class SdTracker(BrTracker):
                 candidates = payload.get("issues") if isinstance(payload, dict) else payload
                 if not isinstance(candidates, list):
                     raise ValueError("readiness returned no issue array")
-                ready.update(row["id"] for row in candidates if row.get("id"))
+                if isinstance(payload, dict) and (
+                        payload.get("has_more") is not False
+                        or payload.get("total") != len(candidates)):
+                    raise ValueError("owner readiness did not prove completeness")
+                for row in candidates:
+                    if (not isinstance(row, dict) or not isinstance(row.get("id"), str)
+                            or not row["id"].strip()):
+                        raise ValueError("owner readiness returned an invalid issue ID")
+                    ready.add(row["id"])
             return Answer.complete_read(ready, how=how)
         except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as error:
             return Answer.capped(ready, how=how, caveat=f"owner readiness unreadable: {error}")

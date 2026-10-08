@@ -116,3 +116,41 @@ def test_deferral_candidates_refuse_partial_or_unscoped_open_rows(monkeypatch, p
         args, 0, json.dumps(payload), ""))
     with pytest.raises(PartialAnswer):
         t.deferred_rows().exact()
+
+
+@pytest.mark.parametrize("payload", [
+    {"issues": [{"id": "z"}], "total": 2, "has_more": True},
+    {"issues": [{"id": "z"}], "total": 2, "has_more": False},
+    {"issues": [{"id": "z"}, {}], "total": 2, "has_more": False},
+    [{"id": "z"}, {}], [{"id": "z"}, {"id": 7}],
+    [{"id": "z"}, {"id": " "}], [{"id": "z"}, None],
+])
+def test_invalid_readiness_is_unknown_and_preserves_plate_ranking(monkeypatch, payload):
+    from shantytown.answer import PartialAnswer
+    t, _ = tracker(monkeypatch)
+    original = t._bd
+    def read(*args):
+        if args[0] == "ready":
+            return subprocess.CompletedProcess(args, 0, json.dumps(payload), "")
+        return original(*args)
+    monkeypatch.setattr(t, "_bd", read)
+    answer = t.plate_ready_ids("rig/worker")
+    assert not answer.complete
+    with pytest.raises(PartialAnswer):
+        answer.exact()
+    assert br.plate(t, "rig/worker").id == "a", "unknown readiness changed the fallback rank"
+
+
+@pytest.mark.parametrize("payload", [
+    [{"id": "z"}],
+    {"issues": [{"id": "z"}], "total": 1, "has_more": False},
+    [], {"issues": [], "total": 0, "has_more": False},
+])
+def test_ready_bare_array_and_complete_envelope_controls(monkeypatch, payload):
+    t = SdTracker(quipu="https://example.test", prefix="test")
+    monkeypatch.setattr(t, "_bd", lambda *args: subprocess.CompletedProcess(
+        args, 0, json.dumps(payload), ""))
+    expected = {"z"} if payload else set()
+    if isinstance(payload, dict) and not payload["issues"]:
+        expected = set()
+    assert t.plate_ready_ids("worker").exact() == expected
