@@ -75,3 +75,27 @@ def test_failed_snapshot_is_unknown_without_refusing_dispatch(monkeypatch):
         raise OSError('tracker down')
     monkeypatch.setattr(cli, '_priority_snapshot', fail)
     assert 'unavailable' in cli._priority_go_note(SimpleNamespace(item='low'))
+
+
+def test_fleet_does_not_treat_parked_or_record_rows_as_work():
+    from shantytown.answer import Answer
+    from shantytown.protocols import Agent
+    reg = SimpleNamespace(all=lambda: Answer.complete_read(
+        [Agent(name="worker", pane="p")], how="test registry"))
+    panes = SimpleNamespace(exists=lambda p: True)
+    active = [LOW | {"assignee": "worker", "labels": ["parked:by-design"]},
+              LOW | {"assignee": "worker", "title": "inbox: message"}]
+    assert pa.fleet_advice([HIGH], active, reg, panes) == []
+    assert len(pa.fleet_advice([HIGH], [LOW | {"assignee": "worker"}] * 3, reg, panes)) == 1
+
+
+def test_liveness_exception_is_not_a_down_owner():
+    from shantytown.answer import Answer
+    from shantytown.protocols import Agent
+    reg = SimpleNamespace(all=lambda: Answer.complete_read(
+        [Agent(name="unknown", pane="p")], how="test registry"))
+    def failed(_):
+        raise OSError("tmux unavailable")
+    down = pa.down_agents(reg, SimpleNamespace(exists=failed))
+    assert down == set()
+    assert pa.advice([HIGH | {"assignee": "unknown"}], LOW, down) == ""
