@@ -769,3 +769,34 @@ def test_atomic_write_goes_through_a_symlink_and_keeps_the_link(tmp_path):
     write_text_atomic(link, "new")
     assert link.is_symlink() and real.read_text() == "new"
     assert sorted(p.name for p in tmp_path.iterdir()) == ["link.json", "real.json"]
+
+
+@pytest.mark.parametrize("harness", ["claude", "codex"])
+def test_emit_names_a_dropped_unregistered_hook(root, harness, capsys):
+    from shantytown import cli
+    h = harness_mod.get(harness)
+    path = emit(root, harness, "worker")
+    data = h.settings("worker", root=root)
+    data["hooks"]["Stop"].append({"matcher": "", "hooks": [
+        {"type": "command", "command": "unregistered-tool stop"}]})
+    path.write_text(h.render(data, root=root))
+    cli._emit_role_settings(root, {"worker"}, harness_name=harness)
+    err = capsys.readouterr().err
+    assert "dropping hook" in err and "unregistered-tool stop" in err
+    assert str(path) in err and "Stop" in err and "register" in err
+    assert "unregistered-tool stop" not in commands(harness, path, "Stop")
+    assert commands(harness, path, "Stop"), "positive control: generated Stop remains"
+    cli._emit_role_settings(root, {"worker"}, harness_name=harness)
+    assert not capsys.readouterr().err
+
+
+@pytest.mark.parametrize("harness", ["claude", "codex"])
+def test_emit_does_not_warn_for_preserved_registered_hooks(root, harness, capsys):
+    from shantytown import cli
+    register(root, bundle())
+    cli._emit_role_settings(root, {"worker"}, harness_name=harness)
+    cli._emit_role_settings(root, {"worker"}, harness_name=harness)
+    assert EXAMPLE_CMD in commands(harness, root / "settings" /
+                                   harness_mod.get(harness).settings_name("worker"),
+                                   "UserPromptSubmit")
+    assert not capsys.readouterr().err
