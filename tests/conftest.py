@@ -110,8 +110,9 @@ def _no_real_store(request, monkeypatch):
         return
 
     def _refuse(self, *args, **kw):
+        tool = getattr(self, "_tool", "bd")
         raise AssertionError(
-            f"a test shelled out to `bd {' '.join(map(str, args))[:60]}` — that "
+            f"a test shelled out to `{tool} {' '.join(map(str, args))[:60]}` — that "
             f"runs against whatever store the CWD resolves to, NOT the test's "
             f"--root (--root does not scope the beads backend; only --repo "
             f"does). This is how four phantom 'mail: HANDOFF the epic' beads "

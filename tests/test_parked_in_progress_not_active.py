@@ -23,6 +23,8 @@ from shantytown.inbox import drop_parked
 
 
 BR = shutil.which("br")
+# Each case creates its own tmp_path board and intentionally exercises the CLI.
+pytestmark = pytest.mark.real_store
 
 
 @pytest.fixture
