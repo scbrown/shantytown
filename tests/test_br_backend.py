@@ -15,6 +15,8 @@ from shantytown.tmux import NullPanes
 
 
 BR = shutil.which("br")
+# Every invocation below names a freshly initialized tmp_path store.
+pytestmark = pytest.mark.real_store
 
 
 @pytest.fixture
