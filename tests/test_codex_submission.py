@@ -55,6 +55,26 @@ def test_one_enter_retry_recovers_only_our_pending_body(monkeypatch):
     assert [c[-1] for c in sends if '-l' in c] == [BODY]
 
 
+@pytest.mark.parametrize('retry_foreground', [None, 'bash', 'claude', 'unrecognized', 'node'])
+def test_retry_requires_positive_codex_identity(monkeypatch, retry_foreground):
+    panes, calls = transport(monkeypatch, [READY, OWNED, OWNED, BUSY])
+    foregrounds = iter(['codex', retry_foreground])
+    monkeypatch.setattr(panes, 'foreground', lambda _: next(foregrounds))
+    monkeypatch.setattr(panes, 'cmdline', lambda _: None)
+    with pytest.raises(tmux.PaneSubmissionUnverified):
+        panes.send('worker', BODY)
+    assert sum(c[-1] == 'Enter' for c in keys(calls)) == 1
+
+
+def test_retry_accepts_node_only_with_live_codex_identity(monkeypatch):
+    panes, calls = transport(monkeypatch, [READY, OWNED, OWNED, BUSY])
+    foregrounds = iter(['codex', 'node'])
+    monkeypatch.setattr(panes, 'foreground', lambda _: next(foregrounds))
+    monkeypatch.setattr(panes, 'cmdline', lambda _: 'CODEX_HOME=/tmp/probe node /opt/codex')
+    panes.send('worker', BODY)
+    assert sum(c[-1] == 'Enter' for c in keys(calls)) == 2
+
+
 def test_persistent_stranding_is_unverified_and_never_resends_the_body(monkeypatch):
     panes, calls = transport(monkeypatch, [READY, OWNED])
     with pytest.raises(tmux.PaneSubmissionUnverified, match='UNVERIFIED'):

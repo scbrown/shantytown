@@ -505,10 +505,7 @@ class Tmux:
                     f"the message as a shell command.")
             before = self.capture(pane, attrs=True)
             _refuse_task_list(pane, before)
-            codex = fg == "codex"
-            if fg == "node":
-                from .harness import running_name
-                codex = running_name(self.cmdline(pane)) == "codex"
+            codex = self._confirmed_codex(pane, fg)
             if codex:
                 from .triage import input_state, INPUT_EMPTY, INPUT_PLACEHOLDER
                 if input_state(before) not in (INPUT_EMPTY, INPUT_PLACEHOLDER):
@@ -584,6 +581,17 @@ class Tmux:
         if codex:
             self._verify_codex_submission(pane, text, before)
 
+    def _confirmed_codex(self, pane: str, foreground: str | None) -> bool:
+        if foreground == "codex":
+            return True
+        if foreground == "node":
+            from .harness import running_name
+            try:
+                return running_name(self.cmdline(pane)) == "codex"
+            except (OSError, subprocess.SubprocessError):
+                return False
+        return False
+
     def _verify_codex_submission(self, pane: str, text: str, before: str) -> None:
         from . import triage
         was_busy = triage.mid_flight(before)
@@ -617,7 +625,9 @@ class Tmux:
                         break
                 if not _codex_owned_input(screen, text) or triage.mid_flight(screen):
                     break
-                if self.foreground(pane) in SHELL_COMMANDS:
+                # Initial identification cannot authorize a later keystroke:
+                # the runtime may have exited or become unreadable meanwhile.
+                if not self._confirmed_codex(pane, self.foreground(pane)):
                     break
                 subprocess.run(self._cmd("send-keys", "-t", pane, "Enter"), check=True)
                 was_busy = False  # retry was admitted only after the older turn ended

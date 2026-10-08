@@ -1347,7 +1347,9 @@ unverified before typing. It waits 500 ms between the final literal chunk and En
 checks for a new active turn with a cleared composer, or a visible queue preview
 matching the message. Existing activity alone is not confirmation. If the
 composer still contains exactly the rendered message, the transport may retry
-Enter once after the older turn ends; it never resends the body or submits a
+Enter once after the older turn ends and a fresh foreground check positively
+identifies Codex (including Node with a live Codex launch identity). An unknown
+or different foreground cannot authorize the retry. It never resends the body or submits a
 different buffer. A clipped capture, unrelated input, or missing confirmation
 reports `UNVERIFIED`. Ephemeral sends and dispatch return exit 2; dispatch does
 not record an assignment. Durable sends retain the persisted inbox pointer and
