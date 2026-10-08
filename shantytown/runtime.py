@@ -683,9 +683,9 @@ _YUPANA_BRIEF = (
 def _yupana_trace_cmd() -> dict:
     """The PreToolUse:Bash ACTION TRACE (`yupana hook pre-bash`).
 
-    RECORD-ONLY by yupana's design — it never denies, never warns, prints
-    nothing, and always exits 0. It resolves a command line to
-    (verb, target, target_class) and spools one record.
+    Resolves the command, records an action, and evaluates governed policies.
+    Policy decisions travel in the output envelope; a process failure is
+    swallowed by the command wrapper.
 
     Why it matters that this runs: yupana's advise-to-enforce promotion ladder
     is gated on REPLAY over recorded actions — "would this rule have blocked
@@ -1155,7 +1155,7 @@ def is_trace_command(cmd: str) -> bool:
 
 def bash_group(root=None) -> dict:
     """The `Bash` matcher group: the deployment's guard when it configures one,
-    plus yupana's action trace, ALWAYS.
+    plus yupana unless the deployment explicitly delegates it to the guard.
 
     SHARED BY BOTH HARNESSES, which is the point (aegis-610jv). The matcher and
     the payload shape are one measured fact — `tool_name: "Bash"` with
@@ -1164,9 +1164,11 @@ def bash_group(root=None) -> dict:
     twice could drift into two answers to one question, leaving an agent traced
     under one shape and CHECKED under another.
 
-    THE TRACE IS UNCONDITIONAL AND THE GUARD IS NOT, and the asymmetry is
-    deliberate. `SHANTY_BASH_GUARD` is a deployment's choice about what to
-    REFUSE; attribution is not a choice. A deployment with no host guard still
+    By default the trace is unconditional and the guard is not. The explicit
+    SHANTY_BASH_GUARD_RUNS_YUPANA=1 contract delegates invocation to a configured
+    guard. Without a guard, that setting cannot suppress Yupana.
+    `SHANTY_BASH_GUARD` is a deployment's choice about what to REFUSE;
+    attribution is not a choice. A deployment with no host guard still
     has to be able to say which agent and which work item caused an action —
     that is the question the whole work-scoped-governance epic exists to answer,
     and yupana's advise-to-enforce promotion is gated on REPLAYING those
@@ -1177,16 +1179,21 @@ def bash_group(root=None) -> dict:
     is legal for Claude Code and confusing for every reader of the emitted
     settings — and `st fleet roles --check` reads that shape back.
 
-    The trace cannot refuse anything: `yupana hook pre-bash` is record-only by
-    construction (never denies, never prints, always exit 0) and the `|| exit 0`
-    means no absent or crashed binary can reach exit 2, the one code Claude Code
-    treats as a hard block.
+    Yupana pre-bash records actions and evaluates governed policies; its JSON
+    envelope may deny or advise. The `|| exit 0` wrapper prevents a process
+    failure from becoming an exit-2 refusal; it preserves the policy envelope.
     """
     hooks = []
     guard = bash_guard_group(root)
     if guard:
         hooks.extend(guard["hooks"])
-    hooks.append(_yupana_trace_cmd())
+    # Some deployment guards already invoke Yupana and carry temporary grants
+    # into that invocation. Running it twice duplicates action metrics and
+    # evaluates the second call without that grant. Ownership is explicit:
+    # never infer it from the guard's executable name or source text.
+    delegated = deployment_default(root, "SHANTY_BASH_GUARD_RUNS_YUPANA") == "1"
+    if not (guard and delegated):
+        hooks.append(_yupana_trace_cmd())
     return {"matcher": BASH_MATCHER, "hooks": hooks}
 
 
