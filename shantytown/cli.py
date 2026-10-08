@@ -4666,7 +4666,21 @@ def _emit_role_settings(root: Path, roles: set[str],
         # file format to keep the rule.
         # ATOMIC (aegis-yb8ifi): every agent on this role launches on this file,
         # and write_text truncates first, so a failure mid-write left it 0 bytes.
-        write_text_atomic(p, program.render(emitted, _read_text(p), root=root))
+        existing = _read_text(p)
+        rendered = program.render(emitted, existing, root=root)
+        # Compare the actual artifacts: registry membership alone misses manual
+        # hooks, and an event may be preserved by one harness but replaced by another.
+        from . import hook_bundles as hb
+        before = hb._hooks_from_bytes(program.name, existing.encode()) or {}
+        after = hb._hooks_from_bytes(program.name, rendered.encode()) or {}
+        for event, groups in sorted(before.items()):
+            removed = hb._commands_in(groups) - hb._commands_in(after.get(event))
+            for matcher, command in sorted(removed, key=lambda item: (str(item[0]), item[1])):
+                print(f"warning: dropping hook from {p}: event={event!r} "
+                      f"matcher={matcher!r} command={command!r}; "
+                      "absent from regenerated settings; register intended hooks "
+                      "with st ops hooks register before re-emitting", file=sys.stderr)
+        write_text_atomic(p, rendered)
         written.append(p)
     return written
 
