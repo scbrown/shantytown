@@ -629,7 +629,8 @@ def _haul(reg: FilesRegistry, panes, me: str, root: Path) -> int:
             return 0
         mine = []
         if resume is None:
-            mine = _assigned_to(me, _bd_json(["ready", "--limit", "0"], cwd, root=root, reg=reg))
+            all_ready = _bd_json(["ready", "--limit", "0"], cwd, root=root, reg=reg)
+            mine = _assigned_to(me, all_ready)
             if not mine:
                 return 0
             # A ready assignment is not governor admission (aegis-4kd6ux).
@@ -670,6 +671,11 @@ def _haul(reg: FilesRegistry, panes, me: str, root: Path) -> int:
             return 0
 
         nxt = mine[0]
+        from . import priority_advisory as pa
+        try:
+            advisory = pa.advice(all_ready, nxt, pa.down_agents(reg, panes))
+        except Exception:
+            advisory = "governor: higher-priority advisory unavailable; haul continues."
         nid = nxt.get("id", "?")
         title = (nxt.get("title") or "")[:80]
         rest = len(mine) - 1
@@ -689,7 +695,8 @@ def _haul(reg: FilesRegistry, panes, me: str, root: Path) -> int:
         print(json.dumps({"decision": "block",
                           "reason": "anchor closed ✓ — "
                           + haul_feed_message(nid, title, rest,
-                                              headroom=headroom, repeats=repeats)}))
+                                              headroom=headroom, repeats=repeats,
+                                              advisory=advisory)}))
         return 0
     except Exception:
         return 0                     # fail-open: never trap a worker's stop

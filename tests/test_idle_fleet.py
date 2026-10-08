@@ -542,3 +542,16 @@ def test_appending_behind_same_next_item_does_not_repeat_delivery(tmp_path, monk
     ready.append({"id": "work-2", "assignee": "billy"})
     alerter.sweep([])
     assert claims == ["work-1"] and len(panes.sent) == 1
+
+
+def test_tend_haul_advance_delivers_and_logs_priority_advice(tmp_path, monkeypatch):
+    alerter, panes = _hauling_world(tmp_path, monkeypatch, claims=[], ready=[
+        {'id': 'low', 'priority': 2, 'assignee': 'billy'},
+        {'id': 'high', 'priority': 1},
+    ])
+    logs = []
+    alerter._log = logs.append
+    assert alerter.sweep(alerter._reg.all().exact()) == ['billy']
+    messages = [text for pane, text in panes.sent if pane == 'p-billy']
+    assert any('high (P1)' in text for text in messages)
+    assert any('high (P1)' in text for text in logs)

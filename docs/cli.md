@@ -2261,3 +2261,24 @@ audit. A later real stop creates a new notice. Urgent governance and risen
 notices, waiting senders and unknown liveness remain deliverable. Only events
 in the measured snapshot are discarded; a new event arriving during that check
 is left for the next observation.
+
+### Untaken higher-priority work
+
+`st go` prints a governor advisory when it dispatches lower-priority work while
+higher-priority ready beads remain unassigned or belong to an agent observed down.
+The message gives the total and up to three IDs. Dispatch remains permitted;
+`--reason <text>` is an alias for `--note` and records why the lower-priority
+choice is appropriate. Prefer `--note-file` for longer explanations.
+
+Both haul advance triggers include the same advisory in the next-work message;
+tend also logs it. The crew and tend reports name waiters when a live agent has
+lower-priority active work. `crew --json` includes `priority_advisories`.
+Deferred, dependency-blocked, decision, record, and anchor beads are excluded.
+An assigned owner whose liveness cannot be read does not count as down. An
+unreadable queue produces an unavailable advisory, never a zero-waiting claim.
+
+There is currently no bead-to-role domain matcher in the dispatch/haul model;
+this advisory does not invent one from labels. Existing governor admission
+checks remain authoritative. A bare tracker assignment bypasses the immediate
+`st go` message; crew/tend detects it once the item is active on a live agent.
+The advisory never reassigns work or changes priorities.
