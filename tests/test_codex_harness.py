@@ -696,7 +696,7 @@ def test_the_settings_env_vars_are_DERIVED_from_the_registry():
     spelling, so it did not check the fleet — it checked the half of the fleet
     running that program. Derived, so a third harness with an env-borne pointer
     is covered by declaring it on itself rather than by a third special case."""
-    assert harness_mod.settings_env_vars() == (codex.HOME_VAR,)
+    assert harness_mod.settings_env_vars() == (codex.HOME_VAR, "OPENCODE_CONFIG")
     assert CLAUDE.settings_env_var is None      # a flag, nothing to recover
     assert CODEX.settings_env_var == codex.HOME_VAR
 

@@ -297,7 +297,7 @@ def link_instructions(ws, harness: str | None) -> bool:
     source = ws / "CLAUDE.md"
     if not source.is_file():
         return False
-    if harness != "codex":
+    if harness not in ("codex", "opencode"):
         return True
     target = ws / "AGENTS.md"
     if target.exists() and source.resolve() == target.resolve():
@@ -474,6 +474,14 @@ def _manifest_gaps(card: Agent, root, manifest: tooling.Manifest, secrets=None) 
             have = None
         if have != want:
             gaps.append("codex-mcp(Quipu drift)")
+    elif card.harness == "opencode":
+        from .opencode import config_path, translate_servers
+        try:
+            have = json.loads(config_path(card, root).read_text()).get("mcp", {})
+            if have != translate_servers(rendered):
+                gaps.append("opencode-mcp(Quipu drift)")
+        except (OSError, ValueError):
+            gaps.append("opencode-mcp(unreadable)")
     else:
         try:
             consent = json.loads((ws / ".claude" / CONSENT_TEMPLATE).read_text())
@@ -509,7 +517,7 @@ def missing_kit(card: Agent, root, *, manifest=_UNREAD) -> list[str]:
     have = servers_in(ws / ".mcp.json")
     if want and sorted(have) != sorted(want):
         gaps.append(f"mcp({','.join(sorted(set(want) - set(have))) or 'mismatch'})")
-    if card.harness != "codex" and not (ws / ".claude" / CONSENT_TEMPLATE).is_file():
+    if card.harness not in ("codex", "opencode") and not (ws / ".claude" / CONSENT_TEMPLATE).is_file():
         gaps.append("mcp-consent")
     # SKILLS ARE KIT TOO — and this is the "wire the detector to something that
     # runs" half of aegis-qvxd. The standing guard for skill drift was a shell
@@ -999,7 +1007,7 @@ def provision(card: Agent, root, *, secrets=None, settings_path=None,
         consent_path = provision_dir(root) / CONSENT_TEMPLATE
         if consent_path.is_file():
             canonical_consent = _manifest_consent(consent_path.read_text(), manifest)
-        elif card.harness != "codex":
+        elif card.harness not in ("codex", "opencode"):
             raise ProvisionError("canonical MCP consent template is missing")
         rendered = json.dumps(_render_manifest(manifest, secrets if secrets is not None else load_secrets(root, template, agent=card.name)))
         try:
@@ -1117,6 +1125,9 @@ def provision(card: Agent, root, *, secrets=None, settings_path=None,
         finally:
             temporary.unlink(missing_ok=True)
     _project_codex_mcp(card, root, rendered, template)
+    if card.harness == "opencode":
+        from .opencode import project_mcp
+        project_mcp(card, root, rendered, replace=template is not None)
 
     consent = d / CONSENT_TEMPLATE
     if consent.is_file():
