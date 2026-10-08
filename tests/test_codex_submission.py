@@ -78,6 +78,14 @@ def test_existing_input_is_not_appended_to_or_submitted(monkeypatch):
     assert keys(calls) == []
 
 
+def test_clipped_composer_is_not_treated_as_empty(monkeypatch):
+    clipped = '\n'.join(['typed text wrapped beyond the prompt'] * 20) + '\n' + FOOTER
+    panes, calls = transport(monkeypatch, [clipped])
+    with pytest.raises(tmux.PaneSubmissionUnverified, match='nothing added'):
+        panes.send('worker', BODY)
+    assert keys(calls) == []
+
+
 def test_old_activity_with_no_new_queue_evidence_is_not_success(monkeypatch):
     panes, calls = transport(monkeypatch, [BUSY, BUSY])
     with pytest.raises(tmux.PaneSubmissionUnverified):

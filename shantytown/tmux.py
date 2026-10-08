@@ -510,10 +510,10 @@ class Tmux:
                 from .harness import running_name
                 codex = running_name(self.cmdline(pane)) == "codex"
             if codex:
-                from .triage import input_state, INPUT_QUEUED
-                if input_state(before) == INPUT_QUEUED:
+                from .triage import input_state, INPUT_EMPTY, INPUT_PLACEHOLDER
+                if input_state(before) not in (INPUT_EMPTY, INPUT_PLACEHOLDER):
                     raise PaneSubmissionUnverified(
-                        f"UNVERIFIED: pane {pane} already has typed input; nothing added")
+                        f"UNVERIFIED: empty composer in {pane} not confirmed; nothing added")
         # -l sends the text literally; the separate Enter is the submit.
         # This is the entire dispatch mechanism. gt nudge's own help says so:
         # "Send directly via tmux send-keys."

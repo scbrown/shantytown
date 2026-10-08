@@ -1342,7 +1342,8 @@ that message's pointer after confirming the input is not stranded. The closed be
 retains its content and history. If the recipient is down, the send fails, the input
 is stranded, or pointer closure fails, the pointer remains open for `st inbox`.
 
-Codex delivery waits 500 ms between the final literal chunk and Enter, then
+Codex delivery first confirms an empty composer; clipped or ambiguous input is
+unverified before typing. It waits 500 ms between the final literal chunk and Enter, then
 checks for a new active turn with a cleared composer, or a visible queue preview
 matching the message. Existing activity alone is not confirmation. If the
 composer still contains exactly the rendered message, the transport may retry
