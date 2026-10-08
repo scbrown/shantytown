@@ -1147,9 +1147,19 @@ class IdleFleetAlerter:
                 repeats = sb.times_served(self._shanty_root, worker, nid,
                                           spend.started)
                 sb.record_item(self._shanty_root, worker, spend.session, nid)
+                from . import priority_advisory as pa
+                selected = next((b for b in ready_beads if b.get("id") == nid), {})
+                try:
+                    advisory = pa.advice(ready_beads, selected,
+                                         pa.down_agents(self._reg, self._panes))
+                except Exception:
+                    advisory = "governor: higher-priority advisory unavailable; haul continues."
+                if advisory:
+                    self._log(advisory)
                 message = feed_check.haul_feed_message(
                     nid, "", len(feedable) - 1,
-                    headroom=sb.headroom(limits, spend), repeats=repeats)
+                    headroom=sb.headroom(limits, spend), repeats=repeats,
+                    advisory=advisory)
                 message += f" — [st serve:{serve_id} worker:{worker}]"
             target = push_to_own_pane(self._reg, self._panes, worker, message)
             if target is None:

@@ -863,7 +863,7 @@ if __name__ == "__main__":
 # claim, same handoff line — built here so the two can never drift.
 
 def haul_feed_message(nid: str, title: str, rest: int, headroom: str = "",
-                      repeats: int = 0) -> str:
+                      repeats: int = 0, advisory: str = "") -> str:
     """The advance instruction: the specific next bead, claimed and named.
 
     The last line is the RELEASE affordance (aegis-tgvtg). The haul re-serves any
@@ -899,7 +899,8 @@ def haul_feed_message(nid: str, title: str, rest: int, headroom: str = "",
     # behind it is noise to learn to skip.
     authority = f"Yours to work — {headroom}. " if headroom else "Yours to work. "
     return (
-        f"HAUL: {nid} ({t}) — `br show {nid}`, execute, close to advance "
+        (f"{advisory}\n" if advisory else "")
+        + f"HAUL: {nid} ({t}) — `br show {nid}`, execute, close to advance "
         f"({rest} more). {again}{authority}{instruction(nid)}"
         f"{handoff_text.deep_context_hint()}\n"
         f"Not this one? done -> `br close {nid}` · gated -> `st work defer {nid} "

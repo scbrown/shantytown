@@ -1300,7 +1300,7 @@ def build_parser() -> argparse.ArgumentParser:
     go.add_argument("item")
     go.add_argument("agent")
     note = go.add_mutually_exclusive_group()
-    note.add_argument("--note", default=None,
+    note.add_argument("--note", "--reason", dest="note", default=None,
                       help="a caveat delivered IN the same payload as the "
                            "dispatch — it rides the triage gate with the work, "
                            "so it cannot arrive after the worker has acted. "
@@ -5747,6 +5747,50 @@ def _go_on_host(a, note: str | None, *, recipient=None) -> int | None:
     return CANNOT_TELL
 
 
+def _priority_snapshot(a):
+    from .br import BrTracker, ready, in_progress
+    trk = _tracker(a)
+    if isinstance(trk, BrTracker):
+        return ready(trk), in_progress(trk)
+    if isinstance(trk, FilesTracker):
+        from .inbox import drop_parked
+        rows = []
+        for path in trk.root.glob("*.json"):
+            row = json.loads(path.read_text())
+            row.setdefault("id", path.stem)
+            rows.append(row)
+        rows = drop_parked(rows)
+        statuses = {r["id"]: r.get("status") for r in rows}
+        ready_rows = [r for r in rows if r.get("status") == "open" and not any(
+            d.get("dependency_type", d.get("type", "blocks")) == "blocks"
+            and statuses.get(d.get("id", d.get("depends_on_id"))) != "closed"
+            for d in (r.get("dependencies") or []))]
+        return ready_rows, [r for r in rows if r.get("status") == "in_progress"]
+    from . import feed_check
+    return feed_check.queue_state(a.root, _registry(a), trk)
+
+
+def _priority_go_note(a):
+    from . import priority_advisory as pa
+    try:
+        ready, active = _priority_snapshot(a)
+        row = next((r for r in ready + active if r.get("id") == a.item), None)
+        if row is None:
+            row = vars(_tracker(a).get(a.item))
+        return pa.advice(ready, row, pa.down_agents(_registry(a), Tmux()))
+    except Exception:
+        return "governor: higher-priority advisory unavailable; dispatch continues."
+
+
+def _priority_fleet_notes(a, reg, panes):
+    from . import priority_advisory as pa
+    try:
+        ready, active = _priority_snapshot(a)
+        return pa.fleet_advice(ready, active, reg, panes)
+    except Exception:
+        return ["governor: higher-priority advisory unavailable; supervision continues."]
+
+
 def _cmd_go(a) -> int:
     try:
         note = _read_note(a)
@@ -5797,6 +5841,8 @@ def _cmd_go(a) -> int:
         except LookupError as e:
             print(f"  refused: {e}", file=sys.stderr)
             return REFUSED
+        if advice := _priority_go_note(a):
+            print("  " + advice, file=sys.stderr)
         print(p.render()); print("\n  triage: " + decision.render())
         print("  " + gctx.render())
         graph_adoption.record(a.root, "go", a.agent, a.item, gctx, dry_run=True)
@@ -5963,6 +6009,8 @@ def _cmd_go(a) -> int:
     suggestion = None if gctx.nodes else entity_suggest.suggest(a.root, a.item)
     graph_adoption.record(a.root, "go", a.agent, a.item, gctx, session=p.pane,
                           suggestion=suggestion)
+    if advice := _priority_go_note(a):
+        print("  " + advice, file=sys.stderr)
     print(f"  {p.item_id} -> {p.agent}          in progress")
     print(f"  sent to pane {p.pane}")
     print(f"  {gctx.render()}")
@@ -6210,7 +6258,9 @@ def _cmd_crew(a) -> int:
                               scope="local" if getattr(a, "local", False) else "fleet",
                               host=local or "local", complete=not peer_errors,
                               agents=local_rows + fleet_mod.rows(peer_results),
-                              errors=peer_errors)))
+                              errors=peer_errors,
+                              priority_advisories=_priority_fleet_notes(
+                                  a, _registry(a), panes))))
         return CANNOT_TELL if peer_errors else OK
     # --count answers BEFORE the empty-roster line: an empty roster is `0/0`, not
     # a sentence telling a status bar to run `st agent new`.
@@ -6456,6 +6506,8 @@ def _cmd_crew(a) -> int:
               "Inspect with `st agent log <agent>` before dispatching.")
     # WHO CAN TAKE THIS is only half the dispatcher's question; the other half is
     # WHAT IS NOT QUEUED ANYWHERE. See _unassigned_open (aegis-jqcs3).
+    for advice in _priority_fleet_notes(a, _registry(a), panes):
+        print("  " + advice)
     n_un, n_p1, why = _unassigned_open(a)
     if n_un is None:
         print(f"  ? unassigned-open: could not ask the tracker ({why}) — this is "
@@ -11633,6 +11685,13 @@ def _tend_once(a, quiet: bool = False) -> int:
                 skipped_fleet.append(label)
                 return []
             return _sweep(label, fn)
+
+        def _priority_report():
+            for note in _priority_fleet_notes(a, _registry(a), panes):
+                _log(note)
+            return []
+
+        _fleet_sweep("priority-advisory", _priority_report)
 
         woke = _sweep("blocked-worker", lambda: notify_mod.Notifier(
             Path(a.root), _registry(a), panes, log=_log).sweep(agents, runtime))

@@ -750,3 +750,15 @@ def test_haul_respects_verdict_exemptions_drain_and_freeze(tmp_path, monkeypatch
     assert bool(captured.out) == allowed
     assert claims == (['low'] if allowed else [])
     assert ('FLOOR-EXEMPT' if allowed else 'parked by governor') in captured.err
+
+
+def test_haul_advance_names_untaken_higher_priority_work(monkeypatch, capsys):
+    claims = []
+    rc, block = _run(monkeypatch, capsys, claims=claims, ready=[
+        {'id': 'low', 'priority': 2, 'assignee': 'billy'},
+        {'id': 'high', 'priority': 1},
+        {'id': 'desk', 'priority': 0, 'labels': ['decision-needed']},
+    ])
+    assert rc == 0 and claims == ['low']
+    assert '1 higher-priority' in block['reason']
+    assert 'high (P1)' in block['reason'] and 'desk (P0)' not in block['reason']
