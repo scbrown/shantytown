@@ -12,12 +12,16 @@
 # Running a town
 
 - [Getting started](getting-started.md)
+- [New host setup](new-host.md)
+- [Second host setup](second-host.md)
 - [Configuration](configuration.md)
 - [The CLI](cli.md)
 - [Routing](routing.md)
 - [Workflows & events](workflows.md)
 - [Roles](roles.md)
 - [Harnesses](harnesses.md)
+- [Incident recall](incident-recall.md)
+- [Private stop samples](stop-samples.md)
 - [Sleep / dream](dream.md)
 - [Scheduled & event jobs](jobs.md)
 
