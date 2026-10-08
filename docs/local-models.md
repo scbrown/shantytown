@@ -56,7 +56,8 @@ Keep provider configuration in the emitted role or per-agent config:
     "*": "deny",
     "read": "allow",
     "glob": "allow",
-    "grep": "allow"
+    "grep": "allow",
+    "skill": "allow"
   }
 }
 ```

@@ -203,3 +203,23 @@ catch {denied=true;}
 if(!denied)process.exit(1);
 ''')
     subprocess.run(["node", "runner.mjs"], cwd=tmp_path, check=True, timeout=15)
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="native bridge requires Node/Bun")
+def test_native_mcp_names_reach_existing_guard_matchers(tmp_path):
+    from shantytown.opencode_bridge import SOURCE
+    (tmp_path / "bridge.mjs").write_text(SOURCE)
+    options={"mcp_servers":["remote"],"hooks":{"PreToolUse":[{
+        "matcher":"^mcp__remote__restart$","hooks":[{"type":"command","command":"exit 2"}]}]}}
+    (tmp_path / "options.json").write_text(json.dumps(options))
+    (tmp_path / "runner.mjs").write_text('''
+import plugin from './bridge.mjs';
+import {readFileSync} from 'node:fs';
+const h=await plugin({client:{},directory:process.cwd()},JSON.parse(readFileSync('options.json')));
+await h['tool.execute.before']({sessionID:'proof',tool:'remote_status'},{args:{}});
+let denied=false;
+try {await h['tool.execute.before']({sessionID:'proof',tool:'remote_restart'},{args:{}});}
+catch {denied=true;}
+if(!denied)process.exit(1);
+''')
+    subprocess.run(["node", "runner.mjs"], cwd=tmp_path, check=True, timeout=15)
