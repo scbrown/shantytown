@@ -96,3 +96,29 @@ def test_active_projection_replaces_cached_pause_with_new_sample(tmp_path, monke
     assert 'st_bead_cost_last_success_timestamp_seconds 123\n' in text
     assert 'st_bead_cost_sync_last_run_timestamp_seconds 123\n' in text
     assert 'kind="cache_read_input"} 40\n' in text
+
+
+def test_rotation_source_identity_is_atomic_with_counts_and_survives_pause(tmp_path, monkeypatch):
+    path = tmp_path / 'cost.prom'
+    monkeypatch.setattr(cost.time, 'time', lambda: 123)
+    config = {'metric_path': str(path), 'sample_active_sources': True}
+    cost._publish_metrics(config, sample())
+    first = path.read_text()
+    marker = first.splitlines()[0]
+    assert json.loads(marker.removeprefix('# st-bead-cost-source ')) == {
+        'agent': 'worker', 'harness': 'codex', 'session': 'session'}
+    monkeypatch.setattr(cost.time, 'time', lambda: 200)
+    cost._publish_metrics(config, paused=True)
+    text = path.read_text()
+    assert text.splitlines()[0] == marker
+    assert 'kind="cache_read_input"} 40' in text
+    assert 'st_bead_cost_last_success_timestamp_seconds 123' in text
+    assert 'st_bead_cost_paused_for_review 1' in text
+
+
+def test_ambiguous_rotation_identity_cannot_replace_last_good_metric_file(tmp_path):
+    path = tmp_path / 'cost.prom'; path.write_text('last good')
+    value = sample(); value['groups'][0]['sessions'] = ['one', 'two']
+    with pytest.raises(RuntimeError, match='one parser-verified source'):
+        cost._publish_metrics({'metric_path': str(path), 'sample_active_sources': True}, value)
+    assert path.read_text() == 'last good'
