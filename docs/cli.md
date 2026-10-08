@@ -1342,6 +1342,20 @@ that message's pointer after confirming the input is not stranded. The closed be
 retains its content and history. If the recipient is down, the send fails, the input
 is stranded, or pointer closure fails, the pointer remains open for `st inbox`.
 
+Codex delivery first confirms an empty composer; clipped or ambiguous input is
+unverified before typing. It waits 500 ms between the final literal chunk and Enter, then
+checks for a new active turn with a cleared composer, or a visible queue preview
+matching the message. Existing activity alone is not confirmation. If the
+composer still contains exactly the rendered message, the transport may retry
+Enter once after the older turn ends and a fresh foreground check positively
+identifies Codex (including Node with a live Codex launch identity). An unknown
+or different foreground cannot authorize the retry. It never resends the body or submits a
+different buffer. A clipped capture, unrelated input, or missing confirmation
+reports `UNVERIFIED`. Ephemeral sends and dispatch return exit 2; dispatch does
+not record an assignment. Durable sends retain the persisted inbox pointer and
+return success for persistence while explicitly reporting unverified live
+submission. Inspect the pane or read that pointer rather than blindly resending.
+
 An **off-host** durable recipient is nudged through the same declared peer the
 ephemeral relay (and `st go`) uses: the peer host's own `st inbox` over SSH. A
 relay that exits 0 counts as live delivery and closes the pointer. When no nudge
