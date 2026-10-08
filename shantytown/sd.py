@@ -33,6 +33,8 @@ import subprocess
 from dataclasses import dataclass
 
 from .br import BrTracker, _failure_reason
+from .answer import Answer
+from .protocols import WorkItem
 
 #: Backends served by a br-compatible CLI. A site that asks "is this a tracker
 #: with plates, comments and hauls" asks THIS, so a new name cannot be missed in
@@ -150,6 +152,74 @@ class SdTracker(BrTracker):
                                  database_path=w.get("database_path"),
                                  quipu_url=w.get("quipu_url"), prefix=w.get("prefix"))
         return self._proof
+
+    def plate_rows(self, agent: str) -> Answer[list[dict]]:
+        """Query both accepted owner spellings before selecting the plate.
+
+        Reading every active issue and filtering its owner locally costs a
+        whole-board read on a remote store. Selection still uses br's ranking,
+        readiness and partial-read rules; only the candidate set is narrower.
+        """
+        return self._owner_rows(agent)
+
+    def _owner_rows(self, agent: str, *, include_closed: bool = False,
+                    messages_only: bool = False) -> Answer[list[dict]]:
+        rows, failures = {}, []
+        for owner in dict.fromkeys((agent, agent.split("/")[-1])):
+            try:
+                arguments = ["list", "--assignee", owner, "--json", "--limit", "0"]
+                if include_closed:
+                    arguments.append("--all")
+                if messages_only:
+                    arguments += ["--title-contains", "inbox:"]
+                result = self._bd(*arguments)
+                if result.returncode:
+                    raise RuntimeError(_failure_reason(result))
+                payload = json.loads(result.stdout)
+                candidates = payload.get("issues") if isinstance(payload, dict) else None
+                if not isinstance(candidates, list):
+                    raise ValueError("listing returned no issue array")
+                if payload.get("has_more") is not False or payload.get("total") != len(candidates):
+                    raise ValueError("owner listing did not prove completeness")
+                for row in candidates:
+                    if not isinstance(row, dict) or not row.get("id"):
+                        raise ValueError("listing returned an invalid issue")
+                    rows[row["id"]] = row
+            except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as error:
+                failures.append(f"sd plate listing failed for owner {owner}: {error}")
+        how = f"sd list --assignee for {agent!r} and its short spelling, --limit 0"
+        if failures:
+            return Answer.capped(list(rows.values()), how=how, caveat="; ".join(failures))
+        return Answer.complete_read(list(rows.values()), how=how)
+
+    def inbox_items(self, agent: str, include_closed: bool = False) -> Answer[list[WorkItem]]:
+        """Read only this recipient's messages, with closed receipt support."""
+        answer = self._owner_rows(agent, include_closed=include_closed, messages_only=True)
+        items = [WorkItem(id=row["id"], title=row.get("title", ""),
+                          status=row.get("status", "open"), assignee=row.get("assignee"),
+                          priority=row.get("priority", 2)) for row in answer.at_least()]
+        how = answer.how + ", --title-contains inbox:" + (", --all" if include_closed else "")
+        if answer.complete:
+            return Answer.complete_read(items, how=how)
+        return Answer.capped(items, how=how, caveat=answer.caveat)
+
+    def plate_ready_ids(self, agent: str) -> Answer[set[str]]:
+        """Read readiness only for the owner spellings used by plate selection."""
+        ready = set()
+        how = f"sd ready --assignee for {agent!r} and its short spelling, --limit 0"
+        try:
+            for owner in dict.fromkeys((agent, agent.split("/")[-1])):
+                result = self._bd("ready", "--assignee", owner, "--json", "--limit", "0")
+                if result.returncode:
+                    raise RuntimeError(_failure_reason(result))
+                payload = json.loads(result.stdout)
+                candidates = payload.get("issues") if isinstance(payload, dict) else payload
+                if not isinstance(candidates, list):
+                    raise ValueError("readiness returned no issue array")
+                ready.update(row["id"] for row in candidates if row.get("id"))
+            return Answer.complete_read(ready, how=how)
+        except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as error:
+            return Answer.capped(ready, how=how, caveat=f"owner readiness unreadable: {error}")
 
     @staticmethod
     def _translate(args: "tuple[str, ...]") -> "tuple[str, ...]":

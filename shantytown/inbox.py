@@ -509,18 +509,21 @@ class TrackerInbox:
     """
 
     def __init__(self, tracker, items: Callable[[], list[WorkItem]],
-                 all_items: Callable[[], list[WorkItem]] | None = None):
+                 all_items: Callable[[], list[WorkItem]] | None = None,
+                 items_for: Callable | None = None):
         self._tracker = tracker
         self._items = items
         self._all_items = all_items
+        self._items_for = items_for
 
     def find_delivery(self, me: str, marker: str) -> Message | None:
         """Receipt lookup needs CLOSED rows too; an unread-only query lies here."""
-        if self._all_items is None:
+        if self._all_items is None and self._items_for is None:
             raise RuntimeError("durable receipt lookup requires an all-status reader")
+        source = self._items_for(me, True).exact() if self._items_for else self._all_items()
         matches = [Message(id=it.id, to=me, body=_body_of(it.title),
                            read=it.status == "closed")
-                   for it in self._all_items()
+                   for it in source
                    if is_message(it.title) and it.assignee == me
                    and _body_of(it.title).startswith(marker + " ")]
         if len(matches) > 1:
@@ -583,7 +586,7 @@ class TrackerInbox:
         """PURE READ. It lists and filters; it closes nothing."""
         return [
             Message(id=it.id, to=me, body=_body_of(it.title), frm=None)
-            for it in self._items()
+            for it in (self._items_for(me, False).exact() if self._items_for else self._items())
             if is_message(it.title)
             and it.assignee in (me, me.split("/")[-1])
             and it.status != "closed"
