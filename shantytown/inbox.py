@@ -566,8 +566,8 @@ class TrackerInbox:
             # stays: it is the non-obvious half, and without it a sender trims to the
             # character count and is refused a second time.
             raise MessageTooLong(
-                f"too long: {typed_size} {unit}, cap {budget}. Put it in a bead and "
-                f"send the pointer: `st inbox {to} 'see <bead-id>'` "
+                f"too long: {typed_size} {unit}, cap {budget}. Keep qualifiers and evidence "
+                f"in the bead; send the pointer: `st inbox {to} 'see <bead-id>'` "
                 f"(`br comments add <id> --file` for the body). `st ops help inbox`."
                 f"{note}",
                 budget=budget,
