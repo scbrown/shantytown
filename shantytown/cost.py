@@ -238,8 +238,20 @@ def _publish_metrics(config, result=None, *, paused=False):
     destination = Path(config['metric_path'])
     # A pause is a live scheduler, not a fresh cost observation. Keep the last
     # sample (including its success timestamp) when refreshing the heartbeat.
-    text = metrics(result) if result is not None else (
-        destination.read_text() if destination.exists() else '')
+    if result is not None:
+        text = metrics(result)
+        if config.get('sample_active_sources') is True:
+            identities = {(g['agent'], g['harness'], session)
+                          for g in result['groups'] for session in g['sessions']}
+            if len(identities) != 1:
+                raise RuntimeError('active cost metrics require one parser-verified source')
+            source = dict(zip(('agent', 'harness', 'session'), next(iter(identities))))
+            # The marker and counts are replaced atomically together. A separate
+            # identity file could route a new sample into the previous session's
+            # group after a crash between the two writes.
+            text = '# st-bead-cost-source ' + json.dumps(source, sort_keys=True) + '\n' + text
+    else:
+        text = destination.read_text() if destination.exists() else ''
     names = ('st_bead_cost_sync_last_run_timestamp_seconds',
              'st_bead_cost_paused_for_review')
     lines = [line for line in text.splitlines()

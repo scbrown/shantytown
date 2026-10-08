@@ -1855,6 +1855,18 @@ preserve cached cost gauges and their last-success timestamp; without a cached
 sample, only heartbeat gauges are emitted. A failed push returns UNKNOWN.
 Review must precede any new population or cap change.
 
+Active-source cost exposition carries the parser's agent, harness and session
+identity in a comment, atomically with its counts. A compatible Camayoc metrics
+publisher partitions token and coverage samples by rig/agent/harness/session,
+while scheduler status remains at the rig level. Rotation then preserves other
+sampled sessions, and a corrected session replaces only its own allocations.
+Sum token gauges across session groups for a bead, for example
+`sum by (rig, bead, model, harness, kind) (st_bead_tokens_total)`.
+These are observed supplied-source totals, not guaranteed lifetime costs.
+Each source retains its own last-success timestamp; heartbeat refresh does not
+make its cached costs fresh. Install the source-aware publisher before enabling
+the source marker. Graph publication and its existing caps are unaffected.
+
 ### Fleet view across hosts
 
 With `[host.peers.<name>]` entries configured, `st crew` reads each peer over SSH
