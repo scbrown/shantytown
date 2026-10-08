@@ -179,7 +179,7 @@ from . import scaffold
 from . import traits as traits_mod
 from . import triage as triage_mod
 from .deployment import deployment_default, resolve_root, root_note
-from .tmux import PaneNotAgent
+from .tmux import PaneNotAgent, PaneSubmissionUnverified
 from .dispatch import (Dispatcher, TriageRefused, SendUnverified,
                        DispatchedButUntracked, AlreadyAssigned, Blocked, Closed,
                        HasOpenBlocker,
@@ -4666,7 +4666,21 @@ def _emit_role_settings(root: Path, roles: set[str],
         # file format to keep the rule.
         # ATOMIC (aegis-yb8ifi): every agent on this role launches on this file,
         # and write_text truncates first, so a failure mid-write left it 0 bytes.
-        write_text_atomic(p, program.render(emitted, _read_text(p), root=root))
+        existing = _read_text(p)
+        rendered = program.render(emitted, existing, root=root)
+        # Compare the actual artifacts: registry membership alone misses manual
+        # hooks, and an event may be preserved by one harness but replaced by another.
+        from . import hook_bundles as hb
+        before = hb._hooks_from_bytes(program.name, existing.encode()) or {}
+        after = hb._hooks_from_bytes(program.name, rendered.encode()) or {}
+        for event, groups in sorted(before.items()):
+            removed = hb._commands_in(groups) - hb._commands_in(after.get(event))
+            for matcher, command in sorted(removed, key=lambda item: (str(item[0]), item[1])):
+                print(f"warning: dropping hook from {p}: event={event!r} "
+                      f"matcher={matcher!r} command={command!r}; "
+                      "absent from regenerated settings; register intended hooks "
+                      "with st ops hooks register before re-emitting", file=sys.stderr)
+        write_text_atomic(p, rendered)
         written.append(p)
     return written
 
@@ -4893,6 +4907,9 @@ def _cmd_inbox(a) -> int:
     try:
         panes.send(agent.pane, msg)
     except PaneNotAgent as e:
+        if isinstance(e, PaneSubmissionUnverified):
+            print(f"  could not tell: {e}", file=sys.stderr)
+            return CANNOT_TELL
         # THE HAZARD THIS EXISTS FOR (aegis-ikj4t): its runtime has exited, so
         # the pane is a login shell and typing here would EXECUTE the message as
         # a shell command. Observed live — another agent's escalation text and an
@@ -5210,6 +5227,10 @@ def _inbox_durable(a, agent, msg: str, panes, typed: str | None = None,
                 print(f"  -> {agent.name}    delivered to inbox as {item.id} ({backend}); "
                       f"live input is still stranded — the open pointer survives for `st inbox`.")
                 return OK
+        except PaneSubmissionUnverified as e:
+            print(f"  -> {agent.name}    delivered to inbox as {item.id} ({backend}); "
+                  f"live submission UNVERIFIED ({e}) — the open pointer survives.")
+            return OK
         except Exception as e:                    # noqa: BLE001 — never fatal here
             print(f"  -> {agent.name}    delivered to inbox as {item.id} ({backend}); "
                   f"the live nudge FAILED ({type(e).__name__}: {str(e)[:80]}) — "
@@ -5943,6 +5964,9 @@ def _cmd_go(a) -> int:
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED
     except PaneNotAgent as e:
+        if isinstance(e, PaneSubmissionUnverified):
+            print(f"  could not tell: {e} — assignment not recorded", file=sys.stderr)
+            return CANNOT_TELL
         # The pane is a SHELL, not a runtime — its agent has exited (aegis-ikj4t).
         # Nothing was typed and nothing was written, so the item stays
         # dispatchable. Refusing is the whole point: typing a dispatch into bash

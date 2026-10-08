@@ -79,29 +79,31 @@ _CARDS = [
 # OMITTED when absent rather than emitted empty — an empty env var reads as a
 # declared empty answer, and these cards have neither.
 #
+# The model carrier deliberately clears inherited SHANTY_MODEL before launching
+# cards with no declared selection, so stale parent provenance cannot survive.
 # Any OTHER change to these strings is drift, which is what the test below is for.
 _BEFORE = {
     (None, "ellie"):
-        "SHANTY_AGENT=ellie BOBBIN_ROLE=worker BEADS_ACTOR=ellie ST_ROLES=worker claude "
+        "env -u SHANTY_MODEL SHANTY_AGENT=ellie BOBBIN_ROLE=worker BEADS_ACTOR=ellie ST_ROLES=worker claude "
         "--no-chrome --remote-control ellie --settings /s/worker.json",
     (None, "malcolm"):
-        "cd /home/w && SHANTY_AGENT=malcolm BOBBIN_ROLE=lead BEADS_ACTOR=malcolm "
+        "cd /home/w && env -u SHANTY_MODEL SHANTY_AGENT=malcolm BOBBIN_ROLE=lead BEADS_ACTOR=malcolm "
         "ST_ROLES=lead claude --no-chrome --remote-control malcolm "
         "--dangerously-skip-permissions --settings /s/lead.json",
     (None, "arnold"):
-        "cd /x && SHANTY_AGENT=arnold BOBBIN_ROLE=administrator "
+        "cd /x && env -u SHANTY_MODEL SHANTY_AGENT=arnold BOBBIN_ROLE=administrator "
         "BEADS_ACTOR=arnold ST_ROLES=administrator claude --no-chrome --remote-control arnold "
         "--settings /s/administrator.json",
     ("/store/r", "ellie"):
-        "SHANTY_ROOT=/store/r SHANTY_AGENT=ellie BOBBIN_ROLE=worker "
+        "env -u SHANTY_MODEL SHANTY_ROOT=/store/r SHANTY_AGENT=ellie BOBBIN_ROLE=worker "
         "BEADS_ACTOR=ellie ST_ROLES=worker claude --no-chrome --remote-control ellie "
         "--settings /s/worker.json",
     ("/store/r", "malcolm"):
-        "cd /home/w && SHANTY_ROOT=/store/r SHANTY_AGENT=malcolm BOBBIN_ROLE=lead "
+        "cd /home/w && env -u SHANTY_MODEL SHANTY_ROOT=/store/r SHANTY_AGENT=malcolm BOBBIN_ROLE=lead "
         "BEADS_ACTOR=malcolm ST_ROLES=lead claude --no-chrome --remote-control malcolm "
         "--dangerously-skip-permissions --settings /s/lead.json",
     ("/store/r", "arnold"):
-        "cd /x && SHANTY_ROOT=/store/r SHANTY_AGENT=arnold "
+        "cd /x && env -u SHANTY_MODEL SHANTY_ROOT=/store/r SHANTY_AGENT=arnold "
         "BOBBIN_ROLE=administrator BEADS_ACTOR=arnold ST_ROLES=administrator claude --no-chrome "
         "--remote-control arnold --settings /s/administrator.json",
 }

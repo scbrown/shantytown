@@ -8,7 +8,7 @@ from shantytown.runtime import ClaudeRuntime
 
 # Fixture from the reported footer in aegis-4f0zje, not a full live capture.
 TASK_LIST = "New task\n› Describe a new task\n  esc tasks"
-TURN = "Working on the task\n› \n  gpt-6 high · /workspace"
+TURN = "Working (1s • esc to interrupt)\n› \n  gpt-6 high · /workspace"
 
 
 @pytest.mark.parametrize("screen", [TASK_LIST, TASK_LIST + "\n" * 25,
@@ -41,7 +41,9 @@ def test_real_transport_refuses_before_any_keystroke(monkeypatch, screen, refuse
     calls = []
     panes = tmux.Tmux()
     monkeypatch.setattr(panes, "foreground", lambda _: "codex")
-    monkeypatch.setattr(panes, "capture", lambda _: screen)
+    monkeypatch.setattr(panes, "capture", lambda _, **kw: screen)
+    # This case isolates task-list admission, not the submission observer.
+    monkeypatch.setattr(panes, "_verify_codex_submission", lambda *_: None)
     monkeypatch.setattr(tmux, "_journal_send", lambda *_: None)
     monkeypatch.setattr(tmux.time, "sleep", lambda _: None)
     monkeypatch.setattr(tmux.subprocess, "run", lambda argv, **kw: calls.append(argv))

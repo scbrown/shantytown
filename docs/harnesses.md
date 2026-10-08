@@ -404,6 +404,12 @@ Same ladder for the model, one axis over:
 | the fleet | `[model] default = "…"` | saying nothing |
 | nothing | — | no `--model` flag; the harness picks |
 
+The launcher exports `SHANTY_MODEL` with the exact resolved selection sent to
+`--model`. Claude and the Codex client inherit it; the Codex remote daemon receives
+it before starting, so its tool shells inherit the same value. With no declared
+selection, the launcher clears an inherited `SHANTY_MODEL` and omits `--model`; it
+does not guess the harness default. Existing sessions keep their launch environment.
+
 Both config halves are validated **at load**, and each catches a different silent failure. An
 unimplemented harness name is refused, because a typo in `default` moves every card in the fleet
 and would otherwise surface as `st agent new` failing agent by agent — a fleet-wide config error reported

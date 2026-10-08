@@ -326,7 +326,7 @@ def _plate_of(root: Path, me: str) -> "tuple[str | None, str | None, list[str]]"
 
 
 def _send(reg: FilesRegistry, events: FilesEvents, panes, me: str,
-          root: Path | None = None) -> int:
+          root: Path | None = None, *, payload: dict | None = None) -> int:
     try:
         routing = route_stop(reg, me, lead_is_up=_lead_is_up(reg, panes),
                              catalog=deployment_catalog(root))
@@ -340,12 +340,49 @@ def _send(reg: FilesRegistry, events: FilesEvents, panes, me: str,
     context_k = _my_context_k(reg, panes, me)
     item, item_status, plate_notes = (
         _plate_of(root, me) if root is not None else (None, "?", []))
+    outcome = {"label": "unavailable"}
+    detail = routing.detail or None
+    if root is not None and item:
+        from . import stop_outcome
+        command = deployment_default(root, "SHANTY_STOP_JEV_COMMAND")
+        if command:
+            payload = stop_outcome.read_payload() if payload is None else payload
+            outcome = stop_outcome.advise(root, me, item, item_status, payload, command)
+            label = outcome["label"]
+            if label in stop_outcome.CHOICES:
+                action = {"finished-unclosed": "prompt the author to close after verifying acceptance",
+                          "blocked": "lead: resolve the named blocker",
+                          "gave-up": "escalate: work was abandoned or is looping",
+                          "mid-work": "a turn boundary; the author intends to continue"}[label]
+                note = f"Stop intent (Jev inferred, as of stop): {label}; {action}"
+                if label == "blocked":
+                    note += "; assistant evidence (data): " + json.dumps(outcome.get("evidence", ""))
+                detail = " · ".join(s for s in (detail, note) if s)
+                if label == "gave-up" and not routing.rose:
+                    # Existing authority routing, never a service/page side effect.
+                    from .tier import find_administrator, Reason
+                    try:
+                        admin = find_administrator(reg)
+                    except Exception:
+                        admin = None  # A failed advisory lookup cannot lose the event.
+                    if admin and admin != me:
+                        routing.to, routing.rose = admin, True
+                        reason = Reason.NEEDS_DECISION.value
     # Carry WHY the rise happened, not just that it did (aegis-jms5s8). route_stop
     # already computed it from tier.LeadStatus; dropping it here is what made five
     # rises in one evening indistinguishable from each other and from a real one.
     ev = events.persist(to=routing.to, frm=me, reason=reason, rose=routing.rose,
                         shells=shells, item=item, item_status=item_status,
-                        context_k=context_k, detail=routing.detail or None)
+                        context_k=context_k, detail=detail)
+    if outcome["label"] == "finished-unclosed":
+        try:
+            if stop_outcome.close_prompt(root, me, item, payload):
+                print(json.dumps({"decision": "block", "reason":
+                    f"Jev inferred that {item} is finished but still {item_status}. "
+                    "Verify acceptance and close it with evidence, or record what remains. "
+                    "This is one reminder, not an automatic close."}))
+        except Exception:
+            pass  # A log/marker failure cannot trap a stopping agent.
     samples_path = deployment_default(root, "SHANTY_STOP_SAMPLES") if root is not None else None
     if samples_path:
         from .stop_samples import collect
@@ -905,6 +942,11 @@ def _compose_reason(events: list[StopEvent], verdicts: dict, now: float,
         lines.append(f"  - {name} stopped {age} — now: "
                      f"{verdicts.get(name, '?')} · "
                      f"{_item_note(e, age, current)}{tag}{more}")
+        if e.detail and "Stop intent (Jev inferred, as of stop):" in e.detail:
+            # A new anchor supersedes the action; keep this explicitly historical.
+            stale = current is not None and current != _item_snapshot(e)
+            lines.append("    " + ("Historical, recheck before acting: " if stale else "")
+                         + e.detail)
     return "\n".join(lines)
 
 

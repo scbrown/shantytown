@@ -82,6 +82,21 @@ def test_verify_reads_the_pane_back(world):
     assert d2.verify("%5", "st-x") is True
 
 
+def test_unverified_submission_leaves_assignment_untouched(world):
+    from shantytown.tmux import PaneSubmissionUnverified
+    crew, trk = world
+
+    class UnverifiedPanes(NullPanes):
+        def send(self, pane, text, **kwargs):
+            raise PaneSubmissionUnverified('submission not observed')
+
+    dispatcher = Dispatcher(FilesRegistry(crew), trk, UnverifiedPanes())
+    with pytest.raises(PaneSubmissionUnverified):
+        dispatcher.go('item-1', 'ellie')
+    assert trk.updates == 0
+    assert trk.get('item-1').status == 'open'
+
+
 class _ScrollbackPanes(NullPanes):
     """A pane whose ECHO has already scrolled off-screen — what a real Claude
     Code agent looks like milliseconds after it accepts a dispatch."""

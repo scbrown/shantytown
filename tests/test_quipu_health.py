@@ -59,7 +59,7 @@ def test_real_transport_reads_token_file_each_request_and_never_follows_redirect
         token.write_text('accepted\n')
         assert health.check(url).state == 'ok'
         assert health.check(url + '/redirect').state == 'unknown'
-        assert len(seen) == 4
+        assert len(seen) == 3
         assert all(row[2] == b'{}' for row in seen)
     finally:
         server.shutdown()
@@ -98,3 +98,32 @@ def test_doctor_renders_probe_and_propagates_exit(tmp_path, monkeypatch, capsys,
     assert cli._cmd_doctor(args) == code
     assert seen == ['http://example.test']
     assert f'{state}: fixture result' in capsys.readouterr().out
+
+
+def test_missing_credential_cannot_report_ok_on_an_open_server(tmp_path, monkeypatch):
+    monkeypatch.setenv('HOME', str(tmp_path))
+    monkeypatch.delenv('QUIPU_AUTH_TOKEN', raising=False)
+    monkeypatch.setenv('QUIPU_AUTH_TOKEN_FILE', str(tmp_path / 'absent'))
+    seen = []
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            seen.append(self.path)
+            self.send_response(400)
+            self.end_headers()
+            self.wfile.write(b'{"error":"invalid episode JSON: missing field `name`"}')
+        def log_message(self, *args):
+            pass
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    url = f'http://127.0.0.1:{server.server_port}'
+    try:
+        assert health.check(url).state == 'no-token'
+        assert seen == []
+        monkeypatch.setenv('QUIPU_AUTH_TOKEN', 'isolated-test-fixture')
+        assert health.check(url).state == 'ok'
+        assert seen == ['/episode']
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
