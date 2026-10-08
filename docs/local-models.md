@@ -62,6 +62,10 @@ Keep provider configuration in the emitted role or per-agent config:
 }
 ```
 
+Launches carry the exact resolved card/role/fleet model in `SHANTY_MODEL` for
+tool and usage provenance. An absent selection clears inherited metadata; it does
+not guess which model a provider will choose.
+
 This example scopes a card to reading. Broader tools need an explicit permission
 policy; supplying a model is not permission to expand its role.
 

@@ -129,21 +129,26 @@ def make_harness(base):
             if card.chrome:
                 raise Unsupported("OpenCode has no measured browser integration")
             config = Path(settings_path).resolve()
+            model = resolve_model(card, root)
             env = {"OPENCODE_CONFIG": str(config), "SHANTY_AGENT": card.name,
                    "BOBBIN_ROLE": card.role, "BEADS_ACTOR": card.name,
                    "ST_ROLES": ",".join(card.effective_roles())}
+            if model:
+                env["SHANTY_MODEL"] = model
             if root:
                 env["SHANTY_ROOT"] = str(Path(root).resolve())
             if card.reports_to:
                 env["ST_REPORTS_TO"] = card.reports_to
             if card.domain:
                 env["ST_ROLE_DOMAIN"] = card.domain
-            line = " ".join(f"{k}={shlex.quote(v)}" for k, v in env.items())
+            # Carry the exact launch selection to tools; absence must clear a
+            # stale parent model rather than claim another card's provenance.
+            line = "env -u SHANTY_MODEL " + " ".join(
+                f"{k}={shlex.quote(v)}" for k, v in env.items())
             line += " opencode"
             if card.dangerous:
                 # Observed 1.18.35 CLI flag. Explicit deny rules still apply.
                 line += " --auto"
-            model = resolve_model(card, root)
             if model:
                 line += " --model " + shlex.quote(model)
             # No global permission bypass: explicit per-tool permissions remain.
