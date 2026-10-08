@@ -48,6 +48,19 @@ def test_unknown_and_missing_bridge_are_not_reported_wired():
     assert program.read_stop_directions("broken") is None
 
 
+def test_per_agent_override_uses_its_own_atomic_bridge(tmp_path):
+    program=get("opencode")
+    path=tmp_path / "settings" / program.agent_settings_name("local")
+    path.parent.mkdir(parents=True)
+    path.write_text(program.render(program.settings("worker",root=tmp_path)))
+    program.provision(str(path),root=tmp_path)
+    config=json.loads(path.read_text())
+    plugin=config["plugin"][0][0]
+    assert plugin == (path.parent / "shantytown-bridge.js").as_uri()
+    assert (path.parent / "shantytown-bridge.js").is_file()
+    assert (path.stat().st_mode & 0o777)==0o600
+
+
 def test_mcp_projection_is_private_and_removes_retired_servers(tmp_path):
     program=get("opencode")
     card=Agent("local", harness="opencode")

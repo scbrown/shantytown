@@ -14,6 +14,19 @@ from pathlib import Path
 PLUGIN_NAME = "shantytown-bridge.js"
 
 
+def private_write(path, text):
+    target = Path(path).resolve()
+    with tempfile.NamedTemporaryFile(mode="w", dir=target.parent, delete=False) as f:
+        temporary = Path(f.name)
+        try:
+            f.write(text)
+            f.close()
+            temporary.chmod(0o600)
+            temporary.replace(target)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+
 def translate_servers(servers):
     from .provision import ProvisionError
     projected = {}
@@ -55,16 +68,7 @@ def project_mcp(card, root, rendered, replace=False):
     for plugin in config.get("plugin", []):
         if isinstance(plugin, list) and len(plugin) == 2 and str(plugin[0]).endswith(PLUGIN_NAME):
             plugin[1]["mcp_servers"] = sorted(config["mcp"])
-    target = path.resolve()
-    with tempfile.NamedTemporaryFile(mode="w", dir=target.parent, delete=False) as f:
-        temporary = Path(f.name)
-        try:
-            json.dump(config, f, indent=2)
-            f.close()
-            temporary.chmod(0o600)
-            temporary.replace(target)
-        finally:
-            temporary.unlink(missing_ok=True)
+    private_write(path, json.dumps(config, indent=2) + "\n")
 
 
 def bridge_options(text: str) -> dict | None:
@@ -181,9 +185,18 @@ def make_harness(base):
 
         def provision(self, settings_path, root=None, workspaces=()):
             from .opencode_bridge import SOURCE
-            path = Path(settings_path).parent / PLUGIN_NAME
-            path.write_text(SOURCE)
-            path.chmod(0o600)
+            config_path = Path(settings_path).resolve()
+            path = config_path.parent / PLUGIN_NAME
+            private_write(path, SOURCE)
+            config = json.loads(config_path.read_text())
+            changed = False
+            for plugin in config.get("plugin", []):
+                if (isinstance(plugin, list) and len(plugin) == 2
+                        and str(plugin[0]).endswith(PLUGIN_NAME) and plugin[0] != path.as_uri()):
+                    plugin[0] = path.as_uri()
+                    changed = True
+            if changed:
+                private_write(config_path, json.dumps(config, indent=2) + "\n")
             return []
 
     return OpenCodeHarness()
