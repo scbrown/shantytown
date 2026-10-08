@@ -126,3 +126,4 @@ def test_ghost_and_partial_input_cannot_authorize_enter():
     assert not tmux._codex_owned_input(READY, 'Ask Codex to do anything')
     assert not tmux._codex_owned_input(OWNED.replace(BODY, BODY[:10]), BODY)
     assert tmux._codex_owned_input(OWNED, BODY)
+    assert not tmux._codex_owned_input(OWNED.replace('assigned work', 'assignedwork'), BODY)

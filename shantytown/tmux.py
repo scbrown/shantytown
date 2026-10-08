@@ -73,7 +73,7 @@ _CODEX_POLLS = 8
 def _codex_owned_input(screen: str, text: str) -> bool:
     """Retry Enter only while the rendered composer still contains our body.
 
-    Wrapped rows change whitespace, so compare visible characters. A clipped
+    Wrapped rows change whitespace, so compare visible words. A clipped
     composer, a paste placeholder, or someone else's text cannot authorize a
     retry. Never accept the dim suggestion as typed input.
     """
@@ -91,7 +91,7 @@ def _codex_owned_input(screen: str, text: str) -> bool:
                 "tab to queue message" in line and "context left" in line):
             break
         rows.append(line)
-    return bool(rows) and "".join("".join(rows).split()) == "".join(text.split())
+    return bool(rows) and " ".join("\n".join(rows).split()) == " ".join(text.split())
 
 
 def _codex_queued(screen: str, text: str) -> bool:
@@ -102,9 +102,9 @@ def _codex_queued(screen: str, text: str) -> bool:
     if marker not in plain or not text.strip():
         return False
     queue = plain.split(marker)[-1].split("›")[0]
-    preview = "".join(queue.split()).split("↳", 1)
-    prefix = "".join(text.split())[:64]
-    return len(preview) == 2 and preview[1].startswith(prefix)
+    preview = " ".join(queue.split()).split("↳", 1)
+    prefix = " ".join(text.split())[:64]
+    return len(preview) == 2 and preview[1].lstrip().startswith(prefix)
 
 
 def _journal_send(pane: str, text: str) -> None:
