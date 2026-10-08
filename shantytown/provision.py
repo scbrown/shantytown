@@ -972,21 +972,23 @@ def provision(card: Agent, root, *, secrets=None, settings_path=None,
 
     # A role config is shared by all agents in that role. A named credential
     # must never be projected into it, including through a per-agent symlink.
-    if secrets is None and card.harness == "codex":
+    if secrets is None and card.harness in ("codex", "opencode"):
         from .provision_credentials import agent_overrides
         try:
             named = bool(agent_overrides(root, card.name))
         except ValueError as exc:
             raise ProvisionError(str(exc)) from None
         if named:
-            parent = Path(root) / "settings" / "codex"
-            config = parent / f"agent-{card.name}" / "config.toml"
+            filename = "config.toml" if card.harness == "codex" else "opencode.json"
+            parent = Path(root) / "settings" / card.harness
+            config = parent / f"agent-{card.name}" / filename
             if (not config.is_file()
-                    or any(p.resolve() == config.resolve() for p in parent.glob("*/config.toml")
+                    or any(p.resolve() == config.resolve() for p in parent.glob("*/" + filename)
                            if p != config)
                     or (settings_path is not None
                         and Path(settings_path).resolve() != config.resolve())):
-                raise ProvisionError("named credentials require an independent per-agent Codex config")
+                program = "Codex" if card.harness == "codex" else "OpenCode"
+                raise ProvisionError(f"named credentials require an independent per-agent {program} config")
 
     # Establish the authority before touching any realized kit. A graph outage
     # must never silently fall back to a stale, locally consistent template.

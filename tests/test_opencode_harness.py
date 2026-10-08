@@ -74,6 +74,14 @@ def test_header_helpers_refuse_instead_of_being_silently_dropped(tmp_path):
                                                    "headersHelper":"example"}}})
 
 
+def test_named_credentials_cannot_enter_shared_opencode_config(tmp_path, monkeypatch):
+    from shantytown import provision, provision_credentials
+    monkeypatch.setattr(provision_credentials,"agent_overrides",lambda root,name:{"TOKEN":"test"})
+    card=Agent("local",harness="opencode",workspace=str(tmp_path))
+    with pytest.raises(provision.ProvisionError,match="independent per-agent OpenCode"):
+        provision.provision(card,tmp_path)
+
+
 def test_gaming_hold_refuses_new_opencode_before_launch(tmp_path, monkeypatch):
     from shantytown import cli
     from shantytown.files import FilesRegistry
