@@ -1195,6 +1195,11 @@ Three ways to say it, in increasing strength:
 | `st fleet tend --retire <agent>` | *…and do not bring it back.* Lives on the card | `st fleet tend` never respawns it; `st fleet start` skips it; the drain never lists it |
 | `[fleet] stood_down = true` | *the whole fleet is quiet by decision* | Rule Zero yields (rank 2), and the drain withholds every dispatch step |
 
+For Codex agents, stop also terminates the card's remote-control server, updater,
+and code-mode host, even when its pane is already down. Each process must have
+the requested `SHANTY_AGENT` identity and a recognized executable or daemon argv;
+the identity is checked again before signalling. A dry run signals nothing.
+
 All three **announce themselves** rather than going quiet. A gate that silently
 stops firing is indistinguishable from a gate that is broken, which would be a worse
 version of the same bug — so the drain prints what it withheld and how to undo it,
