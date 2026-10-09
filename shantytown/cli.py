@@ -440,7 +440,8 @@ def _inbox(a, default="files"):
         trk = _tracker(a, default)
         from .br import items as br_items
         return TrackerInbox(trk, lambda: br_items(trk),
-                            lambda: br_items(trk, include_closed=True))
+                            lambda: br_items(trk, include_closed=True),
+                            items_for=getattr(trk, "inbox_items", None))
     return FilesInbox(Path(a.root) / "inbox")
 
 

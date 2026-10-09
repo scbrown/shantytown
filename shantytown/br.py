@@ -249,6 +249,21 @@ def _warn_stderr(note: str) -> None:
     print(f"  \u26a0 PLATE INCOMPLETE - {note}", file=sys.stderr)
 
 
+def _scoped_candidates(reader, agent):
+    answer = reader(agent)
+    return answer.at_least(), [] if answer.complete else [answer.note()]
+
+
+def _scoped_readiness(reader, agent):
+    from .answer import PartialAnswer
+    try:
+        return reader(agent).exact()
+    except PartialAnswer:
+        # Unknown readiness retains the previous ranking. A partial ready set
+        # would incorrectly brand unseen owned work blocked.
+        return None
+
+
 def plate(tracker: BrTracker, agent: str,
           warn: "callable | None" = None) -> WorkItem | None:
     """The agent's ONE held item, surviving an unreadable extra store.
@@ -270,8 +285,11 @@ def plate(tracker: BrTracker, agent: str,
     agent holding an item in the unreadable store still never reads as a clean
     empty plate, because the warning names the store the answer is missing.
     """
-    return _select_plate(tracker, agent, *rows_partial(tracker),
-                         lambda: ready_ids_or_none(tracker), warn)
+    scoped = getattr(tracker, "plate_rows", None)
+    seen, failures = _scoped_candidates(scoped, agent) if callable(scoped) else rows_partial(tracker)
+    scoped_ready = getattr(tracker, "plate_ready_ids", None)
+    read_ready = (lambda: _scoped_readiness(scoped_ready, agent)) if callable(scoped_ready) else (lambda: ready_ids_or_none(tracker))
+    return _select_plate(tracker, agent, seen, failures, read_ready, warn)
 
 
 def plate_reader(tracker: BrTracker, *, require_complete: bool = False):
@@ -284,14 +302,20 @@ def plate_reader(tracker: BrTracker, *, require_complete: bool = False):
     """
     from functools import cache
 
-    snapshot = cache(lambda: rows_partial(tracker))
-    ready = cache(lambda: ready_ids_or_none(tracker))
+    scoped = getattr(tracker, "plate_rows", None)
+    snapshot = cache(lambda agent: _scoped_candidates(scoped, agent)) if callable(scoped) else None
+    # The ordinary br reader still shares ONE whole-board snapshot; a remote
+    # Seeds reader instead shares only the requested owner's assignments.
+    ordinary = cache(lambda: rows_partial(tracker))
+    scoped_ready = getattr(tracker, "plate_ready_ids", None)
+    ready = cache(lambda agent: _scoped_readiness(scoped_ready, agent)) if callable(scoped_ready) else cache(lambda: ready_ids_or_none(tracker))
 
     def read(agent):
-        seen, failures = snapshot()
+        seen, failures = snapshot(agent) if callable(scoped) else ordinary()
         if require_complete and failures:
             raise RuntimeError("; ".join(failures))
-        return _select_plate(tracker, agent, seen, failures, ready, None)
+        read_ready = (lambda: ready(agent)) if callable(scoped_ready) else ready
+        return _select_plate(tracker, agent, seen, failures, read_ready, None)
 
     return read
 
