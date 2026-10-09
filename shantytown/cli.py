@@ -3350,6 +3350,19 @@ def _launch_admitted(a, card, panes, runtime, *, dry_run: bool = False,
     except RuntimeError as e:
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED
+    if getattr(a, '_account_card', None) is not None:
+        # The old TUI is gone and the target has not started. Per-card remote
+        # daemons outlive pane replacement and must not keep spending the old
+        # subscription. Reuse only the existing ownership-proven cleanup.
+        from . import codex_daemon
+        try:
+            stopped = codex_daemon.stop_owned(card.name)
+            if stopped:
+                print(f'  account switch: stopped {len(stopped)} owned Codex daemon(s)')
+        except OSError as exc:
+            print('  could not tell: pane replaced but account daemon cleanup failed ('
+                  + type(exc).__name__ + ')', file=sys.stderr)
+            return CANNOT_TELL
     # A bounded manifest must never launch before its private parent is ready.
     from . import mcp_limits
     try:

@@ -412,3 +412,36 @@ def test_late_launcher_refusal_restores_unnamed_legacy_card(tmp_path, monkeypatc
     assert cli._restart_cycle(args, current, 'alice', 'p-alice', panes, object(), plan, object())[0] == cli.REFUSED
     assert (tmp_path / 'crew' / 'alice.json').read_bytes() == before
     assert panes.exists('p-alice') and panes.respawned == []
+
+
+def test_account_replacement_reaps_old_daemons_after_pane_change_before_new_runtime(tmp_path, monkeypatch):
+    from shantytown import cli, codex_daemon
+    from types import SimpleNamespace
+    from shantytown.tmux import NullPanes
+    card = Agent('account-fixture', pane='p-account-fixture', harness='claude')
+    args = SimpleNamespace(root=tmp_path, _account_card=card)
+    timeline = []
+    panes = NullPanes(live={card.pane})
+    original = panes.respawn
+    def respawn(*args, **kwargs):
+        original(*args, **kwargs)
+        timeline.append('pane-replaced')
+    monkeypatch.setattr(panes, 'respawn', respawn)
+    monkeypatch.setattr(cli, '_window_launch_gate', lambda *args: None)
+    monkeypatch.setattr(cli, '_account_launch_refusal', lambda *args, **kwargs: '')
+    monkeypatch.setattr(cli, 'provision_ws', lambda *args, **kwargs: [])
+    monkeypatch.setattr(cli, '_launched_now', lambda *args: None)
+    monkeypatch.setattr(cli, '_record_launch_unretirement', lambda *args: True)
+    monkeypatch.setattr(cli, '_observe_live', lambda *args: True)
+    monkeypatch.setattr(cli, '_verify_live_hooks', lambda *args: cli.OK)
+    monkeypatch.setattr(cli, '_deliver_startup_inbox', lambda *args: None)
+    def stop_owned(agent):
+        assert agent == card.name
+        assert timeline == ['pane-replaced']
+        timeline.append('source-daemons-stopped')
+        return (123,)
+    monkeypatch.setattr(codex_daemon, 'stop_owned', stop_owned)
+    runtime = SimpleNamespace(compose=lambda card: 'fixture launch', settings_path=lambda card: None,
+                              start=lambda *args: timeline.append('target-started'))
+    assert cli._launch_admitted(args, card, panes, runtime, reuse_session=True) == cli.OK
+    assert timeline == ['pane-replaced', 'source-daemons-stopped', 'target-started']
