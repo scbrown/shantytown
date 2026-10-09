@@ -48,6 +48,7 @@ import sys
 import time
 from pathlib import Path
 
+from .tmux import shell_foreground
 from . import triage
 from . import workflow
 from .answer import PartialAnswer
@@ -759,7 +760,8 @@ def _liveness(reg: FilesRegistry, panes, shows_ready_ui, name: str,
         card = reg.get(name)
     except Exception:
         return DOWN
-    if not card.pane or not panes.exists(card.pane):
+    if (not card.pane or not panes.exists(card.pane)
+            or shell_foreground(panes, card.pane)):
         return DOWN
     # attrs=True IS LOad-BEARING (aegis-c6hli). work_state asks input_state what
     # is in the box, and input_state can only tell a dim suggestion from typed

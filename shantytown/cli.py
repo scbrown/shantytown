@@ -221,7 +221,7 @@ from .runtime import (asks_a_question, auth_expired, bash_guard_command,
                       input_stranded, limit_reached,
                       live_stop_directions, live_wiring,
                       settings_for_role)
-from .tmux import Tmux, declared_socket
+from .tmux import Tmux, declared_socket, shell_foreground
 from .workspace import (WorkspaceError, agent_worktrees, cleanup_worktree,
                         ensure_workspace, ensure_worktree, push_every_remote,
                         remote_reachable, tree_staleness, unlaunchable,
@@ -6524,7 +6524,8 @@ def _cmd_crew(a) -> int:
         for ag, state, work, posture in _crew_states(
                 agents, panes, runtime, cycling=cycling, untracked_root=a.root,
                 cycle_blocked=cycle_blocked, budget_root=a.root, plate=plate):
-            live = bool(ag.pane and panes.exists(ag.pane))
+            pane_exists = bool(ag.pane and panes.exists(ag.pane))
+            live = state != "down" and pane_exists
             actual = None
             reader = getattr(panes, "cmdline", None)
             if live and callable(reader):
@@ -6533,7 +6534,7 @@ def _cmd_crew(a) -> int:
                 except Exception:
                     pass
             fg = None
-            if live and callable(getattr(panes, "foreground", None)):
+            if pane_exists and callable(getattr(panes, "foreground", None)):
                 try:
                     fg = panes.foreground(ag.pane)
                 except Exception:
@@ -7252,8 +7253,15 @@ def _crew_states(agents, panes, runtime, cycling=(), untracked_root=None,
             state = "up" if panes.exists(ag.pane) else "down"
         else:
             state = "no pane"          # not "down" — we did not look
-        # A cycle-blocked agent's pane is up by construction (the request was
-        # refused, nothing took it down), so it gets the same reading as `up`.
+        # A refused cycle cannot keep a runtime alive. Its pane may now be
+        # only the login shell (kc1f0i); that positive observation overrides
+        # the sticky request. An actual cycle in flight keeps its lifecycle
+        # state, including its brief launch interval before the runtime starts.
+        if (state in ("up", "cycle-blocked") and ag.pane
+                and panes.exists(ag.pane) and shell_foreground(panes, ag.pane)):
+            state = "down"
+        # A cycle-blocked agent whose runtime is still present gets the same
+        # work reading as `up`; a proven exit was handled above.
         # `cycling` deliberately does NOT: that pane is about to stop, and a
         # verdict about a session in its pre-stop interval would be stale by the
         # time it is read.
