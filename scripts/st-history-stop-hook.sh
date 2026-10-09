@@ -69,10 +69,27 @@ fi
 # A skipped overlapping launch is not an archival success; the active worker's
 # completion is recorded in hook.log and the next stop can launch again.
 RAW="${ST_HISTORY_DIR:-$HOME/gt/shantytown/.shanty/history}"
+record_run() {
+  local verdict="$1"
+  { printf '%s\t%s\t%s\trc=%s\n' \
+      "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$AGENT" "${SHANTY_ROLE:-?}" "$verdict" \
+      >> "$RAW/hook.log" && chmod 600 "$RAW/hook.log"; } 2>/dev/null || true
+}
 mkdir -p "$RAW" || exit 1
-exec 9> "$RAW/.stop-worker-$AGENT.lock" || exit 1
-chmod 600 "$RAW/.stop-worker-$AGENT.lock" || exit 1
-flock -n 9 || { echo "st-history: worker already active for $AGENT" >&2; exit 0; }
+exec 9> "$RAW/.stop-worker-$AGENT.lock" || { record_run 1; exit 1; }
+chmod 600 "$RAW/.stop-worker-$AGENT.lock" || { record_run 1; exit 1; }
+# Use an explicit conflict code outside flock's sysexits error range. Missing
+# flock (127), I/O failures and usage errors are failures, not active workers.
+lock_rc=0
+flock -n -E 200 9 || lock_rc=$?
+if [ "$lock_rc" -eq 200 ]; then
+  echo "st-history: worker already active for $AGENT" >&2
+  exit 0
+elif [ "$lock_rc" -ne 0 ]; then
+  echo "st-history: worker lock failed for $AGENT (flock rc=$lock_rc)" >&2
+  record_run 1
+  exit 1
+fi
 
 # ⚠️ STDOUT BELONGS TO THE HARNESS ON A STOP HOOK — SEND THE CHILDREN TO STDERR.
 #
@@ -124,9 +141,6 @@ fi
 #
 # Failure to log is never allowed to change the hook's verdict — an unwritable
 # log is not a reason to disturb a stop.
-LOG="${ST_HISTORY_DIR:-$HOME/gt/shantytown/.shanty/history}/hook.log"
-{ printf '%s\t%s\t%s\trc=%s\n' \
-    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$AGENT" "${SHANTY_ROLE:-?}" "$rc" \
-    >> "$LOG" && chmod 600 "$LOG"; } 2>/dev/null || true
+record_run "$rc"
 
 exit "$rc"

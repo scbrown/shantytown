@@ -5,6 +5,8 @@ import shutil
 import subprocess
 import time
 
+import pytest
+
 HOOK = Path(__file__).resolve().parents[1] / 'scripts/st-history-stop-hook.sh'
 
 
@@ -53,3 +55,21 @@ exit 2
     assert 'rc=1' in (raw / 'hook.log').read_text()  # scrub failure remains visible
     assert 'diagnostic' in (raw / 'worker.log').read_text()
     assert (raw / 'worker.log').stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.parametrize('lock_rc', [74, 127])
+def test_lock_errors_are_logged_failures_not_contention(tmp_path, lock_rc):
+    raw = tmp_path / 'raw'
+    raw.mkdir()
+    fake = tmp_path / 'flock'
+    fake.write_text(f'#!/bin/sh\nexit {lock_rc}\n')
+    fake.chmod(0o700)
+    env = dict(os.environ, SHANTY_AGENT='tester', ST_HISTORY_DIR=str(raw),
+               PATH=str(tmp_path) + ':' + os.environ['PATH'])
+    result = subprocess.run([str(HOOK), '--worker'], env=env,
+                            capture_output=True, text=True, timeout=2)
+    assert result.returncode == 1
+    assert f'flock rc={lock_rc}' in result.stderr
+    assert 'already active' not in result.stderr
+    assert 'rc=1' in (raw / 'hook.log').read_text()
+    assert not (raw / 'manifest.tsv').exists()
