@@ -294,6 +294,7 @@ class FilesTracker:
             blocker_kind=blocker_kind(d.get("labels")),
             defer_until=(d.get("defer_until") or None),
             notes=(d.get("notes") or None),
+            updated_at=d.get("updated_at"),
         )
 
     def update(self, item_id: str, **fields) -> None:

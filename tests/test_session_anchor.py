@@ -19,6 +19,16 @@ from tests.test_hook_bundles import commands, emit
 ROLES = ("administrator", "lead", "worker")
 
 
+def test_stale_plate_startup_requires_verification_instead_of_execution(monkeypatch):
+    text = ("  You are root — administrator.\n\n  ON YOUR PLATE\n"
+            "    ▶ x-1 old work\n      STALE PLATE: no tracker update for over 48 hours.\n")
+    monkeypatch.setattr(sa, "_run_anchor", lambda *args: (0, text))
+    rendered = sa.render("/scratch", "root")
+    assert "Verify the stale plate item's current status before executing it" in rendered
+    assert "Execute the plate item now" not in rendered
+    assert "drain stop events" in rendered
+
+
 @pytest.fixture
 def root(tmp_path):
     r = tmp_path / ".shanty"

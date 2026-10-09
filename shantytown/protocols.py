@@ -281,6 +281,11 @@ class WorkItem:
                                   # above); it exists so the gap can be SAID.
 
 
+    # Tracker-supplied modification time. Absence is unknown, never a claim
+    # that an item is fresh. Appended to preserve positional construction.
+    updated_at: str | None = None
+
+
 @runtime_checkable
 class Registry(Protocol):
     """Identity: who exists, who reports to whom, what role.

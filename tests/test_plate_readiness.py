@@ -60,6 +60,17 @@ def row(ident, status="open", priority=None, assignee="ada", title="t"):
     return d
 
 
+def test_both_tracker_plate_readers_preserve_explicit_update_time():
+    from shantytown import br
+    stamp = "2026-10-01T00:00:00Z"
+    data = dict(row("old", status="in_progress"), updated_at=stamp)
+    store = FakeStore([data], ready_ids=("old",))
+    assert plate(store, "ada").updated_at == stamp
+    item = br._select_plate(store, "ada", [data], [], lambda: {"old"}, None)
+    assert item.updated_at == stamp
+    assert BeadsTracker.get(store, "old").updated_at == stamp
+
+
 # --------------------------------------------------------------------------- #
 # The reported bug, end to end
 # --------------------------------------------------------------------------- #

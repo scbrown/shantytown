@@ -293,6 +293,7 @@ class BeadsTracker:
             # cannot render differently to a caller checking for absence.
             defer_until=(d.get("defer_until") or None),
             notes=(d.get("notes") or None),
+            updated_at=d.get("updated_at"),
             # From the SAME `bd show --json` read — no extra round trip, so the
             # module's one-tracker-read budget is unchanged. Only `blocks`-type
             # deps count: a `relates-to` link is context, not a gate. Only
@@ -554,6 +555,7 @@ def plate(tracker: "BeadsTracker", agent: str) -> "WorkItem | None":
         status=top.get("status", "open"),
         assignee=top.get("assignee"),
         priority=_priority(top),
+        updated_at=top.get("updated_at"),
     )
     # Only when the served item is BLOCKED: name what is blocking it, so the
     # plate is an instruction the agent can act on rather than one they discover
