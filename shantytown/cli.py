@@ -1,10 +1,10 @@
-"""st — the CLI. Seven verbs, five groups, thirty-three grouped commands: forty, and the count is load-bearing: each earns its slot.
+"""st — the CLI. Seven verbs, five groups, thirty-four grouped commands: forty-one, and the count is load-bearing: each earns its slot.
 
     task · go · sling · inbox [--count] · crew [--count|--governor]
     · anchor [--short|--events|--harness] · attach [-r|--no-start]
     work  → repool · defer · cost [--sync] · dream [--run] · triage
             · jobs [list|check|run|history]
-    agent → new · stop · harness · cycle [--self|--allow-loss] · advise [--related|--decision]
+    agent → new · stop · harness · account · cycle [--self|--allow-loss] · advise [--related|--decision]
             · input [--show|--clear|--dismiss] · ask · answer · log · history <agent> · stats
     fleet → start [--mode] · tend [--install|--status|--reauth|--target]
             · roles [--check|set|band|sync] · init · hold gaming [--clear|--status|--probe]
@@ -497,9 +497,13 @@ def _local_governors(a):
     cfg, err = config.load_or_default(Path(a.root))
     if err:
         print(f"  ⚠ {err} — running on config DEFAULTS", file=sys.stderr)
-    if not cfg.governor.active:
+    if not cfg.governor.active and not cfg.accounts:
         return cfg, {}
-    policies = {"base": cfg.governor, **cfg.governor.by_harness}
+    policies = ({"base": cfg.governor, **cfg.governor.by_harness}
+                if cfg.governor.active else {})
+    for account in cfg.accounts.values():
+        if account.default:
+            policies.pop('base' if account.harness == 'claude' else account.harness, None)
     out = {}
     for name, policy in policies.items():
         try:
@@ -513,6 +517,11 @@ def _local_governors(a):
             gov_mod.FilesGovernorState(Path(a.root),
                                        None if name == "base" else name),
             name=name)
+    from . import accounts
+    for name, account in cfg.accounts.items():
+        out[name] = gov_mod.Governor(
+            account.governor, accounts.reader_for(account),
+            gov_mod.FilesGovernorState(Path(a.root), 'account-' + name), name=name)
     return cfg, out
 
 
@@ -521,6 +530,8 @@ def _governor_agents(a):
     from .deployment import local_host
     host = local_host(a.root) or 'local'
     panes = _panes(a)
+    cfg, _err = config.load_or_default(a.root)
+    from . import accounts, account_state
     rows = []
     for card in _registry(a).all().exact():
         if getattr(card, 'host', None) not in (None, host):
@@ -530,8 +541,11 @@ def _governor_agents(a):
         reader = getattr(panes, 'cmdline', None)
         if live and callable(reader):
             actual = harness_mod.running_name(reader(card.pane))
+        running = account_state.process_card(a.root, card, cfg, panes)
+        account = accounts.selected(running, cfg)
         rows.append(dict(name=card.name, host=host, live=live,
-                         harness=actual or harness_mod.name_for(card, root=a.root)))
+                         harness=actual or harness_mod.name_for(running, root=a.root),
+                         account=account.name if account else None))
     return rows
 
 
@@ -547,8 +561,11 @@ def _governors(a):
         snapshot = fg.snapshot(host, local, _governor_agents(a),
                                hosts=[host, *cfg.host_peers],
                                admission_owner=cfg.host_admission_owner)
+        from . import accounts
         declared = [dict(name=card.name, host=card.host, live=True,
-                         harness=harness_mod.name_for(card, root=a.root))
+                         harness=harness_mod.name_for(card, root=a.root),
+                         account=(account.name if (account := accounts.selected(card, cfg))
+                                  else None))
                     for card in _registry(a).all().exact()
                     if card.host in cfg.host_peers and not getattr(card, 'retired', False)]
         fleet = fg.FleetGovernor(snapshot, fg.collect(cfg.host_peers), a.root,
@@ -566,16 +583,30 @@ def _governors(a):
 def _account_launch_refusal(a, card, *, replacing=False):
     try:
         cfg, governors = _governors(a)
+        from . import accounts, account_auth
+        account = accounts.selected(card, cfg)
+        if account is not None and not account_auth.available(a.root, account):
+            return 'named account credential resolver or native file is unavailable'
         fleet = getattr(a, '_account_governor', None)
-        if fleet is None:
+        if fleet is None and account is None:
             return ''
         rows = _governor_agents(a)
         if replacing:
             # A live local session being replaced already owns one slot. Never
             # subtract a same-named peer or a different harness lane by guess.
             rows = [dict(row, live=False) if row['name'] == card.name
-                    and row['host'] == fleet.local else row for row in rows]
-        refusal = fleet.admits_launch(harness_mod.name_for(card, root=a.root), rows)
+                    and (fleet is None or row['host'] == fleet.local) else row for row in rows]
+        if fleet is None:
+            governor = governors.get(account.name)
+            if governor is None:
+                return 'named account governor is unavailable'
+            verdict = governor.evaluate(persist=False)
+            cap = verdict.max_agents
+            used = sum(row['live'] and row.get('account') == account.name for row in rows)
+            if cap is not None and used >= cap:
+                return f'account {account.name}: {used}/{cap} slots occupied'
+            return verdict.excludes(card, _catalog(a))
+        refusal = fleet.admits_launch(accounts.lane(card, cfg), rows)
         if refusal:
             return refusal
         _h, governor, unconfigured = _governor_for(cfg, governors, card, a.root)
@@ -709,6 +740,12 @@ def _fleet_balance(a):
     try:
         _cfg, _governors_map = _governors(a)
         fleet = getattr(a, '_account_governor', None)
+        if fleet is None and _cfg.accounts:
+            from . import fleet_governor as fg
+            from .deployment import local_host
+            host = local_host(a.root) or 'local'
+            fleet = fg.FleetGovernor(fg.snapshot(host, _governors_map, _governor_agents(a),
+                                     hosts=[host]), {}, a.root)
         if fleet is None or len(fleet.governors) <= 1:
             return None
         return fleet.balance()
@@ -753,6 +790,10 @@ def _governor(a):
 
 def _governor_for(cfg, governors, card, root):
     """(harness, governor, synthetic signal-lost verdict-or-None) for card."""
+    from . import accounts
+    account = accounts.selected(card, cfg)
+    if account is not None:
+        return account.name, governors.get(account.name), None
     harness = harness_mod.name_for(card, root=root)
     # The base governor's provider is its compatibility default (Claude), not
     # [harness].default.  The latter chooses which program new cards launch;
@@ -818,13 +859,18 @@ def _dispatch_gate(a):
         except Exception:
             return lambda item, agent=None: (
                 "remote sender identity unavailable; cannot check delegation reserve")
-    sender_harness = (harness_mod.name_for(sender, root=a.root)
+    from . import accounts, account_state
+    if sender is not None and getattr(cfg, "accounts", {}):
+        sender = account_state.process_card(a.root, sender, cfg, _panes(a))
+    sender_harness = (accounts.lane(account_state.process_card(
+        a.root, sender, cfg, _panes(a)), cfg)
                       if sender is not None else None)
 
     def cross_subscription(target) -> bool:
         if sender_harness is None or target is None:
             return False
-        return harness_mod.name_for(target, root=a.root) != sender_harness
+        return accounts.lane(account_state.process_card(a.root, target, cfg, _panes(a)),
+                             cfg) != sender_harness
 
     # Said ONCE per gate, not once per agent. `st go` gates every candidate in a
     # loop, so an unlatched warning prints the same sentence N times and the
@@ -843,6 +889,8 @@ def _dispatch_gate(a):
         card = cards.get(agent)
         if card is None:
             return ""
+        if getattr(cfg, "accounts", {}):
+            card = account_state.process_card(a.root, card, cfg, _panes(a))
         delegated = cross_subscription(card)
         if stood_down and not delegated:
             return ("FLEET STOOD DOWN — dispatch suppressed. Clear "
@@ -871,7 +919,7 @@ def _dispatch_gate(a):
         if not governors:
             return ""
 
-        if sender is not None and cfg.governor.by_harness and not delegated:
+        if sender is not None and (cfg.governor.by_harness or getattr(cfg, "accounts", {})) and not delegated:
             _sh, source_governor, source_unconfigured = _governor_for(
                 cfg, governors, sender, a.root)
             if source_unconfigured is None and source_governor is not None:
@@ -1505,6 +1553,19 @@ def build_parser() -> argparse.ArgumentParser:
                     help="override a role pin or a held target lane. Logged, and "
                          "the refusal it overrides is printed anyway")
     hz.add_argument("-n", "--dry-run", action="store_true")
+
+    ac = leaf('account', help='select a named account, matching harness and default model')
+    ac.add_argument('agent')
+    ac.add_argument('target', nargs='?', default=None)
+    ac.add_argument('--model', default=None, help='override this account\'s declared default model')
+    ac.add_argument('--now', action='store_true', help='checkpoint/relaunch at an idle boundary')
+    ac.add_argument('--reason', default='', help='additional durable checkpoint context')
+    ac.add_argument('-n', '--dry-run', action='store_true')
+    _add_despite_hold(ac)
+    opts = ac.add_mutually_exclusive_group()
+    opts.add_argument('--auto-failover', dest='auto_failover', action='store_true')
+    opts.add_argument('--no-auto-failover', dest='auto_failover', action='store_false')
+    ac.set_defaults(auto_failover=None)
 
     it = leaf("init",
                         help="scaffold a NEW deployment: asks a few questions, "
@@ -2319,6 +2380,8 @@ def _run_command(a) -> int:
         return _cmd_new(a)
     if a.cmd == "harness":
         return _cmd_harness(a)
+    if a.cmd == 'account':
+        return _cmd_account(a)
     if a.cmd == "init":
         return _cmd_init(a)
     if a.cmd == "start":
@@ -2492,6 +2555,10 @@ def _launched_now(a, card_name: str, settings_path=None) -> None:
     """
     if settings_path:
         _launches(a).record(card_name, settings_path)
+    cfg, _err = config.load_or_default(a.root)
+    if cfg.accounts:
+        from . import account_state
+        account_state.record(a.root, _registry(a).get(card_name), cfg, _panes(a))
     _stops(a).forget(card_name)
     agent_hold.clear(a.root, card_name)
 
@@ -2795,6 +2862,9 @@ def _cmd_harness(a) -> int:
         return REFUSED
 
     current = harness_mod.name_for(card, root=a.root)
+    if a.target and getattr(card, 'account', None):
+        print('  refused: this card selects a named account; use st agent account', file=sys.stderr)
+        return REFUSED
     if not a.target:
         # The read-only form. Reports the RESOLVED harness, which may come from a
         # deployment rule rather than the card, and says which.
@@ -2884,6 +2954,176 @@ def _cmd_harness(a) -> int:
     return rc
 
 
+def _cmd_account(a) -> int:
+    from . import accounts, account_state, account_switch
+    try:
+        cfg = config.load(a.root)
+        reg = _registry(a)
+        card = reg.get(a.agent)
+        current = accounts.selected(card, cfg)
+        if not a.target:
+            print(f'{card.name}: account {current.name if current else "legacy"}, '
+                  f'harness {harness_mod.name_for(card, a.root)}, '
+                  f'model {harness_mod.resolve_model(card, a.root) or "harness default"}, '
+                  f'auto-failover {"on" if card.auto_failover else "off"}')
+            return OK
+        if isinstance(reg, (QuipuRegistry, config.TomlRegistry)):
+            raise accounts.AccountError('account selections require writable file cards; project graph identity first')
+        target = cfg.accounts.get(a.target)
+        if target is None:
+            raise accounts.AccountError('target account is not declared')
+        updated = accounts.switch(card, target, cfg=cfg, model=a.model,
+                                  auto_failover=a.auto_failover)
+        if a.dry_run:
+            print(f'would select {card.name}: {target.name}/{target.harness}/{updated.model}'
+                  + (' at the next idle boundary' if a.now else ' at the next relaunch'))
+            return OK
+        with cycle_mod.lifecycle_lock(a.root, card.name):
+            if not a.now:
+                if updated == card:
+                    print(f'{card.name}: already on {target.name}; nothing changed')
+                    return OK
+                # Record the old PROCESS before writing its future card.
+                panes = _panes(a)
+                if card.pane and panes.exists(card.pane):
+                    running = account_state.process_card(a.root, card, cfg, panes)
+                    account_state.record(a.root, running, cfg, panes)
+                reg.set(updated)
+                print(f'{card.name}: selected {target.name}/{target.harness}/{updated.model}; '
+                      'takes effect at the next relaunch')
+                return OK
+            request = account_switch.Requests(a.root).request(
+                card, target, model=a.model, auto_failover=a.auto_failover,
+                source=current.name if current else None)
+        # This is a request while busy, not a kill disguised as a switch.
+        rc = _serve_account_switch(a, card, request)
+        if rc is None:
+            print(f'{card.name}: account switch queued for its next idle boundary; '
+                  'the current card and process are unchanged')
+            return OK
+        return rc
+    except (accounts.AccountError, config.ConfigError, LookupError, OSError, ValueError) as exc:
+        print('  refused: ' + str(exc), file=sys.stderr)
+        return REFUSED
+
+
+def _serve_account_switch(a, card, request):
+    from . import accounts, account_switch
+    if request.get('phase') == 'completed':
+        return OK
+    panes = _panes(a)
+    runtime = _runtime(a, panes)
+    session = card.pane or _session_for(card)
+    if session and panes.exists(session):
+        if _automatic_cycle_refusal(card, session, panes, runtime, a.root,
+                                    allow_limited=True):
+            return None
+    cfg = config.load(a.root)
+    target = cfg.accounts.get(request['desired']['account'])
+    if target is None or account_switch.binding(target) != request['binding']:
+        print('  refused: account definition changed; reissue the switch', file=sys.stderr)
+        return REFUSED
+    if account_switch.choice(card) not in (request['expected'], request['desired']):
+        print('  refused: agent selection changed; reissue the switch', file=sys.stderr)
+        return REFUSED
+    updated = replace(card, **request['desired'])
+    native = cycle_mod.Requests(a.root)
+    reason = account_switch.checkpoint(request)
+    pending = native.pending().get(card.name)
+    if pending and pending.get('checkpoint') != reason:
+        return None  # another cycle belongs to its requester, not this feature
+    args = argparse.Namespace(**{**vars(a), 'cmd': 'cycle', 'agent': card.name,
+        'reason': reason, 'self_': False, 'serve_request': False,
+        'allow_loss': False, 'dry_run': False, 'no_in_place': True,
+        'checkpoint_bead': _cycle_anchor_bead(a, card.name), 'quipu_node': [],
+        'no_graph_context': 'mechanical account switch through the checkpoint cycle',
+        '_automatic_cycle': True, '_account_card': updated,
+        '_account_expected': account_switch.choice(card),
+        '_account_automatic': request.get('automatic', False),
+        '_account_request_id': request['id']})
+    if request.get('automatic'):
+        gate = _durable_checkpoint_gate(args, card.name)
+        if gate.ok is not True:
+            print('  account-switch waiting for a verified durable handoff: ' + gate.render(),
+                  file=sys.stderr)
+            return None
+    rc = _cmd_cycle(args)
+    if rc == OK:
+        request = dict(request, phase='completed')
+        account_switch.Requests(a.root).put(request)
+        print(f'{card.name}: account switch observed on {target.name}/{updated.model}')
+    return rc
+
+
+def _account_switch_sweep(a, agents, cfg, verdicts, panes):
+    """Serve explicit requests and opt-in failover before sending drain notices."""
+    from . import accounts, account_state, account_switch
+    if not cfg.accounts or a.dry_run:
+        return set()
+    store = account_switch.Requests(a.root)
+    protected = set()
+    balance = _fleet_balance(a)
+    preferred = balance.prefer if balance is not None and balance.actionable else None
+    for card in agents:
+        try:
+            running = account_state.process_card(a.root, card, cfg, panes)
+            counts = _live_by_governor(agents, panes, cfg, {}, a.root)
+            pending = store.get(card.name)
+            if pending and pending.get('phase') == 'completed':
+                if pending.get('automatic') and not pending.get('notified'):
+                    # Persist before delivery: an indeterminate transport must not
+                    # generate a fresh notice on every supervisor heartbeat.
+                    store.put(dict(pending, notified=True, notice_state='attempting'))
+                    recipient = card.reports_to
+                    roster = {row.name: row for row in _registry(a).all().exact()}
+                    visited = {card.name}
+                    while recipient in roster and recipient not in visited:
+                        visited.add(recipient)
+                        parent = roster[recipient]
+                        if parent.role == 'administrator' or not parent.reports_to:
+                            break
+                        recipient = parent.reports_to
+                    if recipient:
+                        item = _inbox(a, default='beads').deliver(
+                            recipient, card.name + ': ' + account_switch.checkpoint(pending),
+                            frm=_me(a) or 'st fleet tend')
+                        store.put(dict(pending, notified=True, notice_state='delivered',
+                                       notice_id=str(getattr(item, 'id', item))))
+                if not pending.get('automatic') or not accounts.constrained(
+                        verdicts.get(accounts.lane(running, cfg))):
+                    continue
+                store.clear(card.name)
+                pending = None
+            if pending and pending.get('automatic'):
+                candidate = accounts.receiver(running, cfg, verdicts, counts,
+                                              catalog=_catalog(a), preferred=pending["desired"]["account"])
+                if (card.auto_failover is not True or candidate is None
+                        or candidate.name != pending['desired']['account']):
+                    # Withdraw only the checkpoint this feature owns.
+                    native = cycle_mod.Requests(a.root)
+                    own = native.pending().get(card.name)
+                    if own and own.get('checkpoint') == account_switch.checkpoint(pending):
+                        native.clear(card.name)
+                    store.clear(card.name)
+                    pending = None
+            if pending is None and card.auto_failover is True and not card.retired:
+                target = accounts.receiver(running, cfg, verdicts, counts,
+                                           catalog=_catalog(a), preferred=preferred)
+                if target is not None:
+                    pending = store.request(card, target, automatic=True,
+                                            source=accounts.lane(running, cfg))
+            if pending:
+                rc = _serve_account_switch(a, card, pending)
+                if rc is None and pending.get('automatic'):
+                    protected.add(card.name)
+                # Refresh the census after each transition; a later card cannot
+                # borrow the slot the preceding switch just consumed.
+                agents = _registry(a).all().exact()
+        except Exception as exc:
+            print('  account-switch: could not tell: ' + type(exc).__name__, file=sys.stderr)
+    return protected
+
+
 def unobserved_launch_report(agent: str, harness: str, session: str,
                              inspect=None) -> str:
     """The line printed when a launch was NOT observed live.
@@ -2951,7 +3191,8 @@ def _launch(a, card, panes, runtime, *, dry_run: bool = False,
                                 reuse_session=reuse_session)
     try:
         with fg.admission_lock(a.root, cfg.host_name, cfg.host_peers,
-                               owner=cfg.host_admission_owner):
+                               owner=cfg.host_admission_owner,
+                               **({'local_required': True} if cfg.accounts else {})):
             # A census made before waiting for the lock cannot admit anything.
             if hasattr(a, '_account_governor'):
                 del a._account_governor
@@ -3012,9 +3253,11 @@ def _launch_admitted(a, card, panes, runtime, *, dry_run: bool = False,
     # (aegis-85ox). It belongs here with the others: same seam, same outcome.
     try:
         harness_mod.require_role_harness(card, root=a.root)
+        if not dry_run and hasattr(runtime, "prepare_account_settings"):
+            runtime.prepare_account_settings(card)
         launch = runtime.compose(card)
     except (CapabilityError, SettingsError, harness_mod.UnknownHarness,
-            harness_mod.Unsupported) as e:
+            harness_mod.Unsupported, ValueError, OSError) as e:
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED
     if dry_run:
@@ -3863,6 +4106,8 @@ def _cmd_stop(a) -> int:
 def _cancel_cycle_for_stop(a) -> None:
     if not getattr(a, "_cycle_internal_stop", False):
         cycle_mod.Requests(a.root).clear(a.agent)
+        from .account_switch import Requests
+        Requests(a.root).clear(a.agent)
 
 
 def _stop_locked(a) -> int:
@@ -7353,7 +7598,7 @@ def _crew_governor(a) -> int:
     # lying by omission.  Keep that exact line for old configs; emit one named
     # line per provider once [governor.by_harness] exists.
     cfg, _err = config.load_or_default(Path(a.root))
-    if cfg.governor.by_harness:
+    if cfg.governor.by_harness or cfg.accounts:
         _cfg, governors = _governors(a)
         try:
             cards = _registry(a).all().exact()
@@ -7462,6 +7707,8 @@ def _live_by_governor(cards, panes, cfg, governors, root):
     for card in cards:
         if not (card.pane and panes is not None and panes.exists(card.pane)):
             continue
+        from . import account_state
+        card = account_state.process_card(root, card, cfg, panes)
         harness, _governor, unconfigured = _governor_for(cfg, governors, card, root)
         if unconfigured is not None:
             continue
@@ -7486,7 +7733,7 @@ def _live_by_governor(cards, panes, cfg, governors, root):
                 actual = harness_mod.running_name(reader(card.pane))
             except Exception:
                 actual = None
-        spending = actual or harness
+        spending = harness if harness in getattr(cfg, "accounts", {}) else (actual or harness)
         name = spending if spending in governors else "base"
         live[name] = live.get(name, 0) + 1
     return live
@@ -8562,7 +8809,14 @@ def _cycle_stop_refusal(a, agent_name) -> str:
         stop = _stops(a).get(agent_name)
         if stop and not stop.reason.startswith(cycle_mod.CYCLE_REASON + ":"):
             return "deliberately stopped; use `st agent new` to restart"
-        if agent_name not in cycle_mod.Requests(a.root).pending():
+        if request_id := getattr(a, '_account_request_id', None):
+            from .account_switch import Requests
+            request = Requests(a.root).get(agent_name)
+            if not request or request.get('id') != request_id or request.get('phase') != 'queued':
+                return 'account switch request cancelled or already completed'
+            if agent_name in cycle_mod.Requests(a.root).pending():
+                return 'another cycle request owns this agent'
+        elif agent_name not in cycle_mod.Requests(a.root).pending():
             return "cycle request cancelled"
     return ""
 
@@ -9062,7 +9316,8 @@ def _write_resume_brief(a, card, agent_name: str, checkpoint: str) -> str:
         return ""
 
 
-def _automatic_cycle_refusal(card, session: str, panes, runtime, root=None) -> str:
+def _automatic_cycle_refusal(card, session: str, panes, runtime, root=None,
+                             *, allow_limited=False) -> str:
     """Why an UNATTENDED cycle must not touch this pane now, or "" (aegis-zl7jwm).
 
     Read once, fresh, under the lifecycle lock. Nobody asked at this moment, so
@@ -9081,7 +9336,10 @@ def _automatic_cycle_refusal(card, session: str, panes, runtime, root=None) -> s
         awaiting=asks_a_question(runtime, plain),
         auth_dead=auth_expired(runtime, plain),
         limited=limit_reached(runtime, plain))
-    if state not in (triage_mod.IDLE, triage_mod.SATURATED):
+    limited_boundary = (allow_limited and state == triage_mod.LIMITED
+                        and runtime.shows_ready_ui(plain)
+                        and not asks_a_question(runtime, plain))
+    if state not in (triage_mod.IDLE, triage_mod.SATURATED) and not limited_boundary:
         return f"pane reads {state}, not idle"
     if not _cycle_input_empty(screen, card, root):
         return "the input box is not empty"
@@ -9102,8 +9360,9 @@ def _perform_cycle(a, card, agent_name: str, session: str, panes, runtime,
             # was read before the tree guard's network fetch; the agent may have
             # gone busy since. Re-read, refuse rather than respawn a live turn,
             # and re-plan from the fresh reading.
+            opts = {'allow_limited': True} if getattr(a, '_account_card', None) else {}
             if refusal := _automatic_cycle_refusal(card, session, panes, runtime,
-                                                   a.root):
+                                                   a.root, **opts):
                 print(f"  refused: {agent_name}: {refusal}; the request stays "
                       f"pending for the next idle pass", file=sys.stderr)
                 return REFUSED, chosen.mode
@@ -9114,6 +9373,12 @@ def _perform_cycle(a, card, agent_name: str, session: str, panes, runtime,
             # Cleared INSIDE the lock, so a second server (tend and the --self
             # waiter) that was waiting on it sees no request and stands down.
             cycle_mod.Requests(a.root).clear(agent_name)
+            if getattr(a, '_account_request_id', None):
+                from .account_switch import Requests
+                store = Requests(a.root)
+                request = store.get(agent_name)
+                if request and request['id'] == a._account_request_id:
+                    store.put(dict(request, phase='completed'))
         return rc, performed
 
 
@@ -9148,7 +9413,8 @@ def _perform_cycle_locked(a, card, agent_name, session, panes, runtime,
         return REFUSED, chosen.mode
     try:
         with fg.admission_lock(a.root, cfg.host_name, cfg.host_peers,
-                               owner=cfg.host_admission_owner):
+                               owner=cfg.host_admission_owner,
+                               **({'local_required': True} if cfg.accounts else {})):
             if hasattr(a, '_account_governor'):
                 del a._account_governor
             a._cycle_admission_locked = True
@@ -9164,6 +9430,46 @@ def _perform_cycle_locked(a, card, agent_name, session, panes, runtime,
 
 def _restart_cycle(a, card, agent_name, session, panes, runtime, chosen, verdict):
     """Restart under the admission lock; a refusal must leave the session alive."""
+    account_target = getattr(a, '_account_card', None)
+    if account_target is not None:
+        from . import accounts, account_auth, account_state, account_switch
+        cfg = config.load(a.root)
+        current = _registry(a).get(agent_name)
+        if account_switch.choice(current) != a._account_expected:
+            print('  refused: account selection changed during checkpoint preflight',
+                  file=sys.stderr)
+            return REFUSED, chosen.mode
+        if getattr(a, '_account_automatic', False):
+            # Re-read under the existing admission lock immediately before any
+            # credentials, card or process mutation. A queued reading expires.
+            if hasattr(a, '_account_governor'):
+                del a._account_governor
+            fresh_cfg, fresh_governors = _governors(a)
+            fresh = {name: g.evaluate(persist=False) for name, g in fresh_governors.items()}
+            running = account_state.process_card(a.root, current, fresh_cfg, panes)
+            counts = _live_by_governor(_registry(a).all().exact(), panes,
+                                       fresh_cfg, fresh_governors, a.root)
+            candidate = accounts.receiver(running, fresh_cfg, fresh, counts,
+                                          catalog=_catalog(a), preferred=account_target.account)
+            if current.auto_failover is not True or candidate is None or candidate.name != account_target.account:
+                print('  refused: automatic account headroom is no longer proven', file=sys.stderr)
+                return REFUSED, chosen.mode
+        rc = _launch_admitted(a, account_target, panes, runtime, dry_run=True,
+                              reuse_session=panes.exists(session))
+        if rc != OK:
+            return rc, chosen.mode
+        target = accounts.selected(account_target, cfg)
+        try:
+            account_auth.initialize(a.root, target)
+        except (accounts.AccountError, OSError):
+            print('  refused: target account authentication could not be prepared; '
+                  'the current card and process are unchanged', file=sys.stderr)
+            return REFUSED, chosen.mode
+        if current.pane and panes.exists(current.pane):
+            running = account_state.process_card(a.root, current, cfg, panes)
+            account_state.record(a.root, running, cfg, panes)
+        _registry(a).set(account_target)
+        card = account_target
     if chosen.mode == cycle_mod.RESPAWN:
         print(f"  {agent_name}: {chosen.render()}")
         if refusal := _foreign_session_refusal(a, agent_name, session, panes):
@@ -9176,6 +9482,8 @@ def _restart_cycle(a, card, agent_name, session, panes, runtime, chosen, verdict
         if rc in (OK, REFUSED):
             # REFUSED is the launcher's pre-mutation result, not a failed
             # restart. Falling through here used to kill the preserved session.
+            if rc == REFUSED and account_target is not None:
+                _registry(a).set(current)
             return rc, cycle_mod.RESPAWN
         # The process is already gone by here, so there is no gentler mode left
         # to try and the session may be holding a dead shell. Fall through to the
@@ -9194,6 +9502,8 @@ def _restart_cycle(a, card, agent_name, session, panes, runtime, chosen, verdict
     rc = _launch_admitted(a, card, panes, runtime, dry_run=True,
                           reuse_session=panes.exists(session))
     if rc != OK:
+        if account_target is not None:
+            _registry(a).set(current)
         return rc, cycle_mod.RELAUNCH
     stop_args = argparse.Namespace(**vars(a))
     stop_args.agent = agent_name
@@ -9203,6 +9513,8 @@ def _restart_cycle(a, card, agent_name, session, panes, runtime, chosen, verdict
         print(f"  refused: {agent_name} was not stopped — NOT relaunching. "
               f"A cycle that launches over a session it could not stop is how "
               f"you get two of the same agent.", file=sys.stderr)
+        if account_target is not None:
+            _registry(a).set(current)
         return rc, cycle_mod.RELAUNCH
     rc = _launch(a, card, panes, runtime)
     if rc != OK:
@@ -11347,6 +11659,7 @@ def _code_fingerprint(pkg=None) -> str | None:
 
 
 def _tend_once(a, quiet: bool = False) -> int:
+    from . import account_state
     if (rc := _window_launch_gate(a)) is not None:
         return rc
     # Best-effort sweeps shed by the pass budget (aegis-qwadc). Declared HERE
@@ -11494,8 +11807,10 @@ def _tend_once(a, quiet: bool = False) -> int:
     for _card in agents:
         if getattr(_card, "retired", False):
             continue
-        _h = harness_mod.name_for(_card, root=a.root)
-        _lane = _h if _h in governors else "base"
+        from . import accounts, account_state
+        _running = account_state.process_card(a.root, _card, cfg, panes)
+        _h = harness_mod.name_for(_running, root=a.root)
+        _lane = accounts.lane(_running, cfg) if cfg.accounts else (_h if _h in governors else "base")
         if _pinned.get(_card.role) == _h:
             continue          # pinned here; not convertible
         _by_lane.setdefault(_lane, []).append(_card.name)
@@ -11509,7 +11824,8 @@ def _tend_once(a, quiet: bool = False) -> int:
             # The compatibility lane is named `base` and runs `claude`; the
             # recommendation must name the program, since that is what
             # `st agent harness` takes.
-            harness=(harness_mod.DEFAULT if _n == "base" else _n))
+            harness=(cfg.accounts[_n].name if _n in cfg.accounts else
+                     harness_mod.DEFAULT if _n == "base" else _n))
         for _n in sorted(governors)
         # A BLIND LANE IS EXCLUDED, not defaulted. Recommending a fleet move on a
         # budget nobody can read is the one direction the governor's fail-safe
@@ -11541,10 +11857,13 @@ def _tend_once(a, quiet: bool = False) -> int:
             log=lambda msg: print(f"  ⚠ {msg}", file=sys.stderr))
     # Preserve the byte-for-byte single-governor path.  A mixed fleet has no
     # meaningful global verdict: every decision below resolves from the card.
-    verdict = verdicts.get("base") if not cfg.governor.by_harness else None
+    verdict = verdicts.get("base") if not (cfg.governor.by_harness or cfg.accounts) else None
     card_verdicts = {}
 
     def _card_verdict(card):
+        if cfg.accounts:
+            from .account_state import process_card
+            card = process_card(a.root, card, cfg, panes)
         harness, governor, unconfigured = _governor_for(cfg, governors, card, a.root)
         if harness not in card_verdicts:
             card_verdicts[harness] = (unconfigured if unconfigured is not None
@@ -11583,6 +11902,11 @@ def _tend_once(a, quiet: bool = False) -> int:
         # without being told something is wrong.
         for _pacing in verdict.pacing:
             print(f"  {_pacing.render()}", file=sys.stderr)
+
+    account_protected = _account_switch_sweep(a, agents, cfg, verdicts, panes)
+    if cfg.accounts and not a.dry_run:
+        agents = reg.all().exact()
+        card_verdicts.clear()
 
     def _respawn(card, session):
         runtime.start(card, session)
@@ -11641,7 +11965,8 @@ def _tend_once(a, quiet: bool = False) -> int:
     from . import fleet_governor as fg
     try:
         with fg.admission_lock(a.root, cfg.host_name, cfg.host_peers,
-                               owner=cfg.host_admission_owner):
+                               owner=cfg.host_admission_owner,
+                               **({"local_required": True} if cfg.accounts else {})):
             if cfg.host_peers:
                 if hasattr(a, '_account_governor'):
                     del a._account_governor
@@ -11948,11 +12273,14 @@ def _tend_once(a, quiet: bool = False) -> int:
         # agents told the first time are gone by then.
         # Drains are per provider.  A Claude drain must not tell a Codex agent
         # to stop, and vice versa; the single-governor path remains one call.
-        if cfg.governor.by_harness:
+        if cfg.governor.by_harness or cfg.accounts:
             drained = []
             for _h, _v in card_verdicts.items():
                 _cards = [card for card in agents
-                          if harness_mod.name_for(card, root=a.root) == _h]
+                          if card.name not in account_protected
+                          and _governor_for(cfg, governors,
+                              account_state.process_card(
+                                  a.root, card, cfg, panes), a.root)[0] == _h]
                 _gov = governors.get(_h, governors.get("base"))
                 drained.extend(_sweep(f"drain:{_h}",
                                       lambda v=_v, cs=_cards, h=_h, g=_gov: _drain_sweep(

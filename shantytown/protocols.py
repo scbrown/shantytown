@@ -195,6 +195,8 @@ class Agent:
                                   # exactly that broke the byte-identical launch
                                   # compose for three cards at once. New fields go
                                   # at the end.
+    account: str | None = None    # named subscription lane; None preserves legacy routing
+    auto_failover: bool | None = None  # per-agent opt-in; None preserves projection
 
     def effective_roles(self) -> tuple[str, ...]:
         """The role set to ACT on: the declared stack, or the tree position alone.

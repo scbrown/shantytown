@@ -43,6 +43,7 @@ st agent                      one agent
                               convert one agent to another harness: writes the card (with a
                               .bak), refuses a role the deployment pins, and relaunches with
                               `--now`. Omit the target to report what the card runs
+  account <agent> [name]          select account, harness and default model; --now queues a safe cycle
   cycle <agent> [--self]      clear an agent's context WITHOUT destroying its runtime:
                               checkpoint -> stop -> relaunch -> re-dispatch. `/clear`
                               drops bypass into MANUAL; this keeps it. --self REQUESTS
@@ -242,7 +243,7 @@ Codex input already includes its cached subset. This makes
 `cache_read / usage_in` a provider-independent prompt-cache hit rate. The fields
 are omitted—not zeroed—when every matching transcript is unknown.
 
-Forty. Seven verbs at the top level and thirty-three grouped commands under five groups
+Forty-one. Seven verbs at the top level and thirty-four grouped commands under five groups
 (`work`, `agent`, `fleet`, `repo`, `ops`). A group is a namespace and runs nothing, so it earns no
 slot; the count is the leaves. The flat spellings from before the grouping (st cycle for
 st agent cycle, and so on) still parse into the same handler, print one line on stderr saying
@@ -2320,3 +2321,31 @@ a new session. `st ops doctor` reports a disabled session without resetting it;
 its existing empty-episode probe tests authorization, not storage commits.
 Transcript redaction covers canonical, explicit and former credential files,
 including values shadowed by an environment override.
+
+## Named account switching
+
+Declare each subscription separately in `[accounts.<name>]` (see
+[configuration](configuration.md#named-accounts)). `st agent account alice backup`
+selects the account, its harness and its declared default model in one write.
+The running process keeps its original account until the next relaunch, and the
+usage census continues charging that account. Add `--model` to select a different
+model available on the target subscription.
+
+`--now` queues the change for a positively observed idle boundary, using the
+existing checkpointed cycle. Busy turns, typed input, option pickers, background
+shells, missing authentication, role pins, launch holds and account caps retain
+the current process. The checkpoint, workspace, ownership and live-launch checks
+still apply. `--dry-run` writes nothing. A deliberate stop cancels a queued change.
+
+`--auto-failover` opts this card into supervisor switching; `--no-auto-failover`
+turns it off. When its account has a proven drain or P0-only tier, tend considers
+all other configured accounts with fresh headroom and a free slot. It rechecks
+under the launch lock, requires a verified durable handoff, then switches at an
+idle boundary. Unknown usage or handoff state waits. After an observed successful
+switch, the administrator receives a durable notice. An indeterminate notice is
+marked `attempting` and requires operator reconciliation instead of being sent
+again on every heartbeat. No account creation or interactive login is performed.
+
+Writable file cards are the selection authority. Graph identity may be projected
+into them without clearing an existing account or explicit failover setting;
+a read-only TOML registry or identity-only graph registry refuses selection writes.

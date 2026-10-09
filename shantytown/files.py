@@ -100,6 +100,8 @@ class FilesRegistry:
         if not p.is_file():
             raise LookupError(f"no such agent: {name} (looked in {p})")
         d = json.loads(p.read_text())
+        if d.get('auto_failover') is not None and type(d['auto_failover']) is not bool:
+            raise ValueError('auto_failover must be an explicit boolean')
         return Agent(
             name=name,
             role=d.get("role", "worker"),
@@ -131,6 +133,8 @@ class FilesRegistry:
             # said" — so an un-migrated card is distinguishable from one that
             # was scoped to this host on purpose (aegis-5du1bz).
             host=d.get("host"),
+            account=d.get("account"),
+            auto_failover=d.get("auto_failover"),
         )
 
     def set(self, agent: Agent) -> None:
@@ -164,6 +168,10 @@ class FilesRegistry:
         # agent back onto the default harness.
         if agent.harness is not None:
             existing["harness"] = agent.harness
+        if agent.account is not None:
+            existing["account"] = agent.account
+        if agent.auto_failover is not None:
+            existing["auto_failover"] = agent.auto_failover
         if agent.dangerous:
             existing["dangerous"] = agent.dangerous
         # Same write-only-when-true shape as `dangerous` above: launch config the
@@ -223,7 +231,7 @@ class FilesRegistry:
         # repointed at `st-*` by a projection, which would leave every card
         # addressing a session that does not exist while the real ones ran on.
         existing.setdefault("pane", tier_pane_for(agent.name))
-        p.write_text(json.dumps(existing, indent=2, sort_keys=True))
+        write_text_atomic(p, json.dumps(existing, indent=2, sort_keys=True))
 
     def all(self) -> Answer[list[Agent]]:
         """Every agent. RAISES if there is no registry to read.
