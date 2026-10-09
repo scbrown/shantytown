@@ -2320,3 +2320,15 @@ a new session. `st ops doctor` reports a disabled session without resetting it;
 its existing empty-episode probe tests authorization, not storage commits.
 Transcript redaction covers canonical, explicit and former credential files,
 including values shadowed by an environment override.
+
+### Runtime exit with a surviving pane
+
+A pane whose foreground process is a known login shell is a stopped runtime.
+`st crew` renders it `down`, including when a refused cycle request remains
+pending; JSON reports `live: false`. Old runtime UI in scrollback does not
+override the process observation. The administrator's drain treats it as
+stopped even when its plate still holds work. Each tend pass reports a
+`runtime-exited` fault with the observed shell and leaves recovery to the
+guarded lifecycle commands. Retirement and operator stop records retain their
+meaning. An unreadable foreground process is insufficient evidence of exit;
+an actual cycle's launch interval retains `cycling`.
