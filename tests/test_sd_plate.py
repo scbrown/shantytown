@@ -82,7 +82,7 @@ def test_inbox_scopes_recipient_and_closed_receipts_and_refuses_partial(monkeypa
                          items_for=t.inbox_items)
     assert len(inbox.unread("worker")) == 1
     assert inbox.find_delivery("worker", "marker").read
-    assert calls == [("worker", False), ("worker", True)]
+    assert calls == [("worker", False), ("worker", False), ("worker", True), ("worker", True)]
     monkeypatch.setattr(t, "_bd", lambda *args: subprocess.CompletedProcess(args, 0,
         '{"issues":[],"total":10,"has_more":true}', ""))
     with pytest.raises(PartialAnswer):
@@ -154,3 +154,35 @@ def test_ready_bare_array_and_complete_envelope_controls(monkeypatch, payload):
     if isinstance(payload, dict) and not payload["issues"]:
         expected = set()
     assert t.plate_ready_ids("worker").exact() == expected
+
+
+def test_scoped_inbox_keeps_legacy_mail_and_rejects_partial_prefix_reads(monkeypatch):
+    from shantytown.inbox import TrackerInbox
+    from shantytown.answer import PartialAnswer
+    t = SdTracker(quipu="https://example.test", prefix="test")
+    rows = [dict(id="modern", title="inbox: modern", assignee="worker", status="open"),
+            dict(id="legacy", title="  mail: legacy", assignee="worker", status="open"),
+            dict(id="work", title="work mentions mail: in text", assignee="worker", status="open")]
+    calls = []
+    def run(*args):
+        assert args[args.index("--assignee") + 1] == "worker"
+        prefix = args[args.index("--title-contains") + 1]
+        calls.append(prefix)
+        selected = [row for row in rows if prefix in row["title"]]
+        return subprocess.CompletedProcess(args, 0,
+            json.dumps({"issues": selected, "total": len(selected), "has_more": False}), "")
+    monkeypatch.setattr(t, "_bd", run)
+    assert {item.id for item in t.inbox_items("worker").exact()} == {"modern", "legacy"}
+    inbox = TrackerInbox(t, lambda: (_ for _ in ()).throw(AssertionError("whole board read")),
+                         items_for=t.inbox_items)
+    assert {message.id for message in inbox.unread("worker")} == {"modern", "legacy"}
+    assert set(calls) == {"inbox:", "mail:"}
+    def partial(*args):
+        result = run(*args)
+        if args[args.index("--title-contains") + 1] == "mail:":
+            payload = json.loads(result.stdout);payload["has_more"] = True
+            return subprocess.CompletedProcess(args, 0, json.dumps(payload), "")
+        return result
+    monkeypatch.setattr(t, "_bd", partial)
+    with pytest.raises(PartialAnswer):
+        inbox.unread("worker")

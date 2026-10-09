@@ -35,6 +35,7 @@ from dataclasses import dataclass
 from .br import BrTracker, _failure_reason
 from .answer import Answer
 from .protocols import WorkItem
+from .inbox import MESSAGE_PREFIXES, is_message
 
 #: Backends served by a br-compatible CLI. A site that asks "is this a tracker
 #: with plates, comments and hauls" asks THIS, so a new name cannot be missed in
@@ -194,27 +195,28 @@ class SdTracker(BrTracker):
                     messages_only: bool = False) -> Answer[list[dict]]:
         rows, failures = {}, []
         for owner in dict.fromkeys((agent, agent.split("/")[-1])):
-            try:
-                arguments = ["list", "--assignee", owner, "--json", "--limit", "0"]
-                if include_closed:
-                    arguments.append("--all")
-                if messages_only:
-                    arguments += ["--title-contains", "inbox:"]
-                result = self._bd(*arguments)
-                if result.returncode:
-                    raise RuntimeError(_failure_reason(result))
-                payload = json.loads(result.stdout)
-                candidates = payload.get("issues") if isinstance(payload, dict) else None
-                if not isinstance(candidates, list):
-                    raise ValueError("listing returned no issue array")
-                if payload.get("has_more") is not False or payload.get("total") != len(candidates):
-                    raise ValueError("owner listing did not prove completeness")
-                for row in candidates:
-                    if not isinstance(row, dict) or not row.get("id"):
-                        raise ValueError("listing returned an invalid issue")
-                    rows[row["id"]] = row
-            except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as error:
-                failures.append(f"sd plate listing failed for owner {owner}: {error}")
+            for prefix in (MESSAGE_PREFIXES if messages_only else (None,)):
+                try:
+                    arguments = ["list", "--assignee", owner, "--json", "--limit", "0"]
+                    if include_closed:
+                        arguments.append("--all")
+                    if prefix is not None:
+                        arguments += ["--title-contains", prefix]
+                    result = self._bd(*arguments)
+                    if result.returncode:
+                        raise RuntimeError(_failure_reason(result))
+                    payload = json.loads(result.stdout)
+                    candidates = payload.get("issues") if isinstance(payload, dict) else None
+                    if not isinstance(candidates, list):
+                        raise ValueError("listing returned no issue array")
+                    if payload.get("has_more") is not False or payload.get("total") != len(candidates):
+                        raise ValueError("owner listing did not prove completeness")
+                    for row in candidates:
+                        if not isinstance(row, dict) or not row.get("id"):
+                            raise ValueError("listing returned an invalid issue")
+                        rows[row["id"]] = row
+                except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as error:
+                    failures.append(f"sd plate listing failed for owner {owner}: {error}")
         how = f"sd list --assignee for {agent!r} and its short spelling, --limit 0"
         if failures:
             return Answer.capped(list(rows.values()), how=how, caveat="; ".join(failures))
@@ -225,8 +227,9 @@ class SdTracker(BrTracker):
         answer = self._owner_rows(agent, include_closed=include_closed, messages_only=True)
         items = [WorkItem(id=row["id"], title=row.get("title", ""),
                           status=row.get("status", "open"), assignee=row.get("assignee"),
-                          priority=row.get("priority", 2)) for row in answer.at_least()]
-        how = answer.how + ", --title-contains inbox:" + (", --all" if include_closed else "")
+                          priority=row.get("priority", 2)) for row in answer.at_least()
+                 if is_message(row.get("title", ""))]
+        how = answer.how + ", --title-contains each of " + "/".join(MESSAGE_PREFIXES) + (", --all" if include_closed else "")
         if answer.complete:
             return Answer.complete_read(items, how=how)
         return Answer.capped(items, how=how, caveat=answer.caveat)

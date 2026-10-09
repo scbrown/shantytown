@@ -75,6 +75,7 @@ PREFIX = "inbox:"
 # agents' plates today — the exact defect this type exists to prevent. Excluding
 # the legacy prefix too is not tidiness; it un-breaks the plates already broken.
 _LEGACY_PREFIX = "mail:"
+MESSAGE_PREFIXES = (PREFIX, _LEGACY_PREFIX)
 
 
 def is_message(title: str) -> bool:
@@ -82,7 +83,7 @@ def is_message(title: str) -> bool:
     by files.plate and beads.plate so the two backends cannot disagree about what
     belongs on a plate (the two-implementation equivalence rule, aegis-260i)."""
     t = (title or "").lstrip()
-    return t.startswith(PREFIX) or t.startswith(_LEGACY_PREFIX)
+    return t.startswith(MESSAGE_PREFIXES)
 
 
 # Labels that mean a HUMAN DECISION gates this bead's completion — it is not an
