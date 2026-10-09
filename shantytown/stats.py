@@ -592,7 +592,7 @@ def capture(root: Path, payload: dict) -> None:
 
 
 
-def last_activity(root: Path) -> dict[str, float] | None:
+def last_activity(root: Path, *, kind: str | None = None) -> dict[str, float] | None:
     """{agent: newest event ts} from the store, READ-ONLY. None when there is no
     store or it cannot be read: "no evidence of activity" is not "idle", and a
     caller must be able to tell the two apart (aegis-68j0ys, the firing layer)."""
@@ -602,7 +602,12 @@ def last_activity(root: Path) -> dict[str, float] | None:
     try:
         conn = sqlite3.connect(f"file:{p}?mode=ro", uri=True, timeout=3)
         try:
-            rows = conn.execute("SELECT agent, MAX(ts) FROM events GROUP BY agent").fetchall()
+            if kind is None:
+                rows = conn.execute("SELECT agent, MAX(ts) FROM events GROUP BY agent").fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT agent, MAX(ts) FROM events WHERE kind=? GROUP BY agent",
+                    (kind,)).fetchall()
         finally:
             conn.close()
     except sqlite3.Error:

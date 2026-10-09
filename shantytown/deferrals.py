@@ -212,7 +212,8 @@ class Finding:
         """
         cond = self.condition.render() if self.condition else ""
         raw = (f"{self.bead}|{cond}|{int(bool(self.lapsed_at))}|{int(self.met)}"
-               f"|{self.untestable}|{int(self.conditionless)}")
+               f"|{self.untestable}|{int(self.conditionless)}"
+               f"|{self.priority}|{int(self.read_error)}")
         return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
     def render(self) -> str:

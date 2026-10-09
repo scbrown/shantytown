@@ -48,29 +48,16 @@ def test_bad_record_is_explicitly_unavailable(tmp_path):
     assert line == "advisory unavailable: creel probe returned no controller record"
 
 
-def test_alerter_is_silent_on_every_repeat_including_a_nonzero_one(tmp_path):
-    """sattler's ruling on aegis-ox5dh (2026-08-29) — push on FIRST OCCURRENCE
-    and on VALUE CHANGE, silent on all repeats including a nonzero one. It
-    supersedes 1641346, whose rule this test previously asserted in the opposite
-    direction (`test_alerter_keeps_nonzero_recommendations_actionable`).
-
-    That rule's instinct was right — an unactuated recommendation must not go
-    silent — and its cadence was what made it wrong. Measured live: the same +3
-    at 20:27, 20:32 and 20:37 while the standing answer was known and deliberate.
-    The standing state now lives on `st crew --governor`, a place you LOOK rather
-    than a thing that interrupts you. A slow re-nag returns only if a nonzero
-    recommendation is ever MEASURED sitting unactioned."""
+def test_routine_recommendations_are_logged_on_change_without_a_push(tmp_path, capsys):
     pushed = []
-    mk = lambda: advisory.Alerter(tmp_path, object(), object(),
-        push=lambda reg, panes, message: pushed.append(message) or "admin")
-    lines = {"codex": "governor recommends +2"}
-
-    assert mk().sweep(lines) == ["codex"], "first occurrence is news"
-    assert mk().sweep(lines) == [], "and every repeat after it is not"
-    assert mk().sweep({"codex": "governor recommends +4"}) == ["codex"], \
-        "a CHANGED value is news again"
-    assert pushed == ["governor setpoint [codex]: governor recommends +2",
-                      "governor setpoint [codex]: governor recommends +4"]
+    mk = lambda: advisory.Alerter(tmp_path, None, None,
+        push=lambda *args: pushed.append(args) or "admin")
+    for line in ["governor recommends +2", "governor recommends +2",
+                 "governor recommends +4"]:
+        assert mk().sweep({"codex": line}) == []
+    assert pushed == []
+    assert capsys.readouterr().out.count("advisory log:") == 2
+    assert json.loads((tmp_path / "notify/governor_advisory.json").read_text())["codex"]["key"] == "delta:4"
 
 
 def test_unavailable_record_is_also_deduped(tmp_path):
@@ -89,9 +76,9 @@ def test_hold_dedup_keys_on_recommendation_not_changing_error_prose(tmp_path):
         push=lambda reg, panes, message: pushed.append(message) or "admin")
     first = {"codex": "governor recommends 0 — error -0.7 — hold"}
     second = {"codex": "governor recommends 0 — error -0.8 — hold"}
-    assert alerter.sweep(first) == ["codex"]
+    assert alerter.sweep(first) == []
     assert alerter.sweep(second) == []
-    assert len(pushed) == 1
+    assert pushed == []
 
 
 def test_a_nonzero_recommendation_goes_quiet_once_read(tmp_path):
@@ -103,7 +90,7 @@ def test_a_nonzero_recommendation_goes_quiet_once_read(tmp_path):
     mk = lambda: advisory.Alerter(tmp_path, object(), object(),
         push=lambda reg, panes, message: pushed.append(message) or "admin")
     lines = {"codex": "governor recommends +2 — under trajectory"}
-    assert mk().sweep(lines) == ["codex"]
+    assert mk().sweep(lines) == []
     assert mk().sweep(lines) == []
 
 
@@ -126,11 +113,11 @@ def test_a_standing_recommendation_and_a_hold_both_go_quiet(tmp_path):
 
     mk = lambda: _alerter(tmp_path, sent, filename="u.json",
                           label="governor utilization")
-    assert mk().sweep({"base": fill}) == ["base"], "first occurrence is news"
+    assert mk().sweep({"base": fill}) == [], "first occurrence is news"
     assert mk().sweep({"base": moved}) == [], "same recommendation, drifted prose"
-    assert mk().sweep({"base": hold}) == ["base"], "the change to hold is news"
+    assert mk().sweep({"base": hold}) == [], "the change to hold is news"
     assert mk().sweep({"base": hold}) == [], "a standing hold goes quiet"
-    assert sent[-1].startswith("governor utilization [base]: ")
+    assert sent == []
 
 
 def test_the_two_advisories_do_not_share_a_ledger(tmp_path):
@@ -141,7 +128,7 @@ def test_the_two_advisories_do_not_share_a_ledger(tmp_path):
     _alerter(tmp_path, sent, filename="u.json").sweep({"base": hold})
     # The setpoint ledger is untouched, so its own first hold is still news.
     assert _alerter(tmp_path, sent).sweep(
-        {"base": "governor recommends 0 — hold"}) == ["base"]
+        {"base": "governor recommends 0 — hold"}) == []
 
 
 def test_both_advisories_push_on_change_only(tmp_path):
@@ -155,16 +142,16 @@ def test_both_advisories_push_on_change_only(tmp_path):
     fill = advisory.Advice(line="UTIL[... +3 ...]", key="fill:3", actionable=False)
     mk_u = lambda: _alerter(tmp_path, sent, filename="u.json")
 
-    assert mk_u().sweep({"base": fill}) == ["base"], "newly nonzero still pushes"
+    assert mk_u().sweep({"base": fill}) == [], "newly nonzero still pushes"
     assert mk_u().sweep({"base": fill}) == [], "an unchanged +3 goes quiet"
     grown = advisory.Advice(line="UTIL[... +4 ...]", key="fill:4", actionable=False)
-    assert mk_u().sweep({"base": grown}) == ["base"], "a CHANGED recommendation pushes"
+    assert mk_u().sweep({"base": grown}) == [], "a CHANGED recommendation pushes"
 
     # ...and the setpoint line now behaves identically.
     mk_s = lambda: _alerter(tmp_path, sent, filename="s.json")
-    assert mk_s().sweep({"base": "governor recommends +2"}) == ["base"]
     assert mk_s().sweep({"base": "governor recommends +2"}) == []
-    assert mk_s().sweep({"base": "governor recommends +5"}) == ["base"]
+    assert mk_s().sweep({"base": "governor recommends +2"}) == []
+    assert mk_s().sweep({"base": "governor recommends +5"}) == []
 
 
 def test_an_unknown_key_shape_settles_instead_of_re_pushing_forever(tmp_path):
@@ -186,7 +173,7 @@ def test_an_unknown_key_shape_settles_instead_of_re_pushing_forever(tmp_path):
     for shape in ("over-pace:0", "at-cap:0", "budget-shrinking:0",
                   "a-cause-nobody-has-invented-yet:7"):
         item = {"base": advisory.Advice(line="x", key=shape, actionable=False)}
-        assert mk().sweep(item) == ["base"], f"{shape}: the change is news"
+        assert mk().sweep(item) == [], f"{shape}: the change is news"
         assert mk().sweep(item) == [], f"{shape}: and then it goes QUIET"
 
 
@@ -301,3 +288,41 @@ def test_a_spending_envelope_sends_its_bound_AT_THIS_ELAPSED(tmp_path):
         running=6, cap=9, now=now, paces=(pace,), probe=str(probe), node="node",
         run=run)
     assert blind.startswith("advisory unavailable:") and "envelope" in blind
+
+
+def test_warning_failures_retry_unavailable_panes_and_recovery_stays_logged(tmp_path):
+    sent = []
+    a = advisory.Alerter(tmp_path, None, None, push=lambda *_a: None)
+    failure = {'base': advisory.Advice('probe failed', 'bad', failure=True, risk=2)}
+    assert a.sweep(failure) == []
+    assert not a.path.exists(), 'undelivered failure must remain pending'
+    a.push = lambda _r, _p, msg: sent.append(msg) or 'admin'
+    assert a.sweep(failure) == ['base']
+    assert a.sweep(failure) == []
+    assert a.sweep({'base': advisory.Advice('probe healthy', 'ok')}) == []
+    assert len(sent) == 1
+
+
+def test_low_risk_failure_does_not_interrupt(tmp_path):
+    a = advisory.Alerter(tmp_path, None, None,
+        push=lambda *_a: pytest.fail('below-floor failure interrupted'))
+    assert a.sweep({'base': advisory.Advice('minor failure', 'minor', failure=True, risk=1)}) == []
+
+
+def test_unavailable_idle_lane_logs_but_new_live_lane_failure_interrupts(tmp_path):
+    sent = []
+    a = _alerter(tmp_path, sent)
+    line = 'advisory unavailable: usage probe failed'
+    assert a.sweep({'base': advisory._creel_advice(line, live=0)}) == []
+    assert a.sweep({'base': advisory._creel_advice(line, live=1)}) == ['base']
+    assert a.sweep({'base': advisory._creel_advice(line, live=1)}) == []
+    assert len(sent) == 1
+
+
+def test_risk_increase_on_same_key_must_not_be_hidden_by_routine_dedup(tmp_path):
+    sent = []
+    a = _alerter(tmp_path, sent)
+    assert a.sweep({'base': advisory.Advice('minor', 'probe', failure=True, risk=1)}) == []
+    assert a.sweep({'base': advisory.Advice('major', 'probe', failure=True, risk=2)}) == ['base']
+    assert a.sweep({'base': advisory.Advice('major', 'probe', failure=True, risk=2)}) == []
+    assert len(sent) == 1

@@ -800,3 +800,21 @@ def test_emit_does_not_warn_for_preserved_registered_hooks(root, harness, capsys
                                    harness_mod.get(harness).settings_name("worker"),
                                    "UserPromptSubmit")
     assert not capsys.readouterr().err
+
+
+def test_stop_silence_requires_a_stop_opportunity_after_last_evidence(root):
+    b = bundle(hooks=[{'event': 'Stop', 'command': EXAMPLE_CMD,
+        'evidence': {'command': 'example-tool last-run', 'max_age_seconds': 60}}])
+    register(root, b)
+    path = emit(root, 'claude', 'worker')
+    def check(stops):
+        res = hb.check(root)
+        running = [hb.Running('alice', str(path), launch_bytes=path.read_bytes())]
+        hb.apply_live(res, running)
+        hb.apply_firing(res, hb.load(root), now=10000, runner=lambda _: (1000., ''),
+            running=running, last_active={'alice': 9990.}, last_stopped=stops)
+        return _claude(res)['firing']
+    assert check({}) == hb.NOT_CHECKED, 'tools running without a Stop are not silence'
+    assert check({'alice': 900.}) == hb.NOT_CHECKED, 'capture already covered the last Stop'
+    assert check({'alice': 9990.}) == 'silent', 'real missed Stop remains actionable'
+    assert check(None) == 'unknown', 'unreadable opportunity evidence is not healthy'

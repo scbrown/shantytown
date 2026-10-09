@@ -433,3 +433,12 @@ def test_ordinary_text_is_NOT_redacted():
     ):
         out, n = _redact_bearer_output(benign)
         assert out == benign and n == 0, f"false positive on {benign!r}"
+
+
+def test_stop_activity_ignores_newer_tool_events(tmp_path):
+    conn = stats._db(tmp_path)
+    conn.executemany('INSERT INTO events (ts,agent,kind) VALUES (?,?,?)',
+        [(10., 'alice', 'stop'), (20., 'alice', 'tool'), (30., 'bob', 'tool')])
+    conn.commit(); conn.close()
+    assert stats.last_activity(tmp_path) == {'alice': 20., 'bob': 30.}
+    assert stats.last_activity(tmp_path, kind='stop') == {'alice': 10.}

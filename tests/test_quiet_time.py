@@ -222,7 +222,7 @@ def test_probe_slowdown_uses_aggregate_and_restores_only_after_last_hold(tmp_pat
     assert decisions == [True, True, False]
 
 
-def test_reason_transition_reaches_coordinator_while_still_held(tmp_path, monkeypatch):
+def test_reason_transition_stays_in_log_while_still_held(tmp_path, monkeypatch):
     from shantytown.creel_advisory import Alerter
     from types import SimpleNamespace
     sent = []
@@ -232,10 +232,11 @@ def test_reason_transition_reaches_coordinator_while_still_held(tmp_path, monkey
     call = lambda status: cli._gaming_advisory(a, status, reg=object(), panes=object())
     both = quiet.Status((('gaming', gaming.Status('manual')), ('media', quiet.Observation('active'))))
     media = quiet.Status((('gaming', gaming.Status()), ('media', quiet.Observation('active'))))
-    assert call(both) == ['local']
-    assert call(media) == ['local']
+    assert call(both) == []
     assert call(media) == []
-    assert 'media' in sent[-1] and 'LIFTED' not in sent[-1]
+    assert call(media) == []
+    assert sent == []
+    assert 'media' in (tmp_path / 'notify/gaming_hold.json').read_text()
 
 
 def test_configured_steam_regex_and_grace(tmp_path, monkeypatch):
