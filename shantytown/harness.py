@@ -1628,6 +1628,12 @@ def name_for(card: Agent, root=None) -> str:
     and emitter, ClaudeRuntime (which holds its own root), and tier.role_set's
     capability gate.
     """
+    if getattr(card, 'account', None):
+        if root is None:
+            raise UnknownHarness('named accounts require a deployment root')
+        from . import accounts
+        from .config import load
+        return accounts.selected(card, load(root)).harness
     if card.harness:
         return card.harness
     return _deployment_harness(card.role, root) or DEFAULT
@@ -1675,6 +1681,12 @@ def resolve_model(card, root=None) -> str | None:
     """
     if getattr(card, "model", None):
         return card.model
+    if root is not None:
+        from . import accounts
+        from .config import load
+        account = accounts.selected(card, load(root))
+        if account is not None:
+            return account.model
     return _deployment_model(getattr(card, "role", None), root)
 
 

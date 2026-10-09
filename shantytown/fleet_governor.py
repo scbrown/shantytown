@@ -52,7 +52,7 @@ class AdmissionUnavailable(GovernorError):
 
 
 @contextmanager
-def admission_lock(root, host, peers, *, owner=None):
+def admission_lock(root, host, peers, *, owner=None, local_required=False):
     """Serialize census-to-launch on the explicitly configured authority.
 
     Every peer must list the same host set and authority. There is no failover:
@@ -63,8 +63,10 @@ def admission_lock(root, host, peers, *, owner=None):
     if not peers:
         if owner is not None and owner != host:
             raise AdmissionUnavailable('account admission authority is not a declared host')
-        yield
-        return
+        if not local_required:
+            yield
+            return
+        host = owner = host or 'local'
     if not host or host in peers:
         raise AdmissionUnavailable('account admission needs a unique local host name')
     if not owner:
@@ -428,7 +430,7 @@ class FleetGovernor:
         result = {name: 0 for name in self.governors}
         for row in rows:
             if row['live']:
-                lane = self.lane(row['harness'])
+                lane = self.lane(row.get('account') or row['harness'])
                 result[lane] = result.get(lane, 0) + 1
         return result
 
@@ -474,7 +476,7 @@ class FleetGovernor:
             rows += local_agents
         for row in rows:
             if row['live'] and not row.get('estimated'):
-                h = row.get('harness')
+                h = row.get('account') or row.get('harness')
                 live_by_harness[h] = live_by_harness.get(h, 0) + 1
         out = []
         for name, g in self.governors.items():
