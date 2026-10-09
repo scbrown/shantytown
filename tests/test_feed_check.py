@@ -864,3 +864,17 @@ def test_after_turn_hold_gates_live_idle_worker_until_explicit_relaunch(tmp_path
     assert feed_check.free_feedable_workers(reg, panes, _Runtime(), tmp_path) == []
     agent_hold.clear(tmp_path, "weaver")
     assert feed_check.free_feedable_workers(reg, panes, _Runtime(), tmp_path) == ["weaver"]
+
+
+@pytest.mark.parametrize("label", ["desk", "needs-stiwi", " DESK ", " Needs-Stiwi "])
+def test_human_surface_ready_work_does_not_trap_the_coordinator(label):
+    ready = [
+        {"id": "human", "title": "operator account action", "labels": [label]},
+        {"id": "crew", "title": "implement desk display", "labels": ["infra"]},
+    ]
+    # The word in a title is not a human-only marker; ordinary crew work survives.
+    assert feed_check.dispatchable({"weaver"}, ready) == [("crew", "implement desk display")]
+    assert feed_check.dispatchable({"weaver"}, ready[:1]) == []
+    from shantytown.priority_advisory import workable
+    assert not workable(ready[0])
+    assert workable(ready[1])

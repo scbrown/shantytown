@@ -130,7 +130,11 @@ def is_anchor(labels) -> bool:
 # _DECISION_LABELS, which gate a decision an agent could otherwise implement —
 # here the WORK itself is out of reach, so "execute and close" is not merely
 # unsafe, it is impossible.
-_HUMAN_BLOCKED_LABELS = frozenset({"blocked:human", "blocked:external"})
+# Human-only work can be OPEN/ready on a decision desk without blocked:human.
+# Counting it as available work produces false Rule Zero/priority alerts.
+_HUMAN_BLOCKED_LABELS = frozenset({
+    "blocked:human", "blocked:external", "desk", "needs-stiwi",
+})
 
 # Labels/titles for beads that are RECORDS, not work: a session handoff is a
 # report someone wrote, and an ANCHOR bead says "do not close" in its own title
