@@ -311,3 +311,13 @@ tracker does.
 An optional `SHANTY_STOP_JEV_COMMAND` classifies an open anchor at Stop send using only the hook payload’s `last_assistant_message` and tracker status. It does not read a transcript path or the pane. The message is credential-masked before its bounded tail reaches the canonical Jev MCP server. Calls have a five-second total deadline; absent input/configuration, low confidence, none-of-these and transport/log failures preserve existing routing.
 
 The four inferred outcomes are finished-unclosed (one close reminder per session and item), blocked on a named dependency (evidence reaches the lead), gave-up/looping (needs-decision escalation through the existing administrator route), and mid-work (a turn boundary). It never closes a bead, assigns work, pages or restarts anything. Existing haul and session-budget gates still apply. The stop event carries explicitly dated inferred advice; the drain labels it historical if the current anchor differs. Private verdict metadata under the deployment root’s `stop_outcomes` includes input/question hashes, probabilities, model, usage and latency for evaluation, without storing the message. Disable by unsetting the command.
+
+### Remote Seeds plate reads
+
+`SdTracker` selects plate candidates and ready IDs by the requested owner,
+including both full and short owner spellings. It uses the same ranking and
+blocker checks as `BrTracker`, and keeps failed candidate reads visible as an
+incomplete plate. A roster caches each owner's candidates and readiness for
+one render. Ordinary br trackers continue sharing their single board snapshot. Remote Seeds
+inboxes also query the recipient and message-title prefix; receipt lookup includes
+closed messages and refuses any incomplete response.

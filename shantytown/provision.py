@@ -954,6 +954,19 @@ def headerless_quipu(servers: dict) -> list[str]:
     return sorted(out)
 
 
+def _refresh_opencode_bridge(card, root, settings_path):
+    """Refresh the actual launch artifact, including stores without an MCP kit."""
+    if card.harness != "opencode":
+        return
+    from .harness import get
+    from .opencode import config_path
+    selected = settings_path or config_path(card, root)
+    try:
+        get("opencode").provision(str(selected), root=root)
+    except (OSError, ValueError) as exc:
+        raise ProvisionError(f"cannot refresh OpenCode bridge: {exc}") from None
+
+
 def provision(card: Agent, root, *, secrets=None, settings_path=None,
               require_manifest=False) -> list[str]:
     """Equip the agent's workspace. Returns the server names it can now reach.
@@ -963,7 +976,8 @@ def provision(card: Agent, root, *, secrets=None, settings_path=None,
     the caller is a launcher that runs every time an agent starts.
     """
     if not card.workspace:
-        return []                       # no workspace elected — nothing to equip
+        _refresh_opencode_bridge(card, root, settings_path)
+        return []                       # no workspace elected — no workspace kit
     ws = Path(card.workspace).expanduser()
     if not ws.is_dir():
         raise ProvisionError(
@@ -1098,6 +1112,7 @@ def provision(card: Agent, root, *, secrets=None, settings_path=None,
                 f"every surface. Restore {tmpl}, or empty {d} to declare that this "
                 f"fleet wants no MCP servers.")
         _provision_capture_without_kit(card, root, ws, settings_path)
+        _refresh_opencode_bridge(card, root, settings_path)
         return []
 
     if rendered is None:
@@ -1158,4 +1173,5 @@ def provision(card: Agent, root, *, secrets=None, settings_path=None,
         gaps = _manifest_gaps(card, root, manifest, secrets)
         if gaps:
             raise ProvisionError("provisioned tooling failed verification: " + ", ".join(gaps))
+    _refresh_opencode_bridge(card, root, settings_path)
     return got

@@ -33,6 +33,9 @@ import subprocess
 from dataclasses import dataclass
 
 from .br import BrTracker, _failure_reason
+from .answer import Answer
+from .protocols import WorkItem
+from .inbox import MESSAGE_PREFIXES, is_message
 
 #: Backends served by a br-compatible CLI. A site that asks "is this a tracker
 #: with plates, comments and hauls" asks THIS, so a new name cannot be missed in
@@ -150,6 +153,116 @@ class SdTracker(BrTracker):
                                  database_path=w.get("database_path"),
                                  quipu_url=w.get("quipu_url"), prefix=w.get("prefix"))
         return self._proof
+
+    def deferred_rows(self) -> Answer[list[dict]]:
+        """Both deferral representations, selecting dated open rows remotely."""
+        rows = {}
+        how = "sd list deferred + open --defer-until-present, --limit 0"
+        try:
+            for status in ("deferred", "open"):
+                args = ["list", "--status", status, "--json", "--limit", "0"]
+                if status == "open":
+                    args.append("--defer-until-present")
+                result = self._bd(*args)
+                if result.returncode:
+                    raise RuntimeError(_failure_reason(result))
+                payload = json.loads(result.stdout)
+                candidates = payload.get("issues") if isinstance(payload, dict) else None
+                if (not isinstance(candidates, list) or payload.get("has_more") is not False
+                        or payload.get("total") != len(candidates)):
+                    raise ValueError("deferral listing did not prove completeness")
+                for row in candidates:
+                    if not isinstance(row, dict) or not row.get("id"):
+                        raise ValueError("deferral listing returned an invalid issue")
+                    if status == "open" and row.get("defer_until") is None:
+                        raise ValueError("open deferral listing included an undated issue")
+                    rows[row["id"]] = row
+            return Answer.complete_read(list(rows.values()), how=how)
+        except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as error:
+            return Answer.capped(list(rows.values()), how=how,
+                                 caveat=f"deferral candidates unreadable: {error}")
+
+    def plate_rows(self, agent: str) -> Answer[list[dict]]:
+        """Query both accepted owner spellings before selecting the plate.
+
+        Reading every active issue and filtering its owner locally costs a
+        whole-board read on a remote store. Selection still uses br's ranking,
+        readiness and partial-read rules; only the candidate set is narrower.
+        """
+        return self._owner_rows(agent)
+
+    def _owner_rows(self, agent: str, *, include_closed: bool = False,
+                    messages_only: bool = False) -> Answer[list[dict]]:
+        rows, failures = {}, []
+        for owner in dict.fromkeys((agent, agent.split("/")[-1])):
+            for prefix in (MESSAGE_PREFIXES if messages_only else (None,)):
+                try:
+                    arguments = ["list", "--assignee", owner, "--json", "--limit", "0"]
+                    if include_closed:
+                        arguments.append("--all")
+                    if prefix is not None:
+                        arguments += ["--title-contains", prefix]
+                    result = self._bd(*arguments)
+                    if result.returncode:
+                        raise RuntimeError(_failure_reason(result))
+                    payload = json.loads(result.stdout)
+                    candidates = payload.get("issues") if isinstance(payload, dict) else None
+                    if not isinstance(candidates, list):
+                        raise ValueError("listing returned no issue array")
+                    if payload.get("has_more") is not False or payload.get("total") != len(candidates):
+                        raise ValueError("owner listing did not prove completeness")
+                    for row in candidates:
+                        if not isinstance(row, dict) or not row.get("id"):
+                            raise ValueError("listing returned an invalid issue")
+                        rows[row["id"]] = row
+                except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as error:
+                    failures.append(f"sd plate listing failed for owner {owner}: {error}")
+        how = f"sd list --assignee for {agent!r} and its short spelling, --limit 0"
+        if failures:
+            return Answer.capped(list(rows.values()), how=how, caveat="; ".join(failures))
+        return Answer.complete_read(list(rows.values()), how=how)
+
+    def inbox_items(self, agent: str, include_closed: bool = False) -> Answer[list[WorkItem]]:
+        """Read only this recipient's messages, with closed receipt support."""
+        answer = self._owner_rows(agent, include_closed=include_closed, messages_only=True)
+        # Each bounded read is ordered, but their union must keep the SDK's
+        # global priority/creation/id order before dates leave the projection.
+        rows = sorted(answer.at_least(), key=lambda row: (
+            row.get("priority", 2), row.get("created_at", ""), row["id"]))
+        items = [WorkItem(id=row["id"], title=row.get("title", ""),
+                          status=row.get("status", "open"), assignee=row.get("assignee"),
+                          priority=row.get("priority", 2)) for row in rows
+                 if is_message(row.get("title", ""))]
+        how = answer.how + ", --title-contains each of " + "/".join(MESSAGE_PREFIXES) + (", --all" if include_closed else "")
+        if answer.complete:
+            return Answer.complete_read(items, how=how)
+        return Answer.capped(items, how=how, caveat=answer.caveat)
+
+    def plate_ready_ids(self, agent: str) -> Answer[set[str]]:
+        """Read readiness only for the owner spellings used by plate selection."""
+        ready = set()
+        how = f"sd ready --assignee for {agent!r} and its short spelling, --limit 0"
+        try:
+            for owner in dict.fromkeys((agent, agent.split("/")[-1])):
+                result = self._bd("ready", "--assignee", owner, "--json", "--limit", "0")
+                if result.returncode:
+                    raise RuntimeError(_failure_reason(result))
+                payload = json.loads(result.stdout)
+                candidates = payload.get("issues") if isinstance(payload, dict) else payload
+                if not isinstance(candidates, list):
+                    raise ValueError("readiness returned no issue array")
+                if isinstance(payload, dict) and (
+                        payload.get("has_more") is not False
+                        or payload.get("total") != len(candidates)):
+                    raise ValueError("owner readiness did not prove completeness")
+                for row in candidates:
+                    if (not isinstance(row, dict) or not isinstance(row.get("id"), str)
+                            or not row["id"].strip()):
+                        raise ValueError("owner readiness returned an invalid issue ID")
+                    ready.add(row["id"])
+            return Answer.complete_read(ready, how=how)
+        except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as error:
+            return Answer.capped(ready, how=how, caveat=f"owner readiness unreadable: {error}")
 
     @staticmethod
     def _translate(args: "tuple[str, ...]") -> "tuple[str, ...]":
