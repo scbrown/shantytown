@@ -1098,6 +1098,15 @@ queue remains feedable unless it carries `anchor`; reserve the label for records
 that have no completion state. Existing legacy coordinator title exclusions
 remain, but haul exclusion uses the explicit label.
 
+### Human-only ready work is not dispatchable
+
+The shared unfeedable predicate excludes `desk` and `needs-stiwi` labels as well
+as `blocked:human` and `blocked:external`. An open, unassigned operator action
+can appear in ready without being executable by a crew worker. Rule Zero and
+priority advisories exclude these records; labels are matched after trimming
+and case normalization. Ordinary crew work mentioning a desk in its title
+remains eligible.
+
 ### `dispatchable` means *passes the priority floor*
 
 Measured live, within sixty seconds of itself:
