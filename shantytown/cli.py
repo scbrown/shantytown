@@ -1490,10 +1490,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     hz = leaf(
         "harness",
-        help="convert an agent to another harness (claude|codex), one command")
+        help="convert an agent to another harness, one command")
     hz.add_argument("agent")
     hz.add_argument("target", nargs="?", default=None,
-                    help="claude | codex. Omitted: report what this card runs")
+                    help="claude | codex | opencode. Omitted: report what this card runs")
     hz.add_argument("--model", default=None,
                     help="also set the model this agent runs")
     _add_despite_hold(hz)

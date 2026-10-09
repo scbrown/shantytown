@@ -176,9 +176,9 @@ def test_an_unimplemented_harness_is_refused_not_defaulted(tmp_path):
     substituting a different program is the failure this whole file exists to
     prevent — and it would report success.
 
-    The name moved from `codex` to `opencode` when codex became real: a refusal
+    The name moves whenever its former subject becomes implemented: a refusal
     test whose subject we have since implemented stops testing the refusal."""
-    card = Agent(name="ellie", role="worker", harness="opencode")
+    card = Agent(name="ellie", role="worker", harness="not-implemented")
     with pytest.raises(harness_mod.UnknownHarness):
         _runtime().compose(card)
 

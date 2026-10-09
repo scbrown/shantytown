@@ -22,7 +22,7 @@ if args[:2] == ["remote-control", "stop"]:
     raise SystemExit(0)
 kind = "daemon" if args[:2] == ["remote-control", "start"] else "client"
 row = {"kind": kind, "model": os.environ.get("SHANTY_MODEL"), "args": args}
-if kind == "daemon":
+if kind == "daemon" or os.environ.get("MODEL_PROBE_PROGRAM") == "opencode":
     row["tool_model"] = json.loads(subprocess.check_output([
         sys.executable, "-c",
         "import os,json; print(json.dumps(os.environ.get('SHANTY_MODEL')))"
@@ -34,7 +34,7 @@ if kind == "daemon":
 '''
 
 
-@pytest.mark.parametrize("program", ["claude", "codex", "codex-remote"])
+@pytest.mark.parametrize("program", ["claude", "codex", "codex-remote", "opencode"])
 @pytest.mark.parametrize("selection", ["card", "role", "fleet", "absent", "quoted"])
 def test_model_matches_flag_and_reaches_daemon_tools(tmp_path, monkeypatch,
                                                     program, selection):
@@ -73,12 +73,13 @@ def _exercise(tmp_path, monkeypatch, program, selection):
     (root / "shantytown.toml").write_text(config)
     log = tmp_path / "children.jsonl"
     monkeypatch.setenv("MODEL_PROBE_LOG", str(log))
+    monkeypatch.setenv("MODEL_PROBE_PROGRAM", program)
     # An unconfigured new card must not claim the launching agent's model.
     monkeypatch.setenv("SHANTY_MODEL", "stale-parent-model")
     bins = tmp_path / "bin"
     bins.mkdir()
     script = f"#!{sys.executable}\n" + _STUB
-    for name in ("claude", "codex"):
+    for name in ("claude", "codex", "opencode"):
         executable = bins / name
         executable.write_text(script)
         executable.chmod(0o755)
@@ -94,7 +95,8 @@ def _exercise(tmp_path, monkeypatch, program, selection):
         managed.write_text(script)  # A fixture file, never a link to a live tool.
         managed.chmod(0o755)
     card = Agent(name="probe", role=role, model=declared)
-    command = harness.get("claude" if program == "claude" else "codex").launch(
+    selected = program if program != "codex-remote" else "codex"
+    command = harness.get(selected).launch(
         card, str(settings), root=root)
     completed = subprocess.run(["sh", "-c", command], capture_output=True,
                                text=True, timeout=30)
@@ -108,6 +110,6 @@ def _exercise(tmp_path, monkeypatch, program, selection):
         assert "--model" not in client["args"]
     else:
         assert client["args"][client["args"].index("--model") + 1] == expected
-    if remote:
+    if remote or program == "opencode":
         assert rows[0]["tool_model"] == expected
     assert not marker.exists(), "model data was executed by the launch shell"
