@@ -388,6 +388,12 @@ Four things, and each one has to earn its line:
 
 1. **Identity from the card.** Not from an env var, not from a file in the workspace. One source.
 2. **The work.** One item, or none. A surface that prints a backlog is a dashboard.
+   When that item has no open blockers, the plate reminds the agent to record a
+   `BASELINE` before a fix or improvement: time, version, probe and result,
+   a success metric chosen before building, and the same probe afterwards (or
+   an explanation when measurement is impossible). Dispatch carries the same
+   reminder in its payload, including the dry-run preview. This is an advisory;
+   it does not inspect comments, scan the board or certify a baseline exists.
 3. **Where your stop events go**, and **whether that agent will receive them**. If your lead is
    unreachable, anchor says so *here* — not when you stall and discover it — and it says what
    happens next: the event RISES to the administrator with reason `lead-unreachable` and persists

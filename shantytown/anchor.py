@@ -106,6 +106,11 @@ class Anchoring:
                 L.append(f"      ⛔ BLOCKED by {', '.join(blockers)}"
                          " — nothing ready is on your plate. Chase the blocker,"
                          " or ask your lead for ready work.")
+            else:
+                L.append("      Before a fix or improvement, record a BASELINE on this item"
+                         " before the first change: time, version, probe and result.")
+                L.append("      Choose the success metric now; rerun the same probe afterwards."
+                         " If measurement is impossible, record why.")
         else:
             # Say it plainly. An empty plate is an answer, not a blank section.
             L.append("    nothing. `st go <item> <you>` or ask your lead.")
