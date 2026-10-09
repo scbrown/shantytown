@@ -33,6 +33,13 @@ def read_peer(peer):
                     or not row['name'] or row['name'] in names):
                 raise ValueError('invalid or duplicate agent row')
             names.add(row['name'])
+            if 'role_sources' in row:
+                sources = row['role_sources']
+                if (not isinstance(sources, dict)
+                        or any(not isinstance(items, list)
+                               or any(not isinstance(item, str) for item in items)
+                               for items in sources.values())):
+                    raise ValueError('invalid optional role_sources metadata')
             row['host'] = peer.name
         return {'host': peer.name, 'agents': value['agents'], 'error': None}
     except (OSError, subprocess.TimeoutExpired, ValueError) as exc:
