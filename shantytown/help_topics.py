@@ -112,7 +112,7 @@ INBOX — a pointer channel, not a document store
   your text, after the '[from <you>] ' signature st adds). The cap is on BYTES, so
   non-ASCII (em dashes, arrows, checkmarks) costs more than it looks.
 
-  OVER THE CAP — put the substance in a bead and send the pointer:
+  OVER THE CAP — put the substance, qualifiers and evidence in a bead; send the pointer:
 
     br comments add <id> --file <notes>
     st inbox <who> -d 'see <bead-id>: <one-line gist>'
@@ -121,6 +121,11 @@ INBOX — a pointer channel, not a document store
     A message that must survive a session death belongs in a bead, which is
     readable, greppable and permanent. The inbox exists to say WHERE to look. A
     long inbox message is a bead nobody can find later.
+
+  Relays preserve the source and claim strength. An estimate stays INFERRED;
+  measured values cite the command, time and version in the referenced bead.
+  Do not turn "different methods" into "independent evidence" without verifying
+  their instruments. A pointer elsewhere in a message does not source every claim.
 
   BODIES THAT CONTAIN COMMANDS
     Write them to a file and use --file/--stdin. Prose in double quotes is expanded
