@@ -1296,7 +1296,14 @@ class CodexHarness:
         # Treating that launch state as the source makes source == destination:
         # unlink(), then symlink_to() produces auth.json -> auth.json and locks
         # the whole role out on its next launch (aegis-c360e).
-        source = _codex_credentials(exclude=link)
+        try:
+            source = _codex_credentials(exclude=link)
+        except (OSError, RuntimeError) as e:
+            # resolve() reports symlink loops differently across Python versions.
+            # Preserve the existing topology rather than unlinking its only copy.
+            return notes + [
+                f"could not resolve codex auth.json ({e}); credential links "
+                "were not changed. Check for a symlink cycle or inaccessible login."]
         if source is None:
             if link.is_file() and not link.is_symlink():
                 return notes + [
@@ -1352,15 +1359,31 @@ def _codex_credentials(*, exclude: Path | None = None) -> Path | None:
     launch state, never an independent credential source; fall back to the
     operator's default home instead.  None when there is no login to link."""
     import os
-    excluded = exclude.absolute() if exclude is not None else None
+    # Resolve the parent, not the destination leaf: the leaf may already link
+    # to a valid login. Comparing resolved leaves would reject that login too.
+    excluded = (exclude.parent.resolve() / exclude.name
+                if exclude is not None else None)
+
+    def independent(candidate: Path) -> Path | None:
+        try:
+            resolved = candidate.resolve(strict=True)
+        except FileNotFoundError:
+            return None
+        # Link the terminal file, never a daemon alias that traverses the role
+        # auth we are about to unlink. Otherwise daemon -> role becomes a cycle.
+        return resolved if resolved != excluded and resolved.is_file() else None
+
     if configured := os.environ.get(codex_mod().HOME_VAR):
         candidate = (Path(configured).expanduser() / "auth.json").absolute()
-        if candidate != excluded:
+        source = independent(candidate)
+        if source is not None:
+            return source
+        if candidate.resolve() != excluded:
             # An explicit independent home remains authoritative, including
             # when it is missing; only the managed-home collision falls back.
-            return candidate if candidate.is_file() else None
+            return None
     candidate = (Path.home() / ".codex" / "auth.json").absolute()
-    return candidate if candidate != excluded and candidate.is_file() else None
+    return independent(candidate)
 
 
 def codex_mod():

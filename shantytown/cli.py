@@ -8962,6 +8962,20 @@ def _serve_own_request(a, agent: str, *, sleep=time.sleep, clock=time.monotonic)
     return REFUSED
 
 
+def _cycle_input_empty(screen: str, card, root=None) -> bool:
+    state = triage_mod.input_state(screen)
+    if state == triage_mod.INPUT_EMPTY:
+        return True
+    # Codex paints this dim prompt while its buffer is empty (aegis-apk6dv).
+    # Match only the observed placeholder, after the attribute classifier has
+    # ruled out every non-dim run. Other suggestions remain a refusal.
+    if (state != triage_mod.INPUT_PLACEHOLDER
+            or harness_mod.name_for(card, root) != "codex"):
+        return False
+    prompt = triage_mod.strip_attrs(triage_mod.input_evidence(screen)).strip()
+    return prompt == "› Ask Codex to do anything"
+
+
 def _cycle_plan(a, card, session: str, panes, runtime):
     """Observe the pane, then ask cycle.plan. Observation here, policy there.
 
@@ -8989,7 +9003,7 @@ def _cycle_plan(a, card, session: str, panes, runtime):
         # branch, and it is the very state a cycle exists for. Reading it as not
         # idle planned every saturated cycle as a RESPAWN "mid-turn".
         idle = state in (triage_mod.IDLE, triage_mod.SATURATED)
-        input_empty = triage_mod.input_state(screen) == triage_mod.INPUT_EMPTY
+        input_empty = _cycle_input_empty(screen, card, a.root)
     return cycle_mod.plan(
         clear_command=harness_mod.clear_command_for(card, a.root),
         session_live=live,
@@ -9069,7 +9083,7 @@ def _automatic_cycle_refusal(card, session: str, panes, runtime, root=None) -> s
         limited=limit_reached(runtime, plain))
     if state not in (triage_mod.IDLE, triage_mod.SATURATED):
         return f"pane reads {state}, not idle"
-    if triage_mod.input_state(screen) != triage_mod.INPUT_EMPTY:
+    if not _cycle_input_empty(screen, card, root):
         return "the input box is not empty"
     return notify_mod.unattended_shell_block(plain, harness_mod.name_for(card, root))
 

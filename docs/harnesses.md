@@ -203,6 +203,13 @@ A **symlink, never a copy**: the token stays in the one place you already manage
 `codex login` refreshes every agent at once, and the store — a git repo in every deployment we
 know of — never holds a credential.
 
+Emission may run inside a managed Codex home whose auth link passes through the
+role home. Provisioning resolves that chain and links the role directly to the
+independent login file, so rewriting the role link cannot create a daemon/role
+cycle. A regular credential already in the role home is preserved when there
+is no independent login. An existing symlink cycle or resolution error is
+reported without changing credential links; repair the cycle and emit again.
+
 ### 2. Declare it
 
 Either the config table above, or `harness = "codex"` on the cards you want.
