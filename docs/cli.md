@@ -1981,6 +1981,12 @@ serialization. Do not claim a hard quota boundary under those conditions.
 
 ### Cycle fetch budget
 
+An unattended cycle accepts Codex's dim `Ask Codex to do anything` prompt as
+empty input. The capture must retain terminal attributes: typed text (even the
+same words), mixed typed and dim text, unfamiliar suggestions and captures with
+stripped attributes remain refusals. Background-shell visibility is a separate
+gate; accepting the placeholder does not establish that no shells are running.
+
 `st agent cycle` fetches and prunes only the remote selected by the workspace's
 main/master upstream configuration (or its sole remote). Other remotes are not
 contacted. Its loss check counts commits not found on that refreshed remote;
