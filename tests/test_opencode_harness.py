@@ -290,3 +290,59 @@ await Promise.all(['ses_native_left','ses_native_right'].map(id =>
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
+
+@pytest.mark.parametrize("kit", [False, True])
+@pytest.mark.parametrize("stale", [False, True])
+@pytest.mark.parametrize("workspace_present", [False, True])
+def test_normal_workspace_provision_refreshes_actual_bridge(
+        tmp_path, monkeypatch, kit, stale, workspace_present):
+    """The launch provisioning entrypoint must refresh bytes without role-set."""
+    from shantytown import provision
+    from shantytown.opencode import PLUGIN_NAME
+    from shantytown.opencode_bridge import SOURCE
+
+    root = tmp_path / "store"
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    card = Agent("local", harness="opencode",
+                 workspace=str(workspace) if workspace_present else None)
+    program = get("opencode")
+    config = root / "settings" / program.settings_name(card.role)
+    config.parent.mkdir(parents=True)
+    config.write_text(program.render(program.settings(card.role, root=root),
+                                     json.dumps({"permission": {"edit": "deny"}})))
+    bridge = config.parent / PLUGIN_NAME
+    if stale:
+        bridge.write_text("obsolete plugin with stale provenance")
+    monkeypatch.setattr(provision.tooling, "load", lambda root: None)
+    if kit:
+        template = provision.provision_dir(root) / provision.MCP_TEMPLATE
+        template.parent.mkdir(parents=True)
+        template.write_text(json.dumps({"mcpServers": {"fixture": {"command": "true"}}}))
+    got = provision.provision(card, root, settings_path=str(config))
+    assert got == (["fixture"] if kit and workspace_present else [])
+    assert bridge.read_text() == SOURCE
+    assert bridge.stat().st_mode & 0o777 == 0o600
+    assert json.loads(config.read_text())["permission"] == {"edit": "deny"}
+    assert json.loads(config.read_text())["plugin"][0][0] == bridge.as_uri()
+
+
+def test_bridge_refresh_failure_refuses_provisioning(tmp_path, monkeypatch):
+    from shantytown import opencode, provision
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    root = tmp_path / "store"
+    card = Agent("local", harness="opencode", workspace=str(workspace))
+    program = get("opencode")
+    config = root / "settings" / program.agent_settings_name(card.name)
+    config.parent.mkdir(parents=True)
+    config.write_text(program.render(program.settings(card.role, root=root)))
+    monkeypatch.setattr(provision.tooling, "load", lambda root: None)
+
+    def denied(*args):
+        raise PermissionError("private bridge is unwritable")
+
+    monkeypatch.setattr(opencode, "private_write", denied)
+    with pytest.raises(provision.ProvisionError, match="cannot refresh OpenCode bridge"):
+        provision.provision(card, root, settings_path=str(config))

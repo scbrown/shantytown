@@ -105,3 +105,5 @@ An observed idle callback can notify and request another model turn. It does not
 establish blocking Stop semantics or authorize a router role. Test tool admission
 with both a permitted side effect and a denied one, and verify the files rather
 than relying on the model's report.
+
+Every normal launch refreshes the private bridge artifact from the installed source, including stores without an MCP kit. Missing or stale bridge files are replaced atomically; a refresh failure refuses launch. Existing selected configuration and permissions are preserved.
