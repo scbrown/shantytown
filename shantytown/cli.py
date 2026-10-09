@@ -3055,11 +3055,27 @@ def _serve_account_switch(a, card, request):
     return rc
 
 
-def _account_switch_sweep(a, agents, cfg, verdicts, panes):
+def _account_live_counts(a, agents, cfg, governors, panes):
+    """Charge actual local processes and every known peer before selecting."""
+    fleet = getattr(a, '_account_governor', None)
+    if fleet is not None:
+        if fleet.errors:
+            from .accounts import AccountError
+            raise AccountError('peer account occupancy is unavailable')
+        return fleet.counts(_governor_agents(a))
+    return _live_by_governor(agents, panes, cfg, governors, a.root)
+
+
+def _account_switch_sweep(a, agents, cfg, verdicts, panes, *, governors=None):
     """Serve explicit requests and opt-in failover before sending drain notices."""
     from . import accounts, account_state, account_switch
     if not cfg.accounts or a.dry_run:
         return set()
+    # The census needs lane keys, even for an injected standalone sweep. An
+    # empty map collapses named occupancy into base and repeatedly selects a
+    # full preferred account instead of another account with headroom.
+    if governors is None:
+        governors = dict.fromkeys(cfg.accounts)
     store = account_switch.Requests(a.root)
     protected = set()
     balance = _fleet_balance(a)
@@ -3067,7 +3083,7 @@ def _account_switch_sweep(a, agents, cfg, verdicts, panes):
     for card in agents:
         try:
             running = account_state.process_card(a.root, card, cfg, panes)
-            counts = _live_by_governor(agents, panes, cfg, {}, a.root)
+            counts = _account_live_counts(a, agents, cfg, governors, panes)
             pending = store.get(card.name)
             if pending and pending.get('phase') == 'completed':
                 if pending.get('automatic') and not pending.get('notified'):
@@ -9448,9 +9464,21 @@ def _restart_cycle(a, card, agent_name, session, panes, runtime, chosen, verdict
         from . import accounts, account_auth, account_state, account_switch
         cfg = config.load(a.root)
         current = _registry(a).get(agent_name)
+        if current != card:
+            print('  refused: agent identity changed during checkpoint preflight', file=sys.stderr)
+            return REFUSED, chosen.mode
+        if getattr(a, '_account_automatic', False) and current.retired:
+            print('  refused: retired agents cannot fail over automatically', file=sys.stderr)
+            return REFUSED, chosen.mode
         if account_switch.choice(current) != a._account_expected:
             print('  refused: account selection changed during checkpoint preflight',
                   file=sys.stderr)
+            return REFUSED, chosen.mode
+        try:
+            account_target = accounts.switch(current, cfg.accounts[account_target.account],
+                cfg=cfg, model=account_target.model, auto_failover=account_target.auto_failover)
+        except (accounts.AccountError, KeyError):
+            print('  refused: target account no longer fits the current role', file=sys.stderr)
             return REFUSED, chosen.mode
         if getattr(a, '_account_automatic', False):
             # Re-read under the existing admission lock immediately before any
@@ -9460,8 +9488,12 @@ def _restart_cycle(a, card, agent_name, session, panes, runtime, chosen, verdict
             fresh_cfg, fresh_governors = _governors(a)
             fresh = {name: g.evaluate(persist=False) for name, g in fresh_governors.items()}
             running = account_state.process_card(a.root, current, fresh_cfg, panes)
-            counts = _live_by_governor(_registry(a).all().exact(), panes,
-                                       fresh_cfg, fresh_governors, a.root)
+            try:
+                counts = _account_live_counts(a, _registry(a).all().exact(),
+                                             fresh_cfg, fresh_governors, panes)
+            except (accounts.AccountError, OSError, ValueError):
+                print('  refused: account occupancy is no longer proven', file=sys.stderr)
+                return REFUSED, chosen.mode
             candidate = accounts.receiver(running, fresh_cfg, fresh, counts,
                                           catalog=_catalog(a), preferred=account_target.account)
             if current.auto_failover is not True or candidate is None or candidate.name != account_target.account:
@@ -11918,7 +11950,8 @@ def _tend_once(a, quiet: bool = False) -> int:
         for _pacing in verdict.pacing:
             print(f"  {_pacing.render()}", file=sys.stderr)
 
-    account_protected = _account_switch_sweep(a, agents, cfg, verdicts, panes)
+    account_protected = _account_switch_sweep(a, agents, cfg, verdicts, panes,
+                                             governors=governors)
     if cfg.accounts and not a.dry_run:
         agents = reg.all().exact()
         card_verdicts.clear()

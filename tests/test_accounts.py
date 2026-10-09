@@ -445,3 +445,69 @@ def test_account_replacement_reaps_old_daemons_after_pane_change_before_new_runt
                               start=lambda *args: timeline.append('target-started'))
     assert cli._launch_admitted(args, card, panes, runtime, reuse_session=True) == cli.OK
     assert timeline == ['pane-replaced', 'source-daemons-stopped', 'target-started']
+
+
+
+def test_supervisor_uses_free_third_account_when_preferred_account_is_full(tmp_path, monkeypatch):
+    from shantytown import cli, account_state
+    from types import SimpleNamespace
+    from shantytown.tmux import NullPanes
+    c = config.Config(accounts=accounts.parse({
+        'primary': raw(pct=99, cap=1), 'backup': raw('codex', pct=10, cap=1),
+        'third': raw('codex', pct=30, cap=1)}))
+    monkeypatch.setattr(config, 'load', lambda root: c)
+    panes = NullPanes(live={'p-alice', 'p-bob'}, created={'p-alice': 1, 'p-bob': 2})
+    reg = FilesRegistry(tmp_path / 'crew')
+    for card in (Agent('alice', pane='p-alice', account='primary', harness='claude', auto_failover=True),
+                 Agent('bob', pane='p-bob', account='backup', harness='codex')):
+        reg.set(card)
+        account_state.record(tmp_path, card, c, panes)
+    monkeypatch.setattr(cli, '_registry', lambda a: reg)
+    monkeypatch.setattr(cli, '_catalog', lambda a: None)
+    monkeypatch.setattr(cli, '_fleet_balance', lambda a: SimpleNamespace(actionable=True, prefer='backup'))
+    choices = []
+    monkeypatch.setattr(cli, '_serve_account_switch', lambda a, card, req:
+                        choices.append(req['desired']['account']) or None)
+    # Real census, marker resolution, receiver and sweep; only cycle delivery is
+    # intercepted. A lower usage percentage cannot borrow an occupied slot.
+    cli._account_switch_sweep(SimpleNamespace(root=tmp_path, dry_run=False),
+                              reg.all().exact(), c, verdicts(c), panes)
+    assert choices == ['third']
+
+
+def test_account_selection_counts_peers_and_rejects_unknown_occupancy(tmp_path, monkeypatch):
+    from shantytown import cli
+    from types import SimpleNamespace
+    local = [{'name': 'alice', 'account': 'primary', 'live': True}]
+    monkeypatch.setattr(cli, '_governor_agents', lambda a: local)
+    seen = []
+    fleet = SimpleNamespace(errors=[], counts=lambda rows:
+                            seen.append(rows) or {'primary': 1, 'backup': 1, 'third': 0})
+    args = SimpleNamespace(root=tmp_path, _account_governor=fleet)
+    assert cli._account_live_counts(args, [], cfg(), {}, object())['backup'] == 1
+    assert seen == [local]
+    fleet.errors = ['stale peer occupancy']
+    with pytest.raises(accounts.AccountError, match='occupancy'):
+        cli._account_live_counts(args, [], cfg(), {}, object())
+
+
+
+def test_account_restart_refuses_identity_change_before_preparation(tmp_path, monkeypatch):
+    from shantytown import cli, account_switch, cycle
+    from types import SimpleNamespace
+    from shantytown.tmux import NullPanes
+    c = cfg()
+    reg = FilesRegistry(tmp_path / 'crew')
+    reg.set(Agent('alice', harness='claude', account='primary'))
+    old = reg.get('alice')
+    target = accounts.switch(old, c.accounts['backup'], cfg=c)
+    reg.set(replace(old, workspace='/changed/fixture'))
+    monkeypatch.setattr(config, 'load', lambda root: c)
+    monkeypatch.setattr(cli, '_registry', lambda a: reg)
+    monkeypatch.setattr(cli, '_launch_admitted', lambda *args, **kwargs: pytest.fail('changed identity admitted'))
+    args = SimpleNamespace(root=tmp_path, _account_card=target,
+                           _account_expected=account_switch.choice(old))
+    assert cli._restart_cycle(args, old, 'alice', 'p-alice', NullPanes(), object(),
+                              cycle.Plan(cycle.RESPAWN, 'fixture'), object())[0] == cli.REFUSED
+    assert reg.get('alice').workspace == '/changed/fixture'
+    assert reg.get('alice').account == 'primary'
