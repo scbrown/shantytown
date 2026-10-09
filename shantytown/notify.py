@@ -1592,7 +1592,24 @@ class DeferralAlerter:
         self._log = log or (lambda msg: None)
 
     def sweep(self) -> list:
-        """One pass. Returns the bead ids actually reported (usually none)."""
+        """Serialize observation/delivery/recording so overlapping passes send once."""
+        import fcntl
+        lock = Path(self._root) / "notify" / "deferral-sweep.lock"
+        try:
+            lock.parent.mkdir(parents=True, exist_ok=True)
+            with lock.open("a") as held:
+                try:
+                    fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    self._log("deferral-sweep: already running; no duplicate wake")
+                    return []
+                return self._sweep()
+        except OSError as error:
+            self._log(f"deferral-sweep: lock unavailable ({error!r}); no push")
+            return []
+
+    def _sweep(self) -> list:
+        """One serialized pass. Returns the bead ids actually reported."""
         from datetime import datetime, timezone
         from . import deferrals as pol
         from .feed_check import backend_adapter
@@ -1715,16 +1732,33 @@ class DeferralAlerter:
         findings = reports
         seen = pol.Reported(self._root)
         fresh = seen.unreported(findings)
+        import hashlib
+        import json
+        from .files import write_json_atomic
+        summary_path = Path(self._root) / "notify" / "deferral-summary.json"
+        try:
+            summary = json.loads(summary_path.read_text())
+            previous_summary = summary.get("digest") if isinstance(summary, dict) else None
+        except (OSError, ValueError):
+            previous_summary = None
         if fresh:
-            lines = pol.report(fresh)
-            # RECORD ONLY ON A DELIVERED PUSH. Marking these said when the admin's
-            # pane was unreachable would lose them permanently — the state does not
-            # change again, so nothing would ever re-report it. Same rule
-            # push_to_admin keeps by returning None rather than a silent success.
-            if self._push(self._reg, self._panes, "\n".join(lines)) is None:
-                self._log("deferral-sweep: no admin pane — nothing recorded, "
-                          "these re-report next pass")
-                return []
+            text = "\n".join(pol.report(fresh))
+            digest = hashlib.sha256(text.encode()).hexdigest()
+            if digest == previous_summary:
+                # A changed/reset finding ledger can still render the identical
+                # delivered summary. Record its state, without another LLM turn.
+                self._log("deferral-sweep: identical delivered summary suppressed")
+                fresh = []
+            else:
+                # Failed delivery consumes neither the summary nor finding state.
+                if self._push(self._reg, self._panes, text) is None:
+                    self._log("deferral-sweep: no admin pane — nothing recorded, "
+                              "these re-report next pass")
+                    return []
+                write_json_atomic(summary_path, {"digest": digest})
+        elif not findings and not retry and not store_error:
+            # A positively read resolution permits a future genuine recurrence.
+            write_json_atomic(summary_path, {})
         # Record the FULL current state, not just what was pushed: a bead that
         # stopped being lapsed must drop out of the ledger so it can report again
         # if it lapses anew.

@@ -11107,12 +11107,16 @@ def _cmd_attach(a, *, execer=_exec_attach, which=None) -> int:
 
 
 def _dream_sweep(a, cfg, agents, panes, *, force=False, dry_run=False):
-    """Create at most one due dream bead; return (plan, item-id, reason).
+    """Create one explicitly admitted dream bead; return (plan, item-id, reason).
 
-    This is a best-effort tend layer.  Every capacity input is a measured,
+    Timer calls cannot admit work.  Every capacity input is a measured,
     persist=False provider verdict; signal loss removes a provider from
     consideration rather than becoming fictional headroom.
     """
+    # Timer passage is not actionable admission. Only explicit callers may
+    # create a cycle; existing dream haul items use the ordinary work feeder.
+    if not force:
+        return None, "", "dream requires an explicit request or actionable event"
     from . import feed_check
 
     policy = cfg.dream
@@ -11128,7 +11132,7 @@ def _dream_sweep(a, cfg, agents, panes, *, force=False, dry_run=False):
     verdicts = {name: governor.evaluate(persist=False)
                 for name, governor in governors.items()}
     for name, card in cards.items():
-        # A periodic DREAM may queue behind foreground work, but only on a live
+        # An explicitly requested DREAM may queue behind foreground work, but only on a live
         # worker subscription. Leads/admins are coordination capacity, and a
         # missing pane cannot consume the queued artifact.
         if card.role != "worker" or not card.pane or not panes.exists(card.pane):
@@ -11167,7 +11171,7 @@ def _dream_sweep(a, cfg, agents, panes, *, force=False, dry_run=False):
     if (cycle.agent in free and card is not None and card.pane
             and panes.exists(card.pane)):
         panes.send(card.pane, attribute(
-            f"Work is on your hook: {item.id} — {cycle.title} — scheduled DREAM "
+            f"Work is on your hook: {item.id} — {cycle.title} — requested DREAM "
             f"cycle; read the bead and execute one bounded pass.", "st work dream"))
     return cycle, item.id, "created"
 
@@ -11176,12 +11180,9 @@ def _cmd_dream(a) -> int:
     cfg = config.load(Path(a.root))
     state = dream_mod.State(a.root).read()
     if not a.run:
-        due = state.get("last_at", 0) + cfg.dream.interval_minutes * 60
-        print(f"  dream {'on' if cfg.dream.enabled else 'off'} · interval "
-              f"{cfg.dream.interval_minutes}m · minimum headroom "
+        print(f"  dream event-admitted only · minimum headroom "
               f"{cfg.dream.min_headroom_pct}%")
-        print(f"  last {state.get('last_item', 'never')} · next due "
-              f"{time.strftime('%Y-%m-%d %H:%M:%S %Z', time.localtime(due)) if state else 'now'}")
+        print(f"  last {state.get('last_item', 'never')} · no periodic admission")
         print(f"  rotation: {', '.join(cfg.dream.domains)}")
         return OK
     panes = _panes(a)
@@ -12230,16 +12231,8 @@ def _tend_once(a, quiet: bool = False) -> int:
         if utilized:
             print(f"  ⚠ pushed changed governor utilization advisory to the "
                   f"coordinator: {', '.join(utilized)}", file=sys.stderr)
-        # SLEEP/DREAM (aegis-2o5n2): only after the normal idle-work sweep has
-        # had first claim. The planner independently requires zero normal ready
-        # work, so ordering and predicate both encode "lowest priority".
-        dreamed = _sweep("dream", lambda: _dream_sweep(
-            a, cfg, agents, panes, force=False, dry_run=False))
-        if dreamed and dreamed[0] is not None:
-            cycle, item_id, _reason = dreamed
-            print(f"  ☾ DREAM queued {item_id} for {cycle.agent} on "
-                  f"{cycle.harness}: {cycle.mode}/{cycle.domain} "
-                  f"({cycle.headroom:.0f}% headroom)", file=sys.stderr)
+        # DREAM is event-admitted work, never a timer-created wake. Existing
+        # dream haul items are handled by the ordinary work sweeps above.
         # DECLARED JOBS (docs/jobs.md): <root>/jobs/*.toml, evaluated here
         # because this pass already runs every five minutes with the root, the
         # journal and the crash isolation a host cron never had. After dream and

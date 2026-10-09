@@ -54,7 +54,7 @@ def _wire(monkeypatch, tmp_path, pct):
     return args, cfg, reg.cards, panes, tracker
 
 
-def test_sweep_queues_periodic_quota_behind_ready_work(monkeypatch, tmp_path):
+def test_explicit_sweep_queues_review_work_behind_foreground(monkeypatch, tmp_path):
     args, cfg, cards, panes, tracker = _wire(monkeypatch, tmp_path, pct=10)
     monkeypatch.setattr("shantytown.feed_check._bd_ready", lambda cwd=None: [
         {"id": "aegis-held", "title": "held", "priority": 2, "labels": []},
@@ -62,7 +62,7 @@ def test_sweep_queues_periodic_quota_behind_ready_work(monkeypatch, tmp_path):
     _cfg, governors = cli._governors(args)
     governors["codex"].evaluate().admits = lambda _item: "priority floor holds P2"
 
-    cycle, item_id, reason = cli._dream_sweep(args, cfg, cards, panes)
+    cycle, item_id, reason = cli._dream_sweep(args, cfg, cards, panes, force=True)
 
     assert cycle is not None and (item_id, reason) == ("aegis-dream1", "created")
     assert tracker.fields is not None
@@ -73,7 +73,7 @@ def test_busy_provider_gets_queued_dream_without_interrupting_pane(monkeypatch, 
     monkeypatch.setattr("shantytown.feed_check.free_feedable_workers",
                         lambda *args, **kwargs: [])
 
-    cycle, item_id, reason = cli._dream_sweep(args, cfg, cards, panes)
+    cycle, item_id, reason = cli._dream_sweep(args, cfg, cards, panes, force=True)
 
     assert cycle is not None and (item_id, reason) == ("aegis-dream1", "created")
     assert tracker.fields[1]["assignee"] == "arnold"
@@ -91,14 +91,14 @@ def test_sweep_reads_ready_and_active_work_from_br(monkeypatch, tmp_path):
                         lambda cwd=None: (_ for _ in ()).throw(AssertionError("bd called")))
 
     cycle, item_id, reason = cli._dream_sweep(args, cfg, cards, panes,
-                                              dry_run=True)
+                                              force=True, dry_run=True)
 
     assert cycle is not None and (item_id, reason) == ("", "dry-run")
 
 
 def test_sweep_creates_lowest_priority_review_artifact_and_wakes_agent(monkeypatch, tmp_path):
     args, cfg, cards, panes, tracker = _wire(monkeypatch, tmp_path, pct=10)
-    cycle, item_id, reason = cli._dream_sweep(args, cfg, cards, panes)
+    cycle, item_id, reason = cli._dream_sweep(args, cfg, cards, panes, force=True)
     assert (item_id, reason) == ("aegis-dream1", "created")
     title, fields = tracker.fields
     assert title.startswith("DREAM consolidate")
@@ -112,7 +112,21 @@ def test_sweep_creates_lowest_priority_review_artifact_and_wakes_agent(monkeypat
 
 def test_sweep_protects_delegation_reserve(monkeypatch, tmp_path):
     args, cfg, cards, panes, tracker = _wire(monkeypatch, tmp_path, pct=95)
-    cycle, item_id, reason = cli._dream_sweep(args, cfg, cards, panes)
+    cycle, item_id, reason = cli._dream_sweep(args, cfg, cards, panes, force=True)
     assert cycle is None and item_id == ""
     assert "measured spare capacity" in reason
+    assert tracker.fields is None and panes.sent == []
+
+
+def test_automatic_day_never_creates_or_wakes_even_with_enabled_policy(monkeypatch, tmp_path):
+    args, cfg, cards, panes, tracker = _wire(monkeypatch, tmp_path, pct=10)
+    # Timer admission is refused before board/provider reads, including when
+    # old deployed configs still say enabled=True/interval=360.
+    monkeypatch.setattr(cli, "_tracker", lambda _a: (_ for _ in ()).throw(AssertionError("timer read")))
+    clock = [1700000000.0]
+    monkeypatch.setattr("shantytown.dream.time.time", lambda: clock[0])
+    for tick in range(288):
+        clock[0] = 1700000000 + tick * 300
+        cycle, item_id, reason = cli._dream_sweep(args, cfg, cards, panes)
+        assert cycle is None and item_id == "" and "explicit request" in reason
     assert tracker.fields is None and panes.sent == []
