@@ -332,6 +332,16 @@ but the guard against that is now the test, not this sentence.
 
 ### Transcript derivatives and credential boundaries
 
+The history Stop hook launches a detached, single-agent archive worker and returns
+without waiting for capture or scrub. Both inherited output pipes are disconnected
+from the harness. One nonblocking lock per agent prevents overlapping workers;
+an overlapping stop is coalesced into the active worker, and subsequent stops can
+capture later transcript growth. Completion and failure remain in `hook.log`;
+worker diagnostics go to the private raw archive's `worker.log`. A successful
+launch is not archival acceptance. The worker retains the scrub residual check
+and never publishes raw history. `--worker` runs the same work in the foreground
+for diagnostics and tests; no additional timer is installed.
+
 The raw transcript archive stays local and unindexed. `st-history-scrub.sh`
 creates a separate derivative: it omits supported harness tool-result objects
 wholesale, including nested Claude results and their `toolUseResult` mirrors,
@@ -1363,7 +1373,10 @@ that message's pointer after confirming the input is not stranded. The closed be
 retains its content and history. If the recipient is down, the send fails, the input
 is stranded, or pointer closure fails, the pointer remains open for `st inbox`.
 
-Codex delivery first confirms an empty composer; clipped or ambiguous input is
+Codex delivery first confirms an empty composer, or recognizes an explicit resend
+of the exact body already stranded there. The latter retries Enter without
+retyping the body, after the older turn ends and Codex identity is confirmed.
+Clipped or ambiguous input is
 unverified before typing. It waits 500 ms between the final literal chunk and Enter, then
 checks for a new active turn with a cleared composer, or a visible queue preview
 matching the message. Existing activity alone is not confirmation. If the

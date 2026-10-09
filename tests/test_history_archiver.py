@@ -60,7 +60,7 @@ def _run(script, *args, env=None, agent=None):
         e.pop("SHANTY_AGENT", None)
     else:
         e["SHANTY_AGENT"] = agent
-    return subprocess.run([str(script), *args], capture_output=True, text=True,
+    return subprocess.run([str(script), *(["--worker"] if script == HOOK else []), *args], capture_output=True, text=True,
                           env=e, timeout=120)
 
 
