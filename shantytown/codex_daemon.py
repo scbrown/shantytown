@@ -93,12 +93,21 @@ def _is_updater(cmd: str) -> bool:
     return "app-server" in words and "daemon" in words and "pid-update-loop" in words
 
 
+def _is_stop_target(cmd: str) -> bool:
+    words = cmd.split()
+    # The code-mode host can outlive its app-server parent (aegis-pqiwnz).
+    # Match its executable, never its name embedded in another command's args.
+    code_mode = bool(words) and Path(words[0]).name == "codex-code-mode-host"
+    return _is_control_server(cmd) or _is_updater(cmd) or code_mode
+
+
 def stop_owned(agent: str, *, proc: Path = Path("/proc"), kill=os.kill) -> tuple[int, ...]:
     """Terminate every Remote Control process proven to belong to ``agent``.
 
     Codex's updater is a sibling daemon, not a child of the tmux-hosted TUI, so
-    killing the pane leaves both it and app-server alive.  Environment identity
-    plus a known daemon argv is the ownership proof; a PID record alone is not.
+    killing the pane leaves both it and app-server alive. The code-mode host
+    may also be orphaned. Environment identity plus a known process argv is
+    the ownership proof; a PID record or parent PID alone is not.
     """
     stopped: list[int] = []
     try:
@@ -108,7 +117,12 @@ def stop_owned(agent: str, *, proc: Path = Path("/proc"), kill=os.kill) -> tuple
     for pid in pids:
         cmd = _cmdline(pid, proc)
         if (_environ(pid, proc).get("SHANTY_AGENT") == agent
-                and (_is_control_server(cmd) or _is_updater(cmd))):
+                and _is_stop_target(cmd)):
+            # Enumeration is not permission to signal a PID that has since
+            # changed owner. Keep the same per-card proof at the kill boundary.
+            if (_environ(pid, proc).get("SHANTY_AGENT") != agent
+                    or not _is_stop_target(_cmdline(pid, proc))):
+                continue
             try:
                 kill(pid, signal.SIGTERM)
                 stopped.append(pid)

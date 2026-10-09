@@ -149,6 +149,7 @@ def test_nothing_but_deliberate_stops_renders_the_note_alone():
 # --- the writing: `st agent stop`, and the clearing on relaunch --------------------
 
 import json                                                        # noqa: E402
+import pytest                                                      # noqa: E402
 
 from shantytown import cli                                         # noqa: E402
 from shantytown.tmux import NullPanes                              # noqa: E402
@@ -217,6 +218,31 @@ def test_stopping_an_already_down_agent_records_intent_not_cause(tmp_path, monke
     record = FilesStops(root / "stopped").get("ellie")
     assert record is not None
     assert record.reason.startswith("stop requested while already down:")
+
+
+@pytest.mark.parametrize("up", [False, True])
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_codex_stop_reaps_owned_helper_in_both_pane_states(
+        tmp_path, monkeypatch, up, dry_run):
+    from shantytown import codex_daemon
+
+    root = _world(tmp_path)
+    proc = tmp_path / "proc" / "101"
+    proc.mkdir(parents=True)
+    (proc / "cmdline").write_bytes(b"/release/bin/codex-code-mode-host\0")
+    (proc / "environ").write_bytes(b"SHANTY_AGENT=ellie\0")
+    panes = NullPanes(live={"crew-ellie"} if up else set(), owned={"crew-ellie"})
+    monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: panes)
+    monkeypatch.setattr(cli.harness_mod, "name_for", lambda *_a, **_k: "codex")
+    monkeypatch.setattr(cli, "_capture_history_before_kill", lambda *_a: None)
+    monkeypatch.setattr(codex_daemon, "repair", lambda agent: codex_daemon.Health(agent))
+    stop_owned = codex_daemon.stop_owned
+    killed = []
+    monkeypatch.setattr(codex_daemon, "stop_owned", lambda agent: stop_owned(
+        agent, proc=proc.parent, kill=lambda pid, sig: killed.append(pid)))
+
+    assert cli._cmd_stop(_Args(root, dry_run=dry_run)) == cli.OK
+    assert killed == ([] if dry_run else [101])
 
 
 def test_the_record_does_not_outlive_a_relaunch(tmp_path):
