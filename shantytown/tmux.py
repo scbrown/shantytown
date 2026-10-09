@@ -527,6 +527,13 @@ class Tmux:
             codex = self._confirmed_codex(pane, fg)
             if codex:
                 from .triage import input_state, INPUT_EMPTY, INPUT_PLACEHOLDER
+                if _codex_owned_input(before, text):
+                    # An explicit resend can find the previous attempt stranded
+                    # after a slow Stop hook. Submit only this exact body; never
+                    # append it again or commit unrelated operator input.
+                    _journal_send(pane, "<retry-pending:" + text + ">")
+                    self._verify_codex_submission(pane, text, before)
+                    return
                 if input_state(before) not in (INPUT_EMPTY, INPUT_PLACEHOLDER):
                     raise PaneSubmissionUnverified(
                         f"UNVERIFIED: empty composer in {pane} not confirmed; nothing added")
