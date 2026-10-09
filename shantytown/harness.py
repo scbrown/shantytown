@@ -466,6 +466,11 @@ class ClaudeHarness:
         # column in `st crew`) and `role set` naming the live agents its rewrite did
         # NOT reach (_report_who_the_rewrite_did_not_reach). Both have since landed —
         # all three legs of that bead are closed. This one is the belt, not the detector.
+        from .runtime import _settings_env
+        carried_env = "".join(
+            f"{key}={shlex.quote(value)} "
+            for key, value in _settings_env(card.role, root).items()
+            if key != "BOBBIN_ROLE")
         root_env = f"SHANTY_ROOT={Path(root).resolve()} " if root else ""
         # BEADS_ACTOR is WHO the tracker records for a create/close/reassign
         # (GitHub #24). Without it every agent's bd events are written as $USER —
@@ -487,7 +492,7 @@ class ClaudeHarness:
         st_domain = f"ST_ROLE_DOMAIN={card.domain} " if card.domain else ""
         st_reports = f"ST_REPORTS_TO={card.reports_to} " if card.reports_to else ""
         launch = (
-            f"env -u SHANTY_MODEL {root_env}SHANTY_AGENT={card.name} BOBBIN_ROLE={card.role} "
+            f"env -u SHANTY_MODEL {carried_env}{root_env}SHANTY_AGENT={card.name} BOBBIN_ROLE={card.role} "
             f"BEADS_ACTOR={card.name} {st_roles}{st_domain}{st_reports}{model_env}"
             f"claude {flags} --settings {settings_path}"
         )
@@ -954,6 +959,14 @@ class CodexHarness:
         # nothing. Claude Code's `--settings` has the same exposure and errors
         # loudly instead; this one had to be closed here.
         home = Path(settings_path).resolve().parent
+        # Hooks and remote shells inherit the daemon, so carry the same narrow
+        # non-secret settings allowlist into both daemon and local launches.
+        # CLI command_environment's temporary exports end before tmux executes.
+        from .runtime import _settings_env
+        carried_env = "".join(
+            f"{key}={shlex.quote(value)} "
+            for key, value in _settings_env(card.role, root).items()
+            if key != "BOBBIN_ROLE")
         root_env = f"SHANTY_ROOT={Path(root).resolve()} " if root else ""
         st_roles = f"ST_ROLES={','.join(card.effective_roles())} "
         st_domain = f"ST_ROLE_DOMAIN={card.domain} " if card.domain else ""
@@ -964,7 +977,7 @@ class CodexHarness:
         model = resolve_model(card, root)
         model_env = f"SHANTY_MODEL={shlex.quote(model)} " if model else ""
         identity_env = (
-            f"{root_env}SHANTY_AGENT={card.name} BOBBIN_ROLE={card.role} "
+            f"{carried_env}{root_env}SHANTY_AGENT={card.name} BOBBIN_ROLE={card.role} "
             f"BEADS_ACTOR={card.name} {st_roles}{st_domain}{st_reports}{model_env}"
         )
         # --dangerously-bypass-hook-trust IS A DEFAULT HERE, and it is the one
