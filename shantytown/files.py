@@ -233,6 +233,25 @@ class FilesRegistry:
         existing.setdefault("pane", tier_pane_for(agent.name))
         write_text_atomic(p, json.dumps(existing, indent=2, sort_keys=True))
 
+    def restore_selection(self, agent: Agent) -> None:
+        """Restore an exact account choice, including formerly absent fields.
+
+        set() preserves omissions for identity projection. A refused account
+        restart needs the opposite semantics, without overwriting unrelated card
+        fields changed by another identity writer.
+        """
+        if not agent.name or Path(agent.name).name != agent.name or agent.name in {'.', '..'}:
+            raise ValueError('unsafe agent name')
+        path = self.root / (agent.name + '.json')
+        existing = json.loads(path.read_text())
+        for key in ('account', 'harness', 'model', 'auto_failover'):
+            value = getattr(agent, key, None)
+            if value is None:
+                existing.pop(key, None)
+            else:
+                existing[key] = value
+        write_text_atomic(path, json.dumps(existing, indent=2, sort_keys=True))
+
     def all(self) -> Answer[list[Agent]]:
         """Every agent. RAISES if there is no registry to read.
 

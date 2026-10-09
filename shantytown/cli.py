@@ -9474,6 +9474,8 @@ def _restart_cycle(a, card, agent_name, session, panes, runtime, chosen, verdict
         print(f"  {agent_name}: {chosen.render()}")
         if refusal := _foreign_session_refusal(a, agent_name, session, panes):
             print(f"  refused: {refusal}", file=sys.stderr)
+            if account_target is not None:
+                _registry(a).restore_selection(current)
             return REFUSED, cycle_mod.RESPAWN
         # BEFORE the kill, never after — after it the rollout is gone. Same rule,
         # and the same call, `st agent stop` obeys.
@@ -9483,7 +9485,7 @@ def _restart_cycle(a, card, agent_name, session, panes, runtime, chosen, verdict
             # REFUSED is the launcher's pre-mutation result, not a failed
             # restart. Falling through here used to kill the preserved session.
             if rc == REFUSED and account_target is not None:
-                _registry(a).set(current)
+                _registry(a).restore_selection(current)
             return rc, cycle_mod.RESPAWN
         # The process is already gone by here, so there is no gentler mode left
         # to try and the session may be holding a dead shell. Fall through to the
@@ -9503,7 +9505,7 @@ def _restart_cycle(a, card, agent_name, session, panes, runtime, chosen, verdict
                           reuse_session=panes.exists(session))
     if rc != OK:
         if account_target is not None:
-            _registry(a).set(current)
+            _registry(a).restore_selection(current)
         return rc, cycle_mod.RELAUNCH
     stop_args = argparse.Namespace(**vars(a))
     stop_args.agent = agent_name
@@ -9514,7 +9516,7 @@ def _restart_cycle(a, card, agent_name, session, panes, runtime, chosen, verdict
               f"A cycle that launches over a session it could not stop is how "
               f"you get two of the same agent.", file=sys.stderr)
         if account_target is not None:
-            _registry(a).set(current)
+            _registry(a).restore_selection(current)
         return rc, cycle_mod.RELAUNCH
     rc = _launch(a, card, panes, runtime)
     if rc != OK:

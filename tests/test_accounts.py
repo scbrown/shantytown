@@ -373,3 +373,42 @@ def test_target_credential_failure_preserves_card_and_process(tmp_path, monkeypa
     assert cli._restart_cycle(args, card, 'alice', 'p-alice', panes, object(), plan, object())[0] == cli.REFUSED
     assert (tmp_path / 'crew' / 'alice.json').read_bytes() == before
     assert panes.exists('p-alice') and panes.respawned == []
+
+
+def test_exact_selection_restore_removes_new_fields_and_preserves_other_metadata(tmp_path):
+    reg = FilesRegistry(tmp_path)
+    original = Agent('alice', harness='claude')
+    reg.set(original)
+    reg.set(replace(original, account='backup', harness='codex', model='target-model', auto_failover=True))
+    reg.set(Agent('alice', role='lead', reports_to='administrator'))
+    reg.restore_selection(original)
+    restored = reg.get('alice')
+    assert (restored.account, restored.model, restored.auto_failover, restored.harness) == (None, None, None, 'claude')
+    assert (restored.role, restored.reports_to) == ('lead', 'administrator')
+
+
+def test_late_launcher_refusal_restores_unnamed_legacy_card(tmp_path, monkeypatch):
+    from shantytown import cli, account_auth, account_switch, cycle
+    from types import SimpleNamespace
+    from shantytown.tmux import NullPanes
+    c = cfg()
+    original = Agent('alice', pane='p-alice', harness='claude')
+    reg = FilesRegistry(tmp_path / 'crew')
+    reg.set(original)
+    current = reg.get('alice')
+    before = (tmp_path / 'crew' / 'alice.json').read_bytes()
+    target = accounts.switch(current, c.accounts['backup'], cfg=c)
+    args = SimpleNamespace(root=tmp_path, _account_card=target,
+                           _account_expected=account_switch.choice(current))
+    monkeypatch.setattr(config, 'load', lambda root: c)
+    monkeypatch.setattr(cli, '_registry', lambda a: reg)
+    monkeypatch.setattr(cli, '_launch_admitted', lambda *args, **kwargs: cli.OK)
+    monkeypatch.setattr(account_auth, 'initialize', lambda *args: None)
+    monkeypatch.setattr(cli, '_foreign_session_refusal', lambda *args: '')
+    monkeypatch.setattr(cli, '_capture_history_before_kill', lambda *args: None)
+    monkeypatch.setattr(cli, '_launch', lambda *args, **kwargs: cli.REFUSED)
+    panes = NullPanes(live={'p-alice'})
+    plan = cycle.Plan(cycle.RESPAWN, 'fixture')
+    assert cli._restart_cycle(args, current, 'alice', 'p-alice', panes, object(), plan, object())[0] == cli.REFUSED
+    assert (tmp_path / 'crew' / 'alice.json').read_bytes() == before
+    assert panes.exists('p-alice') and panes.respawned == []
