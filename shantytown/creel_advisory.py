@@ -26,8 +26,7 @@ PROBE_ENV = "SHANTY_CREEL_ADMISSION_PROBE"
 
 @dataclass(frozen=True)
 class Advice:
-    """One advisory ready to push: what to SAY, what to dedup ON, and whether it
-    is still actionable.
+    """One advisory to record: its text, dedup key, and failure risk.
 
     The three are separate because they move at different rates.  The line
     carries live numbers that change every pass; the key carries only the
@@ -46,6 +45,8 @@ class Advice:
     unactioned, a slow re-nag is this flag plus a clock rather than a redesign.
     Defaulting it False means a new producer gets the ruling by construction.
     """
+    failure: bool = False
+    risk: int = 0
 
 
 def recommended_delta(line: str) -> int | None:
@@ -60,7 +61,7 @@ def recommended_delta(line: str) -> int | None:
     return int(match.group(1)) if match else None
 
 
-def _creel_advice(line: str) -> Advice:
+def _creel_advice(line: str, *, live: int | None = None) -> Advice:
     delta = recommended_delta(line)
     if delta is not None:
         key = f"delta:{delta}"
@@ -84,7 +85,11 @@ def _creel_advice(line: str) -> Advice:
     # if a nonzero recommendation is ever MEASURED sitting unactioned, a slow one
     # is this flag plus a clock, not a redesign. It is not speculation left armed
     # — it is off, and turning it on requires the measurement first.
-    return Advice(line=line, key=key, actionable=False)
+    unavailable = key == "unavailable"
+    if unavailable and live == 0:
+        key = "unavailable:idle"
+    return Advice(line=line, key=key, actionable=False,
+                  failure=unavailable and live != 0, risk=2 if unavailable else 0)
 
 
 def _looks_like_a_creel_line(value: str) -> bool:
@@ -107,7 +112,7 @@ def _looks_like_a_creel_line(value: str) -> bool:
 
 
 class Alerter:
-    """Push changed advisory records to the administrator, once per episode.
+    """Log changed routine records; push warning failures once per episode.
 
     Generalised for a second producer (aegis-967a9): the utilization advisory
     keys on a structured recommendation rather than on Creel's sentence, so it
@@ -137,23 +142,41 @@ class Alerter:
 
         def previous_key(name: str) -> str | None:
             old = previous.get(name)
+            if isinstance(old, dict):
+                return old.get("key")
             if not isinstance(old, str):
                 return None
             # Migrate the original line-valued ledger without re-alerting a hold
             # merely because its storage representation changed.
             return _creel_advice(old).key if _looks_like_a_creel_line(old) else old
 
+        def severity_changed(name, advice):
+            old = previous.get(name)
+            return isinstance(old, dict) and (
+                old.get("failure") != advice.failure or old.get("risk") != advice.risk)
+
         changed = [name for name, adv in sorted(advices.items())
-                   if adv.actionable or previous_key(name) != adv.key]
-        sent = []
+                   if adv.actionable or previous_key(name) != adv.key
+                   or severity_changed(name, adv)]
+        from .notification_risk import interrupts
+        sent, recorded = [], []
         for name in changed:
+            advice = advices[name]
+            if not interrupts(failure=advice.failure, risk=advice.risk):
+                print(f"  advisory log: {self.label} [{name}]: {advice.line}")
+                recorded.append(name)
+                continue
             if self.push(self.reg, self.panes,
-                         f"{self.label} [{name}]: {advices[name].line}"):
+                         f"{self.label} [{name}]: {advice.line}"):
                 sent.append(name)
-        if sent:
+                recorded.append(name)
+        if recorded:
             from .files import write_json_atomic
             updated = dict(previous)
-            updated.update({name: advices[name].key for name in sent})
+            updated.update({name: {"key": advices[name].key,
+                                  "failure": advices[name].failure,
+                                  "risk": advices[name].risk}
+                            for name in recorded})
             self.path.parent.mkdir(parents=True, exist_ok=True)
             write_json_atomic(self.path, updated)
         return sent

@@ -1147,7 +1147,8 @@ def _cmd_hooks(a) -> int:
     hb.apply_live(res, running)
     from . import stats as _stats
     hb.apply_firing(res, hb.load(root), running=running,
-                    last_active=_stats.last_activity(Path(root)))
+                    last_active=_stats.last_activity(Path(root)),
+                    last_stopped=_stats.last_activity(Path(root), kind="stop"))
     if a.json:
         print(json.dumps(res.to_json(root=root, host=local_host(root)), indent=2))
         return res.exit_code
@@ -11431,7 +11432,9 @@ def _gaming_advisory(a, status, *, reg=None, panes=None):
         return creel_advisory_mod.Alerter(
             Path(a.root), reg if reg is not None else _registry(a),
             panes if panes is not None else _panes(a), filename="gaming_hold.json",
-            label="quiet-time governor").sweep({"local": creel_advisory_mod.Advice(status.render(), key)})
+            label="quiet-time governor").sweep({"local": creel_advisory_mod.Advice(
+                status.render(), key, failure=status.state == "unknown",
+                risk=2 if status.state == "unknown" else 0)})
     except Exception as exc:
         print(f"  gaming advisory delivery failed: {exc}", file=sys.stderr)
         return []
@@ -11776,8 +11779,8 @@ def _tend_once(a, quiet: bool = False) -> int:
             readings, running=running, cap=verdicts[name].max_agents,
             max_age=gov.policy.max_age_seconds, paces=gov.policy.paces,
             probe=cfg.env.get(creel_advisory_mod.PROBE_ENV))
-        setpoint_advisories[name] = line
-        # Unavailability is pushed once through the deduped alerter below.  A
+        setpoint_advisories[name] = creel_advisory_mod._creel_advice(line, live=running)
+        # Live-lane unavailability is pushed once by the deduped alerter. A
         # permanent warning on every tend heartbeat trains the admin to ignore
         # this channel and therefore un-builds the advisory when it returns.
         if not line.startswith("advisory unavailable:"):
@@ -11872,7 +11875,7 @@ def _tend_once(a, quiet: bool = False) -> int:
     _lanes = [
         _hswitch.Lane(
             name=_n,
-            delta=creel_advisory_mod.recommended_delta(setpoint_advisories[_n]),
+            delta=creel_advisory_mod.recommended_delta(setpoint_advisories[_n].line),
             held=bool(verdicts[_n].held) and not verdicts[_n].signal_lost,
             live=live_by_gov.get(_n, 0),
             candidates=tuple(sorted(_by_lane.get(_n, []))),

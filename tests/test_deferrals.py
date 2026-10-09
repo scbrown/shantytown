@@ -634,7 +634,7 @@ def test_incomplete_condition_read_is_retried_not_treated_as_open(tmp_path):
 
 
 def test_persistent_condition_read_failure_reports_once_after_three_passes(tmp_path):
-    row = _row(notes='resume_when: closed:missing')
+    row = _row(priority=2, notes='resume_when: closed:missing')
     sent = []
     # Recreate the alerter each time: the budget must survive scheduled processes.
     for n in range(6):
@@ -650,7 +650,7 @@ def test_release_failures_are_bounded_and_deduplicated(tmp_path):
     def fail(*_):
         raise RuntimeError('unavailable')
     for arm in ('show', 'release', 'readback'):
-        row = _row(notes='resume_when: date:2026-09-01')
+        row = _row(priority=2, notes='resume_when: date:2026-09-01')
         options = {'show': fail} if arm == 'show' else {'release': fail}
         if arm == 'readback':
             options = {'release': lambda _: None}  # write returns, readback stays held
@@ -724,3 +724,28 @@ def test_lapsed_date_with_prose_still_requires_judgment(tmp_path):
         defer_until=_iso(timedelta(days=-1))))
     h.alerter.sweep()
     assert not h.releases and len(h.sent) == 1
+
+
+def test_nonurgent_deferrals_log_once_without_losing_urgent_or_unknown_failures(tmp_path):
+    rows = [_row('routine', priority=2, labels=['needs-human'], defer_until=_iso(timedelta(days=-1))),
+            _row('urgent', priority=1, labels=['needs-human'], defer_until=_iso(timedelta(days=-1))),
+            _row('unknown', priority=None, labels=['needs-human'], defer_until=_iso(timedelta(days=-1)))]
+    sent, logs = [], []
+    a = _alerter(tmp_path, rows, push=lambda _r, _p, msg: sent.append(msg) or 'admin',
+                 log=logs.append)
+    assert set(a.sweep()) == {'urgent', 'unknown'}
+    assert 'routine' not in sent[0]
+    assert 'urgent' in sent[0] and 'unknown' in sent[0]
+    assert len(logs) == 1 and 'routine' in logs[0]
+    assert a.sweep() == []
+    assert len(sent) == len(logs) == 1
+
+
+def test_routine_deferral_becoming_urgent_is_not_hidden_by_log_dedup(tmp_path):
+    rows = [_row(priority=2, labels=['needs-human'], defer_until=_iso(timedelta(days=-1)))]
+    sent = []
+    a = _alerter(tmp_path, rows, push=lambda _r, _p, msg: sent.append(msg) or 'admin')
+    assert a.sweep() == []
+    rows[0]['priority'] = 1
+    assert a.sweep() == ['aegis-1']
+    assert len(sent) == 1

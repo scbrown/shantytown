@@ -181,7 +181,7 @@ def test_tender_keeps_dead_agent_down_and_never_stops_live_agent(tmp_path):
     assert any(f.agent == 'worker' and f.verdict == GOVERNED for f in report.findings)
 
 
-def test_delivery_retries_and_both_transitions_are_deduped(tmp_path, monkeypatch):
+def test_probe_failure_retries_but_healthy_transitions_stay_logged(tmp_path, monkeypatch, capsys):
     pushed = []
     delivered = [False]
     def push(reg, panes, text):
@@ -192,24 +192,28 @@ def test_delivery_retries_and_both_transitions_are_deduped(tmp_path, monkeypatch
     a = SimpleNamespace(root=tmp_path)
     call = lambda s: cli._gaming_advisory(a, s, reg=object(), panes=object())
     assert call(gaming.Status('clear')) == []
-    assert not pushed
     assert call(gaming.Status('gaming')) == []
-    delivered[0] = True
-    assert call(gaming.Status('gaming')) == ['local']
     assert call(gaming.Status('ending')) == []
-    assert call(gaming.Status('clear')) == ['local']
     assert call(gaming.Status('clear')) == []
-    assert len(pushed) == 3 and 'LIFTED' in pushed[-1]
+    assert call(gaming.Status('clear')) == []
+    assert pushed == []
+    assert 'LIFTED' in capsys.readouterr().out
+    assert call(gaming.Status('unknown')) == []
+    delivered[0] = True
+    assert call(gaming.Status('unknown')) == ['local']
+    assert call(gaming.Status('unknown')) == []
+    assert len(pushed) == 2
 
 
-def test_manual_only_lift_reaches_coordinator(tmp_path, monkeypatch):
+def test_manual_only_lift_stays_in_scheduled_log(tmp_path, monkeypatch, capsys):
     pushed = []
     monkeypatch.setattr(cli.creel_advisory_mod, 'Alerter', lambda *a, **kw:
                         Alerter(*a, **kw, push=lambda r, p, t: pushed.append(t) or True))
     a = SimpleNamespace(root=tmp_path)
     cli._gaming_advisory(a, gaming.Status('manual'), reg=object(), panes=object())
     cli._gaming_advisory(a, gaming.Status('off'), reg=object(), panes=object())
-    assert len(pushed) == 2 and 'LIFTED' in pushed[-1]
+    assert pushed == []
+    assert 'LIFTED' in capsys.readouterr().out
 
 
 def test_rule_zero_yields_to_gaming_without_usage_governor(tmp_path):

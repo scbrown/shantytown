@@ -636,7 +636,8 @@ def _run_evidence(command: str) -> tuple[float | None, str]:
 
 def apply_firing(res: CheckResult, reg: Registry, now: float | None = None,
                  runner=_run_evidence, running: list[Running] | None = None,
-                 last_active: dict[str, float] | None = None) -> None:
+                 last_active: dict[str, float] | None = None,
+                 last_stopped: dict[str, float] | None = None) -> None:
     """Fill `firing`: has each hook actually RUN recently?
 
     ok          the bundle's evidence shows a run within max_age, and the hook is
@@ -650,8 +651,9 @@ def apply_firing(res: CheckResult, reg: Registry, now: float | None = None,
     IDLE IS NOT SILENT (sattler, #117 review). Old evidence only means "the hook
     did not run" when something that carries it was doing work: a fleet idle
     overnight or under a gaming hold would otherwise turn every hook silent at
-    once and page. So silent needs a carrier with activity (any st stats event)
-    within max_age. When activity cannot be read at all, old evidence is unknown,
+    once and page. Stop hooks require an observed Stop after their last evidence;
+    tool activity alone is not an opportunity for Stop to fire. Other hooks use
+    recent carrier activity. When activity cannot be read, old evidence is unknown,
     never silent and never ok.
     Each evidence command runs once per check, whatever the item count."""
     import time
@@ -673,13 +675,15 @@ def apply_firing(res: CheckResult, reg: Registry, now: float | None = None,
         else:
             carriers = sorted({r.agent for r in (running or [])
                                if _same_file(r.settings_file, item["file"])})
-            if last_active is None:
+            activity = last_stopped if h.event == "Stop" else last_active
+            if activity is None:
                 item["firing"] = "unknown"
                 note = (f"last ran {int(now - last)}s ago (allowed {h.evidence_max_age}s), "
                         f"and agent activity cannot be read, so idle and silent look alike")
             else:
                 busy = [a for a in carriers
-                        if now - last_active.get(a, float("-inf")) <= h.evidence_max_age]
+                        if now - activity.get(a, float("-inf")) <= h.evidence_max_age
+                        and (h.event != "Stop" or activity.get(a, 0) > last)]
                 if busy:
                     item["firing"] = "silent"
                     note = (f"live, but last ran {int(now - last)}s ago "

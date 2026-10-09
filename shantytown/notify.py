@@ -1556,7 +1556,7 @@ def _blocked_kind(detail: dict) -> tuple[str, list[str]]:
 
 
 class DeferralAlerter:
-    """Surface a deferral whose DATE has lapsed or whose CONDITION has been met.
+    """Record lapsed/met deferrals; interrupt for urgent or unreadable findings.
 
     The sibling of BlockedStaleAlerter, for the population one step further out of
     sight. Blocked beads at least appear in `br list --status blocked`; a deferred
@@ -1643,10 +1643,11 @@ class DeferralAlerter:
                 and (r.get("status") == "deferred" or r.get("defer_until") is not None)]
         findings = pol.evaluate(rows, now, is_closed=is_closed)
         by_id = {r["id"]: r for r in rows if isinstance(r, dict) and r.get("id")}
-        reports, retry = [], set()
+        reports, retry, persistent_failures = [], set(), set()
         budget = pol.RetryBudget(self._root)
         def failed(finding):
             if budget.failed(finding.bead):
+                persistent_failures.add(finding.bead)
                 from dataclasses import replace
                 reports.append(replace(finding, met=False, read_error=False,
                     untestable="read/release failed for 3 consecutive scheduled passes"
@@ -1715,21 +1716,32 @@ class DeferralAlerter:
         findings = reports
         seen = pol.Reported(self._root)
         fresh = seen.unreported(findings)
-        if fresh:
-            lines = pol.report(fresh)
+        from .notification_risk import deferred_risk, interrupts
+        loud, quiet = [], []
+        for finding in fresh:
+            risk = (3 if finding.read_error or finding.bead == "tracker-store"
+                    or finding.bead in persistent_failures
+                    else deferred_risk(finding.priority))
+            (loud if interrupts(failure=True, risk=risk) else quiet).append(finding)
+        if quiet:
+            self._log("deferral log: " + "\n".join(pol.report(quiet)))
+        if loud:
+            lines = pol.report(loud)
             # RECORD ONLY ON A DELIVERED PUSH. Marking these said when the admin's
             # pane was unreachable would lose them permanently — the state does not
             # change again, so nothing would ever re-report it. Same rule
             # push_to_admin keeps by returning None rather than a silent success.
             if self._push(self._reg, self._panes, "\n".join(lines)) is None:
-                self._log("deferral-sweep: no admin pane — nothing recorded, "
-                          "these re-report next pass")
+                seen.record([f for f in findings if f not in loud],
+                            preserve=retry | {f.bead for f in loud})
+                self._log("deferral-sweep: no admin pane — failures remain pending; "
+                          "routine findings recorded in the log")
                 return []
         # Record the FULL current state, not just what was pushed: a bead that
         # stopped being lapsed must drop out of the ledger so it can report again
         # if it lapses anew.
         seen.record(findings, preserve=retry)
-        return [f.bead for f in fresh]
+        return [f.bead for f in loud]
 
 
 class BlockedStaleAlerter:
