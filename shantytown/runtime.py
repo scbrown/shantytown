@@ -1300,7 +1300,8 @@ def claude_settings_for_role(role: str, root=None) -> dict:
 # running module to vouch for itself (selfcheck.canonical_source resolution
 # order — the pin is the layer that still works for a re-point from a fully
 # independent clone, which the linked-worktree fallback cannot see through).
-_CARRIED_ENV = ("QUIPU_SERVER", "SHANTY_ONTO_NS", "SHANTY_CANONICAL_SOURCE")
+_CARRIED_ENV = ("QUIPU_SERVER", "SHANTY_ONTO_NS", "SHANTY_CANONICAL_SOURCE",
+                "QUIPU_HOOK_GROUP")
 
 
 def _settings_env(role: str, root=None) -> dict:
