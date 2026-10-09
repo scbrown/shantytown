@@ -225,9 +225,13 @@ class SdTracker(BrTracker):
     def inbox_items(self, agent: str, include_closed: bool = False) -> Answer[list[WorkItem]]:
         """Read only this recipient's messages, with closed receipt support."""
         answer = self._owner_rows(agent, include_closed=include_closed, messages_only=True)
+        # Each bounded read is ordered, but their union must keep the SDK's
+        # global priority/creation/id order before dates leave the projection.
+        rows = sorted(answer.at_least(), key=lambda row: (
+            row.get("priority", 2), row.get("created_at", ""), row["id"]))
         items = [WorkItem(id=row["id"], title=row.get("title", ""),
                           status=row.get("status", "open"), assignee=row.get("assignee"),
-                          priority=row.get("priority", 2)) for row in answer.at_least()
+                          priority=row.get("priority", 2)) for row in rows
                  if is_message(row.get("title", ""))]
         how = answer.how + ", --title-contains each of " + "/".join(MESSAGE_PREFIXES) + (", --all" if include_closed else "")
         if answer.complete:

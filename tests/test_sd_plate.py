@@ -156,12 +156,20 @@ def test_ready_bare_array_and_complete_envelope_controls(monkeypatch, payload):
     assert t.plate_ready_ids("worker").exact() == expected
 
 
-def test_scoped_inbox_keeps_legacy_mail_and_rejects_partial_prefix_reads(monkeypatch):
+@pytest.mark.parametrize("modern_priority,legacy_priority,modern_date,legacy_date,expected", [
+    (2, 2, "2020-01-01T00:00:00Z", "2019-01-01T00:00:00Z", ["legacy", "modern"]),
+    (1, 2, "2020-01-01T00:00:00Z", "2019-01-01T00:00:00Z", ["modern", "legacy"]),
+    (2, 2, "2020-01-01T00:00:00Z", "2020-01-01T00:00:00Z", ["legacy", "modern"]),
+])
+def test_scoped_inbox_keeps_legacy_mail_and_rejects_partial_prefix_reads(
+        monkeypatch, modern_priority, legacy_priority, modern_date, legacy_date, expected):
     from shantytown.inbox import TrackerInbox
     from shantytown.answer import PartialAnswer
     t = SdTracker(quipu="https://example.test", prefix="test")
-    rows = [dict(id="modern", title="inbox: modern", assignee="worker", status="open"),
-            dict(id="legacy", title="  mail: legacy", assignee="worker", status="open"),
+    rows = [dict(id="modern", title="inbox: modern", assignee="worker", status="open",
+                 priority=modern_priority, created_at=modern_date),
+            dict(id="legacy", title="  mail: legacy", assignee="worker", status="open",
+                 priority=legacy_priority, created_at=legacy_date),
             dict(id="work", title="work mentions mail: in text", assignee="worker", status="open")]
     calls = []
     def run(*args):
@@ -173,6 +181,7 @@ def test_scoped_inbox_keeps_legacy_mail_and_rejects_partial_prefix_reads(monkeyp
             json.dumps({"issues": selected, "total": len(selected), "has_more": False}), "")
     monkeypatch.setattr(t, "_bd", run)
     assert {item.id for item in t.inbox_items("worker").exact()} == {"modern", "legacy"}
+    assert [item.id for item in t.inbox_items("worker").exact()] == expected
     inbox = TrackerInbox(t, lambda: (_ for _ in ()).throw(AssertionError("whole board read")),
                          items_for=t.inbox_items)
     assert {message.id for message in inbox.unread("worker")} == {"modern", "legacy"}
