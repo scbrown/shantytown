@@ -6250,7 +6250,8 @@ def _cmd_crew(a) -> int:
         for ag, state, work, posture in _crew_states(
                 agents, panes, runtime, cycling=cycling, untracked_root=a.root,
                 cycle_blocked=cycle_blocked, budget_root=a.root, plate=plate):
-            live = bool(state != "down" and ag.pane and panes.exists(ag.pane))
+            pane_exists = bool(ag.pane and panes.exists(ag.pane))
+            live = state != "down" and pane_exists
             actual = None
             reader = getattr(panes, "cmdline", None)
             if live and callable(reader):
@@ -6259,7 +6260,7 @@ def _cmd_crew(a) -> int:
                 except Exception:
                     pass
             fg = None
-            if live and callable(getattr(panes, "foreground", None)):
+            if pane_exists and callable(getattr(panes, "foreground", None)):
                 try:
                     fg = panes.foreground(ag.pane)
                 except Exception:

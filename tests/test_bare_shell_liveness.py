@@ -85,6 +85,7 @@ def test_crew_json_live_flag_agrees_with_positive_shell_down(tmp_path, monkeypat
     row = json.loads(capsys.readouterr().out)["agents"][0]
     assert row["state"] == "down"
     assert row["live"] is False
+    assert row["foreground"] == "bash"
     assert row["work"] == "—"
 
 
