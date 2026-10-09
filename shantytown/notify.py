@@ -1637,10 +1637,11 @@ class DeferralAlerter:
                 and (r.get("status") == "deferred" or r.get("defer_until") is not None)]
         findings = pol.evaluate(rows, now, is_closed=is_closed)
         by_id = {r["id"]: r for r in rows if isinstance(r, dict) and r.get("id")}
-        reports, retry = [], set()
+        reports, retry, persistent_failures = [], set(), set()
         budget = pol.RetryBudget(self._root)
         def failed(finding):
             if budget.failed(finding.bead):
+                persistent_failures.add(finding.bead)
                 from dataclasses import replace
                 reports.append(replace(finding, met=False, read_error=False,
                     untestable="read/release failed for 3 consecutive scheduled passes"
@@ -1713,6 +1714,7 @@ class DeferralAlerter:
         loud, quiet = [], []
         for finding in fresh:
             risk = (3 if finding.read_error or finding.bead == "tracker-store"
+                    or finding.bead in persistent_failures
                     else deferred_risk(finding.priority))
             (loud if interrupts(failure=True, risk=risk) else quiet).append(finding)
         if quiet:

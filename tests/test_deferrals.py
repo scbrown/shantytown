@@ -612,7 +612,7 @@ def test_incomplete_condition_read_is_retried_not_treated_as_open(tmp_path):
 
 
 def test_persistent_condition_read_failure_reports_once_after_three_passes(tmp_path):
-    row = _row(notes='resume_when: closed:missing')
+    row = _row(priority=2, notes='resume_when: closed:missing')
     sent = []
     # Recreate the alerter each time: the budget must survive scheduled processes.
     for n in range(6):
@@ -628,7 +628,7 @@ def test_release_failures_are_bounded_and_deduplicated(tmp_path):
     def fail(*_):
         raise RuntimeError('unavailable')
     for arm in ('show', 'release', 'readback'):
-        row = _row(notes='resume_when: date:2026-09-01')
+        row = _row(priority=2, notes='resume_when: date:2026-09-01')
         options = {'show': fail} if arm == 'show' else {'release': fail}
         if arm == 'readback':
             options = {'release': lambda _: None}  # write returns, readback stays held
