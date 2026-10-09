@@ -40,6 +40,13 @@ audits the whole card registry for the same policy.
 
 ### …and which MODEL that program runs
 
+When converting a card with an explicit model to another harness, supply
+`st agent harness <agent> <target> --model <target-model>`. Without a nonempty
+target model the command refuses before changing the card or restarting, even
+with `--force`. Model identifiers are provider-defined; the converter does not
+guess compatibility or a target default. Same-harness requests and cards without
+an explicit model keep their existing behavior.
+
 `[model]` is the same table one axis over — harness picks the **program**, model picks what that
 program runs — with the same two levels, the same precedence, and a card still beating both:
 
