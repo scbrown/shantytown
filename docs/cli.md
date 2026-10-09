@@ -2259,7 +2259,9 @@ down. Notices name the observation time and current verdict. Pending recovery
 history is capped at 16 notices; coalesced older notices are counted explicitly. UNKNOWN does not reset an outage or manufacture a recovery. Repair and
 human-escalation cooldowns are unchanged.
 
-`st fleet tend` rechecks deferrals on every scheduled pass. A lapsed `defer_until`
+`st fleet tend` compares the full `defer_until` timestamp on every scheduled
+pass: a timestamp-only recheck two hours from now stays quiet until that instant, even on the
+same calendar day. Lapse messages include the full UTC timestamp. A lapsed `defer_until`
 or a met `resume_when: date:...` / `resume_when: closed:...` condition can clear
 both the deferred status and timestamp after a fresh tracker read. It verifies
 that the item is open and the timestamp cleared. Automatic release requires a

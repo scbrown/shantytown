@@ -46,6 +46,28 @@ def test_a_future_deferral_is_silent():
     assert deferrals.evaluate(rows, NOW) == []
 
 
+def test_same_day_recheck_lapses_at_the_full_timestamp_boundary():
+    until = NOW + timedelta(hours=2)
+    # Two spellings of the same instant, across both tracker status shapes.
+    for stamp in (until.isoformat().replace("+00:00", "Z"),
+                  until.astimezone(timezone(timedelta(hours=5, minutes=30))).isoformat()):
+        for status in ("open", "deferred"):
+            rows = [_row(defer_until=stamp, status=status)]
+            for clock in (NOW, until - timedelta(microseconds=1)):
+                assert deferrals.evaluate(rows, clock) == []
+            for clock in (until, until + timedelta(seconds=1)):
+                findings = deferrals.evaluate(rows, clock)
+                assert len(findings) == 1 and findings[0].lapsed_at
+                assert "2026-09-03T15:00:00Z" in findings[0].render()
+
+
+def test_bare_date_keeps_its_existing_midnight_utc_boundary():
+    midnight = NOW.replace(hour=0)
+    rows = [_row(defer_until=midnight.date().isoformat())]
+    assert deferrals.evaluate(rows, midnight - timedelta(microseconds=1)) == []
+    assert deferrals.evaluate(rows, midnight)[0].lapsed_at == midnight
+
+
 def test_lapsed_reports_the_age_because_age_is_the_argument():
     rows = [_row(defer_until=_iso(timedelta(days=-26)), labels=["needs-human"])]
     f = deferrals.evaluate(rows, NOW)[0]
