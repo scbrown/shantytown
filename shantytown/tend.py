@@ -52,6 +52,7 @@ from pathlib import Path
 
 from . import triage as triage_mod
 from .protocols import Agent
+from .tmux import shell_foreground
 from .runtime import asks_a_question, live_wiring
 from .workspace import WorkspaceError, ensure_workspace
 
@@ -81,6 +82,7 @@ STOPPED = "stopped"           # down because somebody ran `st agent stop` (aegis
                               # stay down until asked back, which is what `st
                               # stop` now promises) — only the reason was wrong.
 RESURRECTED = "RESURRECTED"   # retired AND alive — something else respawned it
+RUNTIME_EXITED = "runtime-exited"  # login shell survived its agent (kc1f0i)
 DEAF = "deaf"                 # alive, but the running process cannot report
 STALE = "stale-settings"      # alive, running settings older than the file
 BUSY = "busy"                 # a session appeared and is mid-flight — hands off
@@ -128,7 +130,7 @@ CODEX_DAEMON_WEDGED = "codex-daemon-wedged"  # named launch-depth blocker
 # see _live — rather than by making the whole condition non-faulty, which would
 # hide the un-fixable half in the same silence auth-dead was rescued from.
 _FAULTS = frozenset({RESURRECTED, DEAF, REFUSED, UNEQUIPPED, AUTH_DEAD, CRASH_LOOP,
-                     LIMITED})
+                     LIMITED, RUNTIME_EXITED})
 
 # RESPAWN BACKOFF (GitHub #12). A crash-looping agent — bad card, broken
 # workspace_source, poisoned settings — turns the supervisor into a respawn
@@ -504,7 +506,9 @@ class Tender:
             return Finding(card.name, "no pane", UNTENDABLE,
                            "no pane on the card — nothing to supervise")
 
-        up = self._panes.exists(card.pane)
+        pane_up = self._panes.exists(card.pane)
+        shell = shell_foreground(self._panes, card.pane) if pane_up else None
+        up = pane_up and shell is None
 
         # RETIREMENT FIRST, before anything can decide to act. Ordering is the
         # guarantee: a check that runs after the respawn logic is a check that
@@ -544,6 +548,20 @@ class Tender:
             return Finding(card.name, "down", RETIRED,
                            f"deliberately retired — NOT a fault, NOT "
                            f"respawned{prov}")
+
+        if shell:
+            stop = None
+            try:
+                stop = self._stops.get(card.name) if self._stops is not None else None
+            except Exception:
+                pass
+            if stop is not None:
+                return Finding(card.name, "down", STOPPED,
+                               f"deliberately stopped{_by_at(stop)}; shell remains")
+            why = (f"runtime exited: pane {card.pane!r} is running {shell!r}. "
+                   "Inspect exit evidence and use guarded lifecycle recovery")
+            self._log(f"RUNTIME-EXITED {card.name}: {why}")
+            return Finding(card.name, "down", RUNTIME_EXITED, why)
 
         if blocked := self._codex_block(card):
             return Finding(card.name, "up" if up else "down", CODEX_DAEMON_WEDGED,
