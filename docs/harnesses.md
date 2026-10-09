@@ -289,6 +289,16 @@ change that file, install packages, or remove the worker's governed settings.
 An installed payload still uses the daemon path; invalid boolean settings and
 daemon startup failures still refuse rather than silently switching modes.
 
+Before starting a pane, the launcher checks known model compatibility floors
+against the selected executable's `codex --version`, with a five-second timeout.
+`gpt-6.1-sol` requires Codex 0.160.0 or newer. Remote Control checks the managed
+payload in the selected role or agent home; local launches (including the missing
+managed-package fallback) check the `codex` executable on PATH. An older version,
+failed probe, or unrecognizable version refuses the launch and names the model,
+minimum version, selected executable, and home to update. The launcher does not
+change the model or update packages itself. Other models retain their existing
+launch behavior; passing this check does not prove account access to a model.
+
 Unlike Claude's compatibility default, an absent `SHANTY_REMOTE_CONTROL` does not
 opt Codex into this new binary prerequisite. Set the deployment value explicitly to
 enable or disable both harnesses.
