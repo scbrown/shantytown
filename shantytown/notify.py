@@ -1550,7 +1550,7 @@ def _blocked_kind(detail: dict) -> tuple[str, list[str]]:
 
 
 class DeferralAlerter:
-    """Surface a deferral whose DATE has lapsed or whose CONDITION has been met.
+    """Record lapsed/met deferrals; interrupt for urgent or unreadable findings.
 
     The sibling of BlockedStaleAlerter, for the population one step further out of
     sight. Blocked beads at least appear in `br list --status blocked`; a deferred

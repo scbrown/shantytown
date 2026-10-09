@@ -11412,7 +11412,7 @@ def _tend_once(a, quiet: bool = False) -> int:
             max_age=gov.policy.max_age_seconds, paces=gov.policy.paces,
             probe=cfg.env.get(creel_advisory_mod.PROBE_ENV))
         setpoint_advisories[name] = creel_advisory_mod._creel_advice(line, live=running)
-        # Unavailability is pushed once through the deduped alerter below.  A
+        # Live-lane unavailability is pushed once by the deduped alerter. A
         # permanent warning on every tend heartbeat trains the admin to ignore
         # this channel and therefore un-builds the advisory when it returns.
         if not line.startswith("advisory unavailable:"):

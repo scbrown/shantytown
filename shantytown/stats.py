@@ -595,7 +595,9 @@ def capture(root: Path, payload: dict) -> None:
 def last_activity(root: Path, *, kind: str | None = None) -> dict[str, float] | None:
     """{agent: newest event ts} from the store, READ-ONLY. None when there is no
     store or it cannot be read: "no evidence of activity" is not "idle", and a
-    caller must be able to tell the two apart (aegis-68j0ys, the firing layer)."""
+    caller must be able to tell the two apart (aegis-68j0ys, the firing layer).
+    An optional kind restricts evidence to that event, such as an actual Stop.
+    """
     p = Path(root) / "stats.sqlite"
     if not p.is_file():
         return None

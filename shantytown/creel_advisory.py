@@ -26,8 +26,7 @@ PROBE_ENV = "SHANTY_CREEL_ADMISSION_PROBE"
 
 @dataclass(frozen=True)
 class Advice:
-    """One advisory ready to push: what to SAY, what to dedup ON, and whether it
-    is still actionable.
+    """One advisory to record: its text, dedup key, and failure risk.
 
     The three are separate because they move at different rates.  The line
     carries live numbers that change every pass; the key carries only the
@@ -113,7 +112,7 @@ def _looks_like_a_creel_line(value: str) -> bool:
 
 
 class Alerter:
-    """Push changed advisory records to the administrator, once per episode.
+    """Log changed routine records; push warning failures once per episode.
 
     Generalised for a second producer (aegis-967a9): the utilization advisory
     keys on a structured recommendation rather than on Creel's sentence, so it
