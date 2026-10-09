@@ -61,7 +61,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 import os
+import re
 import shlex
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 from typing import Protocol, runtime_checkable, TYPE_CHECKING
@@ -764,6 +767,42 @@ def codex_standalone_binary(home: Path) -> Path:
     return managed
 
 
+def require_codex_model_version(model: str | None, binary: Path | None,
+                                home: Path) -> None:
+    """Reject known incompatible model/package pairs before creating a pane.
+
+    Role-local updaters can leave an infrequently used role behind the model
+    policy. Probe the selected payload, not the role's directory name or an
+    unrelated PATH install. This is a known compatibility floor, not a claim
+    that every model is available to the authenticated account.
+    """
+    minimum = {"gpt-6.1-sol": (0, 160, 0)}.get(model)
+    if minimum is None:
+        return
+    floor = ".".join(map(str, minimum))
+    version = "unknown"
+    if binary is not None:
+        try:
+            result = subprocess.run(
+                [str(binary), "--version"], capture_output=True, text=True,
+                timeout=5, env={**os.environ, "CODEX_HOME": str(home)},
+            )
+            match = re.fullmatch(r"codex-cli (\d+)\.(\d+)\.(\d+)\s*", result.stdout)
+            if result.returncode == 0 and match:
+                actual = tuple(map(int, match.groups()))
+                if actual >= minimum:
+                    return
+                version = ".".join(map(str, actual))
+        except (OSError, subprocess.TimeoutExpired, UnicodeError):
+            pass
+    raise Unsupported(
+        f"Codex {version} at {binary or 'PATH (codex not found)'} cannot satisfy "
+        f"the launch requirement for model {model!r}: Codex >= {floor}. "
+        f"Update the selected Codex installation for CODEX_HOME={home} and retry. "
+        "Refusing to launch; the selected model has not been changed."
+    )
+
+
 def codex_path_shim_setup(managed: Path, bin_dir: Path | None = None) -> str:
     """Shell that keeps the operator's ``codex`` command on durable storage.
 
@@ -959,6 +998,10 @@ class CodexHarness:
                     '[env] in shantytown.toml.',
                     file=sys.stderr,
                 )
+        require_codex_model_version(
+            model, managed if remote_control else (
+                Path(local) if (local := shutil.which("codex")) else None), home,
+        )
         if remote_control:
             current = managed.parent
             path_shim_setup = codex_path_shim_setup(managed)
