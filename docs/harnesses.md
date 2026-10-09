@@ -538,3 +538,12 @@ Historical excerpts are bounded and labelled untrusted; unavailable archives do
 not block the prompt. No HTTP Bobbin adapter means no archive request. See
 [incident-recall.md](incident-recall.md) for configuration, duplicate suppression,
 the measured hook contract, and the 30-item inferred benchmark seed set.
+
+Claude and Codex launches carry the configured non-secret graph settings
+(`QUIPU_SERVER`, `SHANTY_ONTO_NS`, `SHANTY_CANONICAL_SOURCE`, and
+`QUIPU_HOOK_GROUP`) from deployment `[env]`, with ambient values as fallback.
+Claude also receives them in its settings `env`. Codex carries them into both
+the local client and the Remote Control daemon so Stop-hook children inherit
+the configured capture group. Values are shell quoted; credentials are not
+part of this allowlist. Already-running sessions need a normal relaunch to
+receive a changed group.
