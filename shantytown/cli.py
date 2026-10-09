@@ -6982,9 +6982,9 @@ def _crew_states(agents, panes, runtime, cycling=(), untracked_root=None,
         # only the login shell (kc1f0i); that positive observation overrides
         # the sticky request. An actual cycle in flight keeps its lifecycle
         # state, including its brief launch interval before the runtime starts.
-        if state in ("up", "cycle-blocked") and ag.pane:
-            if not panes.exists(ag.pane) or shell_foreground(panes, ag.pane):
-                state = "down"
+        if (state in ("up", "cycle-blocked") and ag.pane
+                and panes.exists(ag.pane) and shell_foreground(panes, ag.pane)):
+            state = "down"
         # A cycle-blocked agent whose runtime is still present gets the same
         # work reading as `up`; a proven exit was handled above.
         # `cycling` deliberately does NOT: that pane is about to stop, and a

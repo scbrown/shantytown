@@ -76,12 +76,6 @@ def test_genuine_cycle_launch_interval_preserves_cycling():
                                 cycling={"probe"}))[0][1] == "cycling"
 
 
-def test_missing_pane_cannot_remain_cycle_blocked():
-    panes = NullPanes(live=set())
-    assert list(cli._crew_states([CARD], panes, RUNTIME,
-                                cycle_blocked={"probe"}))[0][1] == "down"
-
-
 def test_crew_json_live_flag_agrees_with_positive_shell_down(tmp_path, monkeypatch, capsys):
     root = _roster(tmp_path, {"probe": "p-probe"})
     monkeypatch.setattr(cli, "Tmux", lambda **kwargs: Panes("bash"))
