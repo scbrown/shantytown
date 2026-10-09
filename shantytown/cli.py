@@ -3216,6 +3216,13 @@ def _deliver_startup_inbox(a, card, panes, session: str) -> None:
     Best-effort by design.  Inbox trouble must not turn a healthy agent launch into
     a failed launch, because the open pointers are precisely the recovery path.
     """
+    # Codex Remote Control sessions have been observed to omit SessionStart
+    # context despite configured hooks. Use the verified initial-input rail,
+    # combining anchor and mail so we never submit two competing startup turns.
+    anchor = ""
+    if harness_mod.name_for(card, root=a.root) == "codex":
+        from . import session_anchor
+        anchor = session_anchor.render(str(a.root), card.name)
     try:
         box = _inbox(a, default="beads")
         unread = box.unread(card.name)
@@ -3223,14 +3230,20 @@ def _deliver_startup_inbox(a, card, panes, session: str) -> None:
         print(f"  ⚠ startup inbox unreadable for {card.name} "
               f"({type(e).__name__}: {str(e)[:100]}); pointers remain open.",
               file=sys.stderr)
-        return
-    if not unread:
+        if not anchor:
+            return
+        box, unread = None, []
+    if not unread and not anchor:
         return
 
-    batch, held = _startup_inbox_batch(unread)
+    batch, held = _startup_inbox_batch(
+        unread, budget=max(_STARTUP_INBOX_RESERVE, _STARTUP_INBOX_MAX_CHARS - len(anchor)))
     ids = [m.id for m in batch]
-    marker = f"ST-STARTUP-INBOX-COMPLETE:{','.join(ids)}"
-    lines = ["[startup inbox] Durable messages received while you were offline:"]
+    marker = (f"ST-STARTUP-INBOX-COMPLETE:{','.join(ids)}" if ids else
+              f"ST-STARTUP-ANCHOR-COMPLETE:{card.name}:{os.urandom(8).hex()}")
+    lines = [anchor, ""] if anchor else []
+    if unread:
+        lines.append("[startup inbox] Durable messages received while you were offline:")
     for msg in batch:
         lines.append(f"\n[{msg.id}]")
         lines.extend((msg.body or "").splitlines() or [""])
@@ -3257,7 +3270,8 @@ def _deliver_startup_inbox(a, card, panes, session: str) -> None:
               f"({type(e).__name__}: {str(e)[:100]}); {len(unread)} pointer(s) "
               f"remain open.", file=sys.stderr)
         return
-    if marker not in screen or input_stranded(screen):
+    if (marker not in screen or input_stranded(screen)
+            or (anchor and session_anchor.BANNER not in screen)):
         print(f"  ⚠ startup inbox delivery not verified for {card.name} "
               f"(complete marker absent or input stranded); {len(unread)} "
               f"pointer(s) remain open.", file=sys.stderr)
@@ -3274,6 +3288,9 @@ def _deliver_startup_inbox(a, card, panes, session: str) -> None:
                   file=sys.stderr)
         return
 
+    if not ids:
+        print(f"  startup anchor: verified context for {card.name}.")
+        return
     try:
         marked = box.mark_read(card.name, ids=ids)
     except Exception as e:  # noqa: BLE001 -- delivered, but preserve on close doubt
