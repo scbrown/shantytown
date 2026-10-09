@@ -632,6 +632,11 @@ class Dispatcher:
         from .task_order import instruction
         text = f"Work is on your hook: {item_id} — {item.title}"
         text += " — " + instruction(item_id)
+        # Put measurement where work arrives, without reading the board again.
+        text += (" — Before a fix or improvement, record a BASELINE on this item"
+                 " before the first change: time, version, probe and result."
+                 " Choose the success metric now; rerun the same probe afterwards."
+                 " If measurement is impossible, record why.")
         # NAME THE STORE (aegis-81zyb). An id and a title are not a dispatch on a
         # host with 125 bd stores — they are a riddle, and the receiving agent has
         # no signal that the question is even open. The tag rides HERE, inside

@@ -65,7 +65,7 @@ def test_dropped_send_is_caught_and_nothing_is_written(world):
     with pytest.raises(SendUnverified):
         d.go("item-1", "ellie")
 
-    assert panes.sent == [("%5", "Work is on your hook: item-1 — Restore the den — Before task work, run `st agent stats --begin-task item-1` as a standalone tool command, then query Quipu with task=item-1. ")], \
+    assert panes.sent == [("%5", "Work is on your hook: item-1 — Restore the den — Before task work, run `st agent stats --begin-task item-1` as a standalone tool command, then query Quipu with task=item-1.  — Before a fix or improvement, record a BASELINE on this item before the first change: time, version, probe and result. Choose the success metric now; rerun the same probe afterwards. If measurement is impossible, record why.")], \
         "we should have attempted the send"
     assert trk.updates == 0, "verify failed but the tracker was written — half-dispatch"
     assert trk.get("item-1").status == "open", "item marked in_progress for a lost send"
