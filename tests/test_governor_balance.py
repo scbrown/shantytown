@@ -5,6 +5,7 @@ tests fail if the recommendation would have been wrong on the day it was asked f
 """
 
 import math
+import pytest
 
 from shantytown.governor_balance import (
     BALANCED, DEFAULT_BAND, PREFER, REFRESH, UNRATED, Balance, LanePace, balance,
@@ -86,10 +87,11 @@ class TestCannotSayIsNotBalanced:
     def test_no_lanes_at_all(self):
         assert balance([]).verdict == UNRATED
 
-    def test_three_lanes_refuse_rather_than_pick_a_pair(self):
+    def test_three_lanes_compare_the_whole_set(self):
         v = balance([lane("base", 1.0), lane("codex", 3.0), lane("gemini", 0.1)])
-        assert v.verdict == UNRATED
-        assert "exactly two" in v.why
+        assert v.verdict == PREFER
+        assert v.prefer == 'gemini'
+        assert all(name in v.why for name in ('base', 'codex', 'gemini'))
 
 
 class TestZeroPace:
@@ -253,3 +255,14 @@ class TestLaneOfMapping:
         out = prefer_first(["ana", "bo", "ghost"], lambda n: lanes[n], v)
         assert out[0] == "bo"
         assert set(out) == {"ana", "bo", "ghost"}
+
+
+@pytest.mark.parametrize('ratios,expected', [
+    ([0, 0, 0], None), ([0, 1, 4], 'a'), ([1, 1.1, 1.2], None), ([3, 1, 1], 'b'),
+])
+def test_many_accounts_are_order_independent_and_handle_zero(ratios, expected):
+    from itertools import permutations
+    from shantytown.governor_balance import LanePace
+    values = [LanePace(n, ratio=r) for n, r in zip('abc', ratios)]
+    for ordering in permutations(values):
+        assert balance(ordering).prefer == expected

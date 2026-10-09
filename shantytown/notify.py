@@ -772,12 +772,18 @@ class IdleFleetAlerter:
 
         The claude -> 'base' mapping is FleetGovernor.lane's, restated here because
         this class deliberately does not hold a FleetGovernor (building one does
-        remote collection, and this runs on the tend timer). If a third lane ever
-        exists, `balance` already refuses to rate it, so this cannot silently start
-        preferring the wrong one.
+        remote collection, and this runs on the tend timer). Named accounts use
+        their launch identity, including while the card queues a future change.
         """
         try:
             card = self._reg.get(worker)
+            from . import config, accounts, account_state
+            cfg = config.load(self._shanty_root) if self._shanty_root is not None else config.Config()
+            if cfg.accounts:
+                card = account_state.process_card(self._shanty_root, card, cfg, self._panes)
+                account = accounts.selected(card, cfg)
+                if account is not None:
+                    return account.name
             harness = harness_mod.name_for(card, root=self._shanty_root)
         except Exception:                 # noqa: BLE001
             return ''

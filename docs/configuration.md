@@ -133,3 +133,77 @@ error, it just stops new facts from joining the old ones.
 CLI graph clients refuse before sending a request when the namespace is missing
 or is the documentation example. Local commands still work without a namespace.
 Library clients outside a CLI invocation retain the warned example fallback.
+
+## Named accounts
+
+A harness may have several independent subscriptions. Account names must differ
+from legacy lane names (`base`, `claude`, `codex`, `opencode`). Existing deployments
+with no accounts keep their current behavior. An optional `default = true` maps
+unnamed cards of that harness onto one account; at most one default per harness
+is allowed. Models are declared by the operator; switching does not guess a
+provider model or carry the previous provider's explicit model across.
+
+```toml
+[accounts.primary]
+harness = "claude"
+model = "operator-selected-model"
+credential_ref = "infisical:PRIMARY_NATIVE_AUTH"
+default = true
+[accounts.primary.governor]
+source = "textfile"
+path = "/var/lib/agent-meters/primary.prom"
+max_agents = 3
+[[accounts.primary.governor.tier]]
+at = 80
+min_priority = 0
+[[accounts.primary.governor.tier]]
+at = 95
+action = "drain"
+
+[accounts.backup]
+harness = "codex"
+model = "operator-selected-codex-model"
+credential_ref = "file:/secure/account-backup/auth.json"
+[accounts.backup.governor]
+source = "textfile"
+path = "/var/lib/agent-meters/backup.prom"
+max_agents = 2
+[[accounts.backup.governor.tier]]
+at = 80
+min_priority = 0
+[[accounts.backup.governor.tier]]
+at = 95
+action = "drain"
+```
+
+Each account requires independent tiers, a cap and independently identifiable
+usage. Prometheus requires `usage_account`, which filters every sample by its
+`account` label; textfiles can use it too. Distinct files or session paths may
+supply independent readings. Duplicate usage coordinates and the unscoped Codex
+app-server reader are refused. Named accounts participate in the existing balance
+advisory across the whole fresh set; stale or unrated lanes cannot supply a preference.
+Caps still gate every launch and automatic switch.
+
+Credential references support `infisical:KEY`, `env:VARIABLE`, and an absolute
+`file:` path. Infisical must be installed and authenticated by the operator; its
+output is captured and never logged. Infisical/environment values contain the
+harness's native credential JSON object. They bootstrap a private profile once,
+then preserve native refreshes. To rotate the reference, change its key or path;
+the profile identity includes the reference. A file reference links to the
+operator's credential file so its updates remain authoritative. Keep credential
+files outside Git and restrict access. Inline credentials are refused.
+
+Profiles live under `$XDG_STATE_HOME/shantytown/account-profiles` (otherwise the
+user's standard state directory), mode 0700 with projected files mode 0600.
+Claude uses its private `CLAUDE_CONFIG_DIR`; Codex gets per-account, per-agent
+settings with an authentication link outside the deployment checkout. Ambient
+provider API keys and inherited profile paths are cleared for a named-account
+launch. Cards, requests, process markers and command lines carry only identity
+and references, never credential values. No additional Python runtime dependency
+is required.
+
+Cards may set `account` and `auto_failover`; omitted values preserve an existing
+projection and an explicit `false` disables failover. Role harness pins and browser
+capabilities remain admission constraints. Live acceptance requires operator
+provisioned accounts and an authorized observed launch; fixture tests do not
+establish that a real subscription or its native refresh works.
