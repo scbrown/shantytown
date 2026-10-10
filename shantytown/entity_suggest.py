@@ -84,7 +84,7 @@ def local_name(iri: str) -> str:
     return iri.rstrip("/").rsplit("/", 1)[-1]
 
 
-def suggest(root, item: str, *, run=subprocess.run) -> Suggestion | None:
+def suggest(root, item: str, *, tracker=None, run=subprocess.run) -> Suggestion | None:
     """The suggestion for `item`, or None when suggestions are off or there is no
     item. Never raises."""
     if not item or item == "-" or mode(root) == OFF:
@@ -93,6 +93,15 @@ def suggest(root, item: str, *, run=subprocess.run) -> Suggestion | None:
         os.environ.get(SOURCE_ENV) or DEFAULT_SOURCE)) / "scripts" / "entity_link.py"
     if not script.is_file():
         return Suggestion(note=f"camayoc entity_link not found at {script}")
+    try:
+        work = tracker.get(item)
+        if (work.id != item or not isinstance(work.title, str) or not work.title.strip()
+                or not isinstance(work.description, str)):
+            raise ValueError("authoritative item identity or text is incomplete")
+        payload = json.dumps({"version": 1, "items": [{"id": work.id,
+                            "title": work.title, "description": work.description}]})
+    except Exception:  # noqa: BLE001 — a hint must not undo the delivered work
+        return Suggestion(note="UNKNOWN: authoritative work-item read unavailable or incomplete")
     env = dict(os.environ)
     try:
         from .quipu import _token_from_file, resolve_server
@@ -100,13 +109,13 @@ def suggest(root, item: str, *, run=subprocess.run) -> Suggestion | None:
         token = env.get("QUIPU_AUTH_TOKEN") or _token_from_file()
     except Exception:  # noqa: BLE001
         token = env.get("QUIPU_AUTH_TOKEN", "")
-    argv = ["python3", str(script), item]
+    argv = ["python3", str(script), "--work-item-json", "-"]
     writing = mode(root) == WRITE and bool(token)
     if writing:
         env["QUIPU_AUTH_TOKEN"] = token
         argv += ["--write", "--timestamp", time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())]
     try:
-        out = run(argv, env=env, capture_output=True, text=True, timeout=TIMEOUT_S)
+        out = run(argv, input=payload, env=env, capture_output=True, text=True, timeout=TIMEOUT_S)
     except subprocess.TimeoutExpired:
         return Suggestion(note=f"entity_link timed out after {TIMEOUT_S}s")
     except OSError as e:
@@ -118,8 +127,12 @@ def suggest(root, item: str, *, run=subprocess.run) -> Suggestion | None:
         res = json.loads((out.stdout or "").strip().splitlines()[-1])
     except (ValueError, IndexError):
         return Suggestion(note="entity_link printed no result")
+    if not isinstance(res, dict):
+        return Suggestion(note="UNKNOWN: entity_link returned an invalid result")
     if res.get("error"):
         return Suggestion(note=f"entity_link error: {str(res['error'])[:160]}")
+    if res.get("item") != item:
+        return Suggestion(note="UNKNOWN: entity_link returned a different work item")
     if not res.get("choice"):
         return Suggestion(note="none of the retrieved entities is this work's subject")
     write = res.get("write") or {}
