@@ -342,7 +342,8 @@ def _select_plate(tracker, agent, seen, failures, read_ready, warn):
     row = mine[0]
     item = WorkItem(id=row.get("id", ""), title=row.get("title", ""),
                     status=row.get("status", "open"),
-                    assignee=row.get("assignee"), priority=_priority(row))
+                    assignee=row.get("assignee"), priority=_priority(row),
+                    updated_at=row.get("updated_at"))
     # Same rule as beads.plate: a blocked plate must name its blocker. One extra
     # read, only in the case that would otherwise burn a whole turn.
     if is_blocked(row.get("status"), row.get("id", ""), ready_ids):

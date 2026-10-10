@@ -57,10 +57,12 @@ _BY_ROLE = {
 }
 
 
-def startup_lines(role: str, plate_empty: bool) -> list[str]:
+def startup_lines(role: str, plate_empty: bool, plate_stale: bool = False) -> list[str]:
     """The role's startup instructions. Generic by design: no deployment names,
     because this ships in a public package and every deployment reads it."""
     lines = list(_ALL)
+    if plate_stale:
+        lines[1] = "    Verify the stale plate item's current status before executing it."
     if plate_empty:
         lines.append(_EMPTY)
     lines += _BY_ROLE.get(role, ())
@@ -109,8 +111,9 @@ def render(root: str, agent: str) -> str:
     m = _ROLE_RE.search(text)
     role = m.group(1) if m else ""
     empty = "ON YOUR PLATE\n    nothing." in text
+    stale = "\n      STALE PLATE:" in text
     return "\n".join((BANNER, text.rstrip(), "",
-                       "\n".join(startup_lines(role, empty))))
+                       "\n".join(startup_lines(role, empty, stale))))
 
 
 if __name__ == "__main__":

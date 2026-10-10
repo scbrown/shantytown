@@ -16,12 +16,35 @@
 from __future__ import annotations
 import json
 from pathlib import Path
+from datetime import datetime, timezone
 
 import pytest
 
 from shantytown.files import FilesRegistry, FilesTracker, plate
 from shantytown.anchor import anchor
 from shantytown.tmux import NullPanes
+
+
+@pytest.mark.parametrize("stamp,expected", [
+    ("2026-10-06T23:59:59Z", True),
+    ("2026-10-07T00:00:00Z", False),
+    ("2026-10-08T00:00:00Z", False),
+    ("2026-10-10T00:00:00Z", False),
+    ("2026-10-07T02:00:00+02:00", False),
+    (None, False), ("not-a-time", False),
+    ("2026-10-01T00:00:00", False),
+])
+def test_anchor_stale_age_comes_from_tracker_and_never_writes(world, stamp, expected):
+    _, reg, tracker = world
+    tracker.update("st-9h2", updated_at=stamp)
+    before = {p.name: p.read_bytes() for p in tracker.root.glob("*.json")}
+    result = anchor("ellie", reg, NullPanes(), plate=lambda w: plate(tracker, w))
+    assert result.item.updated_at == stamp
+    text = result.render(now=datetime(2026, 10, 9, tzinfo=timezone.utc))
+    assert ("STALE PLATE:" in text) is expected
+    if expected:
+        assert "Verify whether this work is still current before acting" in text
+    assert {p.name: p.read_bytes() for p in tracker.root.glob("*.json")} == before
 
 
 def _card(d: Path, name: str, **fields) -> None:

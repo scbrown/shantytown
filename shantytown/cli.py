@@ -3515,7 +3515,8 @@ def _deliver_startup_inbox(a, card, panes, session: str) -> None:
     # context despite configured hooks. Use the verified initial-input rail,
     # combining anchor and mail so we never submit two competing startup turns.
     anchor = ""
-    if harness_mod.name_for(card, root=a.root) == "codex":
+    if (harness_mod.name_for(card, root=a.root) == "codex"
+            or card.role == "administrator"):
         from . import session_anchor
         anchor = session_anchor.render(str(a.root), card.name)
     try:
@@ -3529,7 +3530,10 @@ def _deliver_startup_inbox(a, card, panes, session: str) -> None:
             return
         box, unread = None, []
     if not unread and not anchor:
-        return
+        # SessionStart supplies context but cannot initiate a turn. An empty
+        # inbox must not leave any relaunched agent waiting for a dispatch.
+        from . import session_anchor
+        anchor = session_anchor.render(str(a.root), card.name)
 
     batch, held = _startup_inbox_batch(
         unread, budget=max(_STARTUP_INBOX_RESERVE, _STARTUP_INBOX_MAX_CHARS - len(anchor)))

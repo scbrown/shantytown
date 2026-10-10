@@ -429,12 +429,19 @@ silence. "Did I get anchored?" is answerable: `st ops hooks check` verifies st's
 emitted hooks (`st-session-anchor`) alongside registered bundles, and reports MISSING, or names
 the running agents that were launched without it.
 
-Codex launches also deliver the same anchor render through the verified startup
-input, together with any unread mail in one message. This works even when the
-inbox is empty. A unique completion marker verifies delivery; failed delivery
+Codex and administrator launches also deliver the same anchor render through the
+verified startup input, together with any unread mail in one message. Any other
+launch with an empty inbox submits this initial anchor turn too: SessionStart
+context alone cannot start work. A unique completion marker verifies delivery; failed delivery
 keeps mail unread and reports the missing context. This covers Remote Control
 sessions where a configured SessionStart hook does not supply visible context.
 The hook remains configured for subsequent session lifecycle events.
+
+An explicit tracker `updated_at` older than 48 hours marks the plate **STALE**.
+Startup then asks the agent to verify that item's current status before acting,
+and to close completed work or defer/repool it as appropriate. Anchor still only
+reads: age never automatically closes or reassigns work. Missing, malformed, or
+timezone-free timestamps cannot establish age and do not produce a stale claim.
 
 ## `st sling` — design handoff
 
