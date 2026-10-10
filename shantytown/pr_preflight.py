@@ -60,6 +60,8 @@ def inventory(api, repo):
     result = []
     seen = set()
     for pull in pulls:
+        if not isinstance(pull, dict):
+            raise Refused("invalid PR inventory row")
         number = pull.get("number")
         if not isinstance(number, int) or number in seen:
             raise Refused("missing/duplicate PR in inventory")
@@ -70,14 +72,21 @@ def inventory(api, repo):
         again = api(path)
         try:
             head = detail["head"]["sha"]
+            if (not isinstance(head, str) or not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", head)
+                    or not isinstance(detail["head"]["ref"], str) or not detail["head"]["ref"]
+                    or type(detail["changed_files"]) is not int):
+                raise Refused("invalid PR head/file metadata")
             if (detail["state"] != "open" or again["state"] != "open"
                     or head != again["head"]["sha"]
                     or detail["changed_files"] != len(files)
                     or again["changed_files"] != len(files)):
                 raise Refused("PR changed or file inventory is incomplete")
             if any(not isinstance(row, dict) or not isinstance(row.get("filename"), str)
+                   or not row["filename"]
                    for row in files):
                 raise Refused("missing changed-file name")
+            if len({row["filename"] for row in files}) != len(files):
+                raise Refused("duplicate changed-file metadata")
             names = {name for row in files for name in
                      (row.get("filename"), row.get("previous_filename")) if name}
             if any(not isinstance(name, str) for name in names):
