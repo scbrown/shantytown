@@ -218,8 +218,11 @@ class Finding:
     def render(self) -> str:
         bits = []
         if self.lapsed_at:
+            # Keep the actual instant visible: a date-only message made
+            # correctly retained same-day rechecks look like truncation.
+            stamp = self.lapsed_at.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
             bits.append(f"LAPSED {self.lapsed_days}d ago "
-                        f"({self.lapsed_at.date().isoformat()})")
+                        f"({stamp})")
         if self.met:
             bits.append(f"CONDITION MET [{self.condition.render()}]")
         elif self.untestable:

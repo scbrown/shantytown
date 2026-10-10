@@ -109,6 +109,25 @@ def test_durable_keeps_pointer_open_when_live_send_fails(tmp_path, monkeypatch):
     assert box.marked == []
 
 
+def test_durable_unverified_submission_keeps_the_pointer(tmp_path, monkeypatch, capsys):
+    from shantytown.tmux import PaneSubmissionUnverified
+    box = _RecordingInbox()
+    monkeypatch.setattr(cli, "_inbox", lambda a, **kw: box)
+
+    class UnverifiedTmux:
+        def exists(self, pane): return True
+        def send(self, pane, text):
+            raise PaneSubmissionUnverified('submission not observed')
+
+    monkeypatch.setattr(cli, "Tmux", lambda *a, **k: UnverifiedTmux())
+    assert main(["--root", str(_root(tmp_path)), "inbox", "-d", "ian", "continue"]) == OK
+    assert len(box.delivered) == 1
+    assert box.marked == []
+    out = capsys.readouterr().out
+    assert 'UNVERIFIED' in out
+    assert '+ live' not in out
+
+
 def test_durable_reports_pointer_close_failure_without_inviting_resend(tmp_path, monkeypatch, capsys):
     class AckFailureInbox(_RecordingInbox):
         def mark_read(self, me, ids=None):

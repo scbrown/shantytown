@@ -36,6 +36,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Callable
 
+from .tmux import shell_foreground
 from .protocols import Agent, Panes, WorkItem
 
 
@@ -164,7 +165,7 @@ def classify(
             state = AgentState.RETIRED
         elif a.pane is None:
             state = AgentState.NO_PANE
-        elif not panes.exists(a.pane):
+        elif not panes.exists(a.pane) or shell_foreground(panes, a.pane):
             state = AgentState.STOPPED
             at = stopped(a.name) if stopped else None
             if at is not None:

@@ -1300,7 +1300,8 @@ def claude_settings_for_role(role: str, root=None) -> dict:
 # running module to vouch for itself (selfcheck.canonical_source resolution
 # order — the pin is the layer that still works for a re-point from a fully
 # independent clone, which the linked-worktree fallback cannot see through).
-_CARRIED_ENV = ("QUIPU_SERVER", "SHANTY_ONTO_NS", "SHANTY_CANONICAL_SOURCE")
+_CARRIED_ENV = ("QUIPU_SERVER", "SHANTY_ONTO_NS", "SHANTY_CANONICAL_SOURCE",
+                "QUIPU_HOOK_GROUP")
 
 
 def _settings_env(role: str, root=None) -> dict:
@@ -1739,12 +1740,17 @@ class ClaudeRuntime:
         # one the moment a second harness exists.
         assert program.carries_settings(launch, settings_path), \
             "compose produced a settings-less launch"
-        return launch
+        from .account_auth import wrap
+        return wrap(card, launch, self._root)
 
     def settings_path(self, card: Agent) -> str | None:
         """The graph-aware settings artifact resolved for this launch."""
-        return self._resolve(card)
+        from .account_auth import settings_path
+        return settings_path(card, self._resolve(card), self._root)
 
+    def prepare_account_settings(self, card: Agent) -> None:
+        from .account_auth import settings_path
+        settings_path(card, self._resolve(card), self._root, prepare=True)
 
     def start(self, card: Agent, pane: str) -> None:
         """The seam: compose (may refuse) THEN deliver via Panes. Panes stays
@@ -1763,6 +1769,7 @@ class ClaudeRuntime:
         # purpose — that is what starting an agent IS. The send guard
         # (tmux.PaneNotAgent) refuses shells for message traffic, and this
         # is the one caller for which a shell is the correct target.
+        self.prepare_account_settings(card)
         self._panes.send(pane, self.compose(card), allow_shell=True)
 
     def is_live(self, screen: str) -> bool:

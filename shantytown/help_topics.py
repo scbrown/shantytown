@@ -87,9 +87,9 @@ HAUL — the self-feeding queue
   close one and the next is served at your stop. Nobody dispatches per bead.
 
   RELEASING AN ITEM — a bare status change does NOT stop the re-serve
-    done            br close <id>
+    done            {close}
     gated           st work defer <id> <bead|human|access|external|parked> --reason-file <f>
-    not yours       br update <id> -a ""
+    not yours       {unassign}
 
   Why defer rather than just closing or unassigning: `defer` records the KIND of
   block and takes the bead OUT of the ready pool until you undo it. Clearing the
@@ -112,7 +112,7 @@ INBOX — a pointer channel, not a document store
   your text, after the '[from <you>] ' signature st adds). The cap is on BYTES, so
   non-ASCII (em dashes, arrows, checkmarks) costs more than it looks.
 
-  OVER THE CAP — put the substance in a bead and send the pointer:
+  OVER THE CAP — put the substance, qualifiers and evidence in a bead; send the pointer:
 
     br comments add <id> --file <notes>
     st inbox <who> -d 'see <bead-id>: <one-line gist>'
@@ -121,6 +121,11 @@ INBOX — a pointer channel, not a document store
     A message that must survive a session death belongs in a bead, which is
     readable, greppable and permanent. The inbox exists to say WHERE to look. A
     long inbox message is a bead nobody can find later.
+
+  Relays preserve the source and claim strength. An estimate stays INFERRED;
+  measured values cite the command, time and version in the referenced bead.
+  Do not turn "different methods" into "independent evidence" without verifying
+  their instruments. A pointer elsewhere in a message does not source every claim.
 
   BODIES THAT CONTAIN COMMANDS
     Write them to a file and use --file/--stdin. Prose in double quotes is expanded
@@ -136,9 +141,17 @@ TOPICS = {
 }
 
 
-def render(topic: str) -> str | None:
+def render(topic: str, *, examples=None) -> str | None:
     """The page, or None if there is no such topic."""
-    return TOPICS.get((topic or "").strip().lower())
+    topic = (topic or "").strip().lower()
+    if topic == "haul":
+        from .tracker_examples import TrackerExamples
+        examples = examples or TrackerExamples()
+        if not examples.argv:
+            return "HAUL — the self-feeding queue\n\n  " + examples.diagnostic
+        return _HAUL.format(close=examples.close("<id>"),
+                            unassign=examples.unassign("<id>"))
+    return TOPICS.get(topic)
 
 
 def index() -> str:

@@ -40,6 +40,13 @@ audits the whole card registry for the same policy.
 
 ### …and which MODEL that program runs
 
+When converting a card with an explicit model to another harness, supply
+`st agent harness <agent> <target> --model <target-model>`. Without a nonempty
+target model the command refuses before changing the card or restarting, even
+with `--force`. Model identifiers are provider-defined; the converter does not
+guess compatibility or a target default. Same-harness requests and cards without
+an explicit model keep their existing behavior.
+
 `[model]` is the same table one axis over — harness picks the **program**, model picks what that
 program runs — with the same two levels, the same precedence, and a card still beating both:
 
@@ -196,6 +203,13 @@ A **symlink, never a copy**: the token stays in the one place you already manage
 `codex login` refreshes every agent at once, and the store — a git repo in every deployment we
 know of — never holds a credential.
 
+Emission may run inside a managed Codex home whose auth link passes through the
+role home. Provisioning resolves that chain and links the role directly to the
+independent login file, so rewriting the role link cannot create a daemon/role
+cycle. A regular credential already in the role home is preserved when there
+is no independent login. An existing symlink cycle or resolution error is
+reported without changing credential links; repair the cycle and emit again.
+
 ### 2. Declare it
 
 Either the config table above, or `harness = "codex"` on the cards you want.
@@ -274,6 +288,16 @@ under `[env]` in `shantytown.toml` to keep Remote Control off. The fallback does
 change that file, install packages, or remove the worker's governed settings.
 An installed payload still uses the daemon path; invalid boolean settings and
 daemon startup failures still refuse rather than silently switching modes.
+
+Before starting a pane, the launcher checks known model compatibility floors
+against the selected executable's `codex --version`, with a five-second timeout.
+`gpt-6.1-sol` requires Codex 0.160.0 or newer. Remote Control checks the managed
+payload in the selected role or agent home; local launches (including the missing
+managed-package fallback) check the `codex` executable on PATH. An older version,
+failed probe, or unrecognizable version refuses the launch and names the model,
+minimum version, selected executable, and home to update. The launcher does not
+change the model or update packages itself. Other models retain their existing
+launch behavior; passing this check does not prove account access to a model.
 
 Unlike Claude's compatibility default, an absent `SHANTY_REMOTE_CONTROL` does not
 opt Codex into this new binary prerequisite. Set the deployment value explicitly to
@@ -404,6 +428,12 @@ Same ladder for the model, one axis over:
 | the fleet | `[model] default = "…"` | saying nothing |
 | nothing | — | no `--model` flag; the harness picks |
 
+The launcher exports `SHANTY_MODEL` with the exact resolved selection sent to
+`--model`. Claude and the Codex client inherit it; the Codex remote daemon receives
+it before starting, so its tool shells inherit the same value. With no declared
+selection, the launcher clears an inherited `SHANTY_MODEL` and omits `--model`; it
+does not guess the harness default. Existing sessions keep their launch environment.
+
 Both config halves are validated **at load**, and each catches a different silent failure. An
 unimplemented harness name is refused, because a typo in `default` moves every card in the fleet
 and would otherwise surface as `st agent new` failing agent by agent — a fleet-wide config error reported
@@ -508,3 +538,12 @@ Historical excerpts are bounded and labelled untrusted; unavailable archives do
 not block the prompt. No HTTP Bobbin adapter means no archive request. See
 [incident-recall.md](incident-recall.md) for configuration, duplicate suppression,
 the measured hook contract, and the 30-item inferred benchmark seed set.
+
+Claude and Codex launches carry the configured non-secret graph settings
+(`QUIPU_SERVER`, `SHANTY_ONTO_NS`, `SHANTY_CANONICAL_SOURCE`, and
+`QUIPU_HOOK_GROUP`) from deployment `[env]`, with ambient values as fallback.
+Claude also receives them in its settings `env`. Codex carries them into both
+the local client and the Remote Control daemon so Stop-hook children inherit
+the configured capture group. Values are shell quoted; credentials are not
+part of this allowlist. Already-running sessions need a normal relaunch to
+receive a changed group.

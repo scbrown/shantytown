@@ -42,7 +42,11 @@ def request_headers() -> dict:
     changes against today's open server.
     """
     headers = {"Content-Type": "application/json"}
-    token = os.environ.get("QUIPU_AUTH_TOKEN") or _token_from_file()
+    from . import quipu_auth
+    try:
+        token = quipu_auth.token()
+    except (OSError, UnicodeError, ValueError):
+        token = ""  # A broken writer credential must not disable public reads.
     if token:
         headers["Authorization"] = f"Bearer {token}"
     return headers
@@ -88,7 +92,7 @@ def _token_from_file() -> str:
     try:
         with open(path, encoding="utf-8") as f:
             return f.read().strip()
-    except OSError:
+    except (OSError, UnicodeError):
         return ""
 
 # The ontology IRI base. THIS IS DATA IDENTITY, NOT COSMETICS: every triple in a
@@ -803,6 +807,11 @@ class QuipuRegistry:
     def _retract(self, subject: str, predicate: str, obj: str) -> None:
         """Retract exactly one triple (quipu /retract, entity+predicate+value =
         triple-level). Anything coarser would take unrelated facts with it."""
+        from . import quipu_auth
+        try:
+            headers = quipu_auth.write_headers(self.server)
+        except quipu_auth.CredentialRefused as error:
+            raise QuipuWriteRejected(str(error)) from None
         req = urllib.request.Request(
             self.server + "/retract",
             data=json.dumps({
@@ -810,11 +819,15 @@ class QuipuRegistry:
                 "predicate": self.onto + predicate,
                 "value": self.onto + obj,
             }).encode(),
-            headers=request_headers(),
+            headers=headers,
         )
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                 body = json.loads(resp.read())
+        except urllib.error.HTTPError as e:
+            if e.code == 401:
+                raise QuipuWriteRejected(str(quipu_auth.refuse(self.server, "rejected (HTTP 401)"))) from None
+            raise QuipuUnreachable(f"quipu write failed: HTTP {e.code}") from None
         except (urllib.error.URLError, OSError, ValueError) as e:
             raise QuipuUnreachable(f"quipu at {self.server} unreachable: {e}") from e
         if isinstance(body, dict) and body.get("error"):
@@ -855,14 +868,23 @@ class QuipuRegistry:
         return False
 
     def _knot(self, turtle: str) -> None:
+        from . import quipu_auth
+        try:
+            headers = quipu_auth.write_headers(self.server)
+        except quipu_auth.CredentialRefused as error:
+            raise QuipuWriteRejected(str(error)) from None
         req = urllib.request.Request(
             self.server + "/knot",
             data=json.dumps({"turtle": turtle}).encode(),
-            headers=request_headers(),
+            headers=headers,
         )
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                 body = json.loads(resp.read())
+        except urllib.error.HTTPError as e:
+            if e.code == 401:
+                raise QuipuWriteRejected(str(quipu_auth.refuse(self.server, "rejected (HTTP 401)"))) from None
+            raise QuipuUnreachable(f"quipu write failed: HTTP {e.code}") from None
         except (urllib.error.URLError, OSError, ValueError) as e:
             raise QuipuUnreachable(f"quipu at {self.server} unreachable: {e}") from e
         if isinstance(body, dict) and body.get("error"):

@@ -117,6 +117,16 @@ def plan_switch(*, agent: str, current: str, target: str, role: str,
     if current == target and (model is None or model == current_model):
         return NoChange(agent=agent, harness=target)
 
+    # Model IDs are provider-defined, so neither their spelling nor a guessed
+    # default can establish compatibility with another program. Require the
+    # operator's target selection before the CLI writes or restarts anything.
+    if current != target and current_model and not (model and model.strip()):
+        return Refusal(
+            code="target-model-required",
+            reason=(f"{agent} has an explicit model {current_model!r}; moving "
+                    f"from {current!r} to {target!r} requires a target model"),
+            remedy=f"pass --model <model available to {target}>; the card is unchanged")
+
     pinned = required_by_role.get(role)
     if pinned is not None and pinned != target and not force:
         return Refusal(

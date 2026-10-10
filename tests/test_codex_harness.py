@@ -696,7 +696,7 @@ def test_the_settings_env_vars_are_DERIVED_from_the_registry():
     spelling, so it did not check the fleet — it checked the half of the fleet
     running that program. Derived, so a third harness with an env-borne pointer
     is covered by declaring it on itself rather than by a third special case."""
-    assert harness_mod.settings_env_vars() == (codex.HOME_VAR,)
+    assert harness_mod.settings_env_vars() == (codex.HOME_VAR, "OPENCODE_CONFIG")
     assert CLAUDE.settings_env_var is None      # a flag, nothing to recover
     assert CODEX.settings_env_var == codex.HOME_VAR
 
@@ -1102,6 +1102,66 @@ def test_an_agents_CODEX_HOME_cannot_replace_auth_with_a_self_link(tmp_path,
     assert auth.is_symlink()
     assert auth.readlink() == login
     assert auth.readlink() != auth
+
+
+@pytest.mark.parametrize("recovery", [False, True])
+def test_daemon_CODEX_HOME_cannot_link_role_auth_back_to_daemon(
+        tmp_path, monkeypatch, recovery):
+    operator = tmp_path / "operator"
+    login = operator / ".codex" / "auth.json"
+    login.parent.mkdir(parents=True)
+    login.touch()
+    monkeypatch.setenv("HOME", str(operator))
+    root = tmp_path / ".shanty"
+    [path] = cli._emit_role_settings(root, {"worker"}, harness_name="codex")
+    auth = path.parent / "auth.json"
+    if recovery:
+        auth.touch()
+    else:
+        auth.symlink_to(login)
+    daemon = tmp_path / "daemon"
+    daemon.mkdir()
+    daemon_auth = daemon / "auth.json"
+    daemon_auth.symlink_to(auth)
+    monkeypatch.setenv("CODEX_HOME", str(daemon))
+    assert auth.is_file() and daemon_auth.is_file()  # positive control
+
+    assert CODEX.provision(str(path), root=root) == []
+    assert auth.is_file() and daemon_auth.is_file()
+    assert auth.readlink() == login
+
+
+def test_daemon_alias_uses_custom_login_without_default_login(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path / "operator-without-login"))
+    root = tmp_path / ".shanty"
+    [path] = cli._emit_role_settings(root, {"worker"}, harness_name="codex")
+    login = tmp_path / "custom-auth.json"
+    login.touch()
+    auth = path.parent / "auth.json"
+    auth.symlink_to(login)
+    daemon = tmp_path / "daemon"
+    daemon.mkdir()
+    (daemon / "auth.json").symlink_to(auth)
+    monkeypatch.setenv("CODEX_HOME", str(daemon))
+    assert CODEX.provision(str(path), root=root) == []
+    assert auth.readlink() == login
+    assert (daemon / "auth.json").is_file()
+
+
+def test_existing_auth_cycle_is_reported_and_preserved(tmp_path, monkeypatch):
+    root = tmp_path / ".shanty"
+    [path] = cli._emit_role_settings(root, {"worker"}, harness_name="codex")
+    auth = path.parent / "auth.json"
+    daemon = tmp_path / "daemon"
+    daemon.mkdir()
+    daemon_auth = daemon / "auth.json"
+    auth.symlink_to(daemon_auth)
+    daemon_auth.symlink_to(auth)
+    monkeypatch.setenv("CODEX_HOME", str(daemon))
+    notes = CODEX.provision(str(path), root=root)
+    assert notes and "cycle" in notes[0] and "not changed" in notes[0]
+    assert auth.readlink() == daemon_auth
+    assert daemon_auth.readlink() == auth
 
 
 def test_no_independent_login_preserves_auth_instead_of_self_linking(tmp_path,

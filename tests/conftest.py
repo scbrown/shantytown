@@ -110,8 +110,9 @@ def _no_real_store(request, monkeypatch):
         return
 
     def _refuse(self, *args, **kw):
+        tool = getattr(self, "_tool", "bd")
         raise AssertionError(
-            f"a test shelled out to `bd {' '.join(map(str, args))[:60]}` — that "
+            f"a test shelled out to `{tool} {' '.join(map(str, args))[:60]}` — that "
             f"runs against whatever store the CWD resolves to, NOT the test's "
             f"--root (--root does not scope the beads backend; only --repo "
             f"does). This is how four phantom 'mail: HANDOFF the epic' beads "
@@ -121,6 +122,17 @@ def _no_real_store(request, monkeypatch):
         )
 
     monkeypatch.setattr(beads_mod.BeadsTracker, "_bd", _refuse)
+    # BrTracker overrides the legacy transport, so the bd guard cannot reach it.
+    # The fake crew cycle closed nine real startup-inbox pointers through that
+    # second door. Guard every transport; explicit scratch CLI integration tests
+    # use the same real_store marker as the legacy adapter.
+    from shantytown.br import BrTracker
+    from shantytown.sd import SdTracker
+    monkeypatch.setattr(BrTracker, "_bd", _refuse)
+    monkeypatch.setattr(BrTracker, "_bd_in", _refuse)
+    monkeypatch.setattr(SdTracker, "_bd_in", _refuse)
+    monkeypatch.setattr(SdTracker, "prove_store", _refuse)
+
 
 
 @pytest.fixture(autouse=True)

@@ -50,6 +50,7 @@ restores the caller's environment on return when invoked as a Python function.
 | variable | what it points at | default |
 |---|---|---|
 | `SHANTY_ROOT` | **which store `st` reads and writes** — the single most consequential setting. Precedence: `--root` > `$SHANTY_ROOT` > a `.shanty` found walking UP from the cwd > this box's pointer (`~/.config/shantytown/root`, written by `st fleet init`) > `cwd/.shanty`. The CLI and the Stop hook resolve it identically. The walk-up cannot help from a directory that is a SIBLING of the store rather than under it — an agent workspace, typically — which is what the pointer is for; with neither, `st` says so before the command runs rather than reporting "no such agent: &lt;your own name&gt;". | discovered; else `./.shanty` |
+| `SHANTY_MODEL` | Launch-generated provenance: exact resolved card/role/fleet model carried to client and tools; absent selection clears inherited metadata. Configure selection through cards or `[model]`, not this carrier. | resolved model; else unset |
 | `SHANTY_AGENT` | who you are, so `st anchor` needs no argument | — |
 | `SHANTY_TEND_SWEEP_BUDGET_S` | seconds a `st fleet tend` pass may spend on the BEST-EFFORT sweeps that follow respawn (aegis-qwadc). Spending it SKIPS the next sweep; it never interrupts one in flight, because a wall-clock kill lands mid-write. Respawn runs before any of them and is never shed. Raise it on a deployment with slow notifiers; a recurring deferral is a slow store, not failing supervision. | `120` |
 | `SHANTY_HOSTMEM_FLOOR_GIB` | a ONE-RUN override of `[hostmem] floor_gib`, the physical admission floor (aegis-do672). `0` disables the brake for this invocation. It exists because the alternative an operator reaches for under a brake they need to get past is commenting out the table — which disarms it for everyone and stays disarmed. | the `[hostmem]` table |
@@ -82,6 +83,7 @@ restores the caller's environment on return when invoked as a Python function.
 | `SHANTY_PANEMEM_LOG` | file the launcher appends one line to for every pane memory-ceiling outcome, applied or refused (default `~/.local/log/panemem.log`). The stderr warning goes to whoever ran the launch, which for an interactive `st agent new <agent>` is a pane scrollback that is gone with the pane — so the reason a pane is unbounded was unrecoverable for most cases. This is the record that outlives the pane it describes. | `~/.local/log/panemem.log` |
 | `SHANTY_REMOTE_CONTROL` | whether sessions use Remote Control. Claude adds `--remote-control <agent>` for access through Anthropic's relay. Codex starts its managed standalone app-server and attaches the TUI; if the role's standalone payload is missing, it warns and launches locally until installed. Accepts `true`/`false` (and common boolean spellings); an invalid value refuses launch. See [harnesses](harnesses.md) for the Codex prerequisite and recovery. | Claude: `true`; Codex: `false` |
 | `SHANTY_STOP_CAPTURE` | a command appended LAST to every role's Stop hook list — the deployment's session-end knowledge-capture hook. Runs after the role's own stop machinery (send/drain/haul/feed-gate) settles. Solicitation etiquette (block-once, markers) is the command's own responsibility. Unset = nothing appended; shantytown ships no capture hook and hardcodes no path. | — |
+| `SHANTY_STOP_JEV_COMMAND` | Opt-in quoted argv for the canonical Jev MCP server. Classifies an open anchor using only bounded, masked last assistant message plus status; five-second total deadline. Unknown preserves stop routing. No command means disabled. | — |
 | `SHANTY_STOP_SAMPLES` | Absolute private evidence directory for an opt-in, local-only 30-sample stop-hook collection. Requires a daily retention sweep before enabling; see [Private stop samples](stop-samples.md). Pane text is never attached to normal events. Unset = disabled. | — |
 | `SHANTY_HIERARCHY_FILE` | the hierarchy file `st fleet roles sync` falls back to when the graph cannot be read (`.ttl`\|`.yaml`\|`.json` describing `CrewMember` + `reports_to`). Unset = look for `hierarchy.*` beside the crew root; if that is absent too, `sync` REFUSES rather than projecting an empty crew. Only the ontology-first *default* falls back — an explicit `--from quipu` that cannot reach the graph refuses instead of silently substituting this file. | `<root>/hierarchy.*` if present |
 | `SHANTY_SHARED_CHECKOUT_OK` | set to `1` to allow ONE deliberate `git commit`/`rebase`/`merge` in a SHARED project checkout, past the guard `st repo worktree` installs there. Read by the hook, not by `st` — it is the maintenance escape hatch, not a mode. Everyday work belongs in `st repo worktree <repo>`, where index and HEAD are per-agent; the guard exists because a shared checkout's index is shared, so one session's commit can carry another's staged files and its reset can drop the other's commit, with git reporting success to both. Note the guard fires at COMMIT only — `git reset` has no hook and is not guarded, so this is a seatbelt, not a cage. | unset (guard active) |
@@ -131,3 +133,77 @@ error, it just stops new facts from joining the old ones.
 CLI graph clients refuse before sending a request when the namespace is missing
 or is the documentation example. Local commands still work without a namespace.
 Library clients outside a CLI invocation retain the warned example fallback.
+
+## Named accounts
+
+A harness may have several independent subscriptions. Account names must differ
+from legacy lane names (`base`, `claude`, `codex`, `opencode`). Existing deployments
+with no accounts keep their current behavior. An optional `default = true` maps
+unnamed cards of that harness onto one account; at most one default per harness
+is allowed. Models are declared by the operator; switching does not guess a
+provider model or carry the previous provider's explicit model across.
+
+```toml
+[accounts.primary]
+harness = "claude"
+model = "operator-selected-model"
+credential_ref = "infisical:PRIMARY_NATIVE_AUTH"
+default = true
+[accounts.primary.governor]
+source = "textfile"
+path = "/var/lib/agent-meters/primary.prom"
+max_agents = 3
+[[accounts.primary.governor.tier]]
+at = 80
+min_priority = 0
+[[accounts.primary.governor.tier]]
+at = 95
+action = "drain"
+
+[accounts.backup]
+harness = "codex"
+model = "operator-selected-codex-model"
+credential_ref = "file:/secure/account-backup/auth.json"
+[accounts.backup.governor]
+source = "textfile"
+path = "/var/lib/agent-meters/backup.prom"
+max_agents = 2
+[[accounts.backup.governor.tier]]
+at = 80
+min_priority = 0
+[[accounts.backup.governor.tier]]
+at = 95
+action = "drain"
+```
+
+Each account requires independent tiers, a cap and independently identifiable
+usage. Prometheus requires `usage_account`, which filters every sample by its
+`account` label; textfiles can use it too. Distinct files or session paths may
+supply independent readings. Duplicate usage coordinates and the unscoped Codex
+app-server reader are refused. Named accounts participate in the existing balance
+advisory across the whole fresh set; stale or unrated lanes cannot supply a preference.
+Caps still gate every launch and automatic switch.
+
+Credential references support `infisical:KEY`, `env:VARIABLE`, and an absolute
+`file:` path. Infisical must be installed and authenticated by the operator; its
+output is captured and never logged. Infisical/environment values contain the
+harness's native credential JSON object. They bootstrap a private profile once,
+then preserve native refreshes. To rotate the reference, change its key or path;
+the profile identity includes the reference. A file reference links to the
+operator's credential file so its updates remain authoritative. Keep credential
+files outside Git and restrict access. Inline credentials are refused.
+
+Profiles live under `$XDG_STATE_HOME/shantytown/account-profiles` (otherwise the
+user's standard state directory), mode 0700 with projected files mode 0600.
+Claude uses its private `CLAUDE_CONFIG_DIR`; Codex gets per-account, per-agent
+settings with an authentication link outside the deployment checkout. Ambient
+provider API keys and inherited profile paths are cleared for a named-account
+launch. Cards, requests, process markers and command lines carry only identity
+and references, never credential values. No additional Python runtime dependency
+is required.
+
+Cards may set `account` and `auto_failover`; omitted values preserve an existing
+projection and an explicit `false` disables failover. Role harness pins and browser
+capabilities remain admission constraints. Live acceptance requires operator
+provisioned accounts and an authorized observed launch; fixture tests do not
+establish that a real subscription or its native refresh works.

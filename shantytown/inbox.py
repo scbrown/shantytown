@@ -75,6 +75,7 @@ PREFIX = "inbox:"
 # agents' plates today — the exact defect this type exists to prevent. Excluding
 # the legacy prefix too is not tidiness; it un-breaks the plates already broken.
 _LEGACY_PREFIX = "mail:"
+MESSAGE_PREFIXES = (PREFIX, _LEGACY_PREFIX)
 
 
 def is_message(title: str) -> bool:
@@ -82,7 +83,7 @@ def is_message(title: str) -> bool:
     by files.plate and beads.plate so the two backends cannot disagree about what
     belongs on a plate (the two-implementation equivalence rule, aegis-260i)."""
     t = (title or "").lstrip()
-    return t.startswith(PREFIX) or t.startswith(_LEGACY_PREFIX)
+    return t.startswith(MESSAGE_PREFIXES)
 
 
 # Labels that mean a HUMAN DECISION gates this bead's completion — it is not an
@@ -129,7 +130,11 @@ def is_anchor(labels) -> bool:
 # _DECISION_LABELS, which gate a decision an agent could otherwise implement —
 # here the WORK itself is out of reach, so "execute and close" is not merely
 # unsafe, it is impossible.
-_HUMAN_BLOCKED_LABELS = frozenset({"blocked:human", "blocked:external"})
+# Human-only work can be OPEN/ready on a decision desk without blocked:human.
+# Counting it as available work produces false Rule Zero/priority alerts.
+_HUMAN_BLOCKED_LABELS = frozenset({
+    "blocked:human", "blocked:external", "desk", "needs-stiwi",
+})
 
 # Labels/titles for beads that are RECORDS, not work: a session handoff is a
 # report someone wrote, and an ANCHOR bead says "do not close" in its own title
@@ -509,18 +514,21 @@ class TrackerInbox:
     """
 
     def __init__(self, tracker, items: Callable[[], list[WorkItem]],
-                 all_items: Callable[[], list[WorkItem]] | None = None):
+                 all_items: Callable[[], list[WorkItem]] | None = None,
+                 items_for: Callable | None = None):
         self._tracker = tracker
         self._items = items
         self._all_items = all_items
+        self._items_for = items_for
 
     def find_delivery(self, me: str, marker: str) -> Message | None:
         """Receipt lookup needs CLOSED rows too; an unread-only query lies here."""
-        if self._all_items is None:
+        if self._all_items is None and self._items_for is None:
             raise RuntimeError("durable receipt lookup requires an all-status reader")
+        source = self._items_for(me, True).exact() if self._items_for else self._all_items()
         matches = [Message(id=it.id, to=me, body=_body_of(it.title),
                            read=it.status == "closed")
-                   for it in self._all_items()
+                   for it in source
                    if is_message(it.title) and it.assignee == me
                    and _body_of(it.title).startswith(marker + " ")]
         if len(matches) > 1:
@@ -566,8 +574,8 @@ class TrackerInbox:
             # stays: it is the non-obvious half, and without it a sender trims to the
             # character count and is refused a second time.
             raise MessageTooLong(
-                f"too long: {typed_size} {unit}, cap {budget}. Put it in a bead and "
-                f"send the pointer: `st inbox {to} 'see <bead-id>'` "
+                f"too long: {typed_size} {unit}, cap {budget}. Keep qualifiers and evidence "
+                f"in the bead; send the pointer: `st inbox {to} 'see <bead-id>'` "
                 f"(`br comments add <id> --file` for the body). `st ops help inbox`."
                 f"{note}",
                 budget=budget,
@@ -583,7 +591,7 @@ class TrackerInbox:
         """PURE READ. It lists and filters; it closes nothing."""
         return [
             Message(id=it.id, to=me, body=_body_of(it.title), frm=None)
-            for it in self._items()
+            for it in (self._items_for(me, False).exact() if self._items_for else self._items())
             if is_message(it.title)
             and it.assignee in (me, me.split("/")[-1])
             and it.status != "closed"
@@ -591,9 +599,24 @@ class TrackerInbox:
 
     def mark_read(self, me: str, ids: list[str] | None = None) -> list[Message]:
         marked, failed = [], []
-        for msg in self.unread(me):
-            if ids is not None and msg.id not in ids:
-                continue
+        if ids is None:
+            messages = self.unread(me)
+        else:
+            # A verified live delivery already names its receipt. Resolve those
+            # exact IDs instead of requiring a complete recipient enumeration;
+            # a slow listing must not prevent acknowledgment of a known message.
+            # Validate the whole selection before closing any of it.
+            messages = []
+            for item_id in dict.fromkeys(ids):
+                item = self._tracker.get(item_id)
+                if (item.id != item_id or not is_message(item.title)
+                        or item.assignee not in (me, me.split("/")[-1])):
+                    raise RuntimeError(f"refused inbox acknowledgment of {item_id}: "
+                                       "receipt identity, recipient or message marker differs")
+                if item.status != "closed":
+                    messages.append(Message(id=item.id, to=me,
+                                            body=_body_of(item.title)))
+        for msg in messages:
             try:
                 self._tracker.update(msg.id, status="closed")
             except Exception as e:  # noqa: BLE001 -- one slow close must not abandon the batch

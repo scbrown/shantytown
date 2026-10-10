@@ -175,8 +175,8 @@ def test_six_verbs_five_groups_twenty_seven_leaves():
     groups = {n: leaves for n, leaves in surface.items() if leaves is not None}
     assert len(verbs) == 7, verbs
     assert len(groups) == 5, sorted(groups)
-    assert sum(len(l) for l in groups.values()) == 33
-    assert len(_actual_leaves()) == 40, (
+    assert sum(len(l) for l in groups.values()) == 34
+    assert len(_actual_leaves()) == 41, (
         "the command count changed. If that's intended, update the number here, "
         "cli.SURFACE and the cli.py docstring together — and say why the surface "
         "grew in docs/cli.md."
@@ -190,7 +190,7 @@ def test_the_grouping_is_the_one_ruled():
         "task": None, "go": None, "sling": None, "inbox": None, "crew": None, "anchor": None,
         "attach": None,
         "work": frozenset({"repool", "defer", "cost", "dream", "triage", "jobs"}),
-        "agent": frozenset({"new", "stop", "harness", "cycle", "advise", "input", "ask",
+        "agent": frozenset({"new", "stop", "harness", "account", "cycle", "advise", "input", "ask",
                             "answer", "log", "history", "stats"}),
         "fleet": frozenset({"start", "tend", "roles", "init", "hold", "window",
                             "dashboard", "watch"}),
@@ -216,7 +216,7 @@ def test_the_prose_numbers_in_the_docstring_match_the_parser():
              31: "thirty-one", 32: "thirty-two", 33: "thirty-three",
              34: "thirty-four", 35: "thirty-five", 36: "thirty-six",
              37: "thirty-seven", 38: "thirty-eight", 39: "thirty-nine",
-             40: "forty"}
+             40: "forty", 41: "forty-one"}
     surface = _actual_surface()
     n_verbs = sum(1 for l in surface.values() if l is None)
     n_groups = sum(1 for l in surface.values() if l is not None)

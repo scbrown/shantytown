@@ -122,14 +122,15 @@ def balance(paces, band: float = DEFAULT_BAND) -> Balance:
             f"{p.lane}: {p.unrated_why or 'no pace'}" for p in unrated))
 
     if len(lanes) > 2:
-        # Deliberately refuse rather than guess. A 3-lane fleet wants a policy about
-        # WHICH pair (or a different statistic entirely), and silently comparing the
-        # two alphabetically-first lanes would be a wrong answer wearing a right one's
-        # clothes. Nothing on this host has three lanes today; when something does,
-        # that is the moment to decide, not now.
-        return Balance(UNRATED, why=(f"{len(lanes)} lanes configured "
-                                     f"({', '.join(p.lane for p in lanes)}); "
-                                     "balance is defined for exactly two"))
+        # Compare the whole fresh account set, not an arbitrary alphabetic pair.
+        low = min(lanes, key=lambda p: (p.ratio, p.lane))
+        high = max(lanes, key=lambda p: (p.ratio, p.lane))
+        ratio = (float('inf') if low.ratio == 0 and high.ratio else
+                 1.0 if low.ratio == 0 else high.ratio / low.ratio)
+        detail = ', '.join(f'{p.lane} {p.ratio:.2f}x' for p in lanes)
+        if ratio >= band:
+            return Balance(PREFER, prefer=low.lane, ratio=ratio, why=detail)
+        return Balance(BALANCED, ratio=ratio, why=detail)
 
     a, b = lanes
     if a.ratio == 0 and b.ratio == 0:

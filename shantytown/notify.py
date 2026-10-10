@@ -772,12 +772,18 @@ class IdleFleetAlerter:
 
         The claude -> 'base' mapping is FleetGovernor.lane's, restated here because
         this class deliberately does not hold a FleetGovernor (building one does
-        remote collection, and this runs on the tend timer). If a third lane ever
-        exists, `balance` already refuses to rate it, so this cannot silently start
-        preferring the wrong one.
+        remote collection, and this runs on the tend timer). Named accounts use
+        their launch identity, including while the card queues a future change.
         """
         try:
             card = self._reg.get(worker)
+            from . import config, accounts, account_state
+            cfg = config.load(self._shanty_root) if self._shanty_root is not None else config.Config()
+            if cfg.accounts:
+                card = account_state.process_card(self._shanty_root, card, cfg, self._panes)
+                account = accounts.selected(card, cfg)
+                if account is not None:
+                    return account.name
             harness = harness_mod.name_for(card, root=self._shanty_root)
         except Exception:                 # noqa: BLE001
             return ''
@@ -1041,11 +1047,13 @@ class IdleFleetAlerter:
             own_active = [b for b in active
                           if (b.get("assignee") or "").split("/")[-1] == worker]
             if worker in resumable and own_active:
+                from .tracker_examples import for_deployment
+                examples = for_deployment(self._root, self._reg)
                 bead = own_active[0]
                 target = push_to_own_pane(
                     self._reg, self._panes, worker,
                     feed_check.haul_resume_message(
-                        bead.get("id", "?"), bead.get("title") or ""))
+                        bead.get("id", "?"), bead.get("title") or "", examples=examples))
                 if target is not None:
                     nudged.append(worker)
                     self._log(f"haul: resumed idle Codex {worker} on active "
@@ -1156,10 +1164,12 @@ class IdleFleetAlerter:
                     advisory = "governor: higher-priority advisory unavailable; haul continues."
                 if advisory:
                     self._log(advisory)
+                from .tracker_examples import for_deployment
+                examples = for_deployment(self._root, self._reg)
                 message = feed_check.haul_feed_message(
                     nid, "", len(feedable) - 1,
                     headroom=sb.headroom(limits, spend), repeats=repeats,
-                    advisory=advisory)
+                    advisory=advisory, examples=examples)
                 message += f" — [st serve:{serve_id} worker:{worker}]"
             target = push_to_own_pane(self._reg, self._panes, worker, message)
             if target is None:
