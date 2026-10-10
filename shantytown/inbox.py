@@ -599,9 +599,24 @@ class TrackerInbox:
 
     def mark_read(self, me: str, ids: list[str] | None = None) -> list[Message]:
         marked, failed = [], []
-        for msg in self.unread(me):
-            if ids is not None and msg.id not in ids:
-                continue
+        if ids is None:
+            messages = self.unread(me)
+        else:
+            # A verified live delivery already names its receipt. Resolve those
+            # exact IDs instead of requiring a complete recipient enumeration;
+            # a slow listing must not prevent acknowledgment of a known message.
+            # Validate the whole selection before closing any of it.
+            messages = []
+            for item_id in dict.fromkeys(ids):
+                item = self._tracker.get(item_id)
+                if (item.id != item_id or not is_message(item.title)
+                        or item.assignee not in (me, me.split("/")[-1])):
+                    raise RuntimeError(f"refused inbox acknowledgment of {item_id}: "
+                                       "receipt identity, recipient or message marker differs")
+                if item.status != "closed":
+                    messages.append(Message(id=item.id, to=me,
+                                            body=_body_of(item.title)))
+        for msg in messages:
             try:
                 self._tracker.update(msg.id, status="closed")
             except Exception as e:  # noqa: BLE001 -- one slow close must not abandon the batch
