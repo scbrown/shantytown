@@ -1,4 +1,4 @@
-"""st — the CLI. Seven verbs, five groups, thirty-four grouped commands: forty-one, and the count is load-bearing: each earns its slot.
+"""st — the CLI. Seven verbs, five groups, thirty-five grouped commands: forty-two, and the count is load-bearing: each earns its slot.
 
     task · go · sling · inbox [--count] · crew [--count|--governor]
     · anchor [--short|--events|--harness] · attach [-r|--no-start]
@@ -10,7 +10,7 @@
             · roles [--check|set|band|sync] · init · hold gaming [--clear|--status|--probe]
             · window {plan|drain|clear|release|abort} · dashboard [admin]
             · watch [--peer|--metrics|--dry-run]
-    repo  → worktree [--gc] · push [--branch] · context
+    repo  → worktree [--gc] · push [--branch] · context · pr [--create]
     ops   → doctor [--install] · provision [agent] · subscribe · hooks <register|list|check> · help <topic>
 
 THE SURFACE WAS REGROUPED, and the count did not move (Stiwi, 2026-09-17). Six
@@ -1191,7 +1191,7 @@ _GROUP_HELP = {
     "work": "the item and the board: repool, defer, cost, dream, triage, jobs",
     "agent": "one agent: new, stop, harness, cycle, input, ask, answer, log, history, stats",
     "fleet": "the fleet: start, tend, roles, init, hold, window, dashboard, watch",
-    "repo": "a shared project repo: worktree, push, context",
+    "repo": "a shared project repo: worktree, push, context, pr",
     "ops": "the installation: doctor, provision, subscribe, hooks, help",
 }
 #: Set to silence the one-line notice an old spelling prints. For tests and
@@ -2063,6 +2063,19 @@ def build_parser() -> argparse.ArgumentParser:
     ph.add_argument("--branch", default="main",
                     help="destination branch on each remote (default: main)")
 
+    pr = leaf("pr", help="complete overlap preflight before creating a GitHub PR")
+    pr.add_argument("repository", help="explicit GitHub owner/name")
+    pr.add_argument("--checkout", type=Path, default=Path.cwd())
+    pr.add_argument("--base", default="main")
+    pr.add_argument("--bead", required=True)
+    pr.add_argument("--bead-family", action="append", default=[])
+    pr.add_argument("--title")
+    pr.add_argument("--body-file", type=Path)
+    pr.add_argument("--dispositions-file", type=Path)
+    pr.add_argument("--create", action="store_true", help="create after fresh overlap gates pass")
+    pr.add_argument("--draft", action="store_true")
+    pr.add_argument("--dry-run", "-n", action="store_true")
+
     hi = leaf("history",
                         help="list an agent's CAPTURED transcripts — the durable "
                              "archive of sessions incl. reasoning")
@@ -2445,6 +2458,9 @@ def _run_command(a) -> int:
         return _cmd_advise(a)
     if a.cmd == "worktree":
         return _cmd_worktree(a)
+    if a.cmd == "pr":
+        from .pr_preflight import command
+        return command(a)
     if a.cmd == "push":
         return _cmd_push(a)
     if a.cmd == "history":
@@ -3495,6 +3511,13 @@ def _deliver_startup_inbox(a, card, panes, session: str) -> None:
     Best-effort by design.  Inbox trouble must not turn a healthy agent launch into
     a failed launch, because the open pointers are precisely the recovery path.
     """
+    # Codex Remote Control sessions have been observed to omit SessionStart
+    # context despite configured hooks. Use the verified initial-input rail,
+    # combining anchor and mail so we never submit two competing startup turns.
+    anchor = ""
+    if harness_mod.name_for(card, root=a.root) == "codex":
+        from . import session_anchor
+        anchor = session_anchor.render(str(a.root), card.name)
     try:
         box = _inbox(a, default="beads")
         unread = box.unread(card.name)
@@ -3502,14 +3525,20 @@ def _deliver_startup_inbox(a, card, panes, session: str) -> None:
         print(f"  ⚠ startup inbox unreadable for {card.name} "
               f"({type(e).__name__}: {str(e)[:100]}); pointers remain open.",
               file=sys.stderr)
-        return
-    if not unread:
+        if not anchor:
+            return
+        box, unread = None, []
+    if not unread and not anchor:
         return
 
-    batch, held = _startup_inbox_batch(unread)
+    batch, held = _startup_inbox_batch(
+        unread, budget=max(_STARTUP_INBOX_RESERVE, _STARTUP_INBOX_MAX_CHARS - len(anchor)))
     ids = [m.id for m in batch]
-    marker = f"ST-STARTUP-INBOX-COMPLETE:{','.join(ids)}"
-    lines = ["[startup inbox] Durable messages received while you were offline:"]
+    marker = (f"ST-STARTUP-INBOX-COMPLETE:{','.join(ids)}" if ids else
+              f"ST-STARTUP-ANCHOR-COMPLETE:{card.name}:{os.urandom(8).hex()}")
+    lines = [anchor, ""] if anchor else []
+    if unread:
+        lines.append("[startup inbox] Durable messages received while you were offline:")
     for msg in batch:
         lines.append(f"\n[{msg.id}]")
         lines.extend((msg.body or "").splitlines() or [""])
@@ -3536,7 +3565,8 @@ def _deliver_startup_inbox(a, card, panes, session: str) -> None:
               f"({type(e).__name__}: {str(e)[:100]}); {len(unread)} pointer(s) "
               f"remain open.", file=sys.stderr)
         return
-    if marker not in screen or input_stranded(screen):
+    if (marker not in screen or input_stranded(screen)
+            or (anchor and session_anchor.BANNER not in screen)):
         print(f"  ⚠ startup inbox delivery not verified for {card.name} "
               f"(complete marker absent or input stranded); {len(unread)} "
               f"pointer(s) remain open.", file=sys.stderr)
@@ -3553,6 +3583,9 @@ def _deliver_startup_inbox(a, card, panes, session: str) -> None:
                   file=sys.stderr)
         return
 
+    if not ids:
+        print(f"  startup anchor: verified context for {card.name}.")
+        return
     try:
         marked = box.mark_read(card.name, ids=ids)
     except Exception as e:  # noqa: BLE001 -- delivered, but preserve on close doubt
