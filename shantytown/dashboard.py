@@ -22,6 +22,18 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 
+def crew_role_sources(agent, trait_names):
+    """Attribute the declared stack using this host's deployment trait catalog."""
+    stack = agent.effective_roles()
+    tree = list(dict.fromkeys((agent.role, *(r for r in stack if r not in trait_names))))
+    return {"tree": tree, "traits": [r for r in stack if r in trait_names]}
+
+
+def crew_role_cell(sources):
+    return " | ".join(f"{name}={','.join(sources[name])}"
+                      for name in ("tree", "traits", "declared") if sources.get(name))
+
+
 @dataclass(frozen=True)
 class Row:
     """One agent's line in the dashboard."""

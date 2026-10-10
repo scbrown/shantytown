@@ -54,6 +54,28 @@ def test_transport_failure_is_not_zero_agents(monkeypatch, failure):
     assert fleet.read_peer(HostPeer('laptop', 'user@example.com', '/tmp/root'))['error']
 
 
+@pytest.mark.parametrize('sources', ['worker', None, {'tree': 7},
+    {'traits': 'gaming'}, {'declared': [1]}, {'tree': ['worker', None]}])
+def test_invalid_optional_role_sources_is_unreachable(monkeypatch, sources):
+    payload = dict(snapshot(), agents=[dict(row(), role_sources=sources)])
+    monkeypatch.setattr(fleet.subprocess, 'run', lambda *a, **k:
+                        SimpleNamespace(returncode=0, stdout=json.dumps(payload), stderr=''))
+    result = fleet.read_peer(HostPeer('laptop', 'user@example.com', '/tmp/root'))
+    assert result['error']
+    assert result['agents'] == []
+
+
+@pytest.mark.parametrize('sources', [{}, {'tree': ['worker'], 'traits': ['gaming']},
+                                      {'declared': ['worker', 'gaming']}])
+def test_valid_optional_role_sources_survive_peer_boundary(monkeypatch, sources):
+    payload = dict(snapshot(), agents=[dict(row(), role_sources=sources)])
+    monkeypatch.setattr(fleet.subprocess, 'run', lambda *a, **k:
+                        SimpleNamespace(returncode=0, stdout=json.dumps(payload), stderr=''))
+    result = fleet.read_peer(HostPeer('laptop', 'user@example.com', '/tmp/root'))
+    assert result['error'] is None
+    assert result['agents'][0]['role_sources'] == sources
+
+
 def setup(tmp_path, monkeypatch):
     root = _roster(tmp_path, {'local': 'local-pane'})
     (root / 'shantytown.toml').write_text(
