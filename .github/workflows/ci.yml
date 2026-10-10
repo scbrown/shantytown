@@ -15,7 +15,7 @@ on:
 # A second push while the first is still running should cancel the first: the
 # only result anyone acts on is the one for the current tip.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
