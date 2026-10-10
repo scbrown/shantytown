@@ -44,6 +44,7 @@ class AgentState(Enum):
     """What an agent is, derived from (pane, plate). NO_PANE is 'could not tell',
     never 'down' — the same three-way honesty `crew` keeps (cli.py:_cmd_crew)."""
     STOPPED = "stopped"     # has a pane, pane is down
+    PLATE_UNKNOWN = "plate-unknown"  # reader failed; never capacity
     IDLE = "idle"           # pane up, empty plate
     WORKING = "working"     # pane up, holding a plate item
     NO_PANE = "no-pane"     # no pane on the card — cannot tell
@@ -67,6 +68,7 @@ class Candidate:
     weight: float = 0.0               # structural weight (blast radius); 0 = none
     why: str = ""                     # ranker's note
     stopped_ago: float | None = None  # seconds since `st agent stop` (STOPPED_BY_OPERATOR)
+    plate_unknown: bool = False       # independent of physical pane/retirement state
 
 
 @dataclass
@@ -82,11 +84,16 @@ class PrioritizedWorkflow:
     held: list[Candidate] = field(default_factory=list)   # withheld by stand-down
     stood_down: bool = False
     deliberate: list[Candidate] = field(default_factory=list)   # `st agent stop`ped
+    unknown: list[Candidate] = field(default_factory=list)
 
     def render(self) -> str:
         """The block appended into the admin's drain prompt. '' when nothing is
         actionable — an empty workflow adds no lines rather than an empty header."""
         notes = [n for n in (self._stood_down_note(), self._deliberate_note()) if n]
+        if self.unknown:
+            notes.append("  PLATE UNKNOWN — " + ", ".join(
+                f"{c.agent} ({c.state.value})" for c in self.unknown)
+                         + "; tracker read failed, capacity unverified")
         if not self.steps:
             return "\n".join(notes)        # may be '' — then no lines at all
         lines = ["  PRIORITIZE"]
@@ -159,7 +166,11 @@ def classify(
     """
     out: list[Candidate] = []
     for a in agents:
-        item = plate(a.name) if plate else None
+        failed = False
+        try:
+            item = plate(a.name) if plate else None
+        except Exception:  # an unreadable plate must not claim spare capacity
+            item, failed = None, True
         ago = None
         if a.retired:
             state = AgentState.RETIRED
@@ -172,12 +183,14 @@ def classify(
                 state = AgentState.STOPPED_BY_OPERATOR
                 if now is not None:
                     ago = max(0.0, now - at)
+        elif failed:
+            state = AgentState.PLATE_UNKNOWN
         elif item is None:
             state = AgentState.IDLE
         else:
             state = AgentState.WORKING
         out.append(Candidate(agent=a.name, role=a.role, state=state, item=item,
-                             stopped_ago=ago))
+                             stopped_ago=ago, plate_unknown=failed))
     return out
 
 
@@ -226,6 +239,7 @@ def prioritize(candidates: list[Candidate], *,
     steps = [WorkflowStep(rank=i + 1, candidate=c, action=_action(c))
              for i, c in enumerate(actionable)]
     return PrioritizedWorkflow(steps, held=held, stood_down=stood_down,
+                               unknown=[c for c in candidates if c.plate_unknown],
                                deliberate=deliberate)
 
 
@@ -236,6 +250,8 @@ def _tier(c: Candidate) -> int:
     if c.rose:
         return 0            # a risen escalation outranks even a retirement: the
                             # agent may be gone, the decision it forced is not
+    if c.plate_unknown:
+        return _OMIT        # pane down is a fact, but redispatch needs a complete plate
     if c.state == AgentState.STOPPED:
         return 1
     if c.state == AgentState.IDLE:
