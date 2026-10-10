@@ -95,3 +95,28 @@ def test_prioritize_is_deterministic():
     once = [s.candidate.agent for s in wf.prioritize(cands).steps]
     twice = [s.candidate.agent for s in wf.prioritize(cands).steps]
     assert once == twice == ["a", "b", "c"]
+
+
+def test_failed_plate_roster_is_unknown_not_nine_empty_plates():
+    agents = [Agent(f"worker{i}", "worker", "lead", f"p{i}") for i in range(9)]
+    def failed(who):
+        raise RuntimeError("owner listing unreadable")
+    candidates = wf.classify(agents, _Panes({f"p{i}" for i in range(9)}), failed)
+    rendered = wf.prioritize(candidates).render()
+    assert "assign work" not in rendered
+    assert "empty plate" not in rendered
+    assert "PLATE UNKNOWN" in rendered
+    assert all(c.state == wf.AgentState.PLATE_UNKNOWN for c in candidates)
+    assert all(a.name in rendered for a in agents)
+
+def test_unknown_plate_does_not_hide_healthy_empty_or_held_plate():
+    agents = [Agent(name, "worker", "lead", name) for name in ("bad", "empty", "held")]
+    def reader(who):
+        if who == "bad":
+            raise RuntimeError("listing failed")
+        return WorkItem("held-id", "work", "in_progress", who) if who == "held" else None
+    rendered = wf.prioritize(wf.classify(agents, _Panes({a.name for a in agents}), reader)).render()
+    assert "assign work empty" in rendered
+    assert "assign work bad" not in rendered
+    assert "assign work held" not in rendered
+    assert "PLATE UNKNOWN" in rendered

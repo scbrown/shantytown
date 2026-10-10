@@ -715,3 +715,24 @@ def test_risen_picker_preserves_blocked_question_display(tmp_path, capsys):
     reason = json.loads(capsys.readouterr().out)['reason']
     assert 'BLOCKED ON A QUESTION' in reason and 'ROSE: lead-unreachable' in reason
     assert not _pending(tmp_path, 'maldoon')
+
+
+def test_seeds_drain_incomplete_owner_read_is_unknown(tmp_path, monkeypatch):
+    from shantytown.answer import Answer
+    from shantytown import workflow
+    from shantytown.protocols import Agent
+    root = tmp_path / '.shanty'
+    root.mkdir()
+    (root / 'shantytown.toml').write_text('[env]\nSHANTY_BACKEND="seeds"\n')
+    class FailedOwner:
+        def plate_rows(self, who):
+            return Answer.capped([], how='owner list', caveat='HTTP read failed')
+    monkeypatch.setattr('shantytown.sd.br_like_tracker', lambda *a, **kw: FailedOwner())
+    reader = stop_event._plate_reader(root, require_complete=True)
+    with pytest.raises(RuntimeError, match='HTTP read failed'):
+        reader('ellie')
+    agents = [Agent('ellie', 'worker', 'hammond', 'p-ellie')]
+    text = workflow.prioritize(workflow.classify(agents, _Panes({'p-ellie'}), reader)).render()
+    assert 'PLATE UNKNOWN' in text
+    assert 'assign work' not in text
+    assert 'empty plate' not in text

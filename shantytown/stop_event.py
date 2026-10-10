@@ -265,7 +265,7 @@ def _my_context_k(reg: FilesRegistry, panes, me: str) -> float | None:
         return None
 
 
-def _plate_reader(root: Path):
+def _plate_reader(root: Path, *, require_complete: bool = False):
     """A plate reader for the DEPLOYMENT'S declared backend (SHANTY_BACKEND in
     shantytown.toml/env), not a hardcoded one.
 
@@ -287,6 +287,9 @@ def _plate_reader(root: Path):
         from .br import plate as br_plate
         from .sd import br_like_tracker
         sd_tracker = br_like_tracker(lambda k: deployment_default(root, k), "seeds")
+        if require_complete:
+            from .br import plate_reader
+            return plate_reader(sd_tracker, require_complete=True)
         return lambda who, warn=None: br_plate(sd_tracker, who, warn=warn)
     if (deployment_default(root, "SHANTY_BACKEND") or "files") in ("beads", "br"):
         from .beads import EXTRA_REPOS_KEY, parse_extra_repos
@@ -295,6 +298,9 @@ def _plate_reader(root: Path):
                                   or deployment_default(root, "SHANTY_BEADS_REPO")),
                             extra_repos=parse_extra_repos(
                                 deployment_default(root, EXTRA_REPOS_KEY)))
+        if require_complete:
+            from .br import plate_reader
+            return plate_reader(tracker, require_complete=True)
         return lambda who, warn=None: br_plate(tracker, who, warn=warn)
     return lambda who, warn=None: files_plate(FilesTracker(root / "items"), who)
 
@@ -1116,7 +1122,7 @@ def main(argv: list[str] | None = None) -> int:
     # with a prioritized workflow (a lead's/worker's is unaffected — the gate is
     # inside _compose_workflow). Ranker is opt-in: NullRanker (no backend, the
     # default) unless SHANTY_RANKER=policy asks for Hank/Quipu weighting.
-    plate = _plate_reader(root)   # the DEPLOYMENT's backend, not files-only (aegis-tisp)
+    plate = _plate_reader(root, require_complete=True)   # the DEPLOYMENT's backend, not files-only (aegis-tisp)
     rank = PolicyRanker() if os.environ.get("SHANTY_RANKER") == "policy" else NullRanker()
     return _drain(events, me, reg, panes, runtime.shows_ready_ui,
                   runtime.awaiting_answer, plate=plate, rank=rank,

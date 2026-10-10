@@ -44,6 +44,7 @@ class AgentState(Enum):
     """What an agent is, derived from (pane, plate). NO_PANE is 'could not tell',
     never 'down' — the same three-way honesty `crew` keeps (cli.py:_cmd_crew)."""
     STOPPED = "stopped"     # has a pane, pane is down
+    PLATE_UNKNOWN = "plate-unknown"  # reader failed; never capacity
     IDLE = "idle"           # pane up, empty plate
     WORKING = "working"     # pane up, holding a plate item
     NO_PANE = "no-pane"     # no pane on the card — cannot tell
@@ -81,12 +82,16 @@ class PrioritizedWorkflow:
     steps: list[WorkflowStep]
     held: list[Candidate] = field(default_factory=list)   # withheld by stand-down
     stood_down: bool = False
+    unknown: list[Candidate] = field(default_factory=list)
     deliberate: list[Candidate] = field(default_factory=list)   # `st agent stop`ped
 
     def render(self) -> str:
         """The block appended into the admin's drain prompt. '' when nothing is
         actionable — an empty workflow adds no lines rather than an empty header."""
         notes = [n for n in (self._stood_down_note(), self._deliberate_note()) if n]
+        if self.unknown:
+            notes.append("  PLATE UNKNOWN — " + ", ".join(c.agent for c in self.unknown)
+                         + "; tracker read failed, capacity unverified")
         if not self.steps:
             return "\n".join(notes)        # may be '' — then no lines at all
         lines = ["  PRIORITIZE"]
@@ -159,7 +164,11 @@ def classify(
     """
     out: list[Candidate] = []
     for a in agents:
-        item = plate(a.name) if plate else None
+        failed = False
+        try:
+            item = plate(a.name) if plate else None
+        except Exception:  # an unreadable plate must not claim spare capacity
+            item, failed = None, True
         ago = None
         if a.retired:
             state = AgentState.RETIRED
@@ -172,6 +181,8 @@ def classify(
                 state = AgentState.STOPPED_BY_OPERATOR
                 if now is not None:
                     ago = max(0.0, now - at)
+        elif failed:
+            state = AgentState.PLATE_UNKNOWN
         elif item is None:
             state = AgentState.IDLE
         else:
@@ -226,6 +237,7 @@ def prioritize(candidates: list[Candidate], *,
     steps = [WorkflowStep(rank=i + 1, candidate=c, action=_action(c))
              for i, c in enumerate(actionable)]
     return PrioritizedWorkflow(steps, held=held, stood_down=stood_down,
+                               unknown=[c for c in candidates if c.state == AgentState.PLATE_UNKNOWN],
                                deliberate=deliberate)
 
 
