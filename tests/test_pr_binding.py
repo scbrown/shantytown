@@ -191,3 +191,15 @@ def test_registry_corruption_refuses_before_forge_write(setup):
     p.write_text(json.dumps(value))
     with pytest.raises(Refused):reconcile(r,BOARD,read,f)
     assert f.writes==[]
+
+def test_disabled_job_parses_and_never_sends_event_body_to_shell():
+    from pathlib import Path
+    from shantytown.jobs import parse
+    import tomllib
+    path=Path(__file__).parents[1]/'examples/pr-policy/bead-lifecycle.toml'
+    job=parse(path,tomllib.loads(path.read_text()))
+    assert not job.enabled and job.retry_max==0
+    assert job.trigger.kind=='on'
+    assert job.action.kind=='exec'
+    assert job.action.command[:3]==('python3','-m','shantytown.pr_binding')
+    assert all('{{' not in part for part in job.action.command)

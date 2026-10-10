@@ -1,0 +1,11 @@
+# Disabled adoption template. Replace these example identities/paths with the
+# reviewed board, neutral installed source, and private registry before review.
+name = "bead-lifecycle"
+enabled = false
+timeout = "90s"
+[retry]
+max = 0
+[trigger]
+on = "quipu.tx"
+[action]
+exec = ["python3", "-m", "shantytown.pr_binding", "--registry", "/var/lib/example/pr-bindings", "--quipu", "https://graph.example", "--graph", "https://board.example/project/reviewed", "reconcile"]

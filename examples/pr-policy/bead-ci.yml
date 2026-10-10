@@ -1,0 +1,18 @@
+# Adoption template, not an installed workflow. Pin the reviewed policy package
+# before enabling it in a repository; do not execute unreviewed PR code.
+name: Primary bead
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+permissions:
+  contents: read
+jobs:
+  primary-bead:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check reviewed installed policy
+        # The runner must already contain the reviewed shantytown package.
+        # Set CREW_REPOSITORY_OWNER as a repository variable, not PR input.
+        env:
+          CREW_REPOSITORY_OWNER: ${{ vars.CREW_REPOSITORY_OWNER }}
+        run: python -m shantytown.pr_binding_check --owner "$CREW_REPOSITORY_OWNER" --event-file "$GITHUB_EVENT_PATH"
