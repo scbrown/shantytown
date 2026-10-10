@@ -87,9 +87,9 @@ HAUL — the self-feeding queue
   close one and the next is served at your stop. Nobody dispatches per bead.
 
   RELEASING AN ITEM — a bare status change does NOT stop the re-serve
-    done            br close <id>
+    done            {close}
     gated           st work defer <id> <bead|human|access|external|parked> --reason-file <f>
-    not yours       br update <id> -a ""
+    not yours       {unassign}
 
   Why defer rather than just closing or unassigning: `defer` records the KIND of
   block and takes the bead OUT of the ready pool until you undo it. Clearing the
@@ -141,9 +141,17 @@ TOPICS = {
 }
 
 
-def render(topic: str) -> str | None:
+def render(topic: str, *, examples=None) -> str | None:
     """The page, or None if there is no such topic."""
-    return TOPICS.get((topic or "").strip().lower())
+    topic = (topic or "").strip().lower()
+    if topic == "haul":
+        from .tracker_examples import TrackerExamples
+        examples = examples or TrackerExamples()
+        if not examples.argv:
+            return "HAUL — the self-feeding queue\n\n  " + examples.diagnostic
+        return _HAUL.format(close=examples.close("<id>"),
+                            unassign=examples.unassign("<id>"))
+    return TOPICS.get(topic)
 
 
 def index() -> str:
