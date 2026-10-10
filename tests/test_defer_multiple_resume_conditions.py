@@ -53,11 +53,11 @@ def test_a_STALE_marker_in_the_notes_cannot_outrank_the_reason_being_written(wor
     """Defect 2: the specimen that actually fired on nrajcw."""
     d, tracker = world
     tracker.update("item-1", notes="an earlier deferral\nresume_when: closed:aegis-nt4rap\n")
-    with pytest.raises(DeferRefused) as e:
-        d.defer("item-1", "bead", "resume_when: closed:aegis-mzdcm0")
-    msg = str(e.value)
-    assert "closed:aegis-mzdcm0" in msg, "must name what the author wrote"
-    assert "closed:aegis-nt4rap" in msg, "must name the stale marker that would have won"
+    d.defer("item-1", "bead", "resume_when: closed:aegis-mzdcm0")
+    notes = tracker.get("item-1").notes
+    assert parse_condition(notes).render() == "closed:aegis-mzdcm0"
+    assert notes.count("resume_when:") == 1
+    assert "historical resume condition: closed:aegis-nt4rap" in notes
 
 
 def test_ONE_condition_still_defers_normally(world):

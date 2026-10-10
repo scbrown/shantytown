@@ -108,3 +108,77 @@ def test_the_marker_is_parsed_with_the_SWEEPERS_regex(world):
     d.defer("item-1", "human", "resume_when = date: 2026-12-01")
     got = tracker.get("item-1")
     assert _CONDITION.search(got.notes or ""), "sweeper must see it too"
+
+
+def test_redefer_twice_replaces_marker_and_preserves_history(world):
+    from shantytown.deferrals import parse_condition
+    d, tracker = world
+    for day in ("20", "21"):
+        stamp = f"2026-10-{day}T17:00:00Z"
+        d.defer("item-1", "external", f"resume_when: date:{stamp}\nActual event {day}", until=stamp)
+    row = tracker.get("item-1")
+    assert row.notes.count("resume_when:") == 1
+    assert parse_condition(row.notes).render() == "date:2026-10-21T17:00:00Z"
+    assert row.defer_until == "2026-10-21T17:00:00Z"
+    assert "historical resume condition: date:2026-10-20T17:00:00Z" in row.notes
+    assert "Actual event 20" in row.notes and "Actual event 21" in row.notes
+
+def test_until_only_replaces_malformed_and_multiple_old_markers(world):
+    from shantytown.deferrals import parse_condition
+    d, tracker = world
+    tracker.update("item-1", notes="Original prose\nresume_when: human:decision\nresume-when = closed:old\nresume when: malformed")
+    d.defer("item-1", "external", "Real event requires judgement", until="2026-10-21T17:00:00Z")
+    row = tracker.get("item-1")
+    assert row.notes.count("resume_when:") == 1
+    assert parse_condition(row.notes).render() == "date:2026-10-21T17:00:00Z"
+    assert "Original prose" in row.notes and "human:decision" in row.notes
+    assert "closed:old" in row.notes and "malformed" in row.notes
+
+def test_duplicate_markers_landing_is_not_confirmed(world):
+    d, tracker = world
+    real = tracker.update
+    def duplicate(item_id, **fields):
+        real(item_id, **fields)
+        if "defer_reason" in fields:
+            row = tracker.get(item_id)
+            real(item_id, notes=row.notes + "\nresume_when: date:2026-10-21T17:00:00Z")
+    tracker.update = duplicate
+    with pytest.raises(TrackerWriteLost, match="resume_when"):
+        d.defer("item-1", "external", "real event", until="2026-10-21T17:00:00Z")
+    assert tracker.get("item-1").status == "open"
+
+
+def test_prose_only_redefer_preserves_existing_bead_gate_with_date_backstop(world):
+    from shantytown.deferrals import parse_condition
+    d, tracker = world
+    tracker.update('item-1', notes='resume_when: closed:gate-1', defer_until='2026-10-21T17:00:00Z')
+    d.defer('item-1', 'bead', 'The real bead gate still applies')
+    assert parse_condition(tracker.get('item-1').notes).render() == 'closed:gate-1'
+    assert tracker.get('item-1').notes.count('resume_when:') == 1
+
+def test_prose_only_redefer_cannot_choose_between_multiple_old_markers(world):
+    d, tracker = world
+    tracker.update('item-1', notes='resume_when: closed:gate-1\nresume_when: closed:gate-2', defer_until='2026-10-21T17:00:00Z')
+    before = tracker._path('item-1').read_bytes()
+    with pytest.raises(DeferRefused, match='multiple resume markers'):
+        d.defer('item-1', 'bead', 'Still waiting')
+    assert tracker._path('item-1').read_bytes() == before
+
+
+def test_new_until_overrides_a_date_marker_copied_in_reason(world):
+    from shantytown.deferrals import parse_condition
+    d, tracker = world
+    d.defer('item-1', 'external', 'resume_when: date:2026-10-20T17:00:00Z\nOld event', until='2026-10-21T17:00:00Z')
+    row = tracker.get('item-1')
+    assert parse_condition(row.notes).render() == 'date:2026-10-21T17:00:00Z'
+    assert row.notes.count('resume_when:') == 1
+    assert 'date:2026-10-20T17:00:00Z' in row.notes
+
+def test_new_date_marker_updates_an_existing_deadline(world):
+    from shantytown.deferrals import parse_condition
+    d, tracker = world
+    tracker.update('item-1', notes='resume_when: date:2026-10-20T17:00:00Z', defer_until='2026-10-20T17:00:00Z')
+    d.defer('item-1', 'external', 'resume_when: date:2026-10-21T17:00:00Z\nNew event')
+    row = tracker.get('item-1')
+    assert row.defer_until == '2026-10-21T17:00:00Z'
+    assert parse_condition(row.notes).render() == 'date:2026-10-21T17:00:00Z'

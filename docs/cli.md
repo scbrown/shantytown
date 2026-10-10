@@ -275,7 +275,7 @@ deferral did not require the deferrer to state whether the blocker was a bead, h
 access capability, external event, or no blocker at all. `st work defer` records that kind
 and requires a testable resume condition: `--until YYYY-MM-DD` (day) or
 `--until YYYY-MM-DDTHH:MM:SSZ` (exact UTC time), an existing
-`defer_until`, or a `resume_when: closed:<id>` / `date:<ISO date>` marker. It
+`defer_until`, or a `resume_when: closed:<id>` / `date:<ISO date>` marker. Re-deferring records exactly one active marker; a new condition replaces older markers, retaining their values and prose as inert history. A new `--until` replaces a copied date marker, and a new date marker updates an existing deadline. Without a new condition, the existing gate remains; ambiguous old markers require an explicit condition. It
 writes and verifies the reason and condition before changing status, then verifies
 status, blocker kind, reason and condition together. An interrupted write returns
 non-success with read-back evidence and no automatic retry. An already-deferred
