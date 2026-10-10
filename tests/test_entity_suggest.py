@@ -274,3 +274,14 @@ def test_selected_tracker_projects_authoritative_description(camayoc, tmp_path, 
     assert captured[0]['items'][0]['description'] == row['description']
     if kind != 'files':
         assert reads == [(row['id'], ('show', row['id'], '--json'))]
+
+
+@pytest.mark.parametrize('description', [False, [], {}])
+def test_malformed_sdk_description_does_not_become_empty_text(camayoc, tmp_path, description):
+    from shantytown.br import BrTracker
+    tracker = BrTracker(repo=str(tmp_path))
+    tracker._bd_for = lambda *_: SimpleNamespace(returncode=0, stderr='', stdout=json.dumps([
+        {'id': 'aegis-x1', 'title': 'valid title', 'description': description}]))
+    result = es.suggest(tmp_path, 'aegis-x1', tracker=tracker,
+                        run=runner(raises=AssertionError('incomplete text reached linker')))
+    assert 'UNKNOWN' in result.note
