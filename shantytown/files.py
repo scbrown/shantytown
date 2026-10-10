@@ -316,6 +316,7 @@ class FilesTracker:
             id=item_id,
             title=d.get("title", ""),
             status=d.get("status", "open"),
+            description=d.get("description") or "",
             assignee=d.get("assignee"),
             priority=_priority(d),
             blocker_kind=blocker_kind(d.get("labels")),

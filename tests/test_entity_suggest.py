@@ -45,8 +45,15 @@ def answer(**kw):
                        "confidence": None, "error": None, **kw}) + "\n"
 
 
+def _suggest(root, item, **kw):
+    from shantytown.protocols import WorkItem
+    tracker = SimpleNamespace(get=lambda key: WorkItem(id=key, title="work title",
+                                                      description="work description"))
+    return es.suggest(root, item, tracker=tracker, **kw)
+
+
 def test_a_pick_becomes_a_pasteable_local_name(camayoc, tmp_path):
-    s = es.suggest(tmp_path, "aegis-x1",
+    s = _suggest(tmp_path, "aegis-x1",
                    run=runner(answer(choice="aegis:dolt-server", confidence=0.91)))
     assert s.node == "dolt-server" and s.confidence == 0.91
     assert "--quipu-node dolt-server" in s.render()
@@ -54,14 +61,14 @@ def test_a_pick_becomes_a_pasteable_local_name(camayoc, tmp_path):
 
 def test_without_a_token_it_suggests_but_does_not_write(camayoc, tmp_path):
     seen = []
-    s = es.suggest(tmp_path, "aegis-x1", run=runner(answer(choice="aegis:a"), seen=seen))
+    s = _suggest(tmp_path, "aegis-x1", run=runner(answer(choice="aegis:a"), seen=seen))
     assert "--write" not in seen[0] and not s.written
 
 
 def test_with_a_token_the_link_is_written_and_reported(camayoc, tmp_path, monkeypatch):
     monkeypatch.setenv("QUIPU_AUTH_TOKEN", "t")
     seen = []
-    s = es.suggest(tmp_path, "aegis-x1",
+    s = _suggest(tmp_path, "aegis-x1",
                    run=runner(answer(choice="aegis:a", write={"conforms": True}), seen=seen))
     assert "--write" in seen[0] and s.written
 
@@ -70,14 +77,14 @@ def test_suggest_mode_never_writes(camayoc, tmp_path, monkeypatch):
     monkeypatch.setenv("QUIPU_AUTH_TOKEN", "t")
     monkeypatch.setenv(es.MODE_ENV, es.SUGGEST)
     seen = []
-    es.suggest(tmp_path, "aegis-x1", run=runner(answer(choice="aegis:a"), seen=seen))
+    _suggest(tmp_path, "aegis-x1", run=runner(answer(choice="aegis:a"), seen=seen))
     assert "--write" not in seen[0]
 
 
 def test_off_asks_nothing(camayoc, tmp_path, monkeypatch):
     monkeypatch.setenv(es.MODE_ENV, es.OFF)
     seen = []
-    assert es.suggest(tmp_path, "aegis-x1", run=runner(seen=seen)) is None
+    assert _suggest(tmp_path, "aegis-x1", run=runner(seen=seen)) is None
     assert seen == []
 
 
@@ -90,14 +97,14 @@ def test_off_asks_nothing(camayoc, tmp_path, monkeypatch):
     (runner(raises=OSError("no python3")), "did not run"),
 ])
 def test_every_failure_is_no_suggestion_never_an_exception(camayoc, tmp_path, run, note):
-    s = es.suggest(tmp_path, "aegis-x1", run=run)
+    s = _suggest(tmp_path, "aegis-x1", run=run)
     assert not s.node and note in s.note
 
 
 def test_a_missing_camayoc_is_reported_not_raised(tmp_path, monkeypatch):
     monkeypatch.setenv(es.SOURCE_ENV, str(tmp_path / "absent"))
     monkeypatch.delenv(es.MODE_ENV, raising=False)
-    s = es.suggest(tmp_path, "aegis-x1", run=runner(raises=AssertionError("ran")))
+    s = _suggest(tmp_path, "aegis-x1", run=runner(raises=AssertionError("ran")))
     assert "not found" in s.note
 
 
@@ -169,7 +176,7 @@ def test_the_resume_brief_suggests_for_the_plate_and_logs_it(tmp_path, monkeypat
     monkeypatch.setattr(cli, "_tracker", lambda a: None)
     monkeypatch.setattr(cli, "_tracker_plate", lambda trk, who: SimpleNamespace(id="aegis-x1"))
     monkeypatch.setattr(cli.entity_suggest, "suggest",
-                        lambda root, item: es.Suggestion(node="dolt-server", confidence=0.8))
+                        lambda root, item, **kw: es.Suggestion(node="dolt-server", confidence=0.8))
     path = cli._write_resume_brief(_brief_args(tmp_path), SimpleNamespace(workspace=""),
                                    "ellie", "was mid-way")
     assert "suggested graph context: dolt-server" in open(path).read()
@@ -198,3 +205,72 @@ def test_a_crashing_suggestion_never_costs_the_brief(tmp_path, monkeypatch):
     path = cli._write_resume_brief(_brief_args(tmp_path), SimpleNamespace(workspace=""),
                                    "ellie", "x")
     assert path and "suggested graph context" not in open(path).read()
+
+
+def test_authoritative_text_is_literal_stdin_not_an_id_lookup(camayoc, tmp_path):
+    from shantytown.protocols import WorkItem
+    item = WorkItem(id='aegis-x1', title='literal $(no-command) `no-command`',
+                    description='quoted "text"\nsecond line')
+    tracker = SimpleNamespace(get=lambda key: item)
+    calls = []
+    def run(argv, **kwargs):
+        calls.append((argv, kwargs))
+        return runner(answer(choice='aegis:subject'))(argv, **kwargs)
+    result = es.suggest(tmp_path, item.id, tracker=tracker, run=run)
+    argv, kwargs = calls[0]
+    assert result.node == 'subject'
+    assert argv[-2:] == ['--work-item-json', '-']
+    assert item.id not in argv and item.title not in argv
+    assert json.loads(kwargs['input']) == {'version': 1, 'items': [
+        {'id': item.id, 'title': item.title, 'description': item.description}]}
+
+
+@pytest.mark.parametrize('bad', ['failure', 'mismatch', 'title', 'description', 'capped'])
+def test_unavailable_authoritative_text_never_invokes_linker(camayoc, tmp_path, bad):
+    from shantytown.protocols import WorkItem
+    from shantytown.answer import Answer
+    def get(key):
+        if bad == 'failure':
+            raise LookupError('unavailable')
+        if bad == 'capped':
+            return Answer.capped([], how='read', caveat='incomplete')
+        return WorkItem(id='other' if bad == 'mismatch' else key,
+                        title='' if bad == 'title' else 'known',
+                        description=None if bad == 'description' else '')
+    result = es.suggest(tmp_path, 'aegis-x1', tracker=SimpleNamespace(get=get),
+                        run=runner(raises=AssertionError('invoked linker')))
+    assert not result.node and 'UNKNOWN' in result.note
+
+
+def test_linker_cannot_substitute_a_different_receipt(camayoc, tmp_path):
+    s = _suggest(tmp_path, 'aegis-x1', run=runner(answer(item='other', choice='aegis:a')))
+    assert not s.node and 'different work item' in s.note
+
+
+@pytest.mark.parametrize('kind', ['seeds', 'br', 'files'])
+def test_selected_tracker_projects_authoritative_description(camayoc, tmp_path, kind):
+    from shantytown.sd import SdTracker
+    from shantytown.br import BrTracker
+    from shantytown.files import FilesTracker
+    row = {'id': 'aegis-x1', 'title': 'precise target', 'description': 'original body',
+           'status': 'open'}
+    reads = []
+    if kind == 'files':
+        tracker = FilesTracker(tmp_path / 'items')
+        tracker.update(row['id'], title=row['title'], description=row['description'])
+    else:
+        tracker = (SdTracker(repo=str(tmp_path), prefix='aegis', quipu='http://board.test')
+                   if kind == 'seeds' else BrTracker(repo=str(tmp_path)))
+        def read(key, *args):
+            reads.append((key, args))
+            return SimpleNamespace(returncode=0, stdout=json.dumps([row]), stderr='')
+        tracker._bd_for = read
+    captured = []
+    def run(argv, **kwargs):
+        captured.append(json.loads(kwargs['input']))
+        return runner(answer())(argv, **kwargs)
+    result = es.suggest(tmp_path, row['id'], tracker=tracker, run=run)
+    assert result and 'none of the retrieved' in result.note
+    assert captured[0]['items'][0]['description'] == row['description']
+    if kind != 'files':
+        assert reads == [(row['id'], ('show', row['id'], '--json'))]
