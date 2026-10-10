@@ -65,3 +65,27 @@ def test_invalid_cap(cap):
 @pytest.mark.parametrize('hours',[float('nan'),float('inf'),True])
 def test_nonfinite_stale_threshold_refused(hours):
     with pytest.raises(Refused):evaluate(snapshot(),now=NOW,cap=2,stale_hours=hours)
+
+def test_complete_metrics_adapter_and_head_race_control():
+    from shantytown.pr_queue import github_snapshot,metrics
+    row={'number':1,'head':{'sha':'a'*40},'base':{'sha':'b'*40},
+         'state':'open','draft':False,'created_at':'2026-10-08T06:00:00Z'}
+    count=[]
+    def api(path):
+        if '/pulls?' in path:
+            count.append(path)
+            return [deepcopy(row)]
+        return deepcopy(row)
+    s=github_snapshot('example/project',api=api)
+    r=evaluate(s,now=s['observed_at'],cap=2)
+    assert r['open_count']==1 and not r['rows'][0]['eligible']
+    assert r['unknown_author_count']==1
+    assert 'crew_pr_open{repo="example/project"} 1' in metrics(r)
+    reads=[]
+    def changed(path):
+        value=api(path)
+        if '/pulls?' in path:
+            reads.append(path)
+            if len(reads)==2:value[0]['head']['sha']='c'*40
+        return value
+    with pytest.raises(Refused):github_snapshot('example/project',api=changed)

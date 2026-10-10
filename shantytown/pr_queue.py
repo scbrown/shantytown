@@ -9,6 +9,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import hashlib
 import math
+import subprocess
 import re
 from statistics import median
 
@@ -126,3 +127,81 @@ def admission(report, author):
     if report["unknown_author_count"]:
         return False
     return report["authors"].get(author, {"admit": True})["admit"]
+
+
+def github_snapshot(repo, *, author_bindings=None, api=None):
+    """Complete bounded read inventory. Author bindings are exact-head records.
+
+    This metrics adapter provides no review/CI/hold clearance. Eligibility stays
+    false until a trusted receipt adapter supplies those independently.
+    """
+    from .pr_preflight import github, pages
+    api = api or github
+    if not isinstance(repo,str) or not re.fullmatch(r'[\w.-]+/[\w.-]+',repo):
+        raise Refused('invalid repository')
+    bindings = author_bindings or {}
+    def signature(rows):
+        result=[]
+        for row in rows:
+            try:
+                number,head=row['number'],row['head']['sha']
+                if type(number) is not int or number<1 or not isinstance(head,str) or not SHA.fullmatch(head):
+                    raise Refused('unknown PR identity')
+                result.append((number,head))
+            except (KeyError,TypeError) as error:
+                raise Refused('PR inventory unreadable') from error
+        if len({number for number,_ in result})!=len(result):
+            raise Refused('duplicate PR number')
+        return sorted(result)
+    first=pages(api,f'repos/{repo}/pulls?state=open')
+    identities=signature(first)
+    pulls=[]
+    for number,head in identities:
+        row=api(f'repos/{repo}/pulls/{number}')
+        try:
+            if row['head']['sha']!=head or row['state']!='open':
+                raise Refused('PR inventory changed')
+            binding=bindings.get(number,{})
+            author=binding.get('author') if binding.get('head')==head else None
+            pulls.append({'number':number,'head':head,'state':'open','draft':row['draft'],
+                          'base':row['base']['sha'],'created_at':row['created_at'],
+                          'author':author})
+        except (KeyError,TypeError,AttributeError) as error:
+            raise Refused('PR metadata unreadable') from error
+    if signature(pages(api,f'repos/{repo}/pulls?state=open'))!=identities:
+        raise Refused('PR inventory changed during read')
+    return {'repo':repo,'complete':True,'observed_at':datetime.now(timezone.utc).isoformat(),
+            'pulls':pulls}
+
+
+def metrics(report):
+    """Textfile content only; caller owns reviewed installation and observation."""
+    label=report['repo']
+    if not isinstance(label,str) or not re.fullmatch(r'[\w.-]+/[\w.-]+',label):
+        raise Refused('invalid metrics label')
+    eligible=sum(row['eligible'] for row in report['rows'])
+    values={'crew_pr_open':report['open_count'],
+            'crew_pr_median_age_hours':report['median_age_hours'],
+            'crew_pr_eligible_advisory':eligible,
+            'crew_pr_unknown_author':report['unknown_author_count'],
+            'crew_pr_stale':len(report['stale_events'])}
+    return ''.join(f'{name}{{repo="{label}"}} {value}\n' for name,value in values.items())
+
+
+def main(argv=None):
+    import argparse,json
+    parser=argparse.ArgumentParser(description='Read-only complete PR queue metrics')
+    parser.add_argument('--repo',required=True)
+    parser.add_argument('--cap',type=int,required=True)
+    parser.add_argument('--prometheus',action='store_true')
+    args=parser.parse_args(argv)
+    try:
+        snap=github_snapshot(args.repo)
+        report=evaluate(snap,now=datetime.now(timezone.utc).isoformat(),cap=args.cap)
+        print(metrics(report) if args.prometheus else json.dumps(report,sort_keys=True),end='\n')
+        return 0
+    except (Refused,OSError,subprocess.SubprocessError):
+        print('Queue snapshot unverified; no metrics or admission pass emitted')
+        return 2
+
+if __name__=='__main__':raise SystemExit(main())

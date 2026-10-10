@@ -64,3 +64,15 @@ None of these entries arms a job or intercepts other API clients.
 Observed private foreground control: PR189 registered to its author-owned active
 bead, followed by an empty lifecycle reconcile. No forge state or comment write
 was needed. This proves the read/registry entry, not the draft/close write path.
+
+`python -m shantytown.pr_queue --repo OWNER/REPO --cap N --prometheus` reads a
+complete bounded PR inventory twice, refuses head/number drift, and prints queue
+count, median age, stale count and unknown author count. It provides no review or
+CI clearance. Its advisory eligible count is therefore zero until a trusted
+receipt adapter exists. A supplied cap is explicit probe configuration; no fleet
+cap is selected or activated. The command writes no textfile or dashboard itself.
+
+The disabled lifecycle job template receives Quipu transaction notifications and
+calls the bound registry reconciler through a fixed argv. It does not interpolate
+incoming event bodies into a shell. Adoption must measure the real transaction
+source, batching/load behavior and scheduled action before enabling the job.
