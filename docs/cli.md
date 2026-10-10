@@ -2408,3 +2408,10 @@ Unknown backend or unproven routing produces a routing diagnostic instead of
 mutation recipes. A multi-store br deployment also omits examples because a generic
 help page cannot identify the item's store. Resolve routing before changing work.
 The renderer does not change claim, defer, close, or re-pool behavior.
+
+Graph-context suggestions use the same selected tracker as dispatch and cycle.
+The caller passes the authoritative item ID, title and description to Camayoc's
+version 1 work-item JSON interface through stdin. A failed or incomplete item
+read reports an unknown hint; it does not resolve the ID through another board.
+The suggestion remains inferred and does not replace asserted context. The
+updated linker interface must be installed before the updated caller.
