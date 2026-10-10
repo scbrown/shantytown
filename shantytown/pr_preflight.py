@@ -203,12 +203,16 @@ def run(checkout, repo, base, bead, body, title, decisions, *, bead_families=(),
         raise Refused("repository must be owner/name")
     first_candidate = candidate(checkout, repo, base, api)
     pulls = inventory(api, repo)
-    if any(p["head_repo"] == repo and p["head_ref"] == first_candidate["head_ref"] for p in pulls):
+    existing = [p for p in pulls if p["head_repo"] == repo
+                and p["head_ref"] == first_candidate["head_ref"]]
+    if existing and create:
         raise Refused("candidate branch already has an open PR; update it rather than create another")
-    review = report(first_candidate, pulls, bead, bead_families)
+    others = [p for p in pulls if p not in existing]
+    review = report(first_candidate, others, bead, bead_families)
     # Read mode surfaces all candidates even when no dispositions exist yet.
     if not create:
-        return review
+        return {**review, "open_count": len(pulls),
+                "excluded_candidate_prs": [p["number"] for p in existing]}
     if not title.strip() or not body.strip():
         raise Refused("creation needs title and body")
     chosen = dispositions(checkout, repo, first_candidate, review, decisions, api)
@@ -235,10 +239,16 @@ def run(checkout, repo, base, bead, body, title, decisions, *, bead_families=(),
                                             "base": base, "draft": draft})
     except (Refused, OSError, subprocess.SubprocessError) as error:
         raise Indeterminate("create outcome unknown; inspect remote PR before retrying") from error
-    if (not isinstance(result, dict)
-            or (result.get("head") or {}).get("sha") != first_candidate["head"]
-            or (result.get("base") or {}).get("sha") != first_candidate["base"]
-            or not result.get("html_url")):
+    # Every field is still untrusted JSON after a successful POST. A non-object
+    # head/base or missing number must not escape as AttributeError/KeyError and
+    # lose the fact that the write may have committed (Wu's post-write control).
+    valid = (isinstance(result, dict) and isinstance(result.get("head"), dict)
+             and isinstance(result.get("base"), dict)
+             and result["head"].get("sha") == first_candidate["head"]
+             and result["base"].get("sha") == first_candidate["base"]
+             and type(result.get("number")) is int and result["number"] > 0
+             and result.get("html_url") == f"https://github.com/{repo}/pull/{result['number']}")
+    if not valid:
         raise Indeterminate("create outcome/head/base unverified; inspect remote PR before retrying")
     return {**review, "created": result["html_url"], "number": result["number"]}
 

@@ -284,3 +284,44 @@ def test_malformed_metadata_never_becomes_a_disjoint_pass(candidate, mutate):
     with pytest.raises(p.Refused):
         create(forge)
     assert not forge.writes
+
+
+@pytest.mark.parametrize('response', [
+    {'head': 'malformed'},
+    {'head': ['malformed'], 'base': {'sha': BASE}},
+    {'head': {'sha': HEAD}, 'base': 'malformed'},
+    {'head': {'sha': HEAD}, 'base': 42},
+    {'head': {'sha': HEAD}, 'base': {'sha': BASE}, 'html_url': 'missing-number'},
+    {'head': {'sha': HEAD}, 'base': {'sha': BASE}, 'number': True, 'html_url': 'wrong-number'},
+    None,
+    [],
+])
+def test_cli_malformed_post_response_is_indeterminate_once(candidate, monkeypatch, tmp_path, capsys, response):
+    from shantytown.cli import main
+    forge = Forge()
+    def api(path, body=None):
+        if body is not None:
+            forge.writes.append(body)
+            return deepcopy(response)
+        return forge(path)
+    monkeypatch.setattr(p, 'github', api)
+    body = tmp_path / 'body.md'; body.write_text('Concrete change')
+    rc = main(['--root', str(tmp_path), '--backend', 'files', 'repo', 'pr',
+               REPO, '--bead', 'project-new', '--create', '--title', 'New work',
+               '--body-file', str(body)])
+    captured = capsys.readouterr()
+    import json
+    output = json.loads(captured.out)
+    assert rc == 2 and output['outcome'] == 'indeterminate' and output['created'] is None
+    assert 'Traceback' not in captured.err
+    assert len(forge.writes) == 1
+
+
+def test_read_existing_candidate_lists_other_overlaps(candidate):
+    own = pull(99); own['head']['ref'] = 'feature'; own['head']['sha'] = HEAD
+    forge = Forge([own, pull(1)])
+    result = p.run('unused', REPO, 'main', 'project-new', '', '', [], api=forge)
+    assert result['open_count'] == 2
+    assert result['excluded_candidate_prs'] == [99]
+    assert [p['number'] for p in result['overlaps']] == [1]
+    assert not forge.writes
