@@ -866,7 +866,8 @@ class Dispatcher:
         work without a way back (aegis-wuy1j7).
         """
         from .deferrals import (named_conditions, parse_condition,
-                                parse_conditions, parse_stamp)
+                                parse_conditions, parse_stamp, Condition)
+        from .deferral_notes import canonical_reason, MARKER_PREFIX
 
         label = BLOCKER_KIND_LABELS.get(kind)
         if label is None:
@@ -898,7 +899,8 @@ class Dispatcher:
                   "conjunction as dependency edges instead — `br dep add "
                   f"{item_id} <blocker>` for each — and defer with the one "
                   "condition that actually gates the restart, or with --until.")
-        marker = parse_condition((item.notes or "") + "\n\n" + reason)
+        written = parse_conditions(reason)
+        marker = written[0] if written else parse_condition(item.notes or "")
         if date:
             expected = parse_stamp(date)
             if expected is None or (until and not _valid_br_defer_until(until)):
@@ -908,28 +910,21 @@ class Dispatcher:
             condition = date
         elif marker and marker.testable() and (
                 marker.kind != "date" or parse_stamp(marker.arg) is not None):
-            # A STALE MARKER IN THE NOTES MUST NOT OUTRANK THE REASON BEING
-            # WRITTEN NOW. `marker` is parsed from notes + reason and
-            # `parse_condition` takes the FIRST match, so a bead deferred BEFORE
-            # carries its old `resume_when:` earlier in the notes and wins —
-            # measured on aegis-nrajcw, where the author's reason named
-            # `closed:aegis-mzdcm0` and st recorded the previous deferral's
-            # `closed:aegis-nt4rap`, reporting success. The author has no way to
-            # see it: the confirmation echoes the id that won, not the one they
-            # wrote. Refuse and name both, rather than silently re-deferring a
-            # bead on a condition nobody chose this time.
-            written = parse_conditions(reason)
-            if written and marker not in written:
-                raise DeferRefused(
-                    f"your reason names {written[0].render()}, but {item_id} already "
-                    f"carries an earlier `resume_when: {marker.render()}` in its notes "
-                    "and that one is what would be recorded. Clear or correct the stale "
-                    "marker in the notes first, or pass --until, so the condition that "
-                    "gates the restart is the one you just wrote.")
             condition = f"resume_when {marker.render()}"
         else:
             raise DeferRefused("a testable resume condition is required: use --until DATE "
                                "or resume_when: closed:<id> / date:<ISO date>")
+
+        # A new explicit condition replaces the old one; --until supplies a
+        # date marker when the reason names no condition. Old prose stays inert.
+        if not written and not until and len(MARKER_PREFIX.findall(item.notes or "")) > 1:
+            raise DeferRefused("existing notes have multiple resume markers; name one new condition or pass --until")
+        active = (marker if written else Condition("date", until) if until
+                  else marker if marker else Condition("date", date) if date else None)
+        if active is None or not active.testable() or (
+                active.kind == "date" and parse_stamp(active.arg) is None):
+            raise DeferRefused("resume_when must name a testable closed:<id> or date:<ISO date>")
+        reason = canonical_reason(reason, active.render())
 
         def missing(current, final=False):
             absent = {}
@@ -961,8 +956,9 @@ class Dispatcher:
                     ok = got == expected
                 if not ok:
                     absent["defer_until"] = (current.defer_until, date)
-            elif parse_condition(current.notes or "") != marker:
-                absent["resume_when"] = (current.notes, marker.render())
+            if (parse_condition(current.notes or "") != active
+                    or len(MARKER_PREFIX.findall(current.notes or "")) != 1):
+                absent["resume_when"] = (current.notes, active.render())
             if final:
                 for key, want in (("status", "deferred"), ("blocker_kind", label)):
                     if getattr(current, key) != want:

@@ -204,3 +204,30 @@ def test_an_unknown_id_fails_and_never_resolves_to_another(tmp_path):
         br_mod.show(t, real[:-1] + ("x" if real[-1] != "x" else "y"))
     with pytest.raises(Exception):
         br_mod.show(t, real.split("-")[0] + "-")
+
+
+def test_redefer_twice_keeps_one_new_marker_in_real_scratch_store(tmp_path):
+    import json
+    from shantytown.dispatch import Dispatcher
+    from shantytown.files import FilesRegistry
+    from shantytown.tmux import NullPanes
+    from shantytown.deferrals import parse_condition
+    proj, store = _project(tmp_path)
+    issue = json.loads(_sd(proj, store, 'create', 'private deferral fixture', '--json'))
+    t = _tracker(proj, store)
+    t.update(issue['id'], notes='Preserve original prose\nresume_when: date:2026-10-19T17:00:00Z')
+    d = Dispatcher(FilesRegistry(tmp_path/'crew'), t, NullPanes())
+    for day in ('20', '21'):
+        stamp = f'2026-10-{day}T17:00:00Z'
+        d.defer(issue['id'], 'external', f'resume_when: date:{stamp}\nReal event {day}', until=stamp)
+    row = t.get(issue['id'])
+    assert row.notes.count('resume_when:') == 1
+    assert parse_condition(row.notes).render() == 'date:2026-10-21T17:00:00Z'
+    assert row.defer_until == '2026-10-21T17:00:00Z'
+    assert 'Preserve original prose' in row.notes
+    assert 'historical resume condition: date:2026-10-19T17:00:00Z' in row.notes
+    assert 'historical resume condition: date:2026-10-20T17:00:00Z' in row.notes
+    assert 'Real event 20' in row.notes and 'Real event 21' in row.notes
+    before = row.notes
+    d.defer(issue['id'], 'external', 'resume_when: date:2026-10-21T17:00:00Z\nReal event 21', until='2026-10-21T17:00:00Z')
+    assert t.get(issue['id']).notes == before

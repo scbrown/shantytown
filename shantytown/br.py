@@ -12,6 +12,7 @@ from .beads import (BeadsTracker, _PLATE_RANK, _priority, plate_key,
 from .protocols import is_blocked
 from .inbox import drop_parked, is_message, is_unworkable
 from .protocols import BLOCKER_KIND_LABELS, WorkItem
+from .deferral_notes import MARKER_PREFIX, historical_notes, merge_deferral_notes
 
 
 class BrTracker(BeadsTracker):
@@ -60,7 +61,7 @@ class BrTracker(BeadsTracker):
         except Exception:
             return reason, False
         merged, force = merge_notes(existing, reason)
-        if force and existing and existing not in merged:
+        if force and existing and existing not in merged and historical_notes(existing) not in merged:
             # Belt and braces: never force a write that drops what was there.
             return reason, False
         return merged, force
@@ -131,9 +132,12 @@ def merge_notes(existing: str | None, addition: str) -> tuple[str, bool]:
     machine-readable `resume_when` gate and the only record of how to re-test.
     The br guard is right; what was wrong is replacing instead of appending.
 
-    So force is returned ONLY alongside content that provably contains the
-    original, and the caller asserts that before writing.
+    Ordinary prose retains the original verbatim. A new resume marker retains
+    the original prose with old marker prefixes made inert; the caller verifies
+    that preserved history before permitting force.
     """
+    if MARKER_PREFIX.search(addition):
+        return merge_deferral_notes(existing, addition)
     old = existing or ""
     if not old.strip():
         return addition, False

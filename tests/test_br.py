@@ -130,3 +130,11 @@ def test_an_UNREADABLE_item_never_forces(monkeypatch):
     BrTracker().update("aegis-x", defer_reason="reason")
     notes, force = _notes_and_force(calls)
     assert notes == "reason" and force is False
+
+
+def test_new_deferral_marker_retains_old_prose_as_inert_history():
+    old = 'resume_when: date:2026-10-20T17:00:00Z\nOriginal notes\n\n'
+    merged, force = merge_notes(old, 'resume_when: date:2026-10-21T17:00:00Z\nNew event')
+    assert force
+    assert merged.count('resume_when:') == 1
+    assert 'historical resume condition: date:2026-10-20T17:00:00Z\nOriginal notes\n\n' in merged
