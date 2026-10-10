@@ -370,9 +370,11 @@ def test_a_go_with_no_node_records_and_prints_a_suggestion(tmp_path, monkeypatch
     panes = NullPanes(screen="")
     monkeypatch.setattr(cli, "Tmux", lambda *a, **k: panes)
     asked = []
-    monkeypatch.setattr(cli.entity_suggest, "suggest",
-                        lambda root, item: asked.append(item) or es.Suggestion(
-                            node="dolt-server", confidence=0.9))
+    def suggest(root, item, *, tracker):
+        assert tracker.get(item).status == "in_progress"
+        asked.append(item)
+        return es.Suggestion(node="dolt-server", confidence=0.9)
+    monkeypatch.setattr(cli.entity_suggest, "suggest", suggest)
     root = _root(tmp_path)
     assert main(["--root", str(root), "go", "item-1", "ellie"]) == OK
     assert asked == ["item-1"]

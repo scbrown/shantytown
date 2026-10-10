@@ -283,6 +283,9 @@ class WorkItem:
                                   # above); it exists so the gap can be SAID.
 
 
+    description: str | None = None  # None means this reader did not supply it.
+
+
 @runtime_checkable
 class Registry(Protocol):
     """Identity: who exists, who reports to whom, what role.
