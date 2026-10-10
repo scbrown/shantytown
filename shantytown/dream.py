@@ -1,4 +1,4 @@
-"""Bounded spare-capacity reflection for ``st fleet tend`` (aegis-2o5n2).
+"""Bounded spare-capacity reflection for explicitly admitted work (aegis-2o5n2).
 
 Dreaming creates reviewed work artifacts; it never edits the systems it studies.
 The planner is pure.  Its state advances only after the caller observes a tracker
@@ -133,7 +133,7 @@ def plan(policy: Policy, state: dict, ready: list[dict], candidates: list[dict],
                          and float(c["headroom"]) >= policy.min_headroom_pct]
     if not capacity_eligible:
         return None, "no idle subscription has measured spare capacity"
-    # DREAM is a periodic quota, not an idle-board detector.  Queue one bounded
+    # This pure planner does not admit a wake. Explicit callers queue one bounded
     # P4 artifact behind a provider's foreground haul; assignment does not
     # interrupt active work, and the existing-DREAM gate above bounds the queue
     # globally.  Capacity and delegation reserve remain hard gates.
@@ -163,7 +163,7 @@ def plan(policy: Policy, state: dict, ready: list[dict], candidates: list[dict],
                    "functional and/or non-functional improvements. Do not implement "
                    "or auto-apply any proposal in this cycle.")
     description = (
-        f"Scheduled bounded {mode} cycle for domain {domain}. Quipu is the source "
+        f"Admitted bounded {mode} cycle for domain {domain}. Quipu is the source "
         f"of truth. {outcome} Query Quipu before analysis; carry commands and "
         f"observations as evidence; stop after this one bounded domain pass. "
         f"Provenance: st work dream selected {chosen['harness']} with "

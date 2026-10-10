@@ -266,9 +266,9 @@ said "eight" while the code had twelve, and a count nobody enforces is a comment
 whose whole pitch is the exact count, that was the bug.
 
 The twenty-sixth is **dream**: the inspect/preview/manual-run surface for bounded
-background reflection. It is not hidden behind `tend` because scheduling is a
-write while status is a read, and an operator must be able to see the due time,
-rotation, and capacity refusal without running supervision.
+background reflection. Cycles require explicit admission; `tend` never creates
+them because an interval elapsed. Status shows the last cycle, rotation and
+capacity policy without running supervision.
 
 The twenty-seventh is **defer**: the tracker already knew how to hide work, but bare
 deferral did not require the deferrer to state whether the blocker was a bead, human,
@@ -2402,6 +2402,12 @@ again on every heartbeat. No account creation or interactive login is performed.
 Writable file cards are the selection authority. Graph identity may be projected
 into them without clearing an existing account or explicit failover setting;
 a read-only TOML registry or identity-only graph registry refuses selection writes.
+
+Deferral summaries are serialized per deployment root and compared with the
+last successfully delivered summary. Overlapping passes and identical rendered
+summaries do not cause additional coordinator wakes. Failed delivery consumes
+neither the finding state nor the summary, so a reachable recipient can receive
+it later. A positively observed resolution re-arms a genuine later recurrence.
 
 ## Tracker commands in haul instructions
 
