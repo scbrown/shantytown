@@ -2451,7 +2451,8 @@ stale, missing or short-reason dispositions refuse before creation.
 Creation checks the inventory and local/remote candidate again immediately before
 posting. It appends the primary `Bead:` and exact-head dispositions to the body.
 `--dry-run` exercises all gates and previews the body without posting. An existing
-PR for the candidate branch refuses duplicate creation. A lost create response or
+PR for the candidate branch is identified and excluded from its own overlap report
+in read mode; creation still refuses a duplicate. A lost create response or
 mismatched resulting head/base is reported **indeterminate**: inspect the remote
 PR before retrying. GitHub has no atomic expected-head create endpoint, so a branch
 race after the last read is detected on the result, not prevented. This command
