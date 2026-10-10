@@ -127,6 +127,8 @@ def suggest(root, item: str, *, tracker=None, run=subprocess.run) -> Suggestion 
         res = json.loads((out.stdout or "").strip().splitlines()[-1])
     except (ValueError, IndexError):
         return Suggestion(note="entity_link printed no result")
+    if not isinstance(res, dict):
+        return Suggestion(note="UNKNOWN: entity_link returned an invalid result")
     if res.get("error"):
         return Suggestion(note=f"entity_link error: {str(res['error'])[:160]}")
     if res.get("item") != item:

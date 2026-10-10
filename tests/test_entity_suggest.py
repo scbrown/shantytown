@@ -285,3 +285,9 @@ def test_malformed_sdk_description_does_not_become_empty_text(camayoc, tmp_path,
     result = es.suggest(tmp_path, 'aegis-x1', tracker=tracker,
                         run=runner(raises=AssertionError('incomplete text reached linker')))
     assert 'UNKNOWN' in result.note
+
+
+@pytest.mark.parametrize('payload', [[], 1, None])
+def test_non_object_linker_response_never_breaks_dispatch(camayoc, tmp_path, payload):
+    result = _suggest(tmp_path, 'aegis-x1', run=runner(json.dumps(payload)))
+    assert not result.node and 'invalid result' in result.note
