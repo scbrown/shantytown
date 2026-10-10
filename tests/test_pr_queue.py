@@ -61,3 +61,7 @@ def test_duplicate_number_and_empty_control():
 @pytest.mark.parametrize('cap',[True,0,-1,None])
 def test_invalid_cap(cap):
     with pytest.raises(Refused): evaluate(snapshot(),now=NOW,cap=cap)
+
+@pytest.mark.parametrize('hours',[float('nan'),float('inf'),True])
+def test_nonfinite_stale_threshold_refused(hours):
+    with pytest.raises(Refused):evaluate(snapshot(),now=NOW,cap=2,stale_hours=hours)

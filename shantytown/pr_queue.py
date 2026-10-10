@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import hashlib
+import math
 import re
 from statistics import median
 
@@ -37,7 +38,7 @@ def evaluate(snapshot, *, now, cap, stale_hours=48, max_age_seconds=300):
     """
     if type(cap) is not int or cap < 1:
         raise Refused("WIP cap must be a positive integer")
-    if (type(stale_hours) not in (int, float) or stale_hours <= 0
+    if (type(stale_hours) not in (int, float) or not math.isfinite(stale_hours) or stale_hours <= 0
             or type(max_age_seconds) is not int or max_age_seconds < 1):
         raise Refused("invalid queue age policy")
     current = timestamp(now)

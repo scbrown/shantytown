@@ -92,3 +92,102 @@ def test_changed_pending_reason_held(setup):
     item['close_reason']='two';f.lose=None
     with pytest.raises(Refused):reconcile(r,BOARD,read,f)
     assert f.writes==['comment']
+
+def test_github_draft_uses_graphql_and_never_merge(monkeypatch):
+    from shantytown.pr_binding import GitHubAdapter
+    f=GitHubAdapter();calls=[]
+    def api(path,body=None,method=None):
+        calls.append((path,body,method))
+        if body is None:
+            return {'head':{'sha':'a'*40},'body':'Bead: project-abc',
+                    'state':'open','draft':False,'node_id':'PR_node'}
+        return {'data':{}}
+    monkeypatch.setattr(f,'api',api)
+    f.draft('example/project',1)
+    assert calls[1][0]=='graphql'
+    assert 'convertPullRequestToDraft' in calls[1][1]['query']
+    assert calls[1][1]['variables']=={'id':'PR_node'}
+    assert not hasattr(f,'merge')
+
+def test_seeds_reader_refuses_route_drift_and_reads_known_id(monkeypatch):
+    from shantytown.pr_binding import SeedsReader
+    calls=[]
+    def command(self,*args):
+        calls.append(args)
+        if args[0]=='where':return {'mode':'remote','graph':BOARD,'quipu_url':'https://graph.example'}
+        return [{'id':'project-abc','assignee':'alice','status':'open'}]
+    monkeypatch.setattr(SeedsReader,'command',command)
+    read=SeedsReader('https://graph.example',BOARD)
+    assert read('project-abc')['id']=='project-abc'
+    assert calls==[('where','--json'),('show','project-abc','--json')]
+    with pytest.raises(Refused):SeedsReader('https://different.example',BOARD)
+
+
+def test_bad_post_response_cli_stays_indeterminate(setup,monkeypatch,capsys):
+    from shantytown import pr_binding as p
+    r,f,item,read=setup;item['status']='closed';item['close_reason']='private';f.lose='close'
+    monkeypatch.setattr(p,'SeedsReader',lambda *args:read)
+    monkeypatch.setattr(p,'GitHubAdapter',lambda:f)
+    assert p.main(['--registry',str(r.root),'--quipu','https://graph.example',
+                   '--graph',BOARD,'reconcile'])==2
+    assert 'indeterminate' in capsys.readouterr().out
+    assert f.writes==['comment','close']
+
+@pytest.mark.parametrize('status,owner,draft',[('closed','alice',False),
+ ('open','bob',False),('deferred','alice',False)])
+def test_bound_creator_owner_gate_before_forge_call(tmp_path,status,owner,draft):
+    from shantytown.pr_binding import create_bound
+    r=Registry(tmp_path/'registry',BOARD);f=Forge()
+    item={'id':'project-abc','assignee':owner,'status':status}
+    with pytest.raises(Refused):
+        create_bound(r,'example/project','unused','project-abc','alice',BOARD,
+                     lambda _:item,f,'title','body',[],draft=draft)
+    assert f.writes==[]
+
+def test_bound_creator_lost_response_never_replays(tmp_path,monkeypatch):
+    from shantytown.pr_binding import create_bound
+    from shantytown import pr_preflight as pre
+    r=Registry(tmp_path/'registry',BOARD);f=Forge();f.api=lambda *args:None
+    item={'id':'project-abc','assignee':'alice','status':'open'}
+    monkeypatch.setattr(pre,'candidate',lambda *args:{'head':'a'*40,'head_ref':'branch'})
+    writes=[]
+    def lost(*args,**kw):writes.append('post');raise Indeterminate('lost')
+    monkeypatch.setattr(pre,'run',lost)
+    for _ in range(2):
+        with pytest.raises(Indeterminate):
+            create_bound(r,'example/project','unused','project-abc','alice',BOARD,
+                         lambda _:item,f,'title','body',[])
+    assert writes==['post']
+
+def test_bound_creator_post_commit_binding_failure_indeterminate(tmp_path,monkeypatch):
+    from shantytown import pr_binding as binding
+    from shantytown import pr_preflight as pre
+    r=Registry(tmp_path/'registry',BOARD);f=Forge();f.api=lambda *args:None
+    item={'id':'project-abc','assignee':'alice','status':'open'}
+    monkeypatch.setattr(pre,'candidate',lambda *args:{'head':'a'*40,'head_ref':'branch'})
+    monkeypatch.setattr(pre,'run',lambda *args,**kw:{'number':1,'created':'https://github.com/example/project/pull/1'})
+    def fail(*args):raise Refused('bead changed after create')
+    monkeypatch.setattr(binding,'register',fail)
+    with pytest.raises(Indeterminate):
+        binding.create_bound(r,'example/project','unused','project-abc','alice',BOARD,
+                             lambda _:item,f,'title','body',[])
+    with r.locked() as data:assert len(data['creates'])==1
+
+def test_manual_register_reconciles_matching_pending_create(setup):
+    r,f,item,read=setup
+    with r.locked() as data:
+        data['creates']={'key':{'repo':'example/project','bead':'project-abc',
+                               'author':'alice','head':'a'*40,'branch':'branch'}}
+        r.save(data)
+    register(r,'example/project',1,'alice',BOARD,read,f)
+    with r.locked() as data:assert data['creates']=={}
+    assert f.writes==[]
+
+def test_registry_corruption_refuses_before_forge_write(setup):
+    import json
+    r,f,item,read=setup;item['status']='deferred'
+    p=r.root/'registry.json';value=json.loads(p.read_text())
+    value['bindings']['example/project#1']['head']={}
+    p.write_text(json.dumps(value))
+    with pytest.raises(Refused):reconcile(r,BOARD,read,f)
+    assert f.writes==[]

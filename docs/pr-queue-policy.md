@@ -51,3 +51,16 @@ Integration still required: CLI binding, known-ID selected Seeds reader, actual
 GitHub adapter, primary-marker CI admission, producer migration, disabled job
 entry and reviewed observed activation. The library tests are private harness
 controls, not real forge state mutation or scheduled-path acceptance.
+
+A foreground adapter is available with `python -m shantytown.pr_binding`.
+Supply the reviewed server/graph and a private registry path explicitly. Its
+`register` operation proves the known bead and exact existing PR, while
+`reconcile` applies only registered lifecycle actions. `create` composes the
+complete overlap preflight with author ownership and durable creation intent;
+ambiguous creation requires explicit verified registration before another create.
+Registration of a matching PR reconciles that intent without replaying the POST.
+None of these entries arms a job or intercepts other API clients.
+
+Observed private foreground control: PR189 registered to its author-owned active
+bead, followed by an empty lifecycle reconcile. No forge state or comment write
+was needed. This proves the read/registry entry, not the draft/close write path.

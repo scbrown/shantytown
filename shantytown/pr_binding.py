@@ -15,6 +15,7 @@ import os
 from pathlib import Path
 import re
 import tempfile
+import subprocess
 
 from .pr_preflight import BEAD, Refused, Indeterminate
 
@@ -50,12 +51,38 @@ class Registry:
             path = self.root / 'registry.json'
             if path.is_symlink():
                 raise Refused('registry symlink refused')
+            if path.exists() and (path.stat().st_mode & 0o077 or path.stat().st_size > 8_000_000):
+                raise Refused('registry must be private and bounded')
             data = json.loads(path.read_text()) if path.exists() else {
                 'version': 1, 'board': self.board, 'bindings': {}}
             if (not isinstance(data, dict) or data.get('version') != 1
                     or data.get('board') != self.board
                     or not isinstance(data.get('bindings'), dict)):
                 raise Refused('registry identity or schema mismatch')
+            if len(data['bindings']) > 10000:
+                raise Refused('registry binding bound reached')
+            for key, record in data['bindings'].items():
+                if (not isinstance(record, dict) or not isinstance(record.get('repo'), str)
+                        or not re.fullmatch(r'[\w.-]+/[\w.-]+', record['repo'])
+                        or type(record.get('number')) is not int or record['number'] < 1
+                        or key != f"{record['repo']}#{record['number']}"
+                        or not isinstance(record.get('bead'), str) or not BEAD.fullmatch(record['bead'])
+                        or not isinstance(record.get('author'), str) or not record['author']
+                        or not isinstance(record.get('head'), str) or not SHA.fullmatch(record['head'])
+                        or not isinstance(record.get('done'), list)
+                        or any(not isinstance(d, str) or not re.fullmatch(r'[0-9a-f]{64}', d)
+                               for d in record['done'])):
+                    raise Refused('registry binding schema unreadable')
+                pending = record.get('pending')
+                if pending is not None and (not isinstance(pending, dict)
+                        or not isinstance(pending.get('digest'), str)
+                        or not re.fullmatch(r'[0-9a-f]{64}', pending['digest'])
+                        or pending.get('state') not in ('closed', 'deferred')
+                        or not isinstance(pending.get('reason'), str)):
+                    raise Refused('registry pending intent unreadable')
+            creates = data.get('creates', {})
+            if not isinstance(creates, dict):
+                raise Refused('registry creation journal unreadable')
             yield data
 
     def save(self, data):
@@ -111,8 +138,15 @@ def register(registry, repo, number, actor, board, read_bead, forge):
         if old:
             if any(old.get(k) != record[k] for k in ('repo','number','bead','author','head')):
                 raise Refused('existing binding cannot be reassigned implicitly')
-            return old
+            record = old
         data['bindings'][key] = record
+        # Explicit verified registration also reconciles a lost create response.
+        creates = data.get('creates', {})
+        for intent_key, intent in list(creates.items()):
+            if not isinstance(intent, dict):
+                raise Refused('creation intent unreadable')
+            if all(intent.get(k) == record[k] for k in ('repo','bead','author','head')):
+                del creates[intent_key]
         registry.save(data)
         return record
 
@@ -187,3 +221,167 @@ def reconcile(registry, board, read_bead, forge):
             registry.save(data)
             result.append({'bead':record['bead'],'state':state,'digest':digest})
     return result
+
+class GitHubAdapter:
+    """CLI adapter; complete bounded comment reads, no merge operation."""
+    def __init__(self):
+        import subprocess
+        self.subprocess = subprocess
+
+    def api(self,path,body=None,method=None):
+        argv=['gh','api','--method',method or ('GET' if body is None else 'POST'),path]
+        if body is not None: argv += ['--input','-']
+        result=self.subprocess.run(argv,input=json.dumps(body) if body is not None else None,
+                                   capture_output=True,text=True,timeout=45)
+        if result.returncode: raise Refused('forge response unavailable')
+        try:return json.loads(result.stdout)
+        except ValueError as error:raise Refused('forge returned invalid JSON') from error
+
+    def read(self,repo,number):
+        value=self.api(f'repos/{repo}/pulls/{number}')
+        try:
+            return {'head':value['head']['sha'],'body':value['body'],
+                    'state':value['state'],'draft':value['draft'],'node_id':value['node_id']}
+        except (KeyError,TypeError) as error:raise Refused('unknown PR response shape') from error
+
+    def comments(self,repo,number):
+        from .pr_preflight import pages
+        # All comments are read; lifecycle markers are dedupe keys, not signatures.
+        rows=pages(self.api,f'repos/{repo}/issues/{number}/comments')
+        if any(not isinstance(row,dict) or not isinstance(row.get('body'),str) for row in rows):
+            raise Refused('comment inventory unreadable')
+        return [row['body'] for row in rows]
+
+    def comment(self,repo,number,text):
+        self.api(f'repos/{repo}/issues/{number}/comments',{'body':text})
+
+    def close(self,repo,number):
+        self.api(f'repos/{repo}/pulls/{number}',{'state':'closed'},'PATCH')
+
+    def draft(self,repo,number):
+        value=self.read(repo,number)
+        node=value.get('node_id')
+        if not isinstance(node,str) or not node:raise Refused('PR node identity missing')
+        self.api('graphql',{'query':'mutation($id:ID!){convertPullRequestToDraft(input:{pullRequestId:$id}){pullRequest{id isDraft}}}',
+                            'variables':{'id':node}})
+
+
+class SeedsReader:
+    """Read only known IDs through the explicit reviewed remote board."""
+    def __init__(self,server,graph):
+        import subprocess
+        self.subprocess=subprocess
+        self.argv=['sd','--quipu',server,'--graph',graph]
+        where=self.command('where','--json')
+        if (not isinstance(where,dict) or where.get('mode')!='remote'
+                or where.get('graph')!=graph or where.get('quipu_url')!=server):
+            raise Refused('selected Seeds route is unproven')
+
+    def command(self,*args):
+        value=self.subprocess.run([*self.argv,*args],capture_output=True,text=True,timeout=45)
+        if value.returncode:raise Refused('selected Seeds read unavailable')
+        try:return json.loads(value.stdout)
+        except ValueError as error:raise Refused('selected Seeds response unreadable') from error
+
+    def __call__(self,bead):
+        if not BEAD.fullmatch(bead):raise Refused('invalid known bead ID')
+        item=self.command('show',bead,'--json')
+        if isinstance(item,list):
+            if len(item)!=1:raise Refused('known bead response ambiguous')
+            item=item[0]
+        return item
+
+
+def create_bound(registry, repo, checkout, bead, author, board, read_bead, forge,
+                 title, body, decisions, *, base="main", draft=False, dry_run=False):
+    """Prove ownership before creation; never replay a pending create intent."""
+    from . import pr_preflight
+    if board != registry.board or not BEAD.fullmatch(bead):
+        raise Refused("board or primary bead mismatch")
+    item = read_bead(bead)
+    if (not isinstance(item, dict) or item.get("id") != bead
+            or item.get("assignee") != author
+            or item.get("status") not in ("open", "in_progress", "deferred")):
+        raise Refused("creation requires an owned open bead")
+    if item["status"] == "deferred" and not draft:
+        raise Refused("deferred bead requires a draft PR")
+    candidate = pr_preflight.candidate(checkout, repo, base, forge.api)
+    intent_key = hashlib.sha256(f"{repo}:{candidate['head_ref']}".encode()).hexdigest()
+    with registry.locked() as data:
+        intents = data.setdefault("creates", {})
+        if intent_key in intents:
+            raise Indeterminate("pending create must be reconciled by explicit registration")
+        if not dry_run:
+            intents[intent_key] = {"repo": repo, "bead": bead, "author": author,
+                                   "head": candidate["head"], "branch": candidate["head_ref"]}
+            registry.save(data)
+        try:
+            result = pr_preflight.run(checkout, repo, base, bead, body, title, decisions,
+                                      create=True, draft=draft, dry_run=dry_run, api=forge.api)
+        except Indeterminate:
+            raise
+        except Refused:
+            if not dry_run:
+                del intents[intent_key]; registry.save(data)
+            raise
+    if dry_run:
+        # The overlap gate previews the body; do not leak private body to logs.
+        return {"outcome": "would_create", "bead": bead, "head": candidate["head"]}
+    try:
+        register(registry, repo, result["number"], author, board, read_bead, forge)
+        with registry.locked() as data:
+            data["creates"].pop(intent_key, None)
+            registry.save(data)
+    except Exception as error:
+        raise Indeterminate("PR created; binding outcome pending, inspect before retry") from error
+    return {"created": result["created"], "number": result["number"], "bead": bead}
+
+
+def main(argv=None):
+    import argparse
+    parser=argparse.ArgumentParser(description='Explicit PR/bead binding; no merge authority')
+    parser.add_argument('--registry',required=True)
+    parser.add_argument('--quipu',required=True)
+    parser.add_argument('--graph',required=True)
+    modes=parser.add_subparsers(dest='mode',required=True)
+    register_parser=modes.add_parser('register')
+    register_parser.add_argument('--repo',required=True)
+    register_parser.add_argument('--pr',required=True,type=int)
+    register_parser.add_argument('--author',required=True)
+    create_parser=modes.add_parser('create')
+    create_parser.add_argument('--repo',required=True)
+    create_parser.add_argument('--checkout',required=True,type=Path)
+    create_parser.add_argument('--bead',required=True)
+    create_parser.add_argument('--author',required=True)
+    create_parser.add_argument('--title',required=True)
+    create_parser.add_argument('--body-file',required=True,type=Path)
+    create_parser.add_argument('--dispositions-file',required=True,type=Path)
+    create_parser.add_argument('--base',default='main')
+    create_parser.add_argument('--draft',action='store_true')
+    create_parser.add_argument('--dry-run',action='store_true')
+    modes.add_parser('reconcile')
+    args=parser.parse_args(argv)
+    try:
+        reader=SeedsReader(args.quipu,args.graph)
+        registry=Registry(args.registry,args.graph)
+        forge=GitHubAdapter()
+        if args.mode=='register':
+            record=register(registry,args.repo,args.pr,args.author,args.graph,reader,forge)
+            result={key:record[key] for key in ('repo','number','bead','author','head')}
+        elif args.mode=='create':
+            result=create_bound(registry,args.repo,args.checkout,args.bead,args.author,
+                                args.graph,reader,forge,args.title,args.body_file.read_text(),
+                                json.loads(args.dispositions_file.read_text()),
+                                base=args.base,draft=args.draft,dry_run=args.dry_run)
+        else:result=reconcile(registry,args.graph,reader,forge)
+        print(json.dumps({'outcome':'verified','result':result},sort_keys=True))
+        return 0
+    except (Refused,OSError,ValueError,TimeoutError,subprocess.SubprocessError) as error:
+        # Private reason remains in journal, not command output or public comments.
+        print(json.dumps({'outcome':'indeterminate' if isinstance(error,Indeterminate) else 'refused',
+                          'message':'binding or lifecycle outcome unverified; inspect private journal'}))
+        return 2
+
+
+if __name__=='__main__':
+    raise SystemExit(main())
