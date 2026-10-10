@@ -271,3 +271,16 @@ def test_candidate_race_during_recheck_refuses(candidate, monkeypatch):
     with pytest.raises(p.Refused, match='changed'):
         create(forge)
     assert not forge.writes
+
+
+@pytest.mark.parametrize('mutate', [
+    lambda row: row['file_rows'][0].update(filename=''),
+    lambda row: row['head'].update(sha=''),
+    lambda row: row.update(changed_files=True),
+    lambda row: row.update(file_rows=[{'filename': 'src/shared.py'}] * 2, changed_files=2),
+])
+def test_malformed_metadata_never_becomes_a_disjoint_pass(candidate, mutate):
+    row = pull(); mutate(row); forge = Forge([row])
+    with pytest.raises(p.Refused):
+        create(forge)
+    assert not forge.writes
