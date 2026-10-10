@@ -163,3 +163,22 @@ def test_prose_only_redefer_cannot_choose_between_multiple_old_markers(world):
     with pytest.raises(DeferRefused, match='multiple resume markers'):
         d.defer('item-1', 'bead', 'Still waiting')
     assert tracker._path('item-1').read_bytes() == before
+
+
+def test_new_until_overrides_a_date_marker_copied_in_reason(world):
+    from shantytown.deferrals import parse_condition
+    d, tracker = world
+    d.defer('item-1', 'external', 'resume_when: date:2026-10-20T17:00:00Z\nOld event', until='2026-10-21T17:00:00Z')
+    row = tracker.get('item-1')
+    assert parse_condition(row.notes).render() == 'date:2026-10-21T17:00:00Z'
+    assert row.notes.count('resume_when:') == 1
+    assert 'date:2026-10-20T17:00:00Z' in row.notes
+
+def test_new_date_marker_updates_an_existing_deadline(world):
+    from shantytown.deferrals import parse_condition
+    d, tracker = world
+    tracker.update('item-1', notes='resume_when: date:2026-10-20T17:00:00Z', defer_until='2026-10-20T17:00:00Z')
+    d.defer('item-1', 'external', 'resume_when: date:2026-10-21T17:00:00Z\nNew event')
+    row = tracker.get('item-1')
+    assert row.defer_until == '2026-10-21T17:00:00Z'
+    assert parse_condition(row.notes).render() == 'date:2026-10-21T17:00:00Z'

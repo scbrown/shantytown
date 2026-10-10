@@ -901,6 +901,12 @@ class Dispatcher:
                   "condition that actually gates the restart, or with --until.")
         written = parse_conditions(reason)
         marker = written[0] if written else parse_condition(item.notes or "")
+        write_until = until
+        if not until and written and marker.kind == "date" and item.defer_until:
+            stamp = parse_stamp(marker.arg)
+            if stamp is not None:
+                date = marker.arg if _is_bare_date(marker.arg) else stamp.isoformat().replace("+00:00", "Z")
+                write_until = date
         if date:
             expected = parse_stamp(date)
             if expected is None or (until and not _valid_br_defer_until(until)):
@@ -919,7 +925,7 @@ class Dispatcher:
         # date marker when the reason names no condition. Old prose stays inert.
         if not written and not until and len(MARKER_PREFIX.findall(item.notes or "")) > 1:
             raise DeferRefused("existing notes have multiple resume markers; name one new condition or pass --until")
-        active = (marker if written else Condition("date", until) if until
+        active = (Condition("date", until) if until and (not written or marker.kind == "date")
                   else marker if marker else Condition("date", date) if date else None)
         if active is None or not active.testable() or (
                 active.kind == "date" and parse_stamp(active.arg) is None):
@@ -994,8 +1000,8 @@ class Dispatcher:
                 raise TrackerWriteLost(item_id, absent, 1)
 
         fields = {"defer_reason": reason}
-        if until:
-            fields["defer_until"] = until
+        if write_until:
+            fields["defer_until"] = write_until
         write_verified(fields)
         # Never send condition/reason again with the status write: a backend
         # interrupted after status is safe because those fields already exist.
