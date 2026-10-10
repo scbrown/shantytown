@@ -191,6 +191,28 @@ session opens small and knows where to look rather than opening large. It is
 delivered exactly once: a brief that survived its own delivery would be re-read
 at every later session start, telling an agent to resume work it finished two
 sessions ago.
+
+Before accepting a self-cycle, optional Jev advice checks the checkpoint's exact
+next step, landed versus local work, and decisions made. Configure
+`SHANTY_CHECKPOINT_JEV_COMMAND` as the installed Jev MCP server command in `[env]`;
+it falls back to `SHANTY_CREATE_JEV_COMMAND`. The judge sees only checkpoint text,
+at most 8192 characters, with a five-second total transport deadline. Its yes
+probability must reach 0.75; a lower result triggers bounded missing-piece checks.
+These are inferred judgments, not proof that a handoff is correct.
+
+A thin handoff gets one rewrite opportunity per launch when the pane reports
+context below the cycle line. Re-running the cycle then proceeds even if the
+handoff is still thin. At or past the cycle line, with unknown depth or launch
+identity, or when Jev or its telemetry is unavailable, advice never refuses the
+cycle. `--allow-loss` also skips the rewrite delay. Existing durable-checkpoint
+and work-preservation gates still apply. Automatic servicing does not rejudge
+an accepted request; dry runs make no judge calls or quality-ledger writes.
+
+Verdicts are recorded privately in `<root>/checkpoint-quality.jsonl`, including
+question/input provenance, probabilities, model, usage, latency, and whether a
+rewrite was offered. This ledger is available to decision evaluation tooling;
+it does not promote inferred judgments into the knowledge graph.
+
 `st anchor` shows context measurement at startup, and `st crew` shows occupancy
 from that session's most recent hook transcript plus a named summary of live
 agents with unmeasured context. An agent without a current Stop observation is
