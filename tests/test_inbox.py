@@ -366,3 +366,49 @@ def test_one_slow_close_does_not_abandon_the_batch_ack(tmp_path: Path):
     trk.update = real_update
     assert [m.id for m in box.unread("dearing")] == [slow]
     assert [m.id for m in box.mark_read("dearing")] == [slow]
+
+
+def test_known_receipt_ack_survives_incomplete_listing_without_resending(tmp_path):
+    from shantytown.answer import Answer
+    trk = FilesTracker(tmp_path / 'items')
+    box = TrackerInbox(trk, lambda: [],
+                       items_for=lambda *_: Answer.capped([], how='recipient listing',
+                                                          caveat='timeout'))
+    first = box.deliver('sattler', 'one durable delivery')
+    with pytest.raises(Exception, match='incomplete'):
+        box.unread('sattler')
+    assert [m.id for m in box.mark_read('sattler', ids=[first.id, first.id])] == [first.id]
+    assert box.mark_read('sattler', ids=[first.id]) == []
+    assert len(files_items(trk)) == 1
+    assert trk.get(first.id).status == 'closed'
+
+
+@pytest.mark.parametrize('invalid', ['foreign', 'work', 'mismatch', 'unavailable'])
+def test_known_receipt_ack_validates_entire_selection_before_closing(tmp_path, invalid):
+    trk = FilesTracker(tmp_path / 'items')
+    box = TrackerInbox(trk, lambda: [])
+    first = box.deliver('sattler', 'valid')
+    other = (trk.create('ordinary work', assignee='sattler') if invalid == 'work'
+             else box.deliver('wu' if invalid == 'foreign' else 'sattler', 'other'))
+    real_get = trk.get
+    def get(item_id):
+        if item_id == other.id and invalid == 'unavailable':
+            raise LookupError('exact read unavailable')
+        row = real_get(item_id)
+        if item_id == other.id and invalid == 'mismatch':
+            from dataclasses import replace
+            return replace(row, id='different-id')
+        return row
+    trk.get = get
+    with pytest.raises((RuntimeError, LookupError)):
+        box.mark_read('sattler', ids=[first.id, other.id])
+    assert real_get(first.id).status == 'open'
+    assert real_get(other.id).status == 'open'
+
+
+def test_empty_known_receipt_selection_never_lists_or_closes(tmp_path):
+    trk = FilesTracker(tmp_path / 'items')
+    def forbidden():
+        raise AssertionError('must not enumerate')
+    box = TrackerInbox(trk, forbidden)
+    assert box.mark_read('sattler', ids=[]) == []

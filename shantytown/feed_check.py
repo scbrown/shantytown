@@ -866,7 +866,7 @@ if __name__ == "__main__":
 # claim, same handoff line — built here so the two can never drift.
 
 def haul_feed_message(nid: str, title: str, rest: int, headroom: str = "",
-                      repeats: int = 0, advisory: str = "") -> str:
+                      repeats: int = 0, advisory: str = "", *, examples=None) -> str:
     """The advance instruction: the specific next bead, claimed and named.
 
     The last line is the RELEASE affordance (aegis-tgvtg). The haul re-serves any
@@ -891,6 +891,8 @@ def haul_feed_message(nid: str, title: str, rest: int, headroom: str = "",
     means nothing at all. Saying so where it happens is the whole fix.
     """
     from .task_order import instruction
+    from .tracker_examples import TrackerExamples
+    examples = examples or TrackerExamples()
     t = (title or "")[:80]
     # A repeat must READ as a repeat — being handed the same bead back looks like
     # an instruction to persist, when it only means you have not released it. One
@@ -901,19 +903,24 @@ def haul_feed_message(nid: str, title: str, rest: int, headroom: str = "",
     # No budget declared -> say nothing about headroom. A caveat with no number
     # behind it is noise to learn to skip.
     authority = f"Yours to work — {headroom}. " if headroom else "Yours to work. "
+    if not examples.argv:
+        return ((f"{advisory}\n" if advisory else "")
+                + f"HAUL: {nid} ({t}), execute, close to advance ({rest} more). "
+                + again + authority + examples.diagnostic + " "
+                + instruction(nid) + handoff_text.deep_context_hint())
     return (
         (f"{advisory}\n" if advisory else "")
-        + f"HAUL: {nid} ({t}) — `br show {nid}`, execute, close to advance "
+        + f"HAUL: {nid} ({t}) — `{examples.show(nid)}`, execute, close to advance "
         f"({rest} more). {again}{authority}{instruction(nid)}"
         f"{handoff_text.deep_context_hint()}\n"
-        f"Not this one? done -> `br close {nid}` · gated -> `st work defer {nid} "
+        f"Not this one? done -> `{examples.close(nid)}` · gated -> `st work defer {nid} "
         f"<bead|human|access|external|parked> --reason-file <f>` · not yours -> "
-        f"`br update {nid} -a \"\"`. "
+        f"`{examples.unassign(nid)}`. "
         f"(A bare status change does NOT stop the re-serve, and clearing the "
         f"assignee only re-pools it.) Options: `st ops help haul`.")
 
 
-def haul_resume_message(nid: str, title: str) -> str:
+def haul_resume_message(nid: str, title: str, *, examples=None) -> str:
     """Keep a Codex worker's active anchor moving across turn boundaries.
 
     Codex allows the stop after every completed model turn.  Without a new block
@@ -923,10 +930,15 @@ def haul_resume_message(nid: str, title: str) -> str:
     it by the resolved harness.
     """
     from .task_order import instruction
+    from .tracker_examples import TrackerExamples
+    examples = examples or TrackerExamples()
     t = (title or "")[:80]
+    if not examples.argv:
+        return (f"HAUL RESUME: {nid} ({t}) is still your active anchor. "
+                f"Continue it now. {examples.diagnostic} {instruction(nid)}")
     return (
         f"HAUL RESUME: {nid} ({t}) is still your active anchor. Continue it now "
-        f"(`br show {nid}`), execute the remaining work, verify it, and close it "
+        f"(`{examples.show(nid)}`), execute the remaining work, verify it, and close it "
         f"when done so the haul can advance. If it is genuinely gated, record "
         f"the evidence, then use `st work defer {nid} "
         f"<bead|human|access|external|parked> --reason-file <file>`; if it is not "

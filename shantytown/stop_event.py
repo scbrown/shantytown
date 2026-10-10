@@ -662,8 +662,10 @@ def _haul(reg: FilesRegistry, panes, me: str, root: Path) -> int:
                 return 0
             _mark_haul_resume(root, me, rid)
             title = resume.get("title") or ""
+            from .tracker_examples import for_deployment
+            examples = for_deployment(root, reg)
             print(json.dumps({"decision": "block",
-                              "reason": haul_resume_message(rid, title)}))
+                              "reason": haul_resume_message(rid, title, examples=examples)}))
             return 0
         mine = []
         if resume is None:
@@ -730,11 +732,13 @@ def _haul(reg: FilesRegistry, panes, me: str, root: Path) -> int:
             _bd_json(["update", nid, "--status", "in_progress"], cwd, root=root, reg=reg)
         except Exception:
             pass
+        from .tracker_examples import for_deployment
+        examples = for_deployment(root, reg)
         print(json.dumps({"decision": "block",
                           "reason": "anchor closed ✓ — "
                           + haul_feed_message(nid, title, rest,
                                               headroom=headroom, repeats=repeats,
-                                              advisory=advisory)}))
+                                              advisory=advisory, examples=examples)}))
         return 0
     except Exception:
         return 0                     # fail-open: never trap a worker's stop

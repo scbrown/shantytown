@@ -332,6 +332,16 @@ but the guard against that is now the test, not this sentence.
 
 ### Transcript derivatives and credential boundaries
 
+The history Stop hook launches a detached, single-agent archive worker and returns
+without waiting for capture or scrub. Both inherited output pipes are disconnected
+from the harness. One nonblocking lock per agent prevents overlapping workers;
+an overlapping stop is coalesced into the active worker, and subsequent stops can
+capture later transcript growth. Completion and failure remain in `hook.log`;
+worker diagnostics go to the private raw archive's `worker.log`. A successful
+launch is not archival acceptance. The worker retains the scrub residual check
+and never publishes raw history. `--worker` runs the same work in the foreground
+for diagnostics and tests; no additional timer is installed.
+
 The raw transcript archive stays local and unindexed. `st-history-scrub.sh`
 creates a separate derivative: it omits supported harness tool-result objects
 wholesale, including nested Claude results and their `toolUseResult` mirrors,
@@ -1104,6 +1114,15 @@ queue remains feedable unless it carries `anchor`; reserve the label for records
 that have no completion state. Existing legacy coordinator title exclusions
 remain, but haul exclusion uses the explicit label.
 
+### Human-only ready work is not dispatchable
+
+The shared unfeedable predicate excludes `desk` and `needs-stiwi` labels as well
+as `blocked:human` and `blocked:external`. An open, unassigned operator action
+can appear in ready without being executable by a crew worker. Rule Zero and
+priority advisories exclude these records; labels are matched after trimming
+and case normalization. Ordinary crew work mentioning a desk in its title
+remains eligible.
+
 ### `dispatchable` means *passes the priority floor*
 
 Measured live, within sixty seconds of itself:
@@ -1354,7 +1373,10 @@ that message's pointer after confirming the input is not stranded. The closed be
 retains its content and history. If the recipient is down, the send fails, the input
 is stranded, or pointer closure fails, the pointer remains open for `st inbox`.
 
-Codex delivery first confirms an empty composer; clipped or ambiguous input is
+Codex delivery first confirms an empty composer, or recognizes an explicit resend
+of the exact body already stranded there. The latter retries Enter without
+retyping the body, after the older turn ends and Codex identity is confirmed.
+Clipped or ambiguous input is
 unverified before typing. It waits 500 ms between the final literal chunk and Enter, then
 checks for a new active turn with a cleared composer, or a visible queue preview
 matching the message. Existing activity alone is not confirmation. If the
@@ -2373,9 +2395,22 @@ Writable file cards are the selection authority. Graph identity may be projected
 into them without clearing an existing account or explicit failover setting;
 a read-only TOML registry or identity-only graph registry refuses selection writes.
 
-
 Deferral summaries are serialized per deployment root and compared with the
 last successfully delivered summary. Overlapping passes and identical rendered
 summaries do not cause additional coordinator wakes. Failed delivery consumes
 neither the finding state nor the summary, so a reachable recipient can receive
 it later. A positively observed resolution re-arms a genuine later recurrence.
+
+## Tracker commands in haul instructions
+
+The haul feed, active-anchor resume, and `st ops help haul` render command examples
+from the tracker selected for that deployment or explicit CLI invocation. Seeds
+examples include the server and named graph reported by `sd where --json`; local
+store examples require the exact existing file. A single-store br deployment
+retains its configured executable and repository directory. No board read or write
+is needed to exercise the formatting fixtures.
+
+Unknown backend or unproven routing produces a routing diagnostic instead of
+mutation recipes. A multi-store br deployment also omits examples because a generic
+help page cannot identify the item's store. Resolve routing before changing work.
+The renderer does not change claim, defer, close, or re-pool behavior.

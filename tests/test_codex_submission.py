@@ -91,8 +91,8 @@ def test_someone_elses_input_never_gets_a_retry_enter(monkeypatch):
     assert sum(c[-1] == 'Enter' for c in keys(calls)) == 1
 
 
-def test_existing_input_is_not_appended_to_or_submitted(monkeypatch):
-    panes, calls = transport(monkeypatch, [OWNED])
+def test_existing_foreign_input_is_not_appended_to_or_submitted(monkeypatch):
+    panes, calls = transport(monkeypatch, [OWNED.replace(BODY, "Operator input")])
     with pytest.raises(tmux.PaneSubmissionUnverified, match='nothing added'):
         panes.send('worker', BODY)
     assert keys(calls) == []
@@ -155,3 +155,24 @@ def test_ghost_and_partial_input_cannot_authorize_enter():
     assert not tmux._codex_owned_input(OWNED.replace(BODY, BODY[:10]), BODY)
     assert tmux._codex_owned_input(OWNED, BODY)
     assert not tmux._codex_owned_input(OWNED.replace('assigned work', 'assignedwork'), BODY)
+
+
+def test_explicit_resend_submits_exact_stranded_body_without_retyping(monkeypatch):
+    panes, calls = transport(monkeypatch, [OWNED, OWNED, OWNED, BUSY])
+    panes.send('worker', BODY)
+    assert [c[-1] for c in keys(calls)] == ['Enter']
+
+
+def test_resend_of_exact_body_waits_for_hook_to_finish(monkeypatch):
+    busy_owned = 'Working (1s • esc to interrupt)\n' + OWNED
+    panes, calls = transport(monkeypatch, [busy_owned, busy_owned, busy_owned, OWNED, BUSY])
+    panes.send('worker', BODY)
+    assert [c[-1] for c in keys(calls)] == ['Enter']
+
+
+def test_exact_stranded_body_is_not_submitted_while_hook_stays_busy(monkeypatch):
+    busy_owned = 'Working (1s • esc to interrupt)\n' + OWNED
+    panes, calls = transport(monkeypatch, [busy_owned])
+    with pytest.raises(tmux.PaneSubmissionUnverified):
+        panes.send('worker', BODY)
+    assert keys(calls) == []

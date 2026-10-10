@@ -2421,7 +2421,14 @@ def _run_command(a) -> int:
         return _cmd_subscribe(a)
     if a.cmd == "help":
         from . import help_topics
-        page = help_topics.render(a.topic) if a.topic else None
+        examples = None
+        if a.topic and a.topic.strip().lower() == "haul":
+            from .tracker_examples import for_tracker, TrackerExamples
+            try:
+                examples = for_tracker(_tracker(a))
+            except (Exception, SystemExit):
+                examples = TrackerExamples()
+        page = help_topics.render(a.topic, examples=examples) if a.topic else None
         if page:
             print(page)
             return OK

@@ -369,7 +369,9 @@ def test_no_root_means_no_ownership_gate(tmp_path):
 # alone is not enough) so a future edit can't quietly drop the load-bearing half.
 
 def test_haul_feed_message_names_the_release_exit_with_the_actual_id():
-    msg = feed_check.haul_feed_message("aegis-9z9z", "some title", 2)
+    from shantytown.tracker_examples import TrackerExamples
+    msg = feed_check.haul_feed_message("aegis-9z9z", "some title", 2,
+                                       examples=TrackerExamples(("br",)))
     # the working mechanism, spelled with THIS bead's id so it is copy-pasteable
     assert "st work defer aegis-9z9z" in msg      # the structured truly-park exit
     assert "bead|human|access|external|parked" in msg
@@ -864,3 +866,17 @@ def test_after_turn_hold_gates_live_idle_worker_until_explicit_relaunch(tmp_path
     assert feed_check.free_feedable_workers(reg, panes, _Runtime(), tmp_path) == []
     agent_hold.clear(tmp_path, "weaver")
     assert feed_check.free_feedable_workers(reg, panes, _Runtime(), tmp_path) == ["weaver"]
+
+
+@pytest.mark.parametrize("label", ["desk", "needs-stiwi", " DESK ", " Needs-Stiwi "])
+def test_human_surface_ready_work_does_not_trap_the_coordinator(label):
+    ready = [
+        {"id": "human", "title": "operator account action", "labels": [label]},
+        {"id": "crew", "title": "implement desk display", "labels": ["infra"]},
+    ]
+    # The word in a title is not a human-only marker; ordinary crew work survives.
+    assert feed_check.dispatchable({"weaver"}, ready) == [("crew", "implement desk display")]
+    assert feed_check.dispatchable({"weaver"}, ready[:1]) == []
+    from shantytown.priority_advisory import workable
+    assert not workable(ready[0])
+    assert workable(ready[1])
