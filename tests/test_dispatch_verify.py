@@ -54,6 +54,69 @@ def test_landed_send_verifies_then_writes(world):
     assert trk.updates == 1
 
 
+def test_verified_resume_clears_deadline_and_restores_active_plate(world):
+    from shantytown.br import _select_plate
+    crew, trk = world
+    def plate():
+        # Exercise the shared br/Seeds selector against the actual stored row.
+        row = json.loads(trk._path('item-1').read_text())
+        row['id'] = 'item-1'  # The file backend keeps the ID in its filename.
+        return _select_plate(trk, 'ellie', [row], [], lambda: set(), None)
+    trk.update('item-1', status='in_progress', assignee='ellie', priority=0,
+               defer_until='2099-01-01T00:00:00Z', notes='Keep the real review gate')
+    trk.updates = 0
+    assert plate() is None
+    panes = NullPanes()
+    Dispatcher(FilesRegistry(crew), trk, panes).go('item-1', 'ellie')
+    item = trk.get('item-1')
+    assert not item.defer_until
+    assert item.notes == 'Keep the real review gate'
+    assert plate().id == 'item-1'
+    assert len(panes.sent) == 1 and trk.updates == 1
+
+
+@pytest.mark.parametrize('mode', ['dry_run', 'dropped', 'governor', 'busy', 'blocked'])
+def test_no_handoff_preserves_existing_deadline(world, mode):
+    from shantytown.dispatch import Blocked, GovernorRefused, TriageRefused
+    crew, trk = world
+    deadline = '2099-01-01T00:00:00Z'
+    trk.update('item-1', status='blocked' if mode == 'blocked' else 'deferred',
+               defer_until=deadline)
+    trk.updates = 0
+    panes = NullPanes(screen='esc to interrupt' if mode == 'busy' else '',
+                     drops=mode == 'dropped')
+    governor = (lambda item, agent: 'hold') if mode == 'governor' else None
+    dispatcher = Dispatcher(FilesRegistry(crew), trk, panes, governor=governor)
+    if mode == 'dry_run':
+        plan = dispatcher.go('item-1', 'ellie', dry_run=True)
+        assert plan.updates['defer_until'] == ''
+    else:
+        expected = {'dropped': SendUnverified, 'governor': GovernorRefused,
+                    'busy': TriageRefused, 'blocked': Blocked}[mode]
+        with pytest.raises(expected):
+            dispatcher.go('item-1', 'ellie')
+    assert trk.get('item-1').defer_until == deadline
+    assert trk.updates == 0
+
+
+def test_deadline_clear_must_be_verified_without_resending(world, monkeypatch):
+    from shantytown.dispatch import DispatchedButUntracked
+    crew, trk = world
+    deadline = '2099-01-01T00:00:00Z'
+    trk.update('item-1', defer_until=deadline)
+    trk.updates = 0
+    update = trk.update
+    def keep_deadline(item_id, **fields):
+        fields.pop('defer_until', None)
+        update(item_id, **fields)
+    monkeypatch.setattr(trk, 'update', keep_deadline)
+    panes = NullPanes()
+    with pytest.raises(DispatchedButUntracked, match='defer_until'):
+        Dispatcher(FilesRegistry(crew), trk, panes).go('item-1', 'ellie')
+    assert trk.get('item-1').defer_until == deadline
+    assert len(panes.sent) == 1
+
+
 def test_dropped_send_is_caught_and_nothing_is_written(world):
     """THE #2 FIX, positive-controlled. The send does not land (drops=True), so
     verify fails: SendUnverified, and the tracker is NEVER written — no
