@@ -6329,7 +6329,7 @@ def _cmd_go(a) -> int:
     # measures.
     # aegis-4hhqoe.12: no node named, so suggest one. AFTER the send, so the
     # hint never delays the dispatch; never raises, so it cannot undo it.
-    suggestion = None if gctx.nodes else entity_suggest.suggest(a.root, a.item)
+    suggestion = None if gctx.nodes else entity_suggest.suggest(a.root, a.item, tracker=d.tracker)
     graph_adoption.record(a.root, "go", a.agent, a.item, gctx, session=p.pane,
                           suggestion=suggestion)
     if advice := _priority_go_note(a):
@@ -9340,7 +9340,8 @@ def _write_resume_brief(a, card, agent_name: str, checkpoint: str) -> str:
     """
     item = ""
     try:
-        held = _tracker_plate(_tracker(a), agent_name)
+        trk = _tracker(a)
+        held = _tracker_plate(trk, agent_name)
         item = held.id if held is not None else ""
     except Exception:  # noqa: BLE001 — the tracker is not on this critical path
         item = ""
@@ -9355,7 +9356,7 @@ def _write_resume_brief(a, card, agent_name: str, checkpoint: str) -> str:
         # node to start from. Logged as a suggest-only row, so the next cycle
         # that cites (or does not cite) it is the live precision read.
         try:
-            sug = entity_suggest.suggest(a.root, item)
+            sug = entity_suggest.suggest(a.root, item, tracker=trk)
             if sug is not None and sug.node:
                 suggested = sug.node
                 graph_adoption.record(a.root, graph_adoption.SUGGEST, agent_name,

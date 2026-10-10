@@ -124,3 +124,21 @@ def test_a_REFUSED_dispatch_publishes_nothing(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "Tmux", lambda *a, **k: NullPanes(screen="", drops=True))
     assert main(["--root", str(root), "go", "item-1", "ellie"]) == CANNOT_TELL
     assert plate_publish.read(root, "ellie") is None
+
+
+def test_hint_unknown_preserves_one_verified_dispatch(tmp_path, monkeypatch, capsys):
+    from shantytown import entity_suggest
+    root = _root(tmp_path)
+    panes = NullPanes(screen='')
+    monkeypatch.setattr(cli, 'Tmux', lambda *a, **k: panes)
+    seen = []
+    def suggest(root, item, *, tracker):
+        seen.append(tracker.get(item))
+        return entity_suggest.Suggestion(note='UNKNOWN: authoritative work-item read unavailable')
+    monkeypatch.setattr(cli.entity_suggest, 'suggest', suggest)
+    assert main(['--root', str(root), 'go', 'item-1', 'ellie']) == OK
+    assert len(seen) == 1 and seen[0].id == 'item-1'
+    assert json.loads((root / 'items' / 'item-1.json').read_text())['status'] == 'in_progress'
+    output = capsys.readouterr().out
+    assert output.count('sent to pane') == 1
+    assert 'UNKNOWN' in output
