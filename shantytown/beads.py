@@ -282,7 +282,7 @@ class BeadsTracker:
             id=d.get("id", item_id),
             title=d.get("title", ""),
             status=d.get("status", "open"),
-            description=d.get("description") or "",
+            description="" if d.get("description") is None else d["description"],
             assignee=d.get("assignee"),
             # bd's own numbering, 0 = highest. _priority never invents one: a
             # bead with no priority arrives as None so a governed dispatch can
