@@ -103,7 +103,7 @@ def evaluate(snapshot, *, now, cap, stale_hours=48, max_age_seconds=300):
                           "owner": author, "routeable": author is not None})
     return {"repo": repo, "observed_at": snapshot["observed_at"],
             "open_count": len(rows), "median_age_hours": median(ages) if ages else 0,
-            "cap": cap, "authors": {author: {"open": count, "admit": count < cap}
+            "cap": cap, "stale_hours": stale_hours, "authors": {author: {"open": count, "admit": count < cap}
                                     for author, count in sorted(counts.items())},
             "unknown_author_count": sum(row["author"] is None for row in rows),
             "rows": rows, "stale_events": stale, "execution_authority": False}
@@ -203,5 +203,96 @@ def main(argv=None):
     except (Refused,OSError,subprocess.SubprocessError):
         print('Queue snapshot unverified; no metrics or admission pass emitted')
         return 2
+
+
+
+def creation_policy(report, author, reviewer):
+    """Explicit independent reviewer plus complete author-bound WIP admission."""
+    for name in (author,reviewer):
+        if not isinstance(name,str) or not re.fullmatch(r'[A-Za-z0-9_]+',name):
+            raise Refused('named crew author and reviewer required')
+    if author==reviewer:
+        raise Refused('author cannot be their own named reviewer')
+    if not admission(report,author):
+        raise Refused('WIP cap reached or author inventory incomplete')
+    return {'author':author,'reviewer':reviewer,'cap':report['cap']}
+
+
+def enqueue_stale(registry,report,lead):
+    """Private outbox only, one exact-head event to its owner and configured lead."""
+    if not isinstance(lead,str) or not re.fullmatch(r'[A-Za-z0-9_]+',lead):
+        raise Refused('explicit crew lead required')
+    with registry.locked() as data:
+        outbox=data.setdefault('queue_outbox',{})
+        if not isinstance(outbox,dict):raise Refused('queue outbox unreadable')
+        for event in pending_events(report,set()):
+            for target in sorted({event['owner'],lead}):
+                key=hashlib.sha256(f"{event['key']}:{target}".encode()).hexdigest()
+                if key not in outbox:
+                    outbox[key]={'target':target,'marker':f'crew-pr-event:{key}',
+                                 'body':f"PR older than {report['stale_hours']}h: https://github.com/{report['repo']}/pull/{event['number']} head {event['head']}",
+                                 'attempted':False,'delivered':False}
+        registry.save(data)
+        return len(outbox)
+
+
+def drain_outbox(registry,lookup,send):
+    """Reconcile a lost durable-send response before considering another send.
+
+    Lookup must return a control-proven object with found and verified booleans.
+    Attempted-but-absent messages stay held: reads can lag a committed send. No
+    automatic retry after a lost response, and no recipient is an agent wake.
+    """
+    completed=[]
+    with registry.locked() as data:
+        outbox=data.get('queue_outbox',{})
+        if not isinstance(outbox,dict):raise Refused('queue outbox unreadable')
+        for key,event in outbox.items():
+            if not isinstance(event,dict) or type(event.get('delivered')) is not bool:
+                raise Refused('queue event unreadable')
+            if event['delivered']:continue
+            receipt=lookup(event['target'],event['marker'])
+            if (not isinstance(receipt,dict) or receipt.get('verified') is not True
+                    or type(receipt.get('found')) is not bool):
+                raise Refused('durable receipt lookup is unproven')
+            if receipt['found']:
+                event['delivered']=True;registry.save(data);completed.append(key);continue
+            if event.get('attempted'):
+                raise Refused('event send outcome pending; absence is not permission to retry')
+            event['attempted']=True;registry.save(data)
+            try:
+                send(event['target'],event['body']+' '+event['marker'])
+                actual=lookup(event['target'],event['marker'])
+                if (not isinstance(actual,dict) or actual.get('verified') is not True
+                        or actual.get('found') is not True):
+                    raise Refused('durable send outcome unverified')
+            except Exception as error:
+                from .pr_preflight import Indeterminate
+                raise Indeterminate('event intent pending; reconcile before retry') from error
+            event['delivered']=True;registry.save(data);completed.append(key)
+    return completed
+
+
+def enqueue_review(registry, repo, number, author, reviewer):
+    """Record a named independent review request only for a known binding."""
+    for name in (author, reviewer):
+        if not isinstance(name, str) or not re.fullmatch(r'[A-Za-z0-9_]+', name):
+            raise Refused('named reviewer and author required')
+    if author == reviewer:
+        raise Refused('self review assignment refused')
+    with registry.locked() as data:
+        record = data['bindings'].get(f'{repo}#{number}')
+        if not isinstance(record, dict) or record['author'] != author:
+            raise Refused('review request needs a known author-bound PR')
+        key = hashlib.sha256(f"{repo}:{number}:{record['head']}:review:{reviewer}".encode()).hexdigest()
+        outbox = data.setdefault('queue_outbox', {})
+        if not isinstance(outbox, dict):
+            raise Refused('queue outbox unreadable')
+        record['reviewer'] = reviewer
+        outbox.setdefault(key, {'target': reviewer, 'marker': f'crew-pr-event:{key}',
+            'body': f"Review requested: https://github.com/{repo}/pull/{number} head {record['head']}",
+            'attempted': False, 'delivered': False})
+        registry.save(data)
+        return key
 
 if __name__=='__main__':raise SystemExit(main())

@@ -89,3 +89,60 @@ def test_complete_metrics_adapter_and_head_race_control():
             if len(reads)==2:value[0]['head']['sha']='c'*40
         return value
     with pytest.raises(Refused):github_snapshot('example/project',api=changed)
+
+def test_creation_policy_refuses_self_review_and_unknown_author_inventory():
+    from shantytown.pr_queue import creation_policy
+    r=evaluate(snapshot(),now=NOW,cap=2)
+    assert creation_policy(r,'alice','bob')['reviewer']=='bob'
+    with pytest.raises(Refused):creation_policy(r,'alice','alice')
+    r['unknown_author_count']=1
+    with pytest.raises(Refused):creation_policy(r,'alice','bob')
+
+
+def test_stale_outbox_dedup_delivery_and_lost_response_reconcile(tmp_path):
+    from shantytown.pr_binding import Registry
+    from shantytown.pr_preflight import Indeterminate
+    from shantytown.pr_queue import enqueue_stale,drain_outbox
+    registry=Registry(tmp_path/'registry','https://board.example/graph')
+    report=evaluate(snapshot(),now=NOW,cap=2)
+    assert enqueue_stale(registry,report,'lead')==2
+    assert enqueue_stale(registry,report,'lead')==2
+    received=set();writes=[]
+    def lookup(target,marker):return {'verified':True,'found':(target,marker) in received}
+    def lost(target,body):
+        writes.append((target,body));received.add((target,body.split()[-1]));raise TimeoutError()
+    with pytest.raises(Indeterminate):drain_outbox(registry,lookup,lost)
+    def send(target,body):writes.append((target,body));received.add((target,body.split()[-1]))
+    assert len(drain_outbox(registry,lookup,send))==2
+    assert len(writes)==2
+    assert drain_outbox(registry,lookup,send)==[]
+    assert len(writes)==2
+
+
+def test_attempted_but_absent_outbox_does_not_blind_retry(tmp_path):
+    from shantytown.pr_binding import Registry
+    from shantytown.pr_preflight import Indeterminate
+    from shantytown.pr_queue import enqueue_stale,drain_outbox
+    registry=Registry(tmp_path/'registry','https://board.example/graph')
+    enqueue_stale(registry,evaluate(snapshot(),now=NOW,cap=2),'lead')
+    lookup=lambda *args:{'verified':True,'found':False}
+    writes=[]
+    def lost(*args):writes.append(args);raise TimeoutError()
+    with pytest.raises(Indeterminate):drain_outbox(registry,lookup,lost)
+    with pytest.raises(Refused):drain_outbox(registry,lookup,lost)
+    assert len(writes)==1
+
+def test_review_outbox_requires_binding_and_independent_named_reviewer(tmp_path):
+    from shantytown.pr_binding import Registry,register
+    from shantytown.pr_queue import enqueue_review
+    registry=Registry(tmp_path/'registry','https://board.example/graph')
+    class Forge:
+        def read(self,*args):return {'head':'a'*40,'body':'Bead: project-abc','state':'open','draft':False}
+    read=lambda _:{'id':'project-abc','assignee':'alice','status':'open'}
+    with pytest.raises(Refused):enqueue_review(registry,'example/project',1,'alice','bob')
+    register(registry,'example/project',1,'alice',registry.board,read,Forge())
+    key=enqueue_review(registry,'example/project',1,'alice','bob')
+    assert enqueue_review(registry,'example/project',1,'alice','bob')==key
+    with pytest.raises(Refused):enqueue_review(registry,'example/project',1,'alice','alice')
+    with registry.locked() as data:
+        assert len(data['queue_outbox'])==1 and data['bindings']['example/project#1']['reviewer']=='bob'

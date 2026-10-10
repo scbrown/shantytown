@@ -76,3 +76,25 @@ The disabled lifecycle job template receives Quipu transaction notifications and
 calls the bound registry reconciler through a fixed argv. It does not interpolate
 incoming event bodies into a shell. Adoption must measure the real transaction
 source, batching/load behavior and scheduled action before enabling the job.
+
+The bound foreground creator now requires an explicit reviewer and cap. It checks
+complete author-bound WIP admission before posting, and queues a named independent
+review request in the private outbox. Missing existing author bindings prevent
+admission; they are not assigned from shared forge logins. Review assignment is
+not a passing review receipt.
+
+The private stale/review outbox records intent before a durable send. Delivery
+requires a control-proven destination lookup. After a lost response, a positive
+read can reconcile delivery; an absent read does not authorize an automatic
+retry. No sender adapter or event delivery is installed by this prototype.
+
+`pr_merge_slot.execute_one` is a separate default-off library. Activation requires
+the existing designated writer, fresh physical hold/blackout/rollback reads, the
+known author-bound exact head, independent named reviewer, signed receipt, and the
+installed ownership-neutral trusted helper. The helper must attest current source
+and pass its full preflight. Physical conditions are read again after preflight.
+The helper's execute entry repeats CI/review/expected-head/writer gates. Only one
+candidate intent can occupy the designated registry; lost responses require
+remote exact-head and commit proof before the slot clears. Absence holds the
+intent. A real adapter must verify those remote proofs and designate the single
+fleet registry. This is not native auto-merge or activation authority.

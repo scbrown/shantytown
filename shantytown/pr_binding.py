@@ -293,7 +293,8 @@ class SeedsReader:
 
 
 def create_bound(registry, repo, checkout, bead, author, board, read_bead, forge,
-                 title, body, decisions, *, base="main", draft=False, dry_run=False):
+                 title, body, decisions, *, base="main", draft=False, dry_run=False,
+                 reviewer=None, cap=None):
     """Prove ownership before creation; never replay a pending create intent."""
     from . import pr_preflight
     if board != registry.board or not BEAD.fullmatch(bead):
@@ -305,6 +306,15 @@ def create_bound(registry, repo, checkout, bead, author, board, read_bead, forge
         raise Refused("creation requires an owned open bead")
     if item["status"] == "deferred" and not draft:
         raise Refused("deferred bead requires a draft PR")
+    if reviewer is not None or cap is not None:
+        from .pr_queue import github_snapshot, evaluate, creation_policy
+        from datetime import datetime, timezone
+        with registry.locked() as data:
+            bindings = {record['number']: record for record in data['bindings'].values()
+                        if record['repo'] == repo}
+        snapshot = github_snapshot(repo, author_bindings=bindings, api=forge.api)
+        report = evaluate(snapshot, now=datetime.now(timezone.utc).isoformat(), cap=cap)
+        creation_policy(report, author, reviewer)
     candidate = pr_preflight.candidate(checkout, repo, base, forge.api)
     intent_key = hashlib.sha256(f"{repo}:{candidate['head_ref']}".encode()).hexdigest()
     with registry.locked() as data:
@@ -329,6 +339,9 @@ def create_bound(registry, repo, checkout, bead, author, board, read_bead, forge
         return {"outcome": "would_create", "bead": bead, "head": candidate["head"]}
     try:
         register(registry, repo, result["number"], author, board, read_bead, forge)
+        if reviewer is not None:
+            from .pr_queue import enqueue_review
+            enqueue_review(registry, repo, result["number"], author, reviewer)
         with registry.locked() as data:
             data["creates"].pop(intent_key, None)
             registry.save(data)
@@ -354,6 +367,8 @@ def main(argv=None):
     create_parser.add_argument('--bead',required=True)
     create_parser.add_argument('--author',required=True)
     create_parser.add_argument('--title',required=True)
+    create_parser.add_argument('--reviewer',required=True)
+    create_parser.add_argument('--cap',required=True,type=int)
     create_parser.add_argument('--body-file',required=True,type=Path)
     create_parser.add_argument('--dispositions-file',required=True,type=Path)
     create_parser.add_argument('--base',default='main')
@@ -372,7 +387,8 @@ def main(argv=None):
             result=create_bound(registry,args.repo,args.checkout,args.bead,args.author,
                                 args.graph,reader,forge,args.title,args.body_file.read_text(),
                                 json.loads(args.dispositions_file.read_text()),
-                                base=args.base,draft=args.draft,dry_run=args.dry_run)
+                                base=args.base,draft=args.draft,dry_run=args.dry_run,
+                                reviewer=args.reviewer,cap=args.cap)
         else:result=reconcile(registry,args.graph,reader,forge)
         print(json.dumps({'outcome':'verified','result':result},sort_keys=True))
         return 0
