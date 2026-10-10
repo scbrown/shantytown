@@ -482,6 +482,11 @@ is a new handoff. The structured comment provides the same provenance on the bea
 
 ## `st go` — dispatch
 
+Explicitly dispatching deferred work clears its old deadline after delivery is
+confirmed, together with the verified active assignment. A dry run, refusal, or
+unverified delivery leaves the deferral intact. Dependency and governor gates
+still apply; activation does not remove the item's notes or review conditions.
+
 This is the command the repo exists for. `gt sling` takes >120 seconds; `--dry-run` alone takes 51s
 and **writes nothing**, because the cost is 63 sequential Dolt connections during *resolution, before
 any write*. Underneath, dispatch is `tmux send-keys`.

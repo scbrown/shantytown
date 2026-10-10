@@ -694,11 +694,17 @@ class Dispatcher:
         text = attribute(text, self.sender)
         if serve_id:
             text += f" — [st serve:{serve_id} worker:{agent_name}]"
+        updates = {"status": "in_progress", "assignee": agent_name}
+        if getattr(item, "defer_until", None):
+            # Explicit dispatch resumes deferred work. Clear its old deadline
+            # only after a verified handoff, in the same read-back-checked write.
+            # Otherwise the plate still excludes the newly active assignment.
+            updates["defer_until"] = ""
         return Plan(
             item_id=item_id,
             agent=agent_name,
             pane=agent.pane,
-            updates={"status": "in_progress", "assignee": agent_name},
+            updates=updates,
             text=text,
             note=flat,
             store=tag,

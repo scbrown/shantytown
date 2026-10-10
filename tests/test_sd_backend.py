@@ -52,6 +52,29 @@ def _tracker(proj, store, prefix="aegis"):
 
 # 1. NO SILENT EMPTY BOARD ---------------------------------------------------
 
+
+def test_verified_dispatch_clears_future_deadline_in_real_scratch_store(tmp_path):
+    import json
+    from shantytown.dispatch import Dispatcher
+    from shantytown.files import FilesRegistry
+    from shantytown.tmux import NullPanes
+    proj, store = _project(tmp_path)
+    issue = json.loads(_sd(proj, store, 'create', 'resume work', '-p', '0', '--json'))
+    tracker = _tracker(proj, store)
+    tracker.update(issue['id'], status='in_progress', assignee='worker',
+                   defer_until='2099-01-01T00:00:00Z', notes='Keep review gates')
+    assert br_mod.plate(tracker, 'worker') is None
+    crew = tmp_path / 'crew'
+    crew.mkdir()
+    (crew / 'worker.json').write_text(json.dumps({'role': 'worker', 'pane': '%5'}))
+    panes = NullPanes()
+    Dispatcher(FilesRegistry(crew), tracker, panes).go(issue['id'], 'worker')
+    current = tracker.get(issue['id'])
+    assert current.status == 'in_progress' and current.assignee == 'worker'
+    assert not current.defer_until and current.notes == 'Keep review gates'
+    assert br_mod.plate(tracker, 'worker').id == issue['id']
+    assert len(panes.sent) == 1
+
 def test_no_configured_store_refuses_instead_of_reading_a_default(tmp_path):
     t = SdTracker(repo=str(tmp_path), prefix="aegis")
     with pytest.raises(StoreUnproven, match="no store configured"):
