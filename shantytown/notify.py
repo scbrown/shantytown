@@ -1047,11 +1047,13 @@ class IdleFleetAlerter:
             own_active = [b for b in active
                           if (b.get("assignee") or "").split("/")[-1] == worker]
             if worker in resumable and own_active:
+                from .tracker_examples import for_deployment
+                examples = for_deployment(self._root, self._reg)
                 bead = own_active[0]
                 target = push_to_own_pane(
                     self._reg, self._panes, worker,
                     feed_check.haul_resume_message(
-                        bead.get("id", "?"), bead.get("title") or ""))
+                        bead.get("id", "?"), bead.get("title") or "", examples=examples))
                 if target is not None:
                     nudged.append(worker)
                     self._log(f"haul: resumed idle Codex {worker} on active "
@@ -1162,10 +1164,12 @@ class IdleFleetAlerter:
                     advisory = "governor: higher-priority advisory unavailable; haul continues."
                 if advisory:
                     self._log(advisory)
+                from .tracker_examples import for_deployment
+                examples = for_deployment(self._root, self._reg)
                 message = feed_check.haul_feed_message(
                     nid, "", len(feedable) - 1,
                     headroom=sb.headroom(limits, spend), repeats=repeats,
-                    advisory=advisory)
+                    advisory=advisory, examples=examples)
                 message += f" — [st serve:{serve_id} worker:{worker}]"
             target = push_to_own_pane(self._reg, self._panes, worker, message)
             if target is None:

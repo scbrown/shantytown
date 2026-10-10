@@ -369,7 +369,9 @@ def test_no_root_means_no_ownership_gate(tmp_path):
 # alone is not enough) so a future edit can't quietly drop the load-bearing half.
 
 def test_haul_feed_message_names_the_release_exit_with_the_actual_id():
-    msg = feed_check.haul_feed_message("aegis-9z9z", "some title", 2)
+    from shantytown.tracker_examples import TrackerExamples
+    msg = feed_check.haul_feed_message("aegis-9z9z", "some title", 2,
+                                       examples=TrackerExamples(("br",)))
     # the working mechanism, spelled with THIS bead's id so it is copy-pasteable
     assert "st work defer aegis-9z9z" in msg      # the structured truly-park exit
     assert "bead|human|access|external|parked" in msg

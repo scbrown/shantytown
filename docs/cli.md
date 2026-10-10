@@ -2394,3 +2394,17 @@ again on every heartbeat. No account creation or interactive login is performed.
 Writable file cards are the selection authority. Graph identity may be projected
 into them without clearing an existing account or explicit failover setting;
 a read-only TOML registry or identity-only graph registry refuses selection writes.
+
+## Tracker commands in haul instructions
+
+The haul feed, active-anchor resume, and `st ops help haul` render command examples
+from the tracker selected for that deployment or explicit CLI invocation. Seeds
+examples include the server and named graph reported by `sd where --json`; local
+store examples require the exact existing file. A single-store br deployment
+retains its configured executable and repository directory. No board read or write
+is needed to exercise the formatting fixtures.
+
+Unknown backend or unproven routing produces a routing diagnostic instead of
+mutation recipes. A multi-store br deployment also omits examples because a generic
+help page cannot identify the item's store. Resolve routing before changing work.
+The renderer does not change claim, defer, close, or re-pool behavior.
