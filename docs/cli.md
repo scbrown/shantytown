@@ -2415,3 +2415,8 @@ version 1 work-item JSON interface through stdin. A failed or incomplete item
 read reports an unknown hint; it does not resolve the ID through another board.
 The suggestion remains inferred and does not replace asserted context. The
 updated linker interface must be installed before the updated caller.
+
+After a deployment switches its board to Seeds, use its reviewed default backend
+or explicitly select `--backend seeds`. Explicit `--backend beads` still selects
+the br transport; it is not a Seeds alias. A missing ID on that explicitly
+selected board is not permission to retry against another board.
