@@ -1,4 +1,4 @@
-"""st — the CLI. Seven verbs, five groups, thirty-four grouped commands: forty-one, and the count is load-bearing: each earns its slot.
+"""st — the CLI. Seven verbs, five groups, thirty-five grouped commands: forty-two, and the count is load-bearing: each earns its slot.
 
     task · go · sling · inbox [--count] · crew [--count|--governor]
     · anchor [--short|--events|--harness] · attach [-r|--no-start]
@@ -10,7 +10,7 @@
             · roles [--check|set|band|sync] · init · hold gaming [--clear|--status|--probe]
             · window {plan|drain|clear|release|abort} · dashboard [admin]
             · watch [--peer|--metrics|--dry-run]
-    repo  → worktree [--gc] · push [--branch] · context
+    repo  → worktree [--gc] · push [--branch] · context · pr [--create]
     ops   → doctor [--install] · provision [agent] · subscribe · hooks <register|list|check> · help <topic>
 
 THE SURFACE WAS REGROUPED, and the count did not move (Stiwi, 2026-09-17). Six
@@ -1191,7 +1191,7 @@ _GROUP_HELP = {
     "work": "the item and the board: repool, defer, cost, dream, triage, jobs",
     "agent": "one agent: new, stop, harness, cycle, input, ask, answer, log, history, stats",
     "fleet": "the fleet: start, tend, roles, init, hold, window, dashboard, watch",
-    "repo": "a shared project repo: worktree, push, context",
+    "repo": "a shared project repo: worktree, push, context, pr",
     "ops": "the installation: doctor, provision, subscribe, hooks, help",
 }
 #: Set to silence the one-line notice an old spelling prints. For tests and
@@ -2063,6 +2063,19 @@ def build_parser() -> argparse.ArgumentParser:
     ph.add_argument("--branch", default="main",
                     help="destination branch on each remote (default: main)")
 
+    pr = leaf("pr", help="complete overlap preflight before creating a GitHub PR")
+    pr.add_argument("repository", help="explicit GitHub owner/name")
+    pr.add_argument("--checkout", type=Path, default=Path.cwd())
+    pr.add_argument("--base", default="main")
+    pr.add_argument("--bead", required=True)
+    pr.add_argument("--bead-family", action="append", default=[])
+    pr.add_argument("--title")
+    pr.add_argument("--body-file", type=Path)
+    pr.add_argument("--dispositions-file", type=Path)
+    pr.add_argument("--create", action="store_true", help="create after fresh overlap gates pass")
+    pr.add_argument("--draft", action="store_true")
+    pr.add_argument("--dry-run", "-n", action="store_true")
+
     hi = leaf("history",
                         help="list an agent's CAPTURED transcripts — the durable "
                              "archive of sessions incl. reasoning")
@@ -2445,6 +2458,9 @@ def _run_command(a) -> int:
         return _cmd_advise(a)
     if a.cmd == "worktree":
         return _cmd_worktree(a)
+    if a.cmd == "pr":
+        from .pr_preflight import command
+        return command(a)
     if a.cmd == "push":
         return _cmd_push(a)
     if a.cmd == "history":

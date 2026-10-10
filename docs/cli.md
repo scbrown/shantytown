@@ -86,6 +86,7 @@ st repo                       a shared project repo
   worktree <repo> [agent]     provision an agent's isolated worktree off a SHARED project repo
   push <repo> [agent]         push wt/<agent> to EVERY remote; refuses if invoked from another branch
   context <query>             what code should I be looking at? (bobbin)
+  pr <owner/repo> --bead <id>  complete overlap inventory; --create records decisions then creates
 st ops                        the installation
   doctor [--install]          what's installed, stale, missing (out-of-box)
   provision [agent]           register Quipu tooling for local crew without launching
@@ -243,7 +244,7 @@ Codex input already includes its cached subset. This makes
 `cache_read / usage_in` a provider-independent prompt-cache hit rate. The fields
 are omitted—not zeroed—when every matching transcript is unknown.
 
-Forty-one. Seven verbs at the top level and thirty-four grouped commands under five groups
+Forty-two. Seven verbs at the top level and thirty-five grouped commands under five groups
 (`work`, `agent`, `fleet`, `repo`, `ops`). A group is a namespace and runs nothing, so it earns no
 slot; the count is the leaves. The flat spellings from before the grouping (st cycle for
 st agent cycle, and so on) still parse into the same handler, print one line on stderr saying
@@ -2408,3 +2409,51 @@ Unknown backend or unproven routing produces a routing diagnostic instead of
 mutation recipes. A multi-store br deployment also omits examples because a generic
 help page cannot identify the item's store. Resolve routing before changing work.
 The renderer does not change claim, defer, close, or re-pool behavior.
+
+
+## PR overlap preflight
+
+`st repo pr` earns a separate slot because it creates an external review object;
+`repo context` remains a read. Use the guarded creation path after committing and
+pushing the candidate branch. It requires the explicit GitHub repository to match
+`origin`; it does not push, merge, close another PR, or activate native auto-merge.
+Forgejo creation is not implemented by this command.
+
+```sh
+st repo pr example/project --checkout /path/to/own/worktree --bead project-abc
+st repo pr example/project --checkout /path/to/own/worktree --bead project-abc \
+  --create --title 'Concrete change' --body-file /tmp/pr-body.md \
+  --dispositions-file /tmp/overlaps.json --dry-run
+```
+
+Omit `--create` for the complete open-PR inventory and overlap report. Both renamed
+paths and explicit bead-family relationships count (`--bead-family project-epic`
+adds an otherwise unrelated parent). Dotted child IDs share their root family.
+Inventory includes drafts. Missing metadata, failed reads, nonterminating pages,
+a file count mismatch, or a candidate that differs from its remote branch refuses.
+The bound is 3,200 open PRs and fewer than 3,000 changed-file records per PR; a bound
+hit is unknown coverage, never an empty result.
+
+The dispositions file is a JSON list; every overlapping PR needs its exact head
+and a reason. For example:
+
+```json
+[{"number": 12, "head": "<exact-other-head>", "action": "independent",
+  "reason": "The changes touch separate behaviors; integration evidence is linked."}]
+```
+
+`stack` requires the other PR's exact head as the candidate base and proves its
+ancestry. `absorb` requires the referenced PR already closed at that exact head;
+this command never closes other authors' work. `independent` records the author's
+reason rather than pretending file overlap proves a semantic conflict. Duplicate,
+stale, missing or short-reason dispositions refuse before creation.
+
+Creation checks the inventory and local/remote candidate again immediately before
+posting. It appends the primary `Bead:` and exact-head dispositions to the body.
+`--dry-run` exercises all gates and previews the body without posting. An existing
+PR for the candidate branch refuses duplicate creation. A lost create response or
+mismatched resulting head/base is reported **indeterminate**: inspect the remote
+PR before retrying. GitHub has no atomic expected-head create endpoint, so a branch
+race after the last read is detected on the result, not prevented. This command
+provides the crew creation path; it does not claim to intercept raw `gh` or other
+clients. Installing a mandatory external-client hook is a separate adoption step.
