@@ -43,7 +43,7 @@ def _store(tmp_path):
 def test_real_go_dispatch_warns_and_still_succeeds(tmp_path, monkeypatch, capsys):
     _store(tmp_path)
     monkeypatch.setattr(cli, 'Tmux', lambda *a, **k: NullPanes(screen=''))
-    monkeypatch.setattr(cli.entity_suggest, 'suggest', lambda *a: None)
+    monkeypatch.setattr(cli.entity_suggest, 'suggest', lambda *a, **kw: None)
     rc = cli.main(['--root', str(tmp_path), '--backend', 'files', 'go', 'low', 'worker', '--reason', 'specialized work'])
     out = capsys.readouterr()
     assert rc == 0
