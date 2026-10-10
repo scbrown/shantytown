@@ -31,3 +31,23 @@ review assignment, complete live inventory and metrics, verified event delivery,
 serialized helper execution and actual one-week under-cap observation. Unit
 controls establish the library boundary only. No dashboard or production
 activation is claimed.
+
+The private `pr_binding` library adds explicit primary-marker registration and a
+0600 journal under a private directory. A selected-board adapter must attest the
+reviewed graph identity and return fresh records for the known bound IDs only.
+The forge adapter must provide complete comments attributed to the registered
+crew writer, normalize exact head/state/body/draft, and implement draft conversion
+through the supported forge API. These adapters are not installed by this change.
+
+Registration rejects a closed bead, another owner or mismatched PR state. A
+reconcile request rereads the authoritative bead; an old event cannot close a
+currently open bead. Deferred beads draft their bound PR; closed beads close it.
+A public comment carries the bead ID and status; the full private reason remains
+in the journal. Intents survive lost responses and require read reconciliation
+before another write. Changed heads, primary markers, owners, reasons or board
+identity hold the pending action. There is no mass import or unregistered action.
+
+Integration still required: CLI binding, known-ID selected Seeds reader, actual
+GitHub adapter, primary-marker CI admission, producer migration, disabled job
+entry and reviewed observed activation. The library tests are private harness
+controls, not real forge state mutation or scheduled-path acceptance.
