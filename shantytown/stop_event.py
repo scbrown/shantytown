@@ -48,6 +48,7 @@ import sys
 import time
 from pathlib import Path
 
+from .tmux import shell_foreground
 from . import triage
 from . import workflow
 from .answer import PartialAnswer
@@ -661,8 +662,10 @@ def _haul(reg: FilesRegistry, panes, me: str, root: Path) -> int:
                 return 0
             _mark_haul_resume(root, me, rid)
             title = resume.get("title") or ""
+            from .tracker_examples import for_deployment
+            examples = for_deployment(root, reg)
             print(json.dumps({"decision": "block",
-                              "reason": haul_resume_message(rid, title)}))
+                              "reason": haul_resume_message(rid, title, examples=examples)}))
             return 0
         mine = []
         if resume is None:
@@ -729,11 +732,13 @@ def _haul(reg: FilesRegistry, panes, me: str, root: Path) -> int:
             _bd_json(["update", nid, "--status", "in_progress"], cwd, root=root, reg=reg)
         except Exception:
             pass
+        from .tracker_examples import for_deployment
+        examples = for_deployment(root, reg)
         print(json.dumps({"decision": "block",
                           "reason": "anchor closed ✓ — "
                           + haul_feed_message(nid, title, rest,
                                               headroom=headroom, repeats=repeats,
-                                              advisory=advisory)}))
+                                              advisory=advisory, examples=examples)}))
         return 0
     except Exception:
         return 0                     # fail-open: never trap a worker's stop
@@ -759,7 +764,8 @@ def _liveness(reg: FilesRegistry, panes, shows_ready_ui, name: str,
         card = reg.get(name)
     except Exception:
         return DOWN
-    if not card.pane or not panes.exists(card.pane):
+    if (not card.pane or not panes.exists(card.pane)
+            or shell_foreground(panes, card.pane)):
         return DOWN
     # attrs=True IS LOad-BEARING (aegis-c6hli). work_state asks input_state what
     # is in the box, and input_state can only tell a dim suggestion from typed

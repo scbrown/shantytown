@@ -61,7 +61,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 import os
+import re
 import shlex
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 from typing import Protocol, runtime_checkable, TYPE_CHECKING
@@ -463,6 +466,11 @@ class ClaudeHarness:
         # column in `st crew`) and `role set` naming the live agents its rewrite did
         # NOT reach (_report_who_the_rewrite_did_not_reach). Both have since landed —
         # all three legs of that bead are closed. This one is the belt, not the detector.
+        from .runtime import _settings_env
+        carried_env = "".join(
+            f"{key}={shlex.quote(value)} "
+            for key, value in _settings_env(card.role, root).items()
+            if key != "BOBBIN_ROLE")
         root_env = f"SHANTY_ROOT={Path(root).resolve()} " if root else ""
         # BEADS_ACTOR is WHO the tracker records for a create/close/reassign
         # (GitHub #24). Without it every agent's bd events are written as $USER —
@@ -484,7 +492,7 @@ class ClaudeHarness:
         st_domain = f"ST_ROLE_DOMAIN={card.domain} " if card.domain else ""
         st_reports = f"ST_REPORTS_TO={card.reports_to} " if card.reports_to else ""
         launch = (
-            f"env -u SHANTY_MODEL {root_env}SHANTY_AGENT={card.name} BOBBIN_ROLE={card.role} "
+            f"env -u SHANTY_MODEL {carried_env}{root_env}SHANTY_AGENT={card.name} BOBBIN_ROLE={card.role} "
             f"BEADS_ACTOR={card.name} {st_roles}{st_domain}{st_reports}{model_env}"
             f"claude {flags} --settings {settings_path}"
         )
@@ -764,6 +772,42 @@ def codex_standalone_binary(home: Path) -> Path:
     return managed
 
 
+def require_codex_model_version(model: str | None, binary: Path | None,
+                                home: Path) -> None:
+    """Reject known incompatible model/package pairs before creating a pane.
+
+    Role-local updaters can leave an infrequently used role behind the model
+    policy. Probe the selected payload, not the role's directory name or an
+    unrelated PATH install. This is a known compatibility floor, not a claim
+    that every model is available to the authenticated account.
+    """
+    minimum = {"gpt-6.1-sol": (0, 160, 0)}.get(model)
+    if minimum is None:
+        return
+    floor = ".".join(map(str, minimum))
+    version = "unknown"
+    if binary is not None:
+        try:
+            result = subprocess.run(
+                [str(binary), "--version"], capture_output=True, text=True,
+                timeout=5, env={**os.environ, "CODEX_HOME": str(home)},
+            )
+            match = re.fullmatch(r"codex-cli (\d+)\.(\d+)\.(\d+)\s*", result.stdout)
+            if result.returncode == 0 and match:
+                actual = tuple(map(int, match.groups()))
+                if actual >= minimum:
+                    return
+                version = ".".join(map(str, actual))
+        except (OSError, subprocess.TimeoutExpired, UnicodeError):
+            pass
+    raise Unsupported(
+        f"Codex {version} at {binary or 'PATH (codex not found)'} cannot satisfy "
+        f"the launch requirement for model {model!r}: Codex >= {floor}. "
+        f"Update the selected Codex installation for CODEX_HOME={home} and retry. "
+        "Refusing to launch; the selected model has not been changed."
+    )
+
+
 def codex_path_shim_setup(managed: Path, bin_dir: Path | None = None) -> str:
     """Shell that keeps the operator's ``codex`` command on durable storage.
 
@@ -915,6 +959,14 @@ class CodexHarness:
         # nothing. Claude Code's `--settings` has the same exposure and errors
         # loudly instead; this one had to be closed here.
         home = Path(settings_path).resolve().parent
+        # Hooks and remote shells inherit the daemon, so carry the same narrow
+        # non-secret settings allowlist into both daemon and local launches.
+        # CLI command_environment's temporary exports end before tmux executes.
+        from .runtime import _settings_env
+        carried_env = "".join(
+            f"{key}={shlex.quote(value)} "
+            for key, value in _settings_env(card.role, root).items()
+            if key != "BOBBIN_ROLE")
         root_env = f"SHANTY_ROOT={Path(root).resolve()} " if root else ""
         st_roles = f"ST_ROLES={','.join(card.effective_roles())} "
         st_domain = f"ST_ROLE_DOMAIN={card.domain} " if card.domain else ""
@@ -925,7 +977,7 @@ class CodexHarness:
         model = resolve_model(card, root)
         model_env = f"SHANTY_MODEL={shlex.quote(model)} " if model else ""
         identity_env = (
-            f"{root_env}SHANTY_AGENT={card.name} BOBBIN_ROLE={card.role} "
+            f"{carried_env}{root_env}SHANTY_AGENT={card.name} BOBBIN_ROLE={card.role} "
             f"BEADS_ACTOR={card.name} {st_roles}{st_domain}{st_reports}{model_env}"
         )
         # --dangerously-bypass-hook-trust IS A DEFAULT HERE, and it is the one
@@ -959,6 +1011,10 @@ class CodexHarness:
                     '[env] in shantytown.toml.',
                     file=sys.stderr,
                 )
+        require_codex_model_version(
+            model, managed if remote_control else (
+                Path(local) if (local := shutil.which("codex")) else None), home,
+        )
         if remote_control:
             current = managed.parent
             path_shim_setup = codex_path_shim_setup(managed)
@@ -1572,6 +1628,12 @@ def name_for(card: Agent, root=None) -> str:
     and emitter, ClaudeRuntime (which holds its own root), and tier.role_set's
     capability gate.
     """
+    if getattr(card, 'account', None):
+        if root is None:
+            raise UnknownHarness('named accounts require a deployment root')
+        from . import accounts
+        from .config import load
+        return accounts.selected(card, load(root)).harness
     if card.harness:
         return card.harness
     return _deployment_harness(card.role, root) or DEFAULT
@@ -1619,6 +1681,12 @@ def resolve_model(card, root=None) -> str | None:
     """
     if getattr(card, "model", None):
         return card.model
+    if root is not None:
+        from . import accounts
+        from .config import load
+        account = accounts.selected(card, load(root))
+        if account is not None:
+            return account.model
     return _deployment_model(getattr(card, "role", None), root)
 
 

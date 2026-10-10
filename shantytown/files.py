@@ -100,6 +100,8 @@ class FilesRegistry:
         if not p.is_file():
             raise LookupError(f"no such agent: {name} (looked in {p})")
         d = json.loads(p.read_text())
+        if d.get('auto_failover') is not None and type(d['auto_failover']) is not bool:
+            raise ValueError('auto_failover must be an explicit boolean')
         return Agent(
             name=name,
             role=d.get("role", "worker"),
@@ -131,6 +133,8 @@ class FilesRegistry:
             # said" — so an un-migrated card is distinguishable from one that
             # was scoped to this host on purpose (aegis-5du1bz).
             host=d.get("host"),
+            account=d.get("account"),
+            auto_failover=d.get("auto_failover"),
         )
 
     def set(self, agent: Agent) -> None:
@@ -164,6 +168,10 @@ class FilesRegistry:
         # agent back onto the default harness.
         if agent.harness is not None:
             existing["harness"] = agent.harness
+        if agent.account is not None:
+            existing["account"] = agent.account
+        if agent.auto_failover is not None:
+            existing["auto_failover"] = agent.auto_failover
         if agent.dangerous:
             existing["dangerous"] = agent.dangerous
         # Same write-only-when-true shape as `dangerous` above: launch config the
@@ -223,7 +231,26 @@ class FilesRegistry:
         # repointed at `st-*` by a projection, which would leave every card
         # addressing a session that does not exist while the real ones ran on.
         existing.setdefault("pane", tier_pane_for(agent.name))
-        p.write_text(json.dumps(existing, indent=2, sort_keys=True))
+        write_text_atomic(p, json.dumps(existing, indent=2, sort_keys=True))
+
+    def restore_selection(self, agent: Agent) -> None:
+        """Restore an exact account choice, including formerly absent fields.
+
+        set() preserves omissions for identity projection. A refused account
+        restart needs the opposite semantics, without overwriting unrelated card
+        fields changed by another identity writer.
+        """
+        if not agent.name or Path(agent.name).name != agent.name or agent.name in {'.', '..'}:
+            raise ValueError('unsafe agent name')
+        path = self.root / (agent.name + '.json')
+        existing = json.loads(path.read_text())
+        for key in ('account', 'harness', 'model', 'auto_failover'):
+            value = getattr(agent, key, None)
+            if value is None:
+                existing.pop(key, None)
+            else:
+                existing[key] = value
+        write_text_atomic(path, json.dumps(existing, indent=2, sort_keys=True))
 
     def all(self) -> Answer[list[Agent]]:
         """Every agent. RAISES if there is no registry to read.
@@ -289,6 +316,8 @@ class FilesTracker:
             id=item_id,
             title=d.get("title", ""),
             status=d.get("status", "open"),
+            description=(None if "description" not in d else
+                         "" if d["description"] is None else d["description"]),
             assignee=d.get("assignee"),
             priority=_priority(d),
             blocker_kind=blocker_kind(d.get("labels")),

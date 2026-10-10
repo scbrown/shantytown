@@ -130,7 +130,11 @@ def is_anchor(labels) -> bool:
 # _DECISION_LABELS, which gate a decision an agent could otherwise implement —
 # here the WORK itself is out of reach, so "execute and close" is not merely
 # unsafe, it is impossible.
-_HUMAN_BLOCKED_LABELS = frozenset({"blocked:human", "blocked:external"})
+# Human-only work can be OPEN/ready on a decision desk without blocked:human.
+# Counting it as available work produces false Rule Zero/priority alerts.
+_HUMAN_BLOCKED_LABELS = frozenset({
+    "blocked:human", "blocked:external", "desk", "needs-stiwi",
+})
 
 # Labels/titles for beads that are RECORDS, not work: a session handoff is a
 # report someone wrote, and an ANCHOR bead says "do not close" in its own title
@@ -595,9 +599,24 @@ class TrackerInbox:
 
     def mark_read(self, me: str, ids: list[str] | None = None) -> list[Message]:
         marked, failed = [], []
-        for msg in self.unread(me):
-            if ids is not None and msg.id not in ids:
-                continue
+        if ids is None:
+            messages = self.unread(me)
+        else:
+            # A verified live delivery already names its receipt. Resolve those
+            # exact IDs instead of requiring a complete recipient enumeration;
+            # a slow listing must not prevent acknowledgment of a known message.
+            # Validate the whole selection before closing any of it.
+            messages = []
+            for item_id in dict.fromkeys(ids):
+                item = self._tracker.get(item_id)
+                if (item.id != item_id or not is_message(item.title)
+                        or item.assignee not in (me, me.split("/")[-1])):
+                    raise RuntimeError(f"refused inbox acknowledgment of {item_id}: "
+                                       "receipt identity, recipient or message marker differs")
+                if item.status != "closed":
+                    messages.append(Message(id=item.id, to=me,
+                                            body=_body_of(item.title)))
+        for msg in messages:
             try:
                 self._tracker.update(msg.id, status="closed")
             except Exception as e:  # noqa: BLE001 -- one slow close must not abandon the batch

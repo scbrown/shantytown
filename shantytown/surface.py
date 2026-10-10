@@ -9,17 +9,17 @@ tests/test_command_count.py pins this table to the parser and the docstring.
 from __future__ import annotations
 
 #: THE SURFACE, declared once (Stiwi, 2026-09-17): seven verbs stay top-level and
-#: the other thirty-three live under five groups. `None` marks a verb; a tuple
+#: the other thirty-five live under five groups. `None` marks a verb; a tuple
 #: is a group's leaves, in `--help` order. This is the one copy of the count
 #: that is code, and every other copy has to agree with it.
 SURFACE: dict[str, tuple[str, ...] | None] = {
     "task": None, "go": None, "sling": None, "inbox": None, "crew": None, "anchor": None, "attach": None,
     "work": ("repool", "defer", "cost", "dream", "triage", "jobs"),
-    "agent": ("new", "stop", "harness", "cycle", "advise", "input", "ask", "answer",
+    "agent": ("new", "stop", "harness", "account", "cycle", "advise", "input", "ask", "answer",
               "log", "history", "stats"),
     "fleet": ("start", "tend", "roles", "init", "hold", "window", "dashboard",
               "watch"),
-    "repo": ("worktree", "push", "context"),
+    "repo": ("worktree", "push", "context", "pr"),
     "ops": ("doctor", "provision", "subscribe", "hooks", "help"),
 }
 

@@ -277,3 +277,15 @@ def test_tend_governor_chooses_admitted_head_before_delivery_dedup(tmp_path, mon
     current[0] = Verdict(reading=Reading())
     assert alerter.sweep([]) == ['dearing']
     assert claims == ['urgent', 'low']
+
+
+def test_tend_feed_passes_resolved_seed_examples(tmp_path, monkeypatch):
+    from shantytown.tracker_examples import TrackerExamples
+    examples = TrackerExamples(('sd', '--quipu', 'https://board.example',
+                                '--graph', 'https://seeds.example/project/sample'))
+    monkeypatch.setattr('shantytown.tracker_examples.for_deployment', lambda *a: examples)
+    alerter, panes = _lead_hauling_world(tmp_path, monkeypatch, [])
+    assert alerter.sweep([]) == ['dearing']
+    (_, message), = [x for x in panes.sent if x[0] == 'p-dearing']
+    assert 'sd --quipu https://board.example --graph https://seeds.example/project/sample show aegis-2b2tti' in message
+    assert 'br ' not in message

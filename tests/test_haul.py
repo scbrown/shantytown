@@ -762,3 +762,18 @@ def test_haul_advance_names_untaken_higher_priority_work(monkeypatch, capsys):
     assert rc == 0 and claims == ['low']
     assert '1 higher-priority' in block['reason']
     assert 'high (P1)' in block['reason'] and 'desk (P0)' not in block['reason']
+
+
+@pytest.mark.parametrize('active', [False, True])
+def test_stop_haul_passes_resolved_examples_to_both_messages(monkeypatch, capsys, active):
+    from shantytown.tracker_examples import TrackerExamples
+    examples = TrackerExamples(('sd', '--quipu', 'https://board.example',
+                                '--graph', 'https://seeds.example/project/sample'))
+    monkeypatch.setattr('shantytown.tracker_examples.for_deployment', lambda *a: examples)
+    codex = Agent(name='billy', role='worker', pane='p-b', harness='codex')
+    item = dict(id='sample-1', title='work', assignee='billy')
+    _, block = _run(monkeypatch, capsys, reg=_Reg([codex]),
+                    ready=[] if active else [item],
+                    in_progress=[item] if active else [])
+    assert 'sd --quipu https://board.example --graph https://seeds.example/project/sample show sample-1' in block['reason']
+    assert 'br ' not in block['reason']

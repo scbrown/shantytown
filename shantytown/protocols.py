@@ -195,6 +195,8 @@ class Agent:
                                   # exactly that broke the byte-identical launch
                                   # compose for three cards at once. New fields go
                                   # at the end.
+    account: str | None = None    # named subscription lane; None preserves legacy routing
+    auto_failover: bool | None = None  # per-agent opt-in; None preserves projection
 
     def effective_roles(self) -> tuple[str, ...]:
         """The role set to ACT on: the declared stack, or the tree position alone.
@@ -281,6 +283,7 @@ class WorkItem:
                                   # above); it exists so the gap can be SAID.
 
 
+    description: str | None = None  # None means this reader did not supply it.
     # Tracker-supplied modification time. Absence is unknown, never a claim
     # that an item is fresh. Appended to preserve positional construction.
     updated_at: str | None = None

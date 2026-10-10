@@ -43,6 +43,7 @@ st agent                      one agent
                               convert one agent to another harness: writes the card (with a
                               .bak), refuses a role the deployment pins, and relaunches with
                               `--now`. Omit the target to report what the card runs
+  account <agent> [name]          select account, harness and default model; --now queues a safe cycle
   cycle <agent> [--self]      clear an agent's context WITHOUT destroying its runtime:
                               checkpoint -> stop -> relaunch -> re-dispatch. `/clear`
                               drops bypass into MANUAL; this keeps it. --self REQUESTS
@@ -85,6 +86,7 @@ st repo                       a shared project repo
   worktree <repo> [agent]     provision an agent's isolated worktree off a SHARED project repo
   push <repo> [agent]         push wt/<agent> to EVERY remote; refuses if invoked from another branch
   context <query>             what code should I be looking at? (bobbin)
+  pr <owner/repo> --bead <id>  complete overlap inventory; --create records decisions then creates
 st ops                        the installation
   doctor [--install]          what's installed, stale, missing (out-of-box)
   provision [agent]           register Quipu tooling for local crew without launching
@@ -242,7 +244,7 @@ Codex input already includes its cached subset. This makes
 `cache_read / usage_in` a provider-independent prompt-cache hit rate. The fields
 are omitted—not zeroed—when every matching transcript is unknown.
 
-Forty. Seven verbs at the top level and thirty-three grouped commands under five groups
+Forty-two. Seven verbs at the top level and thirty-five grouped commands under five groups
 (`work`, `agent`, `fleet`, `repo`, `ops`). A group is a namespace and runs nothing, so it earns no
 slot; the count is the leaves. The flat spellings from before the grouping (st cycle for
 st agent cycle, and so on) still parse into the same handler, print one line on stderr saying
@@ -264,9 +266,9 @@ said "eight" while the code had twelve, and a count nobody enforces is a comment
 whose whole pitch is the exact count, that was the bug.
 
 The twenty-sixth is **dream**: the inspect/preview/manual-run surface for bounded
-background reflection. It is not hidden behind `tend` because scheduling is a
-write while status is a read, and an operator must be able to see the due time,
-rotation, and capacity refusal without running supervision.
+background reflection. Cycles require explicit admission; `tend` never creates
+them because an interval elapsed. Status shows the last cycle, rotation and
+capacity policy without running supervision.
 
 The twenty-seventh is **defer**: the tracker already knew how to hide work, but bare
 deferral did not require the deferrer to state whether the blocker was a bead, human,
@@ -331,6 +333,16 @@ but the guard against that is now the test, not this sentence.
 
 ### Transcript derivatives and credential boundaries
 
+The history Stop hook launches a detached, single-agent archive worker and returns
+without waiting for capture or scrub. Both inherited output pipes are disconnected
+from the harness. One nonblocking lock per agent prevents overlapping workers;
+an overlapping stop is coalesced into the active worker, and subsequent stops can
+capture later transcript growth. Completion and failure remain in `hook.log`;
+worker diagnostics go to the private raw archive's `worker.log`. A successful
+launch is not archival acceptance. The worker retains the scrub residual check
+and never publishes raw history. `--worker` runs the same work in the foreground
+for diagnostics and tests; no additional timer is installed.
+
 The raw transcript archive stays local and unindexed. `st-history-scrub.sh`
 creates a separate derivative: it omits supported harness tool-result objects
 wholesale, including nested Claude results and their `toolUseResult` mirrors,
@@ -387,6 +399,12 @@ Four things, and each one has to earn its line:
 
 1. **Identity from the card.** Not from an env var, not from a file in the workspace. One source.
 2. **The work.** One item, or none. A surface that prints a backlog is a dashboard.
+   When that item has no open blockers, the plate reminds the agent to record a
+   `BASELINE` before a fix or improvement: time, version, probe and result,
+   a success metric chosen before building, and the same probe afterwards (or
+   an explanation when measurement is impossible). Dispatch carries the same
+   reminder in its payload, including the dry-run preview. This is an advisory;
+   it does not inspect comments, scan the board or certify a baseline exists.
 3. **Where your stop events go**, and **whether that agent will receive them**. If your lead is
    unreachable, anchor says so *here* — not when you stall and discover it — and it says what
    happens next: the event RISES to the administrator with reason `lead-unreachable` and persists
@@ -1111,6 +1129,15 @@ queue remains feedable unless it carries `anchor`; reserve the label for records
 that have no completion state. Existing legacy coordinator title exclusions
 remain, but haul exclusion uses the explicit label.
 
+### Human-only ready work is not dispatchable
+
+The shared unfeedable predicate excludes `desk` and `needs-stiwi` labels as well
+as `blocked:human` and `blocked:external`. An open, unassigned operator action
+can appear in ready without being executable by a crew worker. Rule Zero and
+priority advisories exclude these records; labels are matched after trimming
+and case normalization. Ordinary crew work mentioning a desk in its title
+remains eligible.
+
 ### `dispatchable` means *passes the priority floor*
 
 Measured live, within sixty seconds of itself:
@@ -1208,6 +1235,11 @@ Three ways to say it, in increasing strength:
 | `st agent stop <agent> --reason "…"` | *I stopped this one, now.* Recorded durably; **not** a retirement | `st crew` and the administrator's drain report it as deliberate. Stop hooks and idle haul feeds honour the stop stamp. The removed launch stamp keeps `st fleet tend` from respawning it; `st agent new <agent>` brings it back |
 | `st fleet tend --retire <agent>` | *…and do not bring it back.* Lives on the card | `st fleet tend` never respawns it; `st fleet start` skips it; the drain never lists it |
 | `[fleet] stood_down = true` | *the whole fleet is quiet by decision* | Rule Zero yields (rank 2), and the drain withholds every dispatch step |
+
+For Codex agents, stop also terminates the card's remote-control server, updater,
+and code-mode host, even when its pane is already down. Each process must have
+the requested `SHANTY_AGENT` identity and a recognized executable or daemon argv;
+the identity is checked again before signalling. A dry run signals nothing.
 
 All three **announce themselves** rather than going quiet. A gate that silently
 stops firing is indistinguishable from a gate that is broken, which would be a worse
@@ -1356,7 +1388,10 @@ that message's pointer after confirming the input is not stranded. The closed be
 retains its content and history. If the recipient is down, the send fails, the input
 is stranded, or pointer closure fails, the pointer remains open for `st inbox`.
 
-Codex delivery first confirms an empty composer; clipped or ambiguous input is
+Codex delivery first confirms an empty composer, or recognizes an explicit resend
+of the exact body already stranded there. The latter retries Enter without
+retyping the body, after the older turn ends and Codex identity is confirmed.
+Clipped or ambiguous input is
 unverified before typing. It waits 500 ms between the final literal chunk and Enter, then
 checks for a new active turn with a cleared composer, or a visible queue preview
 matching the message. Existing activity alone is not confirmation. If the
@@ -1995,6 +2030,12 @@ serialization. Do not claim a hard quota boundary under those conditions.
 
 ### Cycle fetch budget
 
+An unattended cycle accepts Codex's dim `Ask Codex to do anything` prompt as
+empty input. The capture must retain terminal attributes: typed text (even the
+same words), mixed typed and dim text, unfamiliar suggestions and captures with
+stripped attributes remain refusals. Background-shell visibility is a separate
+gate; accepting the placeholder does not establish that no shells are running.
+
 `st agent cycle` fetches and prunes only the remote selected by the workspace's
 main/master upstream configuration (or its sole remote). Other remotes are not
 contacted. Its loss check counts commits not found on that refreshed remote;
@@ -2267,7 +2308,9 @@ down. Notices name the observation time and current verdict. Pending recovery
 history is capped at 16 notices; coalesced older notices are counted explicitly. UNKNOWN does not reset an outage or manufacture a recovery. Repair and
 human-escalation cooldowns are unchanged.
 
-`st fleet tend` rechecks deferrals on every scheduled pass. A lapsed `defer_until`
+`st fleet tend` compares the full `defer_until` timestamp on every scheduled
+pass: a timestamp-only recheck two hours from now stays quiet until that instant, even on the
+same calendar day. Lapse messages include the full UTC timestamp. A lapsed `defer_until`
 or a met `resume_when: date:...` / `resume_when: closed:...` condition can clear
 both the deferred status and timestamp after a fresh tracker read. It verifies
 that the item is open and the timestamp cleared. Automatic release requires a
@@ -2326,3 +2369,123 @@ a new session. `st ops doctor` reports a disabled session without resetting it;
 its existing empty-episode probe tests authorization, not storage commits.
 Transcript redaction covers canonical, explicit and former credential files,
 including values shadowed by an environment override.
+
+### Runtime exit with a surviving pane
+
+A pane whose foreground process is a known login shell is a stopped runtime.
+`st crew` renders it `down`, including when a refused cycle request remains
+pending; JSON reports `live: false`. Old runtime UI in scrollback does not
+override the process observation. The administrator's drain treats it as
+stopped even when its plate still holds work. Each tend pass reports a
+`runtime-exited` fault with the observed shell and leaves recovery to the
+guarded lifecycle commands. Retirement and operator stop records retain their
+meaning. An unreadable foreground process is insufficient evidence of exit;
+an actual cycle's launch interval retains `cycling`.
+
+## Named account switching
+
+Declare each subscription separately in `[accounts.<name>]` (see
+[configuration](configuration.md#named-accounts)). `st agent account alice backup`
+selects the account, its harness and its declared default model in one write.
+The running process keeps its original account until the next relaunch, and the
+usage census continues charging that account. Add `--model` to select a different
+model available on the target subscription.
+
+`--now` queues the change for a positively observed idle boundary, using the
+existing checkpointed cycle. Busy turns, typed input, option pickers, background
+shells, missing authentication, role pins, launch holds and account caps retain
+the current process. The checkpoint, workspace, ownership and live-launch checks
+still apply. `--dry-run` writes nothing. A deliberate stop cancels a queued change.
+
+`--auto-failover` opts this card into supervisor switching; `--no-auto-failover`
+turns it off. When its account has a proven drain or P0-only tier, tend considers
+all other configured accounts with fresh headroom and a free slot. It rechecks
+under the launch lock, requires a verified durable handoff, then switches at an
+idle boundary. Unknown usage or handoff state waits. After an observed successful
+switch, the administrator receives a durable notice. An indeterminate notice is
+marked `attempting` and requires operator reconciliation instead of being sent
+again on every heartbeat. No account creation or interactive login is performed.
+
+Writable file cards are the selection authority. Graph identity may be projected
+into them without clearing an existing account or explicit failover setting;
+a read-only TOML registry or identity-only graph registry refuses selection writes.
+
+Deferral summaries are serialized per deployment root and compared with the
+last successfully delivered summary. Overlapping passes and identical rendered
+summaries do not cause additional coordinator wakes. Failed delivery consumes
+neither the finding state nor the summary, so a reachable recipient can receive
+it later. A positively observed resolution re-arms a genuine later recurrence.
+
+## Tracker commands in haul instructions
+
+The haul feed, active-anchor resume, and `st ops help haul` render command examples
+from the tracker selected for that deployment or explicit CLI invocation. Seeds
+examples include the server and named graph reported by `sd where --json`; local
+store examples require the exact existing file. A single-store br deployment
+retains its configured executable and repository directory. No board read or write
+is needed to exercise the formatting fixtures.
+
+Unknown backend or unproven routing produces a routing diagnostic instead of
+mutation recipes. A multi-store br deployment also omits examples because a generic
+help page cannot identify the item's store. Resolve routing before changing work.
+The renderer does not change claim, defer, close, or re-pool behavior.
+
+Graph-context suggestions use the same selected tracker as dispatch and cycle.
+The caller passes the authoritative item ID, title and description to Camayoc's
+version 1 work-item JSON interface through stdin. A failed or incomplete item
+read reports an unknown hint; it does not resolve the ID through another board.
+The suggestion remains inferred and does not replace asserted context. The
+updated linker interface must be installed before the updated caller.
+
+After a deployment switches its board to Seeds, use its reviewed default backend
+or explicitly select `--backend seeds`. Explicit `--backend beads` still selects
+the br transport; it is not a Seeds alias. A missing ID on that explicitly
+selected board is not permission to retry against another board.
+
+## PR overlap preflight
+
+`st repo pr` earns a separate slot because it creates an external review object;
+`repo context` remains a read. Use the guarded creation path after committing and
+pushing the candidate branch. It requires the explicit GitHub repository to match
+`origin`; it does not push, merge, close another PR, or activate native auto-merge.
+Forgejo creation is not implemented by this command.
+
+```sh
+st repo pr example/project --checkout /path/to/own/worktree --bead project-abc
+st repo pr example/project --checkout /path/to/own/worktree --bead project-abc \
+  --create --title 'Concrete change' --body-file /tmp/pr-body.md \
+  --dispositions-file /tmp/overlaps.json --dry-run
+```
+
+Omit `--create` for the complete open-PR inventory and overlap report. Both renamed
+paths and explicit bead-family relationships count (`--bead-family project-epic`
+adds an otherwise unrelated parent). Dotted child IDs share their root family.
+Inventory includes drafts. Missing metadata, failed reads, nonterminating pages,
+a file count mismatch, or a candidate that differs from its remote branch refuses.
+The bound is 3,200 open PRs and fewer than 3,000 changed-file records per PR; a bound
+hit is unknown coverage, never an empty result.
+
+The dispositions file is a JSON list; every overlapping PR needs its exact head
+and a reason. For example:
+
+```json
+[{"number": 12, "head": "<exact-other-head>", "action": "independent",
+  "reason": "The changes touch separate behaviors; integration evidence is linked."}]
+```
+
+`stack` requires the other PR's exact head as the candidate base and proves its
+ancestry. `absorb` requires the referenced PR already closed at that exact head;
+this command never closes other authors' work. `independent` records the author's
+reason rather than pretending file overlap proves a semantic conflict. Duplicate,
+stale, missing or short-reason dispositions refuse before creation.
+
+Creation checks the inventory and local/remote candidate again immediately before
+posting. It appends the primary `Bead:` and exact-head dispositions to the body.
+`--dry-run` exercises all gates and previews the body without posting. An existing
+PR for the candidate branch is identified and excluded from its own overlap report
+in read mode; creation still refuses a duplicate. A lost create response or
+mismatched resulting head/base is reported **indeterminate**: inspect the remote
+PR before retrying. GitHub has no atomic expected-head create endpoint, so a branch
+race after the last read is detected on the result, not prevented. This command
+provides the crew creation path; it does not claim to intercept raw `gh` or other
+clients. Installing a mandatory external-client hook is a separate adoption step.

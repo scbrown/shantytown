@@ -34,6 +34,63 @@ if [ -z "$AGENT" ]; then
   exit 1
 fi
 
+[[ "$AGENT" =~ ^[a-zA-Z0-9_-]+$ ]] || { echo 'st-history: invalid agent' >&2; exit 1; }
+
+# Archival cost grows with transcript history. The Stop budget does not.
+# Detach both inherited pipes and the session: a background shell alone leaves
+# stdout/stderr open, so the harness still waits until its 30s deadline.
+# The worker retains the existing scoped capture + scrub + residual gate.
+if [ "${1:-}" != "--worker" ]; then
+  python3 - "$0" "$AGENT" <<'PY_LAUNCH'
+import os
+from pathlib import Path
+import subprocess
+import sys
+
+raw = Path(os.environ.get("ST_HISTORY_DIR", str(Path.home() / "gt/shantytown/.shanty/history")))
+try:
+    raw.mkdir(parents=True, exist_ok=True)
+    raw.chmod(0o700)
+    # Log diagnostics outside the harness's pipes; raw history is owner-only.
+    fd = os.open(raw / "worker.log", os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+    os.fchmod(fd, 0o600)
+    with os.fdopen(fd, "ab") as log:
+        subprocess.Popen([sys.argv[1], "--worker"], stdin=subprocess.DEVNULL,
+                         stdout=log, stderr=log, start_new_session=True,
+                         close_fds=True)
+except OSError as exc:
+    print(f"st-history: worker launch failed: {exc}", file=sys.stderr)
+    sys.exit(1)
+PY_LAUNCH
+  exit "$?"
+fi
+
+# One worker per agent, never a queue of archive rescans after rapid stops.
+# A skipped overlapping launch is not an archival success; the active worker's
+# completion is recorded in hook.log and the next stop can launch again.
+RAW="${ST_HISTORY_DIR:-$HOME/gt/shantytown/.shanty/history}"
+record_run() {
+  local verdict="$1"
+  { printf '%s\t%s\t%s\trc=%s\n' \
+      "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$AGENT" "${SHANTY_ROLE:-?}" "$verdict" \
+      >> "$RAW/hook.log" && chmod 600 "$RAW/hook.log"; } 2>/dev/null || true
+}
+mkdir -p "$RAW" || exit 1
+exec 9> "$RAW/.stop-worker-$AGENT.lock" || { record_run 1; exit 1; }
+chmod 600 "$RAW/.stop-worker-$AGENT.lock" || { record_run 1; exit 1; }
+# Use an explicit conflict code outside flock's sysexits error range. Missing
+# flock (127), I/O failures and usage errors are failures, not active workers.
+lock_rc=0
+flock -n -E 200 9 || lock_rc=$?
+if [ "$lock_rc" -eq 200 ]; then
+  echo "st-history: worker already active for $AGENT" >&2
+  exit 0
+elif [ "$lock_rc" -ne 0 ]; then
+  echo "st-history: worker lock failed for $AGENT (flock rc=$lock_rc)" >&2
+  record_run 1
+  exit 1
+fi
+
 # ⚠️ STDOUT BELONGS TO THE HARNESS ON A STOP HOOK — SEND THE CHILDREN TO STDERR.
 #
 # Both scripts below print a human summary on stdout when run by hand
@@ -62,9 +119,13 @@ fi
 # group blocks. It was visible for ~16h before anyone read a pane at the one
 # moment — an empty haul — when nothing followed it to push it off screen.
 rc=0
+phase_start=$SECONDS
 "$HERE/st-history-capture.sh" --agent "$AGENT" >&2 || rc=$?
+echo "st-history: agent=$AGENT phase=capture seconds=$((SECONDS-phase_start)) rc=$rc" >&2
 if [ "$rc" -eq 0 ]; then
+  phase_start=$SECONDS
   "$HERE/st-history-scrub.sh" --agent "$AGENT" >&2 || rc=$?
+  echo "st-history: agent=$AGENT phase=scrub seconds=$((SECONDS-phase_start)) rc=$rc" >&2
 fi
 
 # The remap. See the warning above — 2 is Claude Code's blocking code and this
@@ -80,9 +141,6 @@ fi
 #
 # Failure to log is never allowed to change the hook's verdict — an unwritable
 # log is not a reason to disturb a stop.
-LOG="${ST_HISTORY_DIR:-$HOME/gt/shantytown/.shanty/history}/hook.log"
-{ printf '%s\t%s\t%s\trc=%s\n' \
-    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$AGENT" "${SHANTY_ROLE:-?}" "$rc" \
-    >> "$LOG" && chmod 600 "$LOG"; } 2>/dev/null || true
+record_run "$rc"
 
 exit "$rc"

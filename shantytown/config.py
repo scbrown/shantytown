@@ -62,7 +62,7 @@ from . import governor as governor_mod
 from . import hostmem as hostmem_mod
 from . import quiet_detectors
 from . import session_budget as session_budget_mod
-from .governor import Policy as GovernorPolicy
+from .governor import Policy as GovernorPolicy, GovernorError
 from .hostmem import Limits as HostMemLimits
 from .session_budget import Limits as SessionLimits
 from .protocols import Agent
@@ -174,6 +174,7 @@ class Config:
     # [crew.<name>] — identity declared IN THIS FILE (GitHub #11). Empty means the
     # file declares no crew, which is the normal case: cards or the graph own it.
     crew: dict[str, Agent] = field(default_factory=dict)
+    accounts: dict = field(default_factory=dict)
     # [env] — this deployment's plumbing, folded in from env.json (aegis-8calr).
     # KEYS ARE NOT VALIDATED, deliberately, and it is the one table here that
     # isn't: the set is open by construction (a deployment's own guard path, a
@@ -331,7 +332,7 @@ def load_or_default(root) -> tuple[Config, str | None]:
 _TOP_KEYS = {"startup", "modes", "hibernate", "fleet", "crew", "env", "tmux", "dream",
              "roles", "precedence", "governor", "session_budget", "hostmem", "quiet_time",
              "harness",
-             "model", "host", "keep_current", "cycle_advice"}
+             "model", "host", "keep_current", "cycle_advice", "accounts"}
 _HARNESS_KEYS = {"default", "by_role", "required_by_role"}
 _MODEL_KEYS = {"default", "by_role", "fallback", "fallback_by_role"}
 _STARTUP_KEYS = {"mode"}
@@ -399,6 +400,7 @@ def _resolve(data: dict, path: Path) -> Config:
             or not math.isfinite(fetch_timeout) or fetch_timeout <= 0):
         raise ConfigError(f"{path}: keep_current.fetch_timeout_seconds must be a finite positive number")
     return Config(mode=mode, modes=modes,
+                  accounts=_accounts(path, _table(path, data, "accounts")),
                   keep_current_fetch_timeout_seconds=fetch_timeout,
                   harness_default=harness_default,
                   harness_by_role=harness_by_role,
@@ -537,6 +539,14 @@ def _harness(path: Path, tbl: dict,
         return out
 
     return default, _role_map("by_role"), _role_map("required_by_role")
+
+
+def _accounts(path: Path, table: dict) -> dict:
+    from . import accounts
+    try:
+        return accounts.parse(table)
+    except (accounts.AccountError, GovernorError) as exc:
+        raise ConfigError(f'{path}: {exc}') from None
 
 
 def _model(path: Path, tbl: dict, declared: set[str] | None = None) -> tuple:
@@ -885,7 +895,7 @@ def _crew_list(path: Path, mode: str, spec) -> list[str]:
 # The card fields a human may DECLARE. `pane` is included but optional — omitted,
 # it is generated (tier.pane_for), which is the whole point of that change.
 _CREW_KEYS = {"role", "reports_to", "pane", "workspace", "workspace_source",
-              "model", "harness", "dangerous", "retired", "chrome"}
+              "model", "harness", "account", "auto_failover", "dangerous", "retired", "chrome"}
 
 
 def _crew(path: Path, tbl: dict, declared: set[str] | None = None) -> dict:
@@ -926,7 +936,7 @@ def _crew(path: Path, tbl: dict, declared: set[str] | None = None) -> dict:
                 f"{path}: [crew.{name}] role = {role!r} is not one of "
                 f"{', '.join(sorted(allowed))}. Declare it as [roles.{role}] in "
                 f"this file to use it here.")
-        for flag in ("dangerous", "retired", "chrome"):
+        for flag in ("dangerous", "retired", "chrome", "auto_failover"):
             if flag in spec and not isinstance(spec[flag], bool):
                 raise ConfigError(f"{path}: [crew.{name}] {flag} must be true or "
                                   f"false, got {spec[flag]!r}")
@@ -936,6 +946,7 @@ def _crew(path: Path, tbl: dict, declared: set[str] | None = None) -> dict:
             workspace=spec.get("workspace"),
             workspace_source=spec.get("workspace_source"),
             model=spec.get("model"), harness=spec.get("harness"),
+            account=spec.get("account"), auto_failover=spec.get("auto_failover"),
             dangerous=bool(spec.get("dangerous", False)),
             chrome=bool(spec.get("chrome", False)),
             # None when the TOML does not mention it (aegis-6hfmi) — a registry

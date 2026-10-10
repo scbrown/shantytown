@@ -1,54 +1,27 @@
 # SLEEP/DREAM
 
-`st` can use otherwise-idle subscription capacity for one bounded reflection
-cycle at a time. Dreaming is background work, never a second priority queue that
-competes with operational beads.
+Dream work is admitted by an explicit request or an actionable event that
+creates an ordinary haul item. `st fleet tend` never creates or wakes a dream
+cycle merely because an interval elapsed. Existing dream haul items continue
+through the normal work feeder.
 
-```toml
-[dream]
-enabled = true
-interval_minutes = 360
-min_headroom_pct = 20
-domains = ["ontology", "infra", "codebases", "fleet-config"]
-```
+`st work dream` shows the last cycle, domain rotation and capacity policy.
+`st work dream --run -n` previews an explicitly requested cycle; `--run` creates
+one. The live worker, provider signal, headroom, delegation reserve and queued
+cycle checks remain. A busy provider can receive a queued P4 artifact without
+interrupting its pane; a free selected provider receives one requested-cycle
+message. A discrepancy detector may create actionable work through the ordinary
+tracker/event path; no new periodic detector or discrepancy producer is added.
 
-`st fleet tend` schedules a cycle only when all of these are true:
+Legacy `[dream] enabled` and `interval_minutes` settings remain readable for
+configuration compatibility. They never authorize automatic work. Configure
+`min_headroom_pct` and `domains` for explicit requests.
 
-1. The interval is due.
-2. At least one idle provider has no ordinary ready work it can actually accept.
-3. No prior dream task remains ready.
-4. An idle, feedable agent has a healthy provider reading.
-5. That provider has at least `min_headroom_pct` remaining and is outside its
-   configured `delegation_reserve_pct`.
+Cycles alternate between `consolidate` (measured domain reconciliation) and
+`dream` (reviewable improvement proposals), rotating domains. They are bounded,
+read-mostly work: no infrastructure, code or deployed configuration changes.
+Normal triage turns reviewed artifacts into ordinary work.
 
-Signal loss is not capacity. A missing or stale governor reading leaves DREAM
-asleep. The default is disabled, so merely upgrading `st` never spends tokens.
-
-Cycles alternate between:
-
-- `consolidate`: reconcile one rotating domain against Quipu and create
-  `dream-discrepancy` artifacts for measured drift.
-- `dream`: create reviewable `dream-proposal` artifacts for functional or
-  non-functional improvements.
-
-Both modes are read-mostly. Their generated bead explicitly forbids applying
-infrastructure, code, configuration, or ontology changes during the cycle.
-Normal triage turns a reviewed artifact into ordinary work later.
-
-"Can actually accept" reuses the foreground dispatch rules: work assigned to
-another agent, decision-gated work, dependency-blocked work, and work held below
-that provider's current governor floor do not suppress DREAM. Ordinary work that
-does clear those gates still preempts reflection for that provider. This keeps a
-perpetually non-empty board from making the scheduler inert without turning
-DREAM into a competing priority queue.
-
-`st work dream` shows the policy, last cycle, next due time, and domain rotation.
-`st work dream --run -n` previews the next eligible cycle without writing. `--run`
-ignores the interval and enabled bit for an operator-requested cycle, but it does
-not bypass foreground dispatchability, signal health, headroom, or reserve
-protection.
-
-Schedule state lives at `<root>/dream-state.json`. It advances only after the
-tracker returns the created bead ID. A failed creation therefore remains due and
-is retried on a later tend pass. Every created task records mode, domain,
-provider, measured headroom, and the evidence/output contract in its description.
+State lives at `<root>/dream-state.json` and advances only after observed tracker
+creation. A failed explicit request can be retried explicitly; tend does not
+blindly retry it by creating another LLM turn.

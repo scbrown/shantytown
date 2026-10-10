@@ -1,6 +1,7 @@
 import json
 import os
 import signal
+from pathlib import Path
 
 from shantytown import codex_daemon
 
@@ -191,6 +192,101 @@ def test_stop_owned_reaps_server_and_updater_for_only_one_card(tmp_path):
 
     assert stopped == (101, 102)
     assert killed == [(101, signal.SIGTERM), (102, signal.SIGTERM)]
+
+
+def test_stop_owned_reaps_orphan_code_mode_host_without_touching_peers(tmp_path):
+    proc = tmp_path / "proc"
+    proc.mkdir()
+    host = "/private/releases/current/bin/codex-code-mode-host"
+    _proc(proc, 101, cmd=host, env={"SHANTY_AGENT": "kelly"}, ppid=1)
+    _proc(proc, 201, cmd=host, env={"SHANTY_AGENT": "ian"}, ppid=1)
+    _proc(proc, 301, cmd=host, env={}, ppid=1)
+    _proc(proc, 401, cmd="python report.py codex-code-mode-host",
+          env={"SHANTY_AGENT": "kelly"})
+    killed = []
+
+    assert codex_daemon.stop_owned(
+        "kelly", proc=proc, kill=lambda pid, sig: killed.append((pid, sig))
+    ) == (101,)
+    assert killed == [(101, signal.SIGTERM)]
+
+
+def test_stop_owned_rechecks_card_identity_before_signalling(tmp_path, monkeypatch):
+    proc = tmp_path / "proc"
+    proc.mkdir()
+    _proc(proc, 101, cmd="codex app-server --remote-control --listen unix://",
+          env={"SHANTY_AGENT": "kelly"})
+    reads = []
+
+    def environ(pid, root):
+        reads.append(pid)
+        return {"SHANTY_AGENT": "kelly" if len(reads) == 1 else "ian"}
+
+    monkeypatch.setattr(codex_daemon, "_environ", environ)
+    killed = []
+    assert codex_daemon.stop_owned(
+        "kelly", proc=proc, kill=lambda pid, sig: killed.append((pid, sig))
+    ) == ()
+    assert killed == [], "a reused PID belonging to another card is untouchable"
+
+
+def test_real_cli_stop_of_down_card_reaps_helper_and_preserves_peer(tmp_path):
+    import shutil
+    import subprocess
+    import sys
+    import time
+    import uuid
+
+    import pytest
+
+    if sys.platform != "linux" or not shutil.which("bash"):
+        pytest.skip("process ownership uses Linux /proc")
+    agent = "stop-probe-" + uuid.uuid4().hex
+    root = tmp_path / "crew-root"
+    (root / "crew").mkdir(parents=True)
+    (root / "crew" / f"{agent}.json").write_text(json.dumps({
+        "role": "worker", "harness": "codex", "pane": "shanty-" + agent,
+    }))
+    children = []
+    try:
+        for owner in [agent, agent + "-peer"]:
+            child = subprocess.Popen(
+                ["bash", "-c", "exec -a /fixture/bin/codex-code-mode-host sleep 60"],
+                env={**os.environ, "SHANTY_AGENT": owner},
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            children.append(child)
+            deadline = time.monotonic() + 5
+            while not _cmdline_for_test(child.pid).startswith(
+                    "/fixture/bin/codex-code-mode-host"):
+                assert child.poll() is None
+                assert time.monotonic() < deadline
+                time.sleep(0.01)
+
+        command = [sys.executable, "-c",
+                   "from shantytown.cli import main; raise SystemExit(main())",
+                   "--root", str(root),
+                   "--backend", "files", "agent", "stop", agent]
+        dry = subprocess.run(command + ["--dry-run"], capture_output=True,
+                             text=True, timeout=15)
+        assert dry.returncode == 0, dry.stderr
+        assert all(child.poll() is None for child in children)
+        stopped = subprocess.run(command, capture_output=True, text=True, timeout=15)
+        assert stopped.returncode == 0, stopped.stderr
+        assert "was not running" in stopped.stdout
+        assert children[0].wait(timeout=5) == -signal.SIGTERM
+        assert children[1].poll() is None, "the peer's helper must stay alive"
+        again = subprocess.run(command, capture_output=True, text=True, timeout=15)
+        assert again.returncode == 0, again.stderr
+        assert children[1].poll() is None
+    finally:
+        for child in children:
+            if child.poll() is None:
+                child.kill()
+            child.wait(timeout=5)
+
+
+def _cmdline_for_test(pid):
+    return codex_daemon._cmdline(pid, Path("/proc"))
 
 
 # --------------------------------------------------------------------------

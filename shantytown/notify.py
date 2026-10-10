@@ -772,12 +772,18 @@ class IdleFleetAlerter:
 
         The claude -> 'base' mapping is FleetGovernor.lane's, restated here because
         this class deliberately does not hold a FleetGovernor (building one does
-        remote collection, and this runs on the tend timer). If a third lane ever
-        exists, `balance` already refuses to rate it, so this cannot silently start
-        preferring the wrong one.
+        remote collection, and this runs on the tend timer). Named accounts use
+        their launch identity, including while the card queues a future change.
         """
         try:
             card = self._reg.get(worker)
+            from . import config, accounts, account_state
+            cfg = config.load(self._shanty_root) if self._shanty_root is not None else config.Config()
+            if cfg.accounts:
+                card = account_state.process_card(self._shanty_root, card, cfg, self._panes)
+                account = accounts.selected(card, cfg)
+                if account is not None:
+                    return account.name
             harness = harness_mod.name_for(card, root=self._shanty_root)
         except Exception:                 # noqa: BLE001
             return ''
@@ -1041,11 +1047,13 @@ class IdleFleetAlerter:
             own_active = [b for b in active
                           if (b.get("assignee") or "").split("/")[-1] == worker]
             if worker in resumable and own_active:
+                from .tracker_examples import for_deployment
+                examples = for_deployment(self._root, self._reg)
                 bead = own_active[0]
                 target = push_to_own_pane(
                     self._reg, self._panes, worker,
                     feed_check.haul_resume_message(
-                        bead.get("id", "?"), bead.get("title") or ""))
+                        bead.get("id", "?"), bead.get("title") or "", examples=examples))
                 if target is not None:
                     nudged.append(worker)
                     self._log(f"haul: resumed idle Codex {worker} on active "
@@ -1156,10 +1164,12 @@ class IdleFleetAlerter:
                     advisory = "governor: higher-priority advisory unavailable; haul continues."
                 if advisory:
                     self._log(advisory)
+                from .tracker_examples import for_deployment
+                examples = for_deployment(self._root, self._reg)
                 message = feed_check.haul_feed_message(
                     nid, "", len(feedable) - 1,
                     headroom=sb.headroom(limits, spend), repeats=repeats,
-                    advisory=advisory)
+                    advisory=advisory, examples=examples)
                 message += f" — [st serve:{serve_id} worker:{worker}]"
             target = push_to_own_pane(self._reg, self._panes, worker, message)
             if target is None:
@@ -1586,7 +1596,24 @@ class DeferralAlerter:
         self._log = log or (lambda msg: None)
 
     def sweep(self) -> list:
-        """One pass. Returns the bead ids actually reported (usually none)."""
+        """Serialize observation/delivery/recording so overlapping passes send once."""
+        import fcntl
+        lock = Path(self._root) / "notify" / "deferral-sweep.lock"
+        try:
+            lock.parent.mkdir(parents=True, exist_ok=True)
+            with lock.open("a") as held:
+                try:
+                    fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    self._log("deferral-sweep: already running; no duplicate wake")
+                    return []
+                return self._sweep()
+        except OSError as error:
+            self._log(f"deferral-sweep: lock unavailable ({error!r}); no push")
+            return []
+
+    def _sweep(self) -> list:
+        """One serialized pass. Returns the bead ids actually reported."""
         from datetime import datetime, timezone
         from . import deferrals as pol
         from .feed_check import backend_adapter
@@ -1709,16 +1736,33 @@ class DeferralAlerter:
         findings = reports
         seen = pol.Reported(self._root)
         fresh = seen.unreported(findings)
+        import hashlib
+        import json
+        from .files import write_json_atomic
+        summary_path = Path(self._root) / "notify" / "deferral-summary.json"
+        try:
+            summary = json.loads(summary_path.read_text())
+            previous_summary = summary.get("digest") if isinstance(summary, dict) else None
+        except (OSError, ValueError):
+            previous_summary = None
         if fresh:
-            lines = pol.report(fresh)
-            # RECORD ONLY ON A DELIVERED PUSH. Marking these said when the admin's
-            # pane was unreachable would lose them permanently — the state does not
-            # change again, so nothing would ever re-report it. Same rule
-            # push_to_admin keeps by returning None rather than a silent success.
-            if self._push(self._reg, self._panes, "\n".join(lines)) is None:
-                self._log("deferral-sweep: no admin pane — nothing recorded, "
-                          "these re-report next pass")
-                return []
+            text = "\n".join(pol.report(fresh))
+            digest = hashlib.sha256(text.encode()).hexdigest()
+            if digest == previous_summary:
+                # A changed/reset finding ledger can still render the identical
+                # delivered summary. Record its state, without another LLM turn.
+                self._log("deferral-sweep: identical delivered summary suppressed")
+                fresh = []
+            else:
+                # Failed delivery consumes neither the summary nor finding state.
+                if self._push(self._reg, self._panes, text) is None:
+                    self._log("deferral-sweep: no admin pane — nothing recorded, "
+                              "these re-report next pass")
+                    return []
+                write_json_atomic(summary_path, {"digest": digest})
+        elif not findings and not retry and not store_error:
+            # A positively read resolution permits a future genuine recurrence.
+            write_json_atomic(summary_path, {})
         # Record the FULL current state, not just what was pushed: a bead that
         # stopped being lapsed must drop out of the ledger so it can report again
         # if it lapses anew.

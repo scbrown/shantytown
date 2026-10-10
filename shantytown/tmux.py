@@ -288,6 +288,25 @@ SHELL_COMMANDS = frozenset({"bash", "sh", "zsh", "fish", "dash", "ksh", "csh",
                             "tcsh", "-bash", "-sh", "-zsh"})
 
 
+def shell_foreground(panes, pane: str) -> str | None:
+    """Return a positively observed login shell; unreadable is not DOWN.
+
+    Reuse the send guard's measured foreground evidence (aegis-kc1f0i).
+    Runtime tool subprocesses do not own the terminal, and old UI text can
+    remain on screen after the runtime exits. Existence and scrollback alone
+    therefore cannot distinguish a living agent from its surviving shell.
+    Adapters without this optional reader retain their existing semantics.
+    """
+    reader = getattr(panes, "foreground", None)
+    if not callable(reader):
+        return None
+    try:
+        command = reader(pane)
+    except Exception:
+        return None
+    return command if isinstance(command, str) and command in SHELL_COMMANDS else None
+
+
 class Tmux:
     def __init__(self, socket: str | None = None) -> None:
         # Explicit arg wins; else the env; else bare tmux (default server).
@@ -508,6 +527,13 @@ class Tmux:
             codex = self._confirmed_codex(pane, fg)
             if codex:
                 from .triage import input_state, INPUT_EMPTY, INPUT_PLACEHOLDER
+                if _codex_owned_input(before, text):
+                    # An explicit resend can find the previous attempt stranded
+                    # after a slow Stop hook. Submit only this exact body; never
+                    # append it again or commit unrelated operator input.
+                    _journal_send(pane, "<retry-pending:" + text + ">")
+                    self._verify_codex_submission(pane, text, before)
+                    return
                 if input_state(before) not in (INPUT_EMPTY, INPUT_PLACEHOLDER):
                     raise PaneSubmissionUnverified(
                         f"UNVERIFIED: empty composer in {pane} not confirmed; nothing added")

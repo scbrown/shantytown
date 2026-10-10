@@ -8,12 +8,64 @@ state, and an unstatable rule is an untestable one.
 """
 
 import unittest
+import json
+
+import pytest
+
+from shantytown import cli
 
 from shantytown.harness_switch import (
     Lane, NoChange, Plan, Refusal, cross_harness_advice, plan_switch,
 )
 
 KNOWN = ("claude", "codex")
+
+
+@pytest.mark.parametrize("current,target,old_model", [
+    ("codex", "claude", "gpt-6-astra"),
+    ("claude", "codex", "claude-opus-5-5"),
+])
+@pytest.mark.parametrize("replacement", [None, "", "   "])
+def test_cross_harness_model_refusal_preserves_card_before_restart(
+        tmp_path, monkeypatch, current, target, old_model, replacement):
+    root = tmp_path / ".shanty"
+    crew = root / "crew"
+    crew.mkdir(parents=True)
+    path = crew / "scratch.json"
+    path.write_text(json.dumps(dict(name="scratch", role="administrator",
+                                   harness=current, model=old_model)))
+    before = path.read_bytes()
+    monkeypatch.setattr(cli, "_harness_lane_held", lambda *a: False)
+    def unexpected(*args, **kwargs):
+        pytest.fail("model refusal must precede restart")
+    monkeypatch.setattr(cli, "_panes", unexpected)
+    args = ["--root", str(root), "--backend", "files", "agent", "harness",
+            "scratch", target, "--now", "--force"]
+    if replacement is not None:
+        args += ["--model", replacement]
+    assert cli.main(args) == cli.REFUSED
+    assert path.read_bytes() == before
+    assert list(crew.glob("*.bak*")) == []
+
+
+@pytest.mark.parametrize("current,target,old_model,new_model", [
+    ("codex", "claude", "gpt-6-astra", "claude-opus-5-5"),
+    ("claude", "codex", "claude-opus-5-5", "gpt-6-astra"),
+])
+def test_explicit_target_model_is_written_with_harness(
+        tmp_path, monkeypatch, current, target, old_model, new_model):
+    root = tmp_path / ".shanty"
+    crew = root / "crew"
+    crew.mkdir(parents=True)
+    path = crew / "scratch.json"
+    path.write_text(json.dumps(dict(name="scratch", role="administrator",
+                                   harness=current, model=old_model)))
+    monkeypatch.setattr(cli, "_harness_lane_held", lambda *a: False)
+    assert cli.main(["--root", str(root), "--backend", "files", "agent",
+                     "harness", "scratch", target, "--model", new_model]) == cli.OK
+    card = json.loads(path.read_text())
+    assert (card["harness"], card["model"]) == (target, new_model)
+    assert len(list(crew.glob("*.bak*"))) == 1
 
 
 def switch(**kw):
