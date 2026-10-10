@@ -316,7 +316,8 @@ class FilesTracker:
             id=item_id,
             title=d.get("title", ""),
             status=d.get("status", "open"),
-            description="" if d.get("description") is None else d["description"],
+            description=(None if "description" not in d else
+                         "" if d["description"] is None else d["description"]),
             assignee=d.get("assignee"),
             priority=_priority(d),
             blocker_kind=blocker_kind(d.get("labels")),

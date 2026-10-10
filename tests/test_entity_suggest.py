@@ -291,3 +291,37 @@ def test_malformed_sdk_description_does_not_become_empty_text(camayoc, tmp_path,
 def test_non_object_linker_response_never_breaks_dispatch(camayoc, tmp_path, payload):
     result = _suggest(tmp_path, 'aegis-x1', run=runner(json.dumps(payload)))
     assert not result.node and 'invalid result' in result.note
+
+@pytest.mark.parametrize('kind', ['seeds', 'br', 'files'])
+@pytest.mark.parametrize('state', ['absent', 'null', 'empty', 'false', 'list', 'object'])
+def test_reader_distinguishes_absent_from_explicit_empty_description(camayoc, tmp_path, kind, state):
+    from shantytown.sd import SdTracker
+    from shantytown.br import BrTracker
+    from shantytown.files import FilesTracker
+    row = {'id': 'aegis-x1', 'title': 'known title', 'status': 'open'}
+    if state != 'absent':
+        row['description'] = {'null': None, 'empty': '', 'false': False,
+                              'list': [], 'object': {}}[state]
+    if kind == 'files':
+        root = tmp_path / 'items'
+        root.mkdir()
+        (root / 'aegis-x1.json').write_text(json.dumps(row))
+        tracker = FilesTracker(root)
+    else:
+        tracker = (SdTracker(repo=str(tmp_path), prefix='aegis', quipu='http://board.test')
+                   if kind == 'seeds' else BrTracker(repo=str(tmp_path)))
+        tracker._bd_for = lambda *_: SimpleNamespace(returncode=0, stderr='', stdout=json.dumps([row]))
+    calls = []
+    def run(argv, **kwargs):
+        calls.append(json.loads(kwargs['input']))
+        return runner(answer())(argv, **kwargs)
+    result = es.suggest(tmp_path, row['id'], tracker=tracker, run=run)
+    if state in {'null', 'empty'}:
+        assert len(calls) == 1
+        assert calls[0]['items'][0]['description'] == ''
+        assert 'none of the retrieved' in result.note
+    else:
+        assert calls == []
+        assert 'UNKNOWN' in result.note
+    if state == 'absent':
+        assert tracker.get(row['id']).description is None
