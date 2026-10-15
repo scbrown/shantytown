@@ -1,0 +1,11 @@
+{
+  "target": "candidate CLI / private store",
+  "before": "Old scope",
+  "after": "SPEC v1\nOne consolidated replacement.",
+  "version": 1,
+  "unacked_before_ack": true,
+  "unacked_after_ack": false,
+  "layering_refused": true,
+  "version_after_refusal": 1,
+  "production_delivery": "not invoked"
+}

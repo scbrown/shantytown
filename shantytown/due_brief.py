@@ -48,10 +48,10 @@ def projected(tracker, owner, *, now=None):
             return Answer.capped({},how=answer.how,caveat=answer.caveat)
         rows=answer.exact()
         if len(rows)>=10000: raise ValueError("decision candidate cap reached")
-        items=[]; seen=set()
+        items=[]; changes=[]; seen=set()
         from .inbox import is_message
         for row in rows:
-            if row.get("status") not in ("open","in_progress","blocked"):
+            if row.get("status") not in ("open","in_progress","blocked","deferred","hooked"):
                 continue
             if not all(isinstance(row.get(k),str) and row[k] for k in ("id","title","status")) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*",row["id"]):
                 raise ValueError("invalid decision identity")
@@ -61,11 +61,27 @@ def projected(tracker, owner, *, now=None):
                 continue
             if type(row.get("priority")) is not int or row["priority"] not in range(5):
                 raise ValueError("invalid decision priority")
+            generation = row.get("spec_version")
+            if generation is not None:
+                previous, acknowledged = row.get("spec_previous_version"), row.get("spec_ack_version")
+                if (type(generation) is not int or generation < 1 or type(previous) is not int
+                        or not 0 <= previous < generation or (acknowledged is not None
+                        and (type(acknowledged) is not int or not 0 <= acknowledged <= generation))):
+                    raise ValueError("invalid spec generation")
+                changed = _date(row.get("spec_changed_at"))
+                if changed is None:
+                    raise ValueError("spec timestamp UNKNOWN")
+                if acknowledged != generation or row.get("spec_ack_actor") != row.get("assignee"):
+                    changes.append({"id":row["id"],"previous":previous,"version":generation,
+                                    "changed_at":changed.isoformat()})
+            if row["status"] not in ("open","in_progress","blocked"):
+                continue  # spec awareness never makes a deferred item dispatchable
             due=_date(row.get("due_at"))
             items.append({"id":row["id"],"title":row["title"],"status":row["status"],"priority":row["priority"],"due_at":due.isoformat() if due else None})
         packet={"top":sorted(items,key=lambda row:(row["priority"],row["id"]))[:3],
                 "coming":sorted((row for row in items if row["due_at"] and _date(row["due_at"])<=now+timedelta(days=3)),key=lambda row:(_date(row["due_at"]),row["priority"],row["id"]))[:3],
-                "undated":sum(row["due_at"] is None for row in items)}
+                "undated":sum(row["due_at"] is None for row in items),
+                "changes":sorted(changes,key=lambda change:change["changed_at"])[:3]}
         return Answer.complete_read(packet,how=answer.how+"; decision lists reuse scalar fields")
     except Exception as error:
         return Answer.capped({},how="decision lists",caveat=f"UNKNOWN: {type(error).__name__}")
@@ -82,13 +98,20 @@ def render(answer, *, now=None, fleet=False):
         status = " [blocked]" if row["status"] == "blocked" else ""
         title = _cut(" ".join(row["title"].split()), 12)
         return f'P{row["priority"]} {row["id"]} {date}{status} {title}'
-    packet = {**packet, "top":list(packet["top"][:3]), "coming":list(packet["coming"][:3])}
+    packet = {**packet, "top":list(packet["top"][:3]), "coming":list(packet["coming"][:3]),
+              "changes":list(packet.get("changes",[])[:3])}
     omitted = False
     while True:
         lists = []
         for label, key in (("Top of your plate", "top"), ("Coming due", "coming")):
             text = "; ".join(entry(row) for row in packet[key]) or "none"
             lists.append(f"  {label}:\n    {text}")
+        if packet["changes"]:
+            def change(row):
+                age = max(0, int((now - _date(row["changed_at"])).total_seconds()))
+                age_text = f"{age//86400}d" if age >= 86400 else f"{age//3600}h" if age >= 3600 else f"{age//60}m"
+                return f'{row["id"]} SPEC CHANGED v{row["previous"]} -> v{row["version"]} (unacked)' + (f" {age_text}" if fleet else "")
+            lists.append("  " + "; ".join(change(row) for row in packet["changes"]))
         if fleet:
             lists.append(f'  {packet["undated"]} active items have no due date')
         if omitted:
@@ -96,7 +119,7 @@ def render(answer, *, now=None, fleet=False):
         result = "\n".join(lists) + "\n"
         if len(result.encode()) <= CAP:
             return result
-        key = max(("top", "coming"), key=lambda k:len(packet[k]))
+        key = max(("top", "coming", "changes"), key=lambda k:len(packet[k]))
         if not packet[key]:
             return "  Top of your plate: UNKNOWN (byte cap)\n  Coming due: UNKNOWN (byte cap)\n"
         packet[key].pop()
@@ -105,11 +128,21 @@ def render(answer, *, now=None, fleet=False):
 
 def _valid_packet(packet):
     """Treat cached data as untrusted; malformed data cannot imply empty work."""
-    if not isinstance(packet, dict) or set(packet) != {"top", "coming", "undated"}:
+    if not isinstance(packet, dict) or set(packet) not in ({"top", "coming", "undated"}, {"top", "coming", "undated", "changes"}):
         return False
     if type(packet["undated"]) is not int or not 0 <= packet["undated"] < 10000:
         return False
     try:
+        changes = packet.get("changes", [])
+        if not isinstance(changes, list) or len(changes) > 3:
+            return False
+        for change in changes:
+            if (not isinstance(change, dict) or not isinstance(change.get("id"), str)
+                    or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", change["id"])
+                    or type(change.get("version")) is not int or type(change.get("previous")) is not int
+                    or not 0 <= change["previous"] < change["version"]
+                    or _date(change.get("changed_at")) is None):
+                return False
         for key in ("top", "coming"):
             rows = packet[key]
             if not isinstance(rows, list) or len(rows) > 3:
@@ -145,7 +178,7 @@ def load(tracker, root: Path, owner, *, now=None):
         if not tracker._use_remote_projection():
             raise ValueError("unsupported decision projection")
         proof = tracker.prove_store()
-        identity = hashlib.sha256(json.dumps([proof.quipu_url,proof.graph,owner]).encode()).hexdigest()
+        identity = hashlib.sha256(json.dumps([proof.quipu_url,proof.graph,owner,"spec-brief-v1"]).encode()).hexdigest()
         path = root / "cache" / ("decision-" + identity + ".json")
         try:
             if path.is_symlink() or path.stat().st_size > 32768:

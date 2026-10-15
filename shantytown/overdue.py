@@ -59,8 +59,9 @@ def findings(rows, now):
 
 
 class OverdueAlerter:
-    def __init__(self, root, reg, *, read, deliver, events=None, receipt=None, ack=None, now=None, log=None):
+    def __init__(self, root, reg, *, read, deliver, events=None, receipt=None, ack=None, specs=None, spec_ack=None, spec_deliver=None, now=None, log=None):
         self.root, self.reg = Path(root), reg
+        self.specs, self.spec_ack, self.spec_deliver = specs, spec_ack, spec_deliver
         self.ack = ack
         self.receipt = receipt
         self.events = events
@@ -100,6 +101,20 @@ class OverdueAlerter:
                 raise ValueError("invalid unlock reminder event")
             current.append({"id":event["id"],"due_at":event["episode"],
                             "assignee":event["recipient"],"kind":"unlock"})
+        try:
+            spec_events = self.specs().exact() if self.specs is not None else []
+        except Exception as error:
+            self.log(f"spec producer UNKNOWN ({type(error).__name__}); other reminders still evaluated")
+            spec_events = []
+        for event in spec_events:
+            if (not isinstance(event,dict) or event.get("kind") != "spec"
+                    or not all(isinstance(event.get(k),str) and event[k] for k in ("id","episode","summary"))
+                    or type(event.get("previous")) is not int or type(event.get("version")) is not int
+                    or not 0 <= event["previous"] < event["version"]
+                    or event["episode"] != str(event["version"]) or type(event.get("urgent")) is not bool):
+                raise ValueError("invalid spec notification event")
+            current.append({"id":event["id"],"due_at":event["episode"],"kind":"spec",
+                            "assignee":event.get("recipient"),"detail":event})
         # Corruption is UNKNOWN, not an empty ledger authorizing repeat wakes.
         ledger = json.loads(self.path.read_text()) if self.path.exists() else {"entries": {}, "pending": {}}
         if not isinstance(ledger, dict) or set(ledger) != {"entries", "pending"}:
@@ -109,6 +124,7 @@ class OverdueAlerter:
             raise ValueError("invalid overdue ledger entries")
         if len(entries) > 10000:
             raise ValueError("unlock receipt retention budget reached; review compaction before delivery")
+        details = {}
         grouped = {}
         live_keys = set()
         for row in current:
@@ -125,6 +141,7 @@ class OverdueAlerter:
             if key in live_keys:
                 raise ValueError("duplicate reminder episode")
             live_keys.add(key)
+            details[key] = row
             previous = entries.get(key)
             if isinstance(previous,dict):
                 if set(previous) != {"at","receipt","ack"}:
@@ -146,13 +163,13 @@ class OverdueAlerter:
                 raise ValueError("invalid known reminder receipt ID")
             already = (self.receipt(recipient,packet["marker"],known_id) if known_id is not None
                        else self.receipt(recipient,packet["marker"])) if self.receipt is not None else False
-            if already and self.ack is not None and any(json.loads(key)[0] == "unlock" for key in packet["keys"]) and not isinstance(already,str):
+            if already and any(json.loads(key)[0] in ("unlock","spec") for key in packet["keys"]) and (self.ack is not None or self.spec_ack is not None) and not isinstance(already,str):
                 raise ValueError("unlock ACK requires a verified receipt ID")
             if not already:
                 self.log(f"overdue: {recipient} attempted receipt UNKNOWN; no resend")
                 continue
             for key in packet["keys"]:
-                if key in live_keys or json.loads(key)[0] == "unlock":
+                if key in live_keys or json.loads(key)[0] in ("unlock","spec"):
                     entries[key] = {"at":now.timestamp(),"receipt":already if isinstance(already,str) else None,"ack":None}
             del pending[recipient]
             sent.append(recipient)
@@ -168,29 +185,48 @@ class OverdueAlerter:
             # ledger packet, not lost when the visible preview is shortened.
             preview = ", ".join(ids[:5])[:150]
             overdue_count = sum(json.loads(key)[0] == "overdue" for key in keys)
-            unlock_count = len(keys) - overdue_count
+            spec_keys = [key for key in keys if json.loads(key)[0] == "spec"]
+            unlock_count = len(keys) - overdue_count - len(spec_keys)
             body = (f"Work reminders ({overdue_count} overdue, {unlock_count} unlocked): {preview}. "
                     "Close, re-rank, or re-date with a reason. Full digest: notify/overdue.json.")
+            if spec_keys:
+                notices = []
+                for key in spec_keys[:3]:
+                    detail = details[key]["detail"]
+                    summary = detail["summary"].encode()[:30].decode("utf-8", "ignore")
+                    notices.append(f'{detail["id"]} spec v{detail["previous"]} -> v{detail["version"]}: {summary}')
+                body = "; ".join(notices) + ". Diff: sd history <id>; acknowledge: st work item ack <id>."
+                if len(spec_keys) > 3 or overdue_count or unlock_count:
+                    body += " Other reminders retained in notify/overdue.json."
+                if len((marker + " " + body).encode()) > 400:
+                    raise ValueError("spec pointer exceeds shared notification byte cap")
             packet = {"marker":marker,"body":body,"keys":keys,"attempted":True}
             pending[recipient] = packet
             write_json_atomic(self.path, ledger)
-            delivered = self.deliver(recipient, marker, body)
+            if spec_keys:
+                if self.spec_deliver is None:
+                    raise ValueError("spec delivery adapter unavailable")
+                urgent = any(details[key]["detail"]["urgent"] for key in spec_keys)
+                delivered = self.spec_deliver(recipient, marker, body, urgent=urgent)
+            else:
+                delivered = self.deliver(recipient, marker, body)
             if isinstance(delivered,PendingReceipt):
                 packet["receipt_id"] = delivered.identifier
                 write_json_atomic(self.path,ledger)
                 continue
             if delivered is not None and type(delivered) not in (bool,str):
                 raise ValueError("unsupported reminder delivery evidence")
-            if delivered and (self.ack is None or not unlock_count or isinstance(delivered,str)):
+            if delivered and ((self.ack is None and self.spec_ack is None) or not (unlock_count or spec_keys) or isinstance(delivered,str)):
                 for key in keys:
                     entries[key] = {"at":now.timestamp(),"receipt":delivered if isinstance(delivered,str) else None,"ack":None}
                 del pending[recipient]
                 sent.append(recipient)
                 write_json_atomic(self.path, ledger)
-        if self.ack is not None:
+        if self.ack is not None or self.spec_ack is not None:
             for key, evidence in entries.items():
                 kind, identifier, episode, _recipient = json.loads(key)
-                if kind != "unlock" or not isinstance(evidence,dict) or evidence.get("ack") == "confirmed":
+                acknowledge = self.spec_ack if kind == "spec" else self.ack if kind == "unlock" else None
+                if acknowledge is None or not isinstance(evidence,dict) or evidence.get("ack") == "confirmed":
                     continue
                 retained = evidence.get("receipt")
                 if not isinstance(retained,str) or not retained:
@@ -200,12 +236,12 @@ class OverdueAlerter:
                 evidence["ack"] = "attempted"
                 write_json_atomic(self.path,ledger)
                 try:
-                    if self.ack(identifier,episode,retained,attempted=attempted):
+                    if acknowledge(identifier,episode,retained,attempted=attempted):
                         evidence["ack"] = "confirmed"
                         write_json_atomic(self.path,ledger)
                 except Exception as error:
                     self.log(f"unlock ACK UNKNOWN ({type(error).__name__}); retained receipt, no resend")
         ledger["entries"] = {key:value for key,value in entries.items()
-                             if key in live_keys or json.loads(key)[0] == "unlock"}
+                             if key in live_keys or json.loads(key)[0] in ("unlock","spec")}
         write_json_atomic(self.path, ledger)
         return sent

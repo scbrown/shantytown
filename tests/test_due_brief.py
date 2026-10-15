@@ -133,3 +133,20 @@ def test_worker_plate_reuses_projection_without_changing_custody_candidates(monk
     assert result.complete and result.exact()["coming"][0]["id"] == "blocked"
     assert calls == [("ellie", True)]
     assert not (tmp_path / "cache").exists()
+
+
+def test_spec_change_is_capped_advisory_until_matching_owner_ack():
+    data = [{**row("changed-work"), "spec_version": 2, "spec_previous_version": 1,
+             "spec_changed_at": (NOW-timedelta(hours=2)).isoformat(),
+             "spec_ack_version": 1, "spec_ack_actor": "ellie"}]
+    tracker = SimpleNamespace(decision_rows=lambda owner: Answer.complete_read(data, how="fixture"))
+    answer = due_brief.projected(tracker, "ellie", now=NOW)
+    assert answer.complete
+    text = due_brief.render(answer, now=NOW, fleet=True)
+    assert "SPEC CHANGED v1 -> v2 (unacked) 2h" in text and len(text.encode()) <= 400
+    data[0]["spec_ack_version"] = 2
+    assert "SPEC CHANGED" not in due_brief.render(due_brief.projected(tracker, "ellie", now=NOW))
+    data[0]["spec_ack_actor"] = "former-owner"
+    assert "SPEC CHANGED" in due_brief.render(due_brief.projected(tracker, "ellie", now=NOW))
+    data[0]["spec_ack_version"] = 3
+    assert not due_brief.projected(tracker, "ellie", now=NOW).complete

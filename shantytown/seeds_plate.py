@@ -19,6 +19,10 @@ SCHEMA = "https://schema.org/"
 SEEDS = "https://seeds.local/"
 MESSAGE_PATTERN = json.dumps(r"^\s*(inbox:|mail:)")
 FIELDS = {
+    **{SEEDS + "ontology/" + native: public for native, public in (
+        ("specVersion", "spec_version"), ("specPreviousVersion", "spec_previous_version"),
+        ("specChangedAt", "spec_changed_at"), ("specSummary", "spec_summary"),
+        ("specAckVersion", "spec_ack_version"), ("specAckActor", "spec_ack_actor"))},
     SCHEMA + "identifier": "id",
     SCHEMA + "name": "title",
     SCHEMA + "agent": "assignee",
@@ -236,7 +240,7 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
                active_only: bool = False, capacity: bool = False,
                plate_owners: tuple[str, ...] | None = None,
                include_messages: bool = False, shape_reads=None,
-               decision: bool = False) -> Answer[list[dict]]:
+               decision: bool = False, only_specs: bool = False) -> Answer[list[dict]]:
     how = (
         "Seeds owner-scoped plate fields"
         if agent is not None
@@ -268,7 +272,7 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
         branches = []
         for g in graphs:
             statuses = (
-                ("hooked", "in_progress", "open", "blocked") if decision else
+                ("hooked", "in_progress", "open", "blocked", "deferred") if decision else
                 ("hooked", "in_progress", "open") if plate_owners is not None else
                 ("in_progress",) if active_only else
                 ("open", "in_progress")
@@ -310,6 +314,7 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
                     branches.append(
                         f"{{ GRAPH {_iri(g)} {{ {owner_clause}?s a <{SCHEMA}Action> ; "
                         f"<{SEEDS}ontology/status> {json.dumps(status)} . "
+                        + (f"?s <{SEEDS}ontology/specVersion> ?specGeneration . " if only_specs else "")
                         + ("" if include_messages else
                          f"FILTER NOT EXISTS {{ ?s <{SCHEMA}name> ?title . "
                          f"FILTER(REGEX(STR(?title), {MESSAGE_PATTERN})) }} ") + "} "
@@ -318,10 +323,10 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
         query = (
             "SELECT (STR(?s) AS ?subject) ?graph WHERE { "
             + " UNION ".join(branches)
-            + " } LIMIT 10000"
+            + f" }} LIMIT {501 if only_specs else 10000}"
         )
         candidates = _query(proof, query, timeout)["rows"]
-        if len(candidates) >= 10000:
+        if len(candidates) >= (501 if only_specs else 10000):
             raise ValueError("plate candidate budget reached")
         selected = {}
         for candidate in candidates:
@@ -393,7 +398,7 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
                     raise ValueError("unsupported typed plate value")
                 value = value["value"]
             if (
-                key == "assignee"
+                key in ("assignee", "spec_ack_actor")
                 and isinstance(value, str)
                 and value.startswith(SEEDS + "principal/")
             ):

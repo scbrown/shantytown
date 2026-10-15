@@ -1431,11 +1431,17 @@ def build_parser() -> argparse.ArgumentParser:
     # documented `bd update -a ""` clears the assignee and LEAVES the status at
     # in_progress, dropping the item off every feed mechanism at once.
     wi = leaf("item", help="backend-neutral exact-ID show/update/comment/close")
-    wi.add_argument("item_action", choices=("show", "update", "comment", "close"))
+    wi.add_argument("item_action", choices=("show", "update", "comment", "close", "rescope", "ack"))
     wi.add_argument("item")
     wi.add_argument("--status", choices=("open", "in_progress"))
     wi.add_argument("--assignee")
     wi.add_argument("--priority", type=int, choices=range(5))
+    wi.add_argument("--spec-file", type=Path)
+    wi.add_argument("--quote")
+    wi.add_argument("--requester")
+    wi.add_argument("--summary")
+    wi.add_argument("--urgent", action="store_true")
+    wi.add_argument("--session", help="session provenance; defaults to the actor's current recorded session")
     wi.add_argument("--description-file", type=Path)
     wi.add_argument("--notes-file", type=Path)
     wi.add_argument("--replace-text", action="store_true",
@@ -5654,7 +5660,7 @@ def _looks_stranded(panes, pane: str) -> bool:
 
 
 def _inbox_durable(a, agent, msg: str, panes, typed: str | None = None,
-                   sender: str | None = None) -> int:
+                   sender: str | None = None, *, boundary_only: bool = False) -> int:
     """Persist, deliver live when possible, then retire that delivered pointer."""
     # BEADS BY DEFAULT for -d (dearing, qdal.2 follow-up). `-d` is the flag you
     # reach for when the message MUST survive your session dying. A local files
@@ -5736,6 +5742,9 @@ def _inbox_durable(a, agent, msg: str, panes, typed: str | None = None,
               f"({type(e).__name__}: {str(e)[:100]}). Nothing guaranteed to "
               f"survive; not downgrading to an ephemeral send.", file=sys.stderr)
         return CANNOT_TELL
+    if boundary_only:
+        print(f"  -> {agent.name}    delivered to inbox as {item.id} ({backend}); queued for its next turn boundary")
+        return OK
     # Persisted. Now best-effort immediacy — never fatal to the durable result.
     # WRAPPED (GitHub #26): the send was outside the try, so a tmux failure after
     # a SUCCESSFUL persist exited 1 with a traceback. Every consumer reading the
@@ -6081,6 +6090,23 @@ def _cmd_anchor(a) -> int:
     p.decision_view = due_brief.render(due_brief.load(
         _anchor_tracker, Path(a.root), None if p.me.role == "administrator" else me),
         fleet=p.me.role == "administrator")
+    if getattr(_anchor_tracker,"store",None):
+        try:
+            from types import SimpleNamespace
+            rows = _anchor_tracker.spec_rows(None if p.me.role == "administrator" else me)
+            spec_packet = due_brief.projected(SimpleNamespace(decision_rows=lambda _:rows),me).exact()
+            notices = [f'{row["id"]} SPEC CHANGED v{row["previous"]} -> v{row["version"]} (unacked)'
+                       for row in spec_packet["changes"]]
+            if notices:
+                notice = "  " + "; ".join(notices) + "\n"
+                if len((p.decision_view + notice).encode()) > due_brief.CAP:
+                    notice = "  SPEC CHANGED (unacked; display capped)\n"
+                p.decision_view = due_brief._cut(
+                    p.decision_view, due_brief.CAP - len(notice.encode())) + notice
+        except Exception:
+            notice = "  SPEC status UNKNOWN\n"
+            p.decision_view = due_brief._cut(
+                p.decision_view, due_brief.CAP - len(notice.encode())) + notice
     print()
     print(p.render())
     from . import context_hint
@@ -12857,7 +12883,7 @@ def _tend_once(a, quiet: bool = False) -> int:
                     return verify_due_receipt(recipient,marker,identifier)
                 item = _inbox(a, default="beads").find_delivery(recipient,marker)
                 return verify_due_receipt(recipient,marker,item.id) if item is not None else None
-            def deliver_due(recipient, marker, body):
+            def deliver_due(recipient, marker, body, *, boundary_only=False):
                 from copy import copy
                 from contextlib import redirect_stdout
                 from io import StringIO
@@ -12867,7 +12893,7 @@ def _tend_once(a, quiet: bool = False) -> int:
                 output = StringIO()
                 with redirect_stdout(output):
                     code = _inbox_durable(target, _registry(a).get(recipient),
-                                         marker + " " + body, panes, sender="st fleet tend")
+                                         marker + " " + body, panes, sender="st fleet tend", boundary_only=boundary_only)
                 if code != OK:
                     return None
                 match = re.search(r"delivered to inbox as ([A-Za-z0-9_.-]+)",output.getvalue())
@@ -12878,8 +12904,18 @@ def _tend_once(a, quiet: bool = False) -> int:
                     return verify_due_receipt(recipient,marker,identifier)
                 except Exception:
                     return PendingReceipt(identifier)
+            def deliver_spec(recipient, marker, body, *, urgent):
+                return deliver_due(recipient,marker,body,boundary_only=not urgent)
             def run_due_reminders():
                 unlock_reader = None
+                spec_reader = None
+                if cfg.overdue_spec_changes:
+                    from .spec_reader import SpecReader
+                    from .sd import SdTracker
+                    selected = _tracker(a, default="beads")
+                    if not isinstance(selected,SdTracker):
+                        raise ValueError("spec changes require the selected Seeds producer")
+                    spec_reader = SpecReader(selected)
                 if cfg.overdue_external_unlocks:
                     from .unlock_reader import UnlockReader
                     from .sd import SdTracker
@@ -12894,6 +12930,9 @@ def _tend_once(a, quiet: bool = False) -> int:
                     receipt=find_due_receipt,
                     events=unlock_reader.events if unlock_reader is not None else None,
                     ack=unlock_reader.ack if unlock_reader is not None else None,
+                    specs=spec_reader.events if spec_reader is not None else None,
+                    spec_ack=spec_reader.ack if spec_reader is not None else None,
+                    spec_deliver=deliver_spec if spec_reader is not None else None,
                     log=_log).sweep()
             overdue_sent = _fleet_sweep("overdue-sweep",run_due_reminders)
             if overdue_sent:

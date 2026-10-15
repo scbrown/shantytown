@@ -1114,6 +1114,19 @@ def main(argv: list[str] | None = None) -> int:
         agent_hold.finish_turn(root, me)
         return result
     if mode == "haul":
+        try:
+            from . import config
+            cfg, _error = config.load_or_default(root)
+            if cfg.overdue_enabled and cfg.overdue_spec_changes:
+                if _ceiling_took_the_stop(root,me)[0]:
+                    return 0
+                from .spec_boundary import at_boundary
+                notice = at_boundary(root,me,reg)
+                if notice:
+                    print(json.dumps({"decision":"block","reason":notice}))
+                    return 0
+        except Exception as error:
+            print(f"spec boundary UNKNOWN: {type(error).__name__}; no repeated wake", file=sys.stderr)
         return _haul(reg, panes, me, root)
     # shows_ready_ui is the RUNTIME's marker check (triage stays runtime-blind).
     # It reads only the screen, so the settings resolver it never calls is None.

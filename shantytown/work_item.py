@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import asdict
 import json
+import os
 from pathlib import Path
 import re
 
@@ -54,6 +55,50 @@ def _comment_body(row):
 
 
 def command(args, tracker):
+    if args.item_action in ("rescope", "ack"):
+        from .sd import SdTracker
+        if not isinstance(tracker, SdTracker):
+            raise ValueError("governed rescope/ack requires the selected Seeds backend")
+        item = exact(tracker, args.item)
+        actor = os.environ.get("SHANTY_AGENT", "").strip()
+        if not actor:
+            raise ValueError("rescope/ack requires a declared acting agent")
+        if args.item_action == "ack":
+            if item.assignee != actor:
+                raise ValueError("only the current assignee can acknowledge the spec")
+            state = tracker.spec_state(args.item)
+            if getattr(args, "dry_run", False):
+                return {"id":args.item, "version":state["version"], "result":"planned"}
+            session = getattr(args,"session",None)
+            if not session and getattr(args,"root",None):
+                from .session_budget import current_session
+                session = current_session(Path(args.root),actor)
+            tracker.ack_spec(args.item, state["version"],session=session)
+            after = tracker.spec_state(args.item)
+            if after["version"] != state["version"] or after["unacked"]:
+                raise RuntimeError("spec ACK readback unproven; do not retry")
+            return {"id":args.item, "version":after["version"], "result":"verified"}
+        if getattr(args, "spec_file", None) is None:
+            raise ValueError("rescope requires --spec-file")
+        quote = getattr(args, "quote", None)
+        if quote is None:
+            raise ValueError("rescope requires --quote with the requester's verbatim words")
+        session = getattr(args, "session", None)
+        if not session:
+            from .session_budget import current_session
+            session = current_session(Path(args.root), actor)
+        if not session:
+            raise ValueError("current session UNKNOWN; supply explicit --session provenance")
+        summary = getattr(args, "summary", None) or "consolidated specification"
+        result = tracker.rescope(args.item, args.spec_file, quote=quote,
+            requester=getattr(args, "requester", None) or actor, summary=summary,
+            urgent=getattr(args, "urgent", False), session=session,
+            dry_run=getattr(args, "dry_run", False))
+        if not args.dry_run:
+            state = tracker.spec_state(args.item)
+            if state["version"] != result["version"] or not state["unacked"]:
+                raise RuntimeError("rescope readback unproven; write may have landed, do not retry")
+        return result
     if args.item_action == "show":
         from .sd import SdTracker
         if isinstance(tracker, SdTracker) and getattr(tracker, "quipu", None):
@@ -121,6 +166,14 @@ def command(args, tracker):
         if not args.dry_run:
             from .br import BrTracker
             options = {"replace_text": True} if replace_text and isinstance(tracker, BrTracker) else {}
+            from .sd import SdTracker
+            if isinstance(tracker,SdTracker) and fields.get("status") == "in_progress":
+                session = getattr(args,"session",None)
+                if not session and getattr(args,"root",None):
+                    from .session_budget import current_session
+                    session = current_session(Path(args.root),os.environ.get("SHANTY_AGENT", ""))
+                if session:
+                    options["session"] = session
             tracker.update(item.id, **options, **fields)
             after = exact(tracker, item.id)
             if any(getattr(after, key, None) != value for key, value in fields.items()):
