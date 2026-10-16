@@ -2183,7 +2183,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="per-peer push deadline, 1–3600 seconds (default 60); "
                          "includes normal pre-push hooks")
     ph.add_argument("--source-branch",
-                    help="explicit source branch; must match the selected worktree and caller")
+                    help="explicit source branch; must match the selected worktree and caller. "
+                         "Run from the selected checkout, even when its path is explicit")
     ph.add_argument("--branch",
                     help="required destination branch on each remote; no default. "
                          "Use the feature branch for source publication; reviewed "
@@ -10462,11 +10463,22 @@ def _cmd_push(a) -> int:
     invocation = _push_invocation_branch(Path(dest))
     if invocation is not None and invocation[1] != branch:
         caller_path, caller_branch = invocation
+        if source_branch is not None:
+            import shlex
+            remedy = (
+                "--source-branch does not override the caller-checkout guard. "
+                f"After verifying the selected checkout, run `cd {shlex.quote(str(Path(dest).resolve()))}` "
+                "and use that absolute source path when repeating the push command."
+            )
+        else:
+            remedy = (
+                "Run st repo push from the canonical worktree, or name the intended "
+                "branch with --source-branch after reviewing the exact ref."
+            )
         print(
             f"  refused before push: checked-out branch '{caller_branch}' at "
             f"{caller_path} differs from selected source '{branch}' at {dest}. "
-            "No remote was contacted. Run st repo push from the canonical worktree, "
-            "or name the intended branch with --source-branch after reviewing the exact ref.",
+            f"No remote was contacted. {remedy}",
             file=sys.stderr,
         )
         return REFUSED

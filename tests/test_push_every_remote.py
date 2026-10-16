@@ -753,3 +753,25 @@ def test_partial_timeout_does_not_claim_remote_rejection(two_remotes, monkeypatc
     err = capsys.readouterr().err
     assert "confirmed publication" in err and "Read back" in err
     assert "did not" not in err
+
+
+@pytest.mark.parametrize("source_path", ["absolute", "relative"])
+def test_explicit_worktree_caller_mismatch_gives_actionable_remedy(
+        two_remotes, monkeypatch, capsys, source_path):
+    import shlex
+    from shantytown import cli
+    repo, canonical, origin, forge = two_remotes
+    extra = canonical.parent / 'ellie topic'
+    _git(repo, 'worktree', 'add', '-b', 'ellie/topic', str(extra), 'main')
+    monkeypatch.chdir(repo)
+    monkeypatch.setattr(cli, 'push_every_remote',
+                        lambda *a: pytest.fail('caller mismatch must not contact peers'))
+    source = str(extra) if source_path == 'absolute' else str(Path('..') / extra.relative_to(repo.parent))
+    assert main(['repo', 'push', source, 'ellie', '--source-branch',
+                 'ellie/topic', '--branch', 'ellie/topic']) == REFUSED
+    message = capsys.readouterr().err
+    assert 'does not override the caller-checkout guard' in message
+    assert 'cd ' + shlex.quote(str(extra)) in message
+    assert 'use that absolute source path' in message
+    assert 'or name the intended branch with --source-branch' not in message
+    assert all(_sha(peer, 'main') == _sha(canonical, 'HEAD') for peer in (origin, forge))

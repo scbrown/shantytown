@@ -2600,7 +2600,10 @@ clients. Installing a mandatory external-client hook is a separate adoption step
 `--branch` before contacting any remote. Publish a candidate with
 `--branch <feature-branch>`; use `--source-branch <feature-branch>` when the selected
 worktree is on that topic instead of its canonical agent branch. The source must
-match the selected worktree and caller. Existing authority, pre-push hooks and
+match the selected worktree and caller. An explicit path selects the source tree;
+it does not bypass the caller-checkout guard. Run the command from that selected
+checkout, including when publishing an extra worktree. When changing directories,
+use an absolute source path in the repeated push command. Existing authority, pre-push hooks and
 non-fast-forward checks still apply to every trusted peer.
 
 `--branch main` explicitly selects a destination; it does not establish independent

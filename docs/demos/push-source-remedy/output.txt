@@ -1,0 +1,18 @@
+Script started on 2026-10-16 19:36:55-04:00 [COMMAND="python3 docs/demos/push-source-remedy/run-demo.py" <not executed on terminal>]
+
+BEFORE: explicit source from primary main
+  refused before push: checked-out branch 'main' at /var/tmp/st-push-remedy-opxvyylm/project differs from selected source 'worker/topic' at /var/tmp/st-push-remedy-opxvyylm/selected worktree. No remote was contacted. Run st repo push from the canonical worktree, or name the intended branch with --source-branch after reviewing the exact ref.
+exit: 1 (expected 1 )
+
+AFTER: same refusal, actionable remedy
+  refused before push: checked-out branch 'main' at /var/tmp/st-push-remedy-opxvyylm/project differs from selected source 'worker/topic' at /var/tmp/st-push-remedy-opxvyylm/selected worktree. No remote was contacted. --source-branch does not override the caller-checkout guard. After verifying the selected checkout, run `cd '/var/tmp/st-push-remedy-opxvyylm/selected worktree'` and use that absolute source path when repeating the push command.
+exit: 1 (expected 1 )
+
+CONTROL: candidate run from selected checkout
+  origin: pushed worker/topic -> worker/topic
+  peer: pushed worker/topic -> worker/topic
+exit: 0 (expected 0 )
+
+Both local peers received only worker/topic; main refs unchanged.
+
+Script done on 2026-10-16 19:36:56-04:00 [COMMAND_EXIT_CODE="0"]

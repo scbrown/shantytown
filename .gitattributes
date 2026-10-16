@@ -10,3 +10,5 @@ docs/demos/inbox-recovery/output.log whitespace=blank-at-eol,blank-at-eof,space-
 docs/demos/cycle-resume/output.log whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
 # Keep raw inbox-read recording bytes replayable and text reviewable.
 docs/demos/inbox-read/output.log whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
+# Preserve the PTY recording; CRLF is its literal terminal output.
+docs/demos/push-source-remedy/output.txt whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
