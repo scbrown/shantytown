@@ -2,7 +2,7 @@
 # Release Please updates this marked literal with the package metadata. The
 # release workflow checks the built wheel and checksum before publishing.
 # Editable installs continue to identify their executing source with deployed_sha().
-__version__ = "0.7.1"  # x-release-please-version
+__version__ = "0.8.0"  # x-release-please-version
 
 
 def deployed_sha() -> str:
