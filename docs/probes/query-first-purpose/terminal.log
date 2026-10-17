@@ -1,0 +1,16 @@
+Script started on 2026-10-17 06:43:48-04:00 [COMMAND="python3 docs/probes/query-first-purpose/reproduce.py" <not executed on terminal>]
+BASE ce995db60403bb1ccfd084a15cf2133f69b04ebc
+🔎 QUERY-FIRST (knowledge graph): before you start a task, ask quipu what is already known about what you're about to touch — prior incidents, decided facts, provenance — instead of re-deriving it or grepping items. It is a live query, not a doc:
+  Use the provisioned homelab MCP tool quipu_search with {"query":"<subject>"}. Use quipu_query for SPARQL and quipu_ask for stored queries.
+  REST fallback: curl -s "$QUIPU_SERVER/search" -H 'content-type: application/json' -d '{"query":"<subject>"}'
+Query-first, not grep-first: the graph already knows more than you can grep.
+
+HEAD 2ccaf32
+🔎 QUERY-FIRST (knowledge graph): before you start a task, ask quipu what is already known about what you're about to touch — prior incidents, decided facts, provenance — instead of re-deriving it or grepping items. It is a live query, not a doc:
+  Use the provisioned homelab MCP tool quipu_search with {"query":"<subject>","usage":{"purpose":"CONTEXT"}}. Use quipu_query for SPARQL and quipu_ask for stored queries.
+  REST fallback: curl -s "$QUIPU_SERVER/search" -H 'X-Quipu-Client: query-first' -H 'X-Quipu-Purpose: CONTEXT' -H 'content-type: application/json' -d '{"query":"<subject>"}'
+Query-first, not grep-first: the graph already knows more than you can grep.
+
+Same SessionStart trigger: omitted purpose -> explicit CONTEXT; zero graph reads.
+
+Script done on 2026-10-17 06:43:48-04:00 [COMMAND_EXIT_CODE="0"]

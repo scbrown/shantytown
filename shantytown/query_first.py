@@ -23,9 +23,10 @@ DIRECTIVE = (
     "incidents, decided facts, provenance — instead of re-deriving it or "
     "grepping items. It is a live query, not a doc:\n"
     "  Use the provisioned homelab MCP tool quipu_search with "
-    "{\"query\":\"<subject>\"}. Use quipu_query for SPARQL and quipu_ask "
+    "{\"query\":\"<subject>\",\"usage\":{\"purpose\":\"CONTEXT\"}}. Use quipu_query for SPARQL and quipu_ask "
     "for stored queries.\n"
     "  REST fallback: curl -s \"$QUIPU_SERVER/search\" "
+    "-H 'X-Quipu-Client: query-first' -H 'X-Quipu-Purpose: CONTEXT' "
     "-H 'content-type: application/json' -d '{\"query\":\"<subject>\"}'\n"
     "Query-first, not grep-first: the graph already knows more than you can grep."
 )

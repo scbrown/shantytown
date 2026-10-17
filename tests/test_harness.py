@@ -163,6 +163,8 @@ def test_query_first_directive_is_actionable_and_host_agnostic():
     $QUIPU_SERVER)."""
     from shantytown import query_first
     d = query_first.DIRECTIVE
+    assert "CONTEXT" in d and "X-Quipu-Purpose: CONTEXT" in d
+    assert "usage" in d
     assert "QUERY-FIRST" in d
     assert "quipu_search" in d, "does not name the provisioned MCP tool"
     assert "$QUIPU_SERVER" in d and "/search" in d, "no runnable REST fallback"
