@@ -1,0 +1,9 @@
+Script started on 2026-10-16 08:18:45-04:00 [COMMAND="PYTHONPATH=. python3 docs/demos/push-freeze/run.py" <not executed on terminal>]
+BASE 22c563e64d2026389df15c043f4f55943bca91af
+{"phase": "frozen", "refs_advanced": {"forge": true, "origin": true}, "refused": false}
+unfrozen positive control: BOTH refs match HEAD
+CANDIDATE workspace.py SHA256 79680de6f9722d89784031e0b45a5087b33db95e68ffba2ed07b3d8803f13b4b
+{"phase": "frozen", "refs_advanced": {"forge": false, "origin": false}, "refused": true}
+unfrozen positive control: BOTH refs match HEAD
+
+Script done on 2026-10-16 08:18:47-04:00 [COMMAND_EXIT_CODE="0"]

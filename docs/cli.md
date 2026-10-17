@@ -2685,3 +2685,39 @@ notifications for that item for 24 hours. Future, absent, invalid, or differentl
 attributed timestamps do not arm the cooldown. Pending delivery and prior ask
 stages remain recorded; normal eligibility resumes when the cooldown expires.
 The verdict does not release an item, rewrite priorities, or clear its gate.
+
+
+### Push freezes and selected peers
+
+`st repo push` keeps its default fan-out to all approved peer remotes. Add
+`--remote origin` to publish only that configured peer, or repeat `--remote` for
+an explicit subset. Source and destination branch checks, peer authorization,
+mirror exclusion, hooks and bounded push deadlines still apply. Selection does
+not grant authority to an unapproved upstream.
+
+Before a maintenance freeze, the operator records a reason in Git configuration
+for every effective push hostname, on each crew host that can publish:
+
+```bash
+git config --global --add st.push-freeze.forge.example 'maintenance window'
+```
+
+The key is `st.push-freeze.<host>`. Any configured value, even an empty reason,
+means HOLD. The tool reads all scopes/values; a local empty value cannot override
+a global freeze. Only the owning operator releases it by removing its values
+from the same scopes after the window passes. There is no automatic time expiry
+or push-command bypass. A chat announcement alone cannot be detected locally.
+
+Every selected peer's effective push URLs (including multiple pushurls and Git
+URL rewrites) are preflighted before any peer is contacted. A frozen host or an
+unreadable URL/config refuses the whole set. Mirrors remain uncontacted. The
+check repeats before each push; a hold appearing after an earlier publication
+stops the remaining writes and reports partial publication. It never rewrites
+an earlier remote to undo a push.
+
+Host matching uses the Git URL's hostname, not DNS or SSH alias resolution.
+Record all aliases used in push URLs. Hosts that cannot be represented by the
+freeze key (for example, a raw IPv6 literal) refuse instead of assuming unfrozen.
+This client check does not intercept raw
+`git push`, prevent other clients, or cancel a push already in flight. Operator
+freeze coordination and server-side write controls remain necessary.

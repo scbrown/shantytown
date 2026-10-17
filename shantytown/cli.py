@@ -2170,10 +2170,12 @@ def build_parser() -> argparse.ArgumentParser:
                          "uncommitted or unpushed work")
 
     ph = leaf("push",
-                        help="push your worktree branch to EVERY peer remote — "
+                        help="push your worktree branch to all peers, or select --remote — "
                              "the repo has two live peers and pushing one forks "
                              "it; declared mirrors (st-push-role=mirror) are "
                              "never pushed")
+    ph.add_argument("--remote", action="append", dest="remotes", metavar="NAME",
+                    help="publish only this configured peer (repeatable); default: all peers")
     ph.add_argument("repo",
                     help="the shared checkout: a path, or a bare name under "
                          "$GT_ROOT (~/gt), e.g. `shantytown` -> ~/gt/shantytown")
@@ -10438,6 +10440,7 @@ def _cmd_push(a) -> int:
               "source. This command does not replace the reviewed merge helper.",
               file=sys.stderr)
         return REFUSED
+    remotes = getattr(a, "remotes", None)
     agent = a.agent or os.environ.get("SHANTY_AGENT")
     if not agent:
         print("  refused: no agent. `st repo push <repo> <agent>` or set "
@@ -10505,13 +10508,14 @@ def _cmd_push(a) -> int:
         print("  refused before push: --timeout must be 1–3600 seconds; "
               "no remote was contacted.", file=sys.stderr)
         return REFUSED
+    selected = {"selected_remotes": tuple(remotes)} if remotes is not None else {}
     if timeout == 60:
-        outcomes = push_every_remote(dest, branch, a.branch)
+        outcomes = push_every_remote(dest, branch, a.branch, **selected)
     else:
         from functools import partial
         from .workspace import _git_push
         outcomes = push_every_remote(dest, branch, a.branch,
-                                     push_run=partial(_git_push, timeout=timeout))
+                                     push_run=partial(_git_push, timeout=timeout), **selected)
     if not outcomes:
         print(f"  refused: {dest} has no remotes configured — nothing to push to.",
               file=sys.stderr)

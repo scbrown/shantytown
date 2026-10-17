@@ -1763,9 +1763,40 @@ def push_authority_refusal(dest: Path | str, run: GitRunner = _git,
     return ""
 
 
+def push_freeze_refusal(dest: Path | str, remotes: list[str],
+                        run: GitRunner = _git) -> str:
+    """Check every effective push URL against operator-recorded host freezes.
+
+    Git resolves pushInsteadOf/pushurl here. All configured values are read so a
+    repo-local empty value cannot erase a global hold. This is a local preflight,
+    not a server lock or a claim that a prose-only freeze can be discovered.
+    """
+    for remote in remotes:
+        rc, urls = run(dest, "remote", "get-url", "--push", "--all", remote)
+        if rc or not urls.strip():
+            return f"REFUSED BEFORE PUSH: {remote} push URLs unreadable; no push authorized."
+        for url in urls.splitlines():
+            host, _ = _remote_authority(url)
+            if not re.fullmatch(r"[a-z0-9][a-z0-9.-]*", host):
+                return (f"REFUSED BEFORE PUSH: {remote} host cannot be checked "
+                        "against freeze configuration; no push authorized.")
+            rc, reason = run(dest, "config", "--get-all", f"st.push-freeze.{host}")
+            if rc == 1:
+                continue
+            if rc != 0:
+                return (f"REFUSED BEFORE PUSH: freeze state for {remote} is unreadable "
+                        f"(git config exit {rc}); no push authorized.")
+            # Presence, including an empty reason, means HOLD. No time-based
+            # expiry or command-line bypass silently releases an operator hold.
+            return (f"REFUSED BEFORE PUSH: {remote} host {host} is write-frozen "
+                    f"(st.push-freeze.{host}); no push authorized.")
+    return ""
+
+
 def push_every_remote(dest: Path | str, src: str, dst: str = "main",
                       run: GitRunner = _git,
-                      push_run: PushRunner = _git_push) -> "list[PushOutcome]":
+                      push_run: PushRunner = _git_push, *,
+                      selected_remotes: tuple[str, ...] | None = None) -> "list[PushOutcome]":
     """Push `src` to `dst` on EVERY configured remote. NEVER forces.
 
     WHY EVERY REMOTE. shantytown has two live peers, neither a mirror, and each
@@ -1799,6 +1830,14 @@ def push_every_remote(dest: Path | str, src: str, dst: str = "main",
     if refusal:
         return [PushOutcome(remote="preflight", ok=False, reason=refusal)]
 
+    if selected_remotes is not None:
+        wanted = list(dict.fromkeys(selected_remotes))
+        if not wanted or any(not r or r not in remotes for r in wanted):
+            return [PushOutcome(remote="preflight", ok=False,
+                reason="REFUSED BEFORE PUSH: selected remote is empty or unconfigured; "
+                       "no remote was contacted.")]
+        remotes = [r for r in remotes if r in wanted]
+
     # NEVER PUSH A DECLARED MIRROR (aegis-x74). A raw feature branch reached
     # skein's public, scrubbed GitHub mirror through this loop because the loop
     # had no word for "mirror". The role was validated by the preflight above.
@@ -1809,7 +1848,17 @@ def push_every_remote(dest: Path | str, src: str, dst: str = "main",
                             "mirror): not pushed; it is advanced only by its "
                             "mirror protocol."))
         for m in mirrors]
-    for remote in (r for r in remotes if r not in mirrors):
+    peers = [r for r in remotes if r not in mirrors]
+    refusal = push_freeze_refusal(dest, peers, run)
+    if refusal:
+        return [PushOutcome(remote="preflight", ok=False, reason=refusal)]
+    for remote in peers:
+        # Recheck immediately before each push as well as the whole-set check.
+        # A new hold after an earlier publication is reported, never unwound.
+        refusal = push_freeze_refusal(dest, [remote], run)
+        if refusal:
+            outcomes.append(PushOutcome(remote=remote, ok=False, reason=refusal))
+            break
         rc, out, err = push_run(dest, "--porcelain", remote,
                                 f"{src}:refs/heads/{dst}")
         if rc == 0:
