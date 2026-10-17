@@ -1,5 +1,76 @@
 # Changelog
 
+## [0.8.0](https://github.com/scbrown/shantytown/compare/v0.7.1...v0.8.0) (2026-10-17)
+
+
+### Features
+
+* **auth:** materialize crew credentials in private runtime files ([#311](https://github.com/scbrown/shantytown/issues/311)) ([1277d0a](https://github.com/scbrown/shantytown/commit/1277d0a4b9ad92c53e0abc12b769eb0694e3238c))
+* bound routine administrator Stop wakes with an opt-in policy ([#305](https://github.com/scbrown/shantytown/issues/305)) ([ce995db](https://github.com/scbrown/shantytown/commit/ce995db60403bb1ccfd084a15cf2133f69b04ebc))
+* capture ceiling-transfer advisory evidence at the fleet sweep ([9a77bbe](https://github.com/scbrown/shantytown/commit/9a77bbed51097ef7dc58bf96c977e064593d84d0))
+* capture ceiling-transfer inputs and outcomes for independent policy assessment ([#315](https://github.com/scbrown/shantytown/issues/315)) ([9a77bbe](https://github.com/scbrown/shantytown/commit/9a77bbed51097ef7dc58bf96c977e064593d84d0))
+* **cost:** project request usage by UTC day for frozen joins ([#299](https://github.com/scbrown/shantytown/issues/299)) ([0c0820f](https://github.com/scbrown/shantytown/commit/0c0820fbc89885239c8662b6c1c4041eb32f14c5))
+* declare finite command sources before tracker preflight ([#302](https://github.com/scbrown/shantytown/issues/302)) ([bb9f8d2](https://github.com/scbrown/shantytown/commit/bb9f8d2a4503c0b4b9c1721185f52316e5ccfc6a))
+* **deferrals:** evaluate registered natural-event evidence ([83c8ab1](https://github.com/scbrown/shantytown/commit/83c8ab151925d81a670463da60982b3f76187f64))
+* **deferrals:** report a prose gate that is met while the field waits on a date ([#260](https://github.com/scbrown/shantytown/issues/260)) ([66284bd](https://github.com/scbrown/shantytown/commit/66284bdd8000c785d35a5bb4cc35cd26803bf62c))
+* **deferrals:** support registered natural-event resume conditions ([#295](https://github.com/scbrown/shantytown/issues/295)) ([83c8ab1](https://github.com/scbrown/shantytown/commit/83c8ab151925d81a670463da60982b3f76187f64))
+* **jobs:** expose validated declarations as versioned JSON ([#272](https://github.com/scbrown/shantytown/issues/272)) ([592f5e2](https://github.com/scbrown/shantytown/commit/592f5e236dce12d97457ea80f7260e16a64b601e))
+* run private Seeds commands after native admission ([#316](https://github.com/scbrown/shantytown/issues/316)) ([c666ed2](https://github.com/scbrown/shantytown/commit/c666ed268a277d57b0db63cf12b789d42cbe984d))
+* share scheduled overdue and unlock reminder digests ([#255](https://github.com/scbrown/shantytown/issues/255)) ([bd203ca](https://github.com/scbrown/shantytown/commit/bd203ca0b3b9368c59a948f9713c7736a39b105d))
+* **skills:** adopt six crew-workflow skills from skein ([#257](https://github.com/scbrown/shantytown/issues/257)) ([29248b5](https://github.com/scbrown/shantytown/commit/29248b5d38c1d051efbed7790df137d9a251db37))
+* **tend:** name the slowest sweeps when the pass sheds its budget (aegis-qc2) ([#292](https://github.com/scbrown/shantytown/issues/292)) ([440e4bc](https://github.com/scbrown/shantytown/commit/440e4bca9a84b8b9b11bcfc7884f2cb96094a4cc))
+
+
+### Bug Fixes
+
+* avoid repeating failed exact item reads ([#285](https://github.com/scbrown/shantytown/issues/285)) ([baf725b](https://github.com/scbrown/shantytown/commit/baf725b94621565658c6acf9e8fabd9283068079))
+* **cycle:** check automatic pane state before costly preflight ([#294](https://github.com/scbrown/shantytown/issues/294)) ([04b0b75](https://github.com/scbrown/shantytown/commit/04b0b75916e5f98eefa6d0aa6ec1f854cee3b08a))
+* deliver the admin wake hook through scoped provisioning ([#309](https://github.com/scbrown/shantytown/issues/309)) ([2811002](https://github.com/scbrown/shantytown/commit/281100288e7a196afcf88e37ab342880ed02afea))
+* **governor:** reserve administrator capacity inside account caps ([#278](https://github.com/scbrown/shantytown/issues/278)) ([7f8fded](https://github.com/scbrown/shantytown/commit/7f8fded808abf8b05aa5c6a685572886bafc0a80))
+* **haul:** scope active anchor reads to their owner ([#298](https://github.com/scbrown/shantytown/issues/298)) ([03451cd](https://github.com/scbrown/shantytown/commit/03451cd227e374d9f33a63000333cbaaad36b043))
+* **hooks:** back off failed tracking reads while preserving UNKNOWN ([#287](https://github.com/scbrown/shantytown/issues/287)) ([aa4b3f5](https://github.com/scbrown/shantytown/commit/aa4b3f5662f1fc3483205fb95e3d20ab828c6f44))
+* **jobs:** a detached exec runner must leave the tend unit's cgroup ([#271](https://github.com/scbrown/shantytown/issues/271)) ([48c2bc4](https://github.com/scbrown/shantytown/commit/48c2bc4f6fc1e1ab7e7067c93bbbc9723974d96c))
+* **overdue:** retain safe read failure diagnostics ([#281](https://github.com/scbrown/shantytown/issues/281)) ([2873839](https://github.com/scbrown/shantytown/commit/2873839be02c5b28570e144bc4172764554ae6f2))
+* preserve launchd routing and peer SSH diagnostics ([#296](https://github.com/scbrown/shantytown/issues/296)) ([f3d23bf](https://github.com/scbrown/shantytown/commit/f3d23bfdb2344d491f3fafb8da19f5e26ba922b6))
+* preserve launchd tracker routing and SSH transport causes ([f3d23bf](https://github.com/scbrown/shantytown/commit/f3d23bfdb2344d491f3fafb8da19f5e26ba922b6))
+* **pr:** refuse renamed repository aliases before creation ([#307](https://github.com/scbrown/shantytown/issues/307)) ([ae3b001](https://github.com/scbrown/shantytown/commit/ae3b00165cd03f3fcc3b6d0519f94c108f4a4099))
+* **push:** give validation hooks a bounded 600-second default ([#313](https://github.com/scbrown/shantytown/issues/313)) ([2d4ab81](https://github.com/scbrown/shantytown/commit/2d4ab813a2266f6278c66bf0d9ee1a3fe71c62cc))
+* **push:** name literal worktree path in bare-source refusal ([#303](https://github.com/scbrown/shantytown/issues/303)) ([eb2d3c8](https://github.com/scbrown/shantytown/commit/eb2d3c8ee90d41cc9e9001f8ca9ee7246d0f7e48))
+* **push:** never push a declared mirror; mirrors never prove publication ([#269](https://github.com/scbrown/shantytown/issues/269)) ([819cde2](https://github.com/scbrown/shantytown/commit/819cde2f2246aa2ae962993a75e11e8b225f9565))
+* refuse unattended cycling with truncated shell footers ([#276](https://github.com/scbrown/shantytown/issues/276)) ([f8b788e](https://github.com/scbrown/shantytown/commit/f8b788eb5c0e2df182285c0f6a8e001004f82b66))
+* retain scheduled reminder receipt after delivery ([#277](https://github.com/scbrown/shantytown/issues/277)) ([6f57356](https://github.com/scbrown/shantytown/commit/6f573562c55ff62841cb5878d8822a37825a9069))
+* **roles:** check parent stop eligibility against routing traits ([2322864](https://github.com/scbrown/shantytown/commit/232286406178df6478fbb803cbf2dff3e06afc07))
+* **roles:** reject parents that cannot receive stop events ([#288](https://github.com/scbrown/shantytown/issues/288)) ([2322864](https://github.com/scbrown/shantytown/commit/232286406178df6478fbb803cbf2dff3e06afc07))
+* route overdue notices for non-crew owners to administrator ([#273](https://github.com/scbrown/shantytown/issues/273)) ([c90765e](https://github.com/scbrown/shantytown/commit/c90765e89ea116f5b2aab234e3794031412ba107))
+* seed empty prepared daemon package destinations ([#312](https://github.com/scbrown/shantytown/issues/312)) ([f8581d8](https://github.com/scbrown/shantytown/commit/f8581d889769a18cb45f99981c6cb26fb6a852b0))
+* **seeds:** split deferral candidate reads within one budget ([#306](https://github.com/scbrown/shantytown/issues/306)) ([d510b68](https://github.com/scbrown/shantytown/commit/d510b6815cedd1a5641b894cf492134431447fc9))
+* stop retrying busy transfer receivers within a pass ([#263](https://github.com/scbrown/shantytown/issues/263)) ([f243b76](https://github.com/scbrown/shantytown/commit/f243b76924211f630d44308d2878f325e25df7da))
+* **stop:** exclude short deferred plates from spare capacity ([#280](https://github.com/scbrown/shantytown/issues/280)) ([99ffbec](https://github.com/scbrown/shantytown/commit/99ffbec7e503ca85c12b23bffea3c904d9db2329))
+* **stop:** retain capacity for bounded external event gates ([#308](https://github.com/scbrown/shantytown/issues/308)) ([f057406](https://github.com/scbrown/shantytown/commit/f057406faf225701fdeb61a3de920a8d733a7757))
+* **tend:** back off refused cycle requests and read typed due dates in deferral candidates (aegis-qc2) ([#293](https://github.com/scbrown/shantytown/issues/293)) ([be8eba5](https://github.com/scbrown/shantytown/commit/be8eba5a4c8b9a0509b2b9169165e5711efcd6fb))
+* **tmux:** never type into a pane in copy-mode; refuse and say so (aegis-6jx) ([#286](https://github.com/scbrown/shantytown/issues/286)) ([60987f6](https://github.com/scbrown/shantytown/commit/60987f6a2c9f24b930212846a48204491dab3061))
+* **worktree:** collect remotely retained squash landings ([#289](https://github.com/scbrown/shantytown/issues/289)) ([22c563e](https://github.com/scbrown/shantytown/commit/22c563e64d2026389df15c043f4f55943bca91af))
+
+
+### Performance Improvements
+
+* combine owner plate status selection branches ([#284](https://github.com/scbrown/shantytown/issues/284)) ([6b0083f](https://github.com/scbrown/shantytown/commit/6b0083f69f505421bc8434056735a82265ddb962))
+* **crew:** reuse roster observation for capacity counts ([#259](https://github.com/scbrown/shantytown/issues/259)) ([31e6773](https://github.com/scbrown/shantytown/commit/31e677317458f02380e11a8aa1c5d7005c9e634a))
+* **inbox:** read message prefixes in one native projection ([#283](https://github.com/scbrown/shantytown/issues/283)) ([f00120e](https://github.com/scbrown/shantytown/commit/f00120e463995b9582567503107e0db6b2f8960e))
+
+
+### Documentation
+
+* introduce the software factory and everyday operations crew ([#267](https://github.com/scbrown/shantytown/issues/267)) ([ff7bdc5](https://github.com/scbrown/shantytown/commit/ff7bdc59d550dbaa4de25d4e86b82066780bff30))
+* make pipx PATH and single-user preview explicit ([#300](https://github.com/scbrown/shantytown/issues/300)) ([8f1d426](https://github.com/scbrown/shantytown/commit/8f1d426bf91dd392937d00620739ff24069d634f))
+* preview everyday routines with one agent ([#304](https://github.com/scbrown/shantytown/issues/304)) ([4b48bce](https://github.com/scbrown/shantytown/commit/4b48bce25e8926ae307f29beab2fa5ccfcb9a5cc))
+* skein is archived; stop describing it as a live integration ([#270](https://github.com/scbrown/shantytown/issues/270)) ([42c4908](https://github.com/scbrown/shantytown/commit/42c4908360cd5455b29e8c79518a0e950ce7935a))
+
+
+### Continuous Integration
+
+* enforce conventional squash titles and complete release notes ([#264](https://github.com/scbrown/shantytown/issues/264)) ([08d98d2](https://github.com/scbrown/shantytown/commit/08d98d28ad5adb5448b42ac648dbbe5bfbc41c7a))
+
 ## [0.7.1](https://github.com/scbrown/shantytown/compare/v0.7.0...v0.7.1) (2026-10-15)
 
 
