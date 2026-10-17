@@ -3,6 +3,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 import os
 import re
+import socket
 
 _caller = ContextVar("query_caller", default=None)
 _source = ContextVar("query_source", default="shantytown")
@@ -25,6 +26,17 @@ def _key(value):
     return value.lower() if value and len(value) <= 64 and re.fullmatch(r"[A-Za-z0-9._-]+", value) else None
 
 
+def _host():
+    # A malformed explicit declaration remains UNKNOWN rather than silently
+    # becoming a different host. This is attribution, never authentication.
+    if "QUIPU_HOST" in os.environ:
+        return _key(os.environ["QUIPU_HOST"])
+    try:
+        return _key(socket.gethostname())
+    except OSError:
+        return None
+
+
 def read_context():
     """Resolve known declarations without guessing identity from an owner/actor."""
     env = os.environ
@@ -42,6 +54,7 @@ def read_context():
     task = _key(env.get("QUIPU_TASK") if env.get("QUIPU_TASK") else env.get("SEEDS_TASK"))
     return {k: v for k, v in {
         "QUIPU_AGENT": caller, "QUIPU_SESSION": session, "QUIPU_TASK": task,
+        "QUIPU_HOST": _host(),
         "QUIPU_SOURCE": _key(env.get("QUIPU_SOURCE")) or _source.get(),
         "QUIPU_OPERATION": _key(env.get("QUIPU_OPERATION")) or _operation.get(),
     }.items() if v is not None}

@@ -130,3 +130,41 @@ def test_malformed_explicit_caller_stays_unknown_not_a_different_reader(clean_co
     monkeypatch.setenv("SEEDS_AGENT_NAME", "other-reader")
     with declared_query_identity("nested-reader"):
         assert "X-Quipu-Agent" not in read_headers()
+
+
+@pytest.mark.parametrize("declared,local,expected", [
+    (None, "local-host", "local-host"),
+    ("declared-host", "local-host", "declared-host"),
+    ("EXPLICIT.EXAMPLE", "local-host", "explicit.example"),
+    ("bad\nhost", "local-host", None),
+    ("", "local-host", None),
+    (None, "bad host", None),
+])
+def test_host_header_crosses_http_without_inventing_caller(
+        clean_context, monkeypatch, transport, declared, local, expected):
+    from shantytown import query_identity
+    monkeypatch.setattr(query_identity.socket, "gethostname", lambda: local)
+    if declared is not None:
+        monkeypatch.setenv("QUIPU_HOST", declared)
+    before = dict(os.environ)
+    url, seen = transport
+    assert query(url) == {"result": False}
+    headers = lower(seen[0][0])
+    assert headers.get("x-quipu-host") == expected
+    assert headers["x-quipu-client"] == "seeds"
+    assert "x-quipu-agent" not in headers
+    assert seen[0][1] == {"query": "ASK {}"}
+    assert dict(os.environ) == before
+
+
+def test_hostname_failure_stays_unknown(clean_context, monkeypatch, transport):
+    from shantytown import query_identity
+    def unavailable():
+        raise OSError("no local hostname")
+    monkeypatch.setattr(query_identity.socket, "gethostname", unavailable)
+    url, seen = transport
+    query(url)
+    assert "x-quipu-host" not in lower(seen[0][0])
+    monkeypatch.setenv("QUIPU_HOST", "declared-host")
+    query(url)
+    assert lower(seen[1][0])["x-quipu-host"] == "declared-host"
