@@ -114,6 +114,9 @@ def haul_hold_reason(root, agent: str) -> str:
     """A deliberate stop or gaming hold must precede claims and continuation."""
     if root is None:
         return ""
+    from . import feed_hold
+    if held := feed_hold.reason(root, agent):
+        return held
     from .cycle import Requests
     if agent in Requests(Path(root)).pending():
         return "context cycle pending; keep the haul queued until the cycle completes"

@@ -1,8 +1,8 @@
-"""st — the CLI. Seven verbs, five groups, thirty-six grouped commands: forty-three, and the count is load-bearing: each earns its slot.
+"""st — the CLI. Seven verbs, five groups, thirty-seven grouped commands: forty-four, and the count is load-bearing: each earns its slot.
 
     task · go · sling · inbox [--count] · crew [--count|--governor]
     · anchor [--short|--events|--harness] · attach [-r|--no-start]
-    work  → item · repool · defer · cost [--sync] · dream [--run] · triage
+    work  → item · repool · defer · hold-feed [--until|--clear|--status] · cost [--sync] · dream [--run] · triage
             · jobs [list|check|run|history]
     agent → new · stop · harness · account · cycle [--self|--allow-loss] · advise [--related|--decision]
             · input [--show|--clear|--dismiss] · ask · answer · log · history <agent> · stats
@@ -1502,6 +1502,15 @@ def build_parser() -> argparse.ArgumentParser:
     rp.add_argument("item")
     rp.add_argument("-n", "--dry-run", action="store_true")
 
+    fh = leaf("hold-feed", help="pause automatic haul feeds while keeping the agent live")
+    fh.add_argument("agent")
+    action = fh.add_mutually_exclusive_group()
+    action.add_argument("--status", action="store_true")
+    action.add_argument("--clear", action="store_true")
+    fh.add_argument("--until", help="UTC date/time or closed:<exact-item-id>")
+    fh.add_argument("--reason-file", type=Path)
+    fh.add_argument("-n", "--dry-run", action="store_true")
+
     hold = leaf("hold", help="configurable quiet-time holds and scheduled observation")
     hold.add_argument("kind", help="configured detector name, or all for aggregate status/probe")
     actions = hold.add_mutually_exclusive_group()
@@ -2451,6 +2460,8 @@ def _run_command(a) -> int:
         gaming = quiet_time_mod.read(Path(a.root))
         if gaming.held:
             return _refuse_gaming(a, gaming)
+    if a.cmd == "hold-feed":
+        return _cmd_hold_feed(a)
     if a.cmd == "hold":
         return _cmd_hold(a)
     if a.cmd == "anchor":
@@ -6166,6 +6177,9 @@ def _cmd_anchor(a) -> int:
         fleet=p.me.role == "administrator")
     print()
     print(p.render())
+    from . import feed_hold
+    if feed_note := feed_hold.reason(a.root, me):
+        print(f"  {me}: {feed_note}")
     from . import context_hint
     if context_label := context_hint.crew_label(a.root, registry.get(me)):
         print(f"  {me}: {context_label}")
@@ -6214,6 +6228,44 @@ def _anchor_events(a, me: str) -> int:
     """
     print(len(FilesEvents(Path(a.root) / "events").pending(me)))
     return OK
+
+
+def _cmd_hold_feed(a) -> int:
+    from . import feed_hold
+    from .quipu import QuipuUnreachable, QuipuNotQuipu
+    try:
+        card = _registry(a).get(a.agent)
+        from .deployment import local_host
+        if card.host is not None and card.host != local_host(a.root):
+            raise ValueError(f"feed hold belongs to host {card.host}; select that deployment")
+        if (a.status or a.clear) and (a.until or a.reason_file is not None):
+            raise ValueError("--status/--clear cannot also create a hold")
+        if a.status:
+            print(feed_hold.reason(a.root, a.agent) or "feed clear")
+            return OK
+        if a.clear:
+            if not a.dry_run:
+                feed_hold.clear(a.root, a.agent)
+            print(f"  {a.agent}: " + ("would clear feed hold" if a.dry_run else "feed hold cleared"))
+            return OK
+        if not a.until or a.reason_file is None:
+            raise ValueError("hold-feed requires --until and --reason-file, or --status/--clear")
+        note = sys.stdin.read() if str(a.reason_file) == "-" else a.reason_file.read_text()
+        deadline = feed_hold.expiry(a.until)
+        if deadline is not None and deadline <= time.time():
+            raise ValueError("feed hold expiry must be in the future")
+        if not note.strip() or len(note.encode()) > 4096:
+            raise ValueError("feed hold requires a nonempty reason of at most 4096 bytes")
+        if not a.dry_run:
+            feed_hold.hold(a.root, a.agent, _actor(), a.until, note)
+        print(f"  {a.agent}: " + (
+            f"would hold automatic feed until {a.until}" if a.dry_run else
+            feed_hold.reason(a.root, a.agent)))
+        return OK
+    except (LookupError, OSError, ValueError, CouldNotLook, PartialAnswer,
+            QuipuUnreachable, QuipuNotQuipu) as exc:
+        print(f"  refused: {exc}", file=sys.stderr)
+        return REFUSED
 
 
 def _cmd_repool(a) -> int:
@@ -7025,6 +7077,10 @@ def _cmd_crew(a) -> int:
     peer_roles = [crew_role_cell(row.get("role_sources") or
                                 {"declared": row["role"].split(",")})
                   for row in peer_rows]
+    from . import feed_hold
+    for card in agents:
+        if feed_note := feed_hold.reason(a.root, card.name):
+            print(f"  {card.name}: {feed_note}")
     role_width = max([14, *(len(cell) for cell in [*local_roles.values(), *peer_roles])])
     title_width = None if getattr(a, "wide", False) else max(
         1, shutil.get_terminal_size().columns - 14)

@@ -7,6 +7,36 @@
 > now pinned by a test (`tests/test_command_count.py`), so a new command either updates the docstring
 > and this doc, or fails CI.
 
+## Hold automatic feeds while staying live
+
+Use a per-agent feed hold when the pane should remain reachable but receive no
+automatic haul continuation, advance or idle-worker feed:
+
+```sh
+st work hold-feed ada --until 2027-01-01T18:00:00Z --reason-file reason.txt
+st work hold-feed ada --status
+st work hold-feed ada --clear
+```
+
+An expiry may be a UTC date/time or `closed:project-item`. A date expires on the
+next feed read; a closed-item condition uses the selected deployment's exact-ID
+reader. An unreadable condition or hold record keeps automatic feeding held.
+Expired records remain as provenance and do not block feeding. A replacement
+hold takes effect immediately; an older expiry cannot remove it.
+
+The hold is stored on the agent's declared host. An off-host or unresolved-host
+request refuses before writing; select the target deployment through the existing
+CLI execution lane. The hold is durable and appears in the human `st crew` and `st anchor` views.
+It does not stop, retire, cycle or relaunch the agent, cancel a queued cycle, or
+block explicit `st go` and inbox delivery. It does not grant dispatch permission:
+all existing busy-pane, budget, stop and ownership gates still apply.
+`st agent stop --after-turn` retains its separate stop intent.
+
+This command earns its own slot because creating feed intent is a write with
+an expiry and reason; hiding it on a crew read or using the stop command would
+change what an operator's existing command means. `--dry-run` validates the
+request and writes nothing.
+
 ## Assignment capacity
 
 A crew member may own at most ten active work items. Open, hooked,
@@ -54,6 +84,8 @@ st work                       the item and the board
                               park work with exactly one structured blocker kind
                               (`bead|human|access|external|parked`) and a durable
                               reason naming its referent/re-test condition
+  hold-feed <agent> --until <UTC|closed:id> --reason-file <path>
+                              hold automatic feeds only; --status/--clear inspect/release
   cost [bead] [--sync]        parser-owned cost reads and closed-bead/metric publication
   triage [item ...]             preview Jev board suggestions; --publish comments only
   dream [--run]               inspect or run one bounded spare-capacity reflection cycle
@@ -291,7 +323,7 @@ Codex input already includes its cached subset. This makes
 `cache_read / usage_in` a provider-independent prompt-cache hit rate. The fields
 are omitted—not zeroed—when every matching transcript is unknown.
 
-Forty-three. Seven verbs at the top level and thirty-six grouped commands under five groups
+Forty-four. Seven verbs at the top level and thirty-seven grouped commands under five groups
 (`work`, `agent`, `fleet`, `repo`, `ops`). A group is a namespace and runs nothing, so it earns no
 slot; the count is the leaves. The flat spellings from before the grouping (st cycle for
 st agent cycle, and so on) still parse into the same handler, print one line on stderr saying

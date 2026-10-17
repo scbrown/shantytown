@@ -79,7 +79,7 @@ def _surface_in_block(text: str, fence_contains: str) -> dict[str, frozenset[str
             if m := re.match(r"^st ([a-z]+)", line):
                 current = m.group(1)
                 out.setdefault(current, set() if cli.SURFACE.get(current) else None)
-            elif m := re.match(r"^  ([a-z]+)", line):
+            elif m := re.match(r"^  ([a-z]+(?:-[a-z]+)*)", line):
                 assert current is not None and out[current] is not None, (
                     f"leaf line {line!r} under a verb (or no group) in the surface block")
                 out[current].add(m.group(1))       # type: ignore[union-attr]
@@ -239,7 +239,7 @@ def test_cli_md_stated_count_matches_the_wired_count():
              21: "Twenty-one", 22: "Twenty-two",
              23: "Twenty-three", 24: "Twenty-four", 25: "Twenty-five",
              26: "Twenty-six", 27: "Twenty-seven", 28: "Twenty-eight",
-             29: "Twenty-nine", 30: "Thirty", 31: "Thirty-one", 32: "Thirty-two", 33: "Thirty-three", 34: "Thirty-four", 35: "Thirty-five", 36: "Thirty-six", 37: "Thirty-seven", 38: "Thirty-eight", 39: "Thirty-nine", 40: "Forty", 41: "Forty-one", 42: "Forty-two", 43: "Forty-three"}
+             29: "Twenty-nine", 30: "Thirty", 31: "Thirty-one", 32: "Thirty-two", 33: "Thirty-three", 34: "Thirty-four", 35: "Thirty-five", 36: "Thirty-six", 37: "Thirty-seven", 38: "Thirty-eight", 39: "Thirty-nine", 40: "Forty", 41: "Forty-one", 42: "Forty-two", 43: "Forty-three", 44: "Forty-four"}
     n = _leaf_count()
     assert n in words, "add the number word and update docs/cli.md"
     text = CLI_MD.read_text()
@@ -458,7 +458,7 @@ def test_readme_prose_count_matches_the_parser():
              24: "twenty-four", 25: "twenty-five", 26: "twenty-six",
              27: "twenty-seven", 28: "twenty-eight", 29: "twenty-nine",
              30: "thirty", 31: "thirty-one", 32: "thirty-two", 33: "thirty-three",
-             34: "thirty-four", 35: "thirty-five", 36: "thirty-six", 37: "thirty-seven", 38: "thirty-eight", 39: "thirty-nine", 40: "forty", 41: "forty-one", 42: "forty-two", 43: "forty-three"}
+             34: "thirty-four", 35: "thirty-five", 36: "thirty-six", 37: "thirty-seven", 38: "thirty-eight", 39: "thirty-nine", 40: "forty", 41: "forty-one", 42: "forty-two", 43: "forty-three", 44: "forty-four"}
     m = re.search(r"^([A-Z][a-z-]+), and the count is load-bearing", README.read_text(), re.M)
     if m is None:  # Counts are optional claims, not required marketing copy.
         return

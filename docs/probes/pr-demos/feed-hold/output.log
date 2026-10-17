@@ -1,0 +1,21 @@
+Script started on 2026-10-15 13:47:16-04:00 [COMMAND="python3 docs/probes/pr-demos/feed-hold/record.py" <not executed on terminal>]
+BEFORE: create a feed hold, then explicit dispatch to the live pane
+{
+  "hold_command_exit": 2,
+  "automatic_feed_held": false,
+  "after_turn_stop_requested": false,
+  "explicit_dispatch_exit": 0,
+  "pane_still_live": true
+}
+AFTER: create a feed hold, then explicit dispatch to the live pane
+{
+  "hold_command_exit": 0,
+  "automatic_feed_held": true,
+  "after_turn_stop_requested": false,
+  "explicit_dispatch_exit": 0,
+  "pane_still_live": true
+}
+{"clear_exit": 0, "automatic_feed_after_clear": false}
+{"before_expiry_held": true, "at_expiry_held": false}
+
+Script done on 2026-10-15 13:47:17-04:00 [COMMAND_EXIT_CODE="0"]
