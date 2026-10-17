@@ -256,11 +256,11 @@ def _registry(a):
     """Identity backend for this invocation, selected by --registry.
 
     quipu is the SOURCE OF TRUTH (Stiwi: "quipu should be the source of truth");
-    files is the projection/cache and the leak detector. Default stays files so
-    an offline invocation still resolves identity locally; --registry quipu reads
-    it straight from the graph. Either way the SAME roles.check runs over it.
+    files is the projection/cache and the leak detector. A deployment may select
+    another default; an explicit --registry overrides it. With no declaration,
+    files remains the offline default. The SAME roles.check runs over each.
     """
-    chosen = getattr(a, "registry", "files")
+    chosen = _registry_choice(a)
     if chosen == "quipu":
         # Pass the root so the ADDRESS and the NAMESPACE both come from the
         # deployment's shantytown.toml rather than whatever this shell exported. Without
@@ -274,6 +274,17 @@ def _registry(a):
         # for a deployment that wants no ontology and no generated cards.
         return config.TomlRegistry(a.root)
     return FilesRegistry(a.root / "crew")
+
+
+def _registry_choice(a) -> str:
+    """Explicit identity selection, deployment TOML/env, then offline files."""
+    chosen = getattr(a, "registry", None)
+    if chosen is None:
+        chosen = _deployment_default(a, "SHANTY_REGISTRY") or "files"
+    if chosen not in ("files", "quipu", "toml"):
+        raise SystemExit("refused: SHANTY_REGISTRY must be files, quipu, or toml; "
+                         "fix the deployment [env] or environment")
+    return chosen
 
 
 def _deployment_default(a, key: str) -> str | None:
@@ -1376,15 +1387,16 @@ def build_parser() -> argparse.ArgumentParser:
                          "walking up from here, else the box's deployment pointer "
                          "(~/.config/shantytown/root), else ./.shanty")
     ap.add_argument("--backend", choices=["files", "beads", "br", "seeds", "forgejo"], default=None,
-                    help="tracker backend (identity is always files). Unset uses "
+                    help="tracker backend (identity uses --registry). Unset uses "
                          "the deployment's SHANTY_BACKEND ([env] in shantytown.toml, "
                          "then environment), otherwise the command default. An "
                          "explicit option overrides deployment configuration.")
     ap.add_argument("--repo", default=None,
                     help="store directory for compatibility tracker adapters (unset: deployment's "
                          "SHANTY_BEADS_REPO/SHANTY_BR_REPO, else the configured store walk-up)")
-    ap.add_argument("--registry", choices=["files", "quipu", "toml"], default="files",
-                    help="identity backend: files (generated cards, the default), "
+    ap.add_argument("--registry", choices=["files", "quipu", "toml"], default=None,
+                    help="identity backend (unset: deployment SHANTY_REGISTRY, else files): "
+                         "files (generated cards), "
                          "quipu (the graph), or toml ([crew.<name>] in "
                          "<root>/shantytown.toml — hand-authored, read-only, for a "
                          "deployment that wants no ontology).")
@@ -2438,6 +2450,7 @@ def _main(a, argv: list[str] | None = None) -> int:
             a.cmd in {"new", "start", "cycle", "attach", "harness", "provision",
                       "tend", "window"})):
         try:
+            a.registry = _registry_choice(a)
             return _run_command(a)
         except NamespaceUnconfigured as e:
             print(f"  {e}", file=sys.stderr)
