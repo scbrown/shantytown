@@ -29,6 +29,7 @@ FIELDS = {
     SCHEMA + "keywords": "labels",
     SEEDS + "ontology/status": "status",
     SEEDS + "ontology/priority": "priority",
+    SEEDS + "ontology/rank": "rank",
     SEEDS + "ontology/issueType": "issue_type",
     SCHEMA + "scheduledTime": "defer_until",
     SEEDS + "ontology/deferUntil": "defer_until",
@@ -446,6 +447,8 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
             raise ValueError("plate candidate disappeared during projection")
         rows = []
         for subject, row in grouped.items():
+            from .protocols import rank_order
+            rank_order(row.get("rank"), row.get("due_at"), row.get("created_at"))
             if row.get("status") in ("closed", "tombstone") and not include_closed:
                 continue
             if (

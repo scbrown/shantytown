@@ -289,6 +289,9 @@ class WorkItem:
     updated_at: str | None = None
     # Terminal evidence is data, appended to preserve positional construction.
     close_reason: str | None = None
+    rank: str | None = None
+    due_at: str | None = None
+    created_at: str | None = None
 
 
 @runtime_checkable
@@ -603,10 +606,11 @@ def is_blocked(status: str | None, ident: str, ready_ids: "set[str] | None") -> 
 
 
 def plate_key(status: str | None, priority: "int | None", ident: str,
-              ready_ids: "set[str] | None" = None) -> tuple:
+              ready_ids: "set[str] | None" = None, *, rank=None, due_at=None,
+              created_at=None) -> tuple:
     """The ONE plate ordering, shared by every backend (aegis-fxx3y).
 
-    Four keys, in this order, and each one earns its place:
+    Lifecycle/readiness precede priority, explicit work rank, due and age:
 
     1. **in-hand before not-started** — the pre-existing contract, unchanged.
     2. **unblocked before blocked**, within a rank. This is the fix. A
@@ -617,7 +621,9 @@ def plate_key(status: str | None, priority: "int | None", ident: str,
     3. **priority**, stated ones first and in order. Unstated sorts last rather
        than defaulting: `_priority` refuses to invent a 2, and an item whose
        importance nobody stated must not outrank a stated P1 by accident.
-    4. **id**, last, purely as a deterministic tiebreak.
+    4. **work rank**, exact decimals, ranked before unranked within priority.
+       Ties use due then creation time; unranked uses oldest first.
+    5. **id**, last, purely as a deterministic tiebreak.
 
     Key 4 used to be key 2, and that was the whole defect: among equal-status
     items the winner was decided ALPHABETICALLY. `aegis-8fydl` beat `aegis-rl1kg`
@@ -632,5 +638,23 @@ def plate_key(status: str | None, priority: "int | None", ident: str,
         _PLATE_RANK.get(status, 2),
         1 if is_blocked(status, ident, ready_ids) else 0,
         (1, 0) if priority is None else (0, priority),
+        *rank_order(rank, due_at, created_at),
         ident,
     )
+
+
+def rank_order(rank=None, due_at=None, created_at=None) -> tuple:
+    """Exact Seeds decimal order; unranked retains oldest-first fallback."""
+    from decimal import Decimal, InvalidOperation
+    import re
+    if rank is None:
+        return (True, Decimal(0), True, "", created_at or "")
+    if not isinstance(rank, str) or not re.fullmatch(r"-?[0-9]+(?:\.[0-9]{1,9})?", rank):
+        raise ValueError("rank ordering evidence malformed")
+    try:
+        number = Decimal(rank)
+    except InvalidOperation as error:
+        raise ValueError("rank ordering evidence malformed") from error
+    if not number.is_finite() or abs(number) > Decimal("9000000000000000000"):
+        raise ValueError("rank ordering evidence out of bounds")
+    return (False, number, due_at is None, due_at or "", created_at or "")

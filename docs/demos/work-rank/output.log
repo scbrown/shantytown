@@ -1,0 +1,11 @@
+Script started on 2026-10-17 10:40:25-04:00 [COMMAND="python3 docs/demos/work-rank/demo.py" <not executed on terminal>]
+base source 281100288e7a196afcf88e37ab342880ed02afea
+$ same mocked tracker rows -> plate(worker)
+same-priority selection: old
+higher-priority control: urgent
+head source 08eee231d7d682d37709d0a2ea250ed58ec63c05
+$ same mocked tracker rows -> plate(worker)
+same-priority selection: ranked
+higher-priority control: urgent
+
+Script done on 2026-10-17 10:40:25-04:00 [COMMAND_EXIT_CODE="0"]

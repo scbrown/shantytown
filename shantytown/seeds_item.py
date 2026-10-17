@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 from urllib.parse import quote, unquote
 
 from .beads import _is_placeholder_dep
-from .protocols import WorkItem, blocker_kind
+from .protocols import WorkItem, blocker_kind, rank_order
 from .seeds_plate import SCHEMA, SEEDS, _iri, _query
 
 TYPE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"
@@ -23,7 +23,9 @@ FIELDS = (TYPE, SCHEMA + "identifier", SCHEMA + "name", LABEL,
           SCHEMA + "agent", SCHEMA + "dateModified", SCHEMA + "keywords",
           SEEDS + "ontology/status", SEEDS + "ontology/priority",
           SCHEMA + "description", SEEDS + "ontology/notes",
-          SCHEMA + "scheduledTime", SCHEMA + "result", *EDGES)
+          SCHEMA + "scheduledTime", SCHEMA + "result",
+          SCHEMA + "dateCreated", "http://www.w3.org/2002/12/cal/ical#due",
+          SEEDS + "ontology/rank", *EDGES)
 TARGET_FIELDS = (TYPE, SCHEMA + "identifier", SCHEMA + "name", LABEL,
                  SEEDS + "ontology/status")
 CAP = 10000
@@ -89,7 +91,12 @@ def _value(row):
         if not value.startswith(prefix):
             raise ValueError("item principal unsupported")
         value = unquote(value[len(prefix):])
-    elif predicate in (SCHEMA + "dateModified", SCHEMA + "scheduledTime"):
+    elif predicate == SEEDS + "ontology/rank":
+        if kind != XSD + "string":
+            raise ValueError("item rank type unsupported")
+        rank_order(value)
+    elif predicate in (SCHEMA + "dateModified", SCHEMA + "scheduledTime",
+                       SCHEMA + "dateCreated", "http://www.w3.org/2002/12/cal/ical#due"):
         if kind not in (XSD + "string", XSD + "dateTime", XSD + "date"):
             raise ValueError("item time type unsupported")
         value = _time(value)
@@ -228,4 +235,7 @@ def read_item(tracker, identifier):
                             if d["dependency_type"] == "blocks" and d["status"] != "closed"
                             and not _is_placeholder_dep(d)),
         unreadable_deps=sum(_is_placeholder_dep(d) for d in dependencies),
+        rank=_one(facts, SEEDS + "ontology/rank"),
+        due_at=_one(facts, "http://www.w3.org/2002/12/cal/ical#due"),
+        created_at=_one(facts, SCHEMA + "dateCreated"),
     )

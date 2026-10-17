@@ -66,6 +66,7 @@ def test_all_display_fields_and_dependency_classification(monkeypatch):
         "open_blockers": ("test-missing", "test-open", "test-tombstone"),
         "unreadable_deps": 0, "description": "body preserved",
         "updated_at": "2026-10-12T00:00:00Z", "close_reason": "retained reason",
+        "rank": None, "due_at": None, "created_at": None,
     }
     assert len(calls) == 1
     assert "LIMIT 10000" in calls[0] and "schema.org/parentItem" not in calls[0]
@@ -240,3 +241,22 @@ def test_query_proves_the_date_type_instead_of_dropping_kind():
     text = seeds_item._fields_query((GRAPH,), SUBJECT)
     assert f"STRDT(STR(?value), <{seeds_item.XSD}date>)" in text
     assert f'"{seeds_item.UNREPORTED}"' in text and "COALESCE(" in text
+
+
+def test_exact_item_preserves_rank_and_deadline_fields(monkeypatch):
+    source = rows(**{seeds_item.SEEDS + "ontology/rank": "1.000000001",
+                     "http://www.w3.org/2002/12/cal/ical#due": "2026-10-31T00:00:00Z",
+                     seeds_item.SCHEMA + "dateCreated": "2026-01-01T00:00:00Z"})
+    value, calls = tracker(monkeypatch, source)
+    item = seeds_item.read_item(value, "test-one")
+    assert (item.rank, item.due_at, item.created_at) == (
+        "1.000000001", "2026-10-31T00:00:00Z", "2026-01-01T00:00:00Z")
+    assert len(calls) == 1
+    assert seeds_item.SEEDS + "ontology/rank" in calls[0]
+
+
+@pytest.mark.parametrize("rank", ["NaN", "1e2", "1.0000000001"])
+def test_exact_item_refuses_malformed_rank(monkeypatch, rank):
+    value, _ = tracker(monkeypatch, rows(**{seeds_item.SEEDS + "ontology/rank": rank}))
+    with pytest.raises(ValueError):
+        seeds_item.read_item(value, "test-one")
