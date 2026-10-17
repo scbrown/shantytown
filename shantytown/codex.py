@@ -88,6 +88,8 @@ The TOML writer at the bottom is ours because the package has ZERO dependencies
 and the stdlib reads TOML (tomllib) but does not write it.
 """
 from __future__ import annotations
+import hashlib
+import json
 import re
 import tomllib
 from typing import Any
@@ -280,12 +282,35 @@ def _apply_mcp_approval(config: dict, root=None) -> dict:
     return config
 
 
+_NOTIFY_MARKER = "# shantytown-notify-sha256: "
+
+
+def _notify_hash(argv) -> str | None:
+    if not isinstance(argv, list) or not argv or not all(isinstance(a, str) for a in argv):
+        return None
+    return hashlib.sha256(json.dumps(argv, ensure_ascii=True).encode()).hexdigest()
+
+
+def _notify_owner(existing: str) -> str | None:
+    markers = [line[len(_NOTIFY_MARKER):] for line in existing.splitlines()
+               if line.startswith(_NOTIFY_MARKER)]
+    # Ambiguous or damaged ownership is not authority to delete operator data.
+    if (existing.startswith(_NOTIFY_MARKER) and len(markers) == 1
+            and re.fullmatch(r"[0-9a-f]{64}", markers[0])):
+        return markers[0]
+    return None
+
+
 def render(settings: dict, existing: str = "", root=None) -> str:
     """The bytes to write, merging what the operator already had.
 
     SAME MERGE RULE AS CLAUDE'S (harness.merge_one_level): st replaces the hook
     EVENTS it emits, and every other key — including `[hooks.state]`, which is
     codex's trust ledger and emphatically not ours to rewrite — survives.
+
+    A notify emitted by st carries a per-file ownership fingerprint. When its
+    bundle stops emitting it, only that unchanged value is removed. Unmarked
+    legacy values and operator edits remain; matching argv alone is not ownership.
 
     THE COST, stated because it is real and TOML-specific: this is a
     parse-and-re-emit, so an operator's COMMENTS and key ORDER in config.toml do
@@ -303,7 +328,16 @@ def render(settings: dict, existing: str = "", root=None) -> str:
         # and let the emission stand: a config we cannot read is a config we
         # cannot honour, and the alternative is refusing to emit hooks at all.
         current = {}
-    return dumps(_apply_mcp_approval(merge_one_level(current, settings), root))
+    owned = _notify_owner(existing)
+    if "notify" not in settings and owned is not None and _notify_hash(current.get("notify")) == owned:
+        current.pop("notify", None)
+    merged = _apply_mcp_approval(merge_one_level(current, settings), root)
+    emitted = _notify_hash(settings.get("notify"))
+    if emitted is not None:
+        # A comment keeps ownership local to this artifact without introducing
+        # an unknown Codex config key or repeating potentially private argv.
+        return _NOTIFY_MARKER + emitted + "\n" + dumps(merged)
+    return dumps(merged, existing=existing)
 
 
 def with_workspace_hooks(existing: str, role: str, root=None) -> str:
@@ -371,7 +405,7 @@ def with_workspace_hooks(existing: str, role: str, root=None) -> str:
         if commands:
             prompt.append({**group, "hooks": commands})
     hooks["UserPromptSubmit"] = prompt + incident_recall_hooks("codex")
-    return dumps(cfg)
+    return dumps(cfg, existing=existing)
 
 
 def trust_projects(existing: str, workspaces) -> str:
@@ -428,7 +462,7 @@ def trust_projects(existing: str, workspaces) -> str:
         # and they are theirs; this records trust and states nothing else.
         entry["trust_level"] = "trusted"
         merged[w] = entry
-    return dumps({**current, "projects": merged})
+    return dumps({**current, "projects": merged}, existing=existing)
 
 
 def stop_directions(text: str) -> set[str] | None:
@@ -524,11 +558,15 @@ _ESCAPES = {"\\": "\\\\", '"': '\\"', "\b": "\\b", "\f": "\\f",
             "\n": "\\n", "\r": "\\r", "\t": "\\t"}
 
 
-def dumps(data: dict) -> str:
-    """A dict -> TOML. Deterministic (insertion order preserved), newline-ended."""
+def dumps(data: dict, *, existing: str = "") -> str:
+    """A dict -> TOML, retaining proven notify ownership through rewrites."""
     lines: list[str] = []
     _table(data, [], lines)
-    return "\n".join(lines).strip("\n") + "\n"
+    rendered = "\n".join(lines).strip("\n") + "\n"
+    owned = _notify_owner(existing)
+    if owned is not None and _notify_hash(data.get("notify")) == owned:
+        rendered = _NOTIFY_MARKER + owned + "\n" + rendered
+    return rendered
 
 
 def _table(table: dict, path: list[str], lines: list[str], *, header: bool = True) -> None:

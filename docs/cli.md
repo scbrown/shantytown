@@ -312,6 +312,12 @@ named on purpose: this doc once
 said "eight" while the code had twelve, and a count nobody enforces is a comment — in the one repo
 whose whole pitch is the exact count, that was the bug.
 
+For a bundle's Codex `notify`, each emitted file records an ownership fingerprint
+in a comment. Unregistering the bundle removes its unchanged notify value on
+regeneration. An operator's replacement and older unmarked values survive:
+matching a command alone is not proof that st owns it. Workspace and project
+trust rewrites preserve the fingerprint while the notify remains unchanged.
+
 The twenty-sixth is **dream**: the inspect/preview/manual-run surface for bounded
 background reflection. Cycles require explicit admission; `tend` never creates
 them because an interval elapsed. Status shows the last cycle, rotation and

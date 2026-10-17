@@ -1,0 +1,13 @@
+Script started on 2026-10-15 00:19:33-04:00 [COMMAND="stty -onlcr; python3 docs/demos/codex-notify/reproduce.py" <not executed on terminal>]
+before: emitted notify present = True
+before: removed-owner notify present = True
+before: unowned operator notify preserved = True
+before: operator edit preserved = True
+after: emitted notify present = True
+after: removed-owner notify present = False
+after: unowned operator notify preserved = True
+after: operator edit preserved = True
+base revision: 31e677317458f02380e11a8aa1c5d7005c9e634a
+candidate codex.py SHA256: 6bf1aa55ad8eebc4df8a8d2d5934457409847829c7122458e94ff59dd9444123
+
+Script done on 2026-10-15 00:19:33-04:00 [COMMAND_EXIT_CODE="0"]

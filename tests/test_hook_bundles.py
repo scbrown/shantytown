@@ -700,16 +700,78 @@ def test_unregister_re_renders_so_the_bundle_hooks_leave_every_file(root):
         assert EXAMPLE_CMD not in (root / "settings" / f).read_text(), f
 
 
-@pytest.mark.xfail(strict=True, reason="aegis-ipjh44: render preserves a top-level key st "
-                   "no longer owns, so a removed notify owner's argv is orphaned")
 def test_unregister_drops_an_orphaned_codex_notify(root):
     _emit_all(root)
     src = root / "src-notifier.json"
     src.write_text(json.dumps(bundle(name="notifier", codex_notify=NOTIFY)))
     _hooks_cmd(root, "register", file=src, no_apply=False)
     _hooks_cmd(root, "unregister", name="notifier", no_apply=False)
-    doc = tomllib.loads((root / "settings" / "codex" / "lead" / "config.toml").read_text())
-    assert doc.get("notify") != NOTIFY
+    for role in ("worker", "lead", "administrator"):
+        text = (root / "settings" / "codex" / role / "config.toml").read_text()
+        assert "notify" not in tomllib.loads(text), role
+
+
+def test_unregister_preserves_notify_changed_by_the_operator(root):
+    register(root, bundle(name="notifier", hooks=[], codex_notify=NOTIFY))
+    path = emit(root, "codex", "lead")
+    path.write_text(path.read_text().replace("example-tool ingest", "operator-tool ingest"))
+    assert _hooks_cmd(root, "unregister", name="notifier", no_apply=False) == 0
+    emit(root, "codex", "lead")
+    assert tomllib.loads(path.read_text())["notify"] == [
+        arg.replace("example-tool ingest", "operator-tool ingest") for arg in NOTIFY]
+
+
+def test_notify_ownership_is_per_artifact_not_inferred_from_matching_argv(root):
+    from shantytown import codex
+    operator = codex.dumps({"notify": NOTIFY, "hooks": {"state": {"trusted_hash": "operator"}}})
+    register(root, bundle(name="notifier", hooks=[], codex_notify=NOTIFY))
+    managed = emit_agent(root, "codex", "alice", "lead").read_text()
+    assert _hooks_cmd(root, "unregister", name="notifier", no_apply=False) == 0
+    h = harness_mod.get("codex")
+    settings = h.settings("lead", root=root)
+    assert "notify" not in tomllib.loads(h.render(settings, managed, root=root))
+    kept = tomllib.loads(h.render(settings, operator, root=root))
+    assert kept["notify"] == NOTIFY
+    assert kept["hooks"]["state"]["trusted_hash"] == "operator"
+
+
+def test_notify_ownership_survives_workspace_and_trust_rewrites(root):
+    from shantytown import codex
+    register(root, bundle(name="notifier", hooks=[], codex_notify=NOTIFY))
+    path = emit(root, "codex", "lead")
+    text = codex.with_workspace_hooks(path.read_text(), "lead", root=root)
+    text = codex.trust_projects(text, [root / "workspace"])
+    path.write_text(text)
+    assert tomllib.loads(text)["notify"] == NOTIFY
+    assert _hooks_cmd(root, "unregister", name="notifier", no_apply=False) == 0
+    doc = tomllib.loads(path.read_text())
+    assert "notify" not in doc
+    assert doc["projects"][str(root / "workspace")]["trust_level"] == "trusted"
+
+
+def test_conflicting_notify_owners_remove_only_the_previously_emitted_notify(root):
+    register(root, bundle(name="one", hooks=[], codex_notify=NOTIFY))
+    path = emit(root, "codex", "worker")
+    register(root, bundle(name="two", hooks=[], codex_notify=["other"]))
+    emit(root, "codex", "worker")
+    assert "notify" not in tomllib.loads(path.read_text())
+    assert hb.check(root).exit_code == 1
+
+
+@pytest.mark.parametrize("damage", ["missing", "invalid", "duplicate", "quoted"])
+def test_unproven_notify_ownership_never_deletes_the_operator_value(root, damage):
+    from shantytown import codex
+    managed = codex.render({"notify": NOTIFY}, root=root)
+    marker, body = managed.split("\n", 1)
+    if damage == "missing":
+        existing = body
+    elif damage == "invalid":
+        existing = marker[:-1] + "?\n" + body
+    elif damage == "duplicate":
+        existing = marker + "\n" + managed
+    else:
+        existing = 'operator_note = """\n' + marker + '\n"""\n' + body
+    assert tomllib.loads(codex.render({}, existing, root=root))["notify"] == NOTIFY
 
 
 # --- emitted role settings are written ATOMICALLY (aegis-yb8ifi) -----------------------
