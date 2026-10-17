@@ -497,35 +497,28 @@ def deferred_rows(proof, *, timeout: int = 30, include_asks=False, target_ids=No
         graphs = (proof.graph, proof.graph + "#seeds-ephemeral")
         branches = []
         for graph in graphs:
-            branches.append(
-                f'{{ GRAPH {_iri(graph)} {{ ?s a <{SCHEMA}Action> ; '
-                f'<{SEEDS}ontology/status> "deferred" }} '
-                f'BIND({json.dumps(graph)} AS ?graph) }}'
-            )
+            # Select by indexed status/date before joining Action type. Repeating
+            # the type join in every UNION arm scans the same broad population.
+            choices = [f'{{ ?s <{SEEDS}ontology/status> "deferred" }}']
             for predicate in (SCHEMA + "scheduledTime", SEEDS + "ontology/deferUntil"):
-                branches.append(
-                    f'{{ GRAPH {_iri(graph)} {{ ?s a <{SCHEMA}Action> ; '
-                    f'<{SEEDS}ontology/status> "open" ; {_iri(predicate)} ?date }} '
-                    f'BIND({json.dumps(graph)} AS ?graph) }}'
-                )
-        if include_asks:
-            for graph in graphs:
+                choices.append(
+                    f'{{ ?s <{SEEDS}ontology/status> "open" ; {_iri(predicate)} ?date }}')
+            if include_asks:
                 for status in ("open", "blocked", "in_progress"):
-                    branches.append(
-                        f'{{ GRAPH {_iri(graph)} {{ ?s a <{SCHEMA}Action> ; '
-                        f'<{SEEDS}ontology/status> {json.dumps(status)} ; '
+                    choices.append(
+                        f'{{ ?s <{SEEDS}ontology/status> {json.dumps(status)} ; '
                         f'<{SEEDS}ontology/notes> ?askNotes . '
-                        'FILTER(CONTAINS(?askNotes, "steve_quote:")) } '
-                        f'BIND({json.dumps(graph)} AS ?graph) }}')
-        if include_asks:
-            for graph in graphs:
+                        'FILTER(CONTAINS(?askNotes, "steve_quote:")) }')
                 for status in ("open", "blocked"):
-                    branches.append(
-                        f'{{ GRAPH {_iri(graph)} {{ ?s a <{SCHEMA}Action> ; '
-                        f'<{SEEDS}ontology/status> {json.dumps(status)} ; '
+                    choices.append(
+                        f'{{ ?s <{SEEDS}ontology/status> {json.dumps(status)} ; '
                         f'<{SEEDS}ontology/notes> ?gateNotes . '
-                        'FILTER(CONTAINS(?gateNotes, "resume_when:")) } '
-                        f'BIND({json.dumps(graph)} AS ?graph) }}')
+                        'FILTER(CONTAINS(?gateNotes, "resume_when:")) }')
+            branches.append(
+                '{ { SELECT DISTINCT ?s WHERE { GRAPH ' + _iri(graph) + ' { '
+                + " UNION ".join(choices) + ' } } } GRAPH ' + _iri(graph)
+                + f' {{ ?s a <{SCHEMA}Action> }} '
+                + f'BIND({json.dumps(graph)} AS ?graph) }}')
         if target_ids is not None:
             if not target_ids or len(target_ids) > 25:
                 raise ValueError("gate target batch must contain 1..25 IDs")

@@ -1,0 +1,6 @@
+{"version": 2, "width": 110, "height": 20, "timestamp": 1792023736, "title": "Measured deferral candidate query comparison"}
+[0.0, "o", "Retained bounded read results; sequential samples, load variation applies.\r\n"]
+[0.1, "o", "BASE: HTTP 200, 9.074s, 556 rows / 525 distinct pairs\r\n"]
+[0.2, "o", "CANDIDATE: HTTP 200, 1.324s, 525 distinct pairs\r\n"]
+[0.30000000000000004, "o", "Candidate set comparison: removed=0, added=0, truncated=False\r\n"]
+[0.4, "o", "Native scope/refusal tests and scheduled 24h acceptance are separate gates.\r\n"]
